@@ -62,12 +62,30 @@ fi
 # ── 4) 交叉工具链 env（NDK r28 时代：直连 clang wrapper，无 make-standalone-toolchain）──
 export ANDROID_NDK_HOME="$NDK_DIR"
 export PATH="$TOOLCHAIN/bin:$PATH"
+
+# 目标 toolset：NDK 交叉 clang（configure/gyp 从 env CC/CXX/AR 读取，见 configure.py 的
+# GetEnvironFallback 语义与 android_configure.py:66-74 —— 本管线 configure 命令与官方同源）
 export CC="$TOOLCHAIN/bin/${TARGET_TUPLE}-clang"
 export CXX="$TOOLCHAIN/bin/${TARGET_TUPLE}-clang++"
 export AR="$TOOLCHAIN/bin/llvm-ar"
 export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 [ -x "$CC" ] && [ -x "$CXX" ] || die "NDK clang wrapper 缺失: $NDK_DIR"
+
+# host toolset：gyp 对 toolsets:['host']（mksnapshot 等构建期 x86_64 宿主工具）从
+# CC_host→CC、CXX_host→CXX 回退解析（tools/gyp/.../make.py:2482-2485）。若缺 CC_host，
+# 会回退到上方 CC=NDK 交叉 clang → mksnapshot 编成 arm64-android ELF → 宿主执行 ENOEXEC
+# → make 在 v8_snapshot 的 run_mksnapshot 处确定性断链（评审在 v24.21.0 实证）。
+# --cross-compiling 强制 GYP want_separate_host_toolset=1，host 与 target 永远分离。
+# build-essential 提供宿主 gcc/g++/ar（Dockerfile builder 阶段已装）。
+export CC_host=gcc
+export CXX_host=g++
+export AR_host=ar
+
+# GYP_DEFINES：目标 arch/宿主 OS/NDK 路径在 configure.py 之外、只能从 GYP_DEFINES 注入
+# （缺则 gyp-load 阶段即报 "Undefined variable android_ndk_path / host_os is not defined"，
+# 评审实证）。取值与 Node 官方 android-configure 完全同源（android_configure.py:69-74）。
+export GYP_DEFINES="target_arch=${TARGET_ARCH} v8_target_arch=${TARGET_ARCH} android_target_arch=${TARGET_ARCH} host_os=linux OS=android android_ndk_path=${NDK_DIR}"
 
 # ── 5) configure + make（configure 仅读 env CC/CXX/AR，见 configure.py:24）──
 cd "$SRC/node-$NODE_VERSION"
