@@ -7,7 +7,7 @@ on:
 
 jobs:
   jvm-tests:
-    name: JVM 单测（domain / bridge:java / script-repo）
+    name: JVM 单测（domain / bridge:java / script-repo / runtime）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
           gradle-version: "8.9"   # 与 AGP 8.5.2 匹配（≥8.7）；gradlew wrapper 就绪后改走 wrapper
       - name: JVM 单元测试
         run: |
-          ./gradlew :domain:test :bridge:java:test :app-service:script-repo:testDebugUnitTest --stacktrace
+          ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:script-repo:testDebugUnitTest --stacktrace
         # 说明：Android 模块在无 wrapper 时用 setup-gradle 安装的 gradle 命令亦可（农场里等价 ./gradlew）
       - name: 上传测试报告
         if: always()
