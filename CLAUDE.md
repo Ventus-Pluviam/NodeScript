@@ -1,0 +1,47 @@
+# AutoScript
+
+内置 Node.js 的安卓自动化平台（对标 AutoJsPro v9）：每脚本一个 Node 进程、跨进程异步桥、能力三态门禁。架构设计见 `docs/framework-design.md`（§0–§19 全覆盖）。
+
+## 仓库地图
+
+| 路径 | 说明 | 设计章节 |
+|---|---|---|
+| `docs/framework-design.md` | 架构设计（契约的单一事实来源） | 全部 |
+| `.claude/skills/skill-designer/` | 项目级 skill：设计/创建技能 + 外科手术式改代码 + git 提交 | — |
+| `module-stubs` 之外的模块 | 各模块职责见下 | §6 |
+
+## Gradle 模块（模块表由 `settings.gradle.kts` 冻结，14 个）
+
+- `:app` — Compose UI（IDE/任务中心/控制台/能力中心/打包向导）+ AppShellApplication 启动装配（§4.1）
+- `:app-service:runtime` — RuntimeController / EnginePool / Watchdog 仲裁（§8）
+- `:app-service:scheduler` — 定时/Intent/事件任务、checkpoint 意图日志、runNonce 幂等（§9.6）
+- `:app-service:script-repo` — 项目/资源/脚本库、assets→filesDir 原子部署（§9.6）
+- `:app-service:permission-center` — 权限三态门禁、引导页、降级路径（§9.5）
+- `:app-service:packager` — 模板 APK 改写、签名向导、加密资产注入（§14 P0）
+- `:domain` — **纯 Kotlin 领域层**：SPI 接口 + DTO + 状态机（零 Android 依赖、JVM 可单测）
+- `:bridge:java` — Kotlin Router / RequestRegistry(TTL) / HandleRegistry(generation) / EventBus（§7）
+- `:bridge:native` — C++ N-API addon 控制面 + libnode.so 装载（§7，CI 构建）
+- `:bridge:image` — C++ 图像管线 libimgnative.so（OpenCV 4.x，§9.2，CI 构建）
+- `:engine:node-process` — :nodeN 进程宿主 main.cpp（§5，CI 构建）
+- `:engine:sandbox` — QuickJS 宿主进程（P1）
+- `:platform:capabilities` — a11y/截图/输入/悬浮窗/系统/存储（§9.1–9.4）
+- `:platform:system` — overlay/通知/datastore/shell/zip/设备信息（§9.6）
+- `bridge/js/` — **npm workspace**（TS facade SDK `@autojs/*`，非 Gradle 模块，§12.4）
+- `node-runtime-build/` — **CI 构建管线**（Node 24 源码 recipe + 16KB 对齐门禁，非 Gradle 模块，§3）
+
+## 依赖方向铁律（Gradle/archUnit 强制，见 §4.1）
+
+`:app` → `:app-service:*` → `:domain`；`:platform:*` → `:domain`（实现 SPI，不反向）；`:bridge:java` → `:domain`；`:domain` 零 Android/零桥。全部禁止把 UI/Dialog 类、危险权限、循环依赖带进下层。
+
+## 构建
+
+- 本机无 Android SDK：Android 模块的编译/验证在 **CI（Docker 构建镜像）** 完成；本机只有 JDK 17（`/root/develop/claude/tools/jdk-17.0.17+10`）。
+- JVM 模块（`:domain`、`:bridge:java`）可本地 `gradle :domain:test`（无 Gradle 时用 wrapper，内置后统一 `./gradlew`）。
+
+## 协作纪律（子 agent 必须遵守）
+
+1. **改前先读**：动手前读 `docs/framework-design.md` 对应章节 + 本文件 + `settings.gradle.kts`；未知默认问协调者。
+2. **只动自己的模块目录**；`settings.gradle.kts`、`gradle/libs.versions.toml`、根 `build.gradle.kts` 由协调者冻结——需要改先提给协调者。
+3. **外科手术式读写**：Grep/Glob 定位，Read 带 offset/limit，Edit 用最小唯一匹配，不整库读代码。
+4. **git 提交**：每个逻辑完成点提交，信息 `type(scope): 摘要` + 结尾 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`；不提交无关文件；不 init 仓库（已是仓库）。
+5. **契约先行**：接口/DTO 以 `:domain` 骨架为准；别自行发明跨模块类型。

@@ -1,0 +1,17 @@
+{
+  "name": "@autoscript/bridge-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AutoScript TS facade SDK workspace（docs/framework-design.md §12.4）：@autojs/* 包、RuntimeChannel、bootstrap loader、输出 d.ts。非 Gradle 模块，仅 npm 依赖（禁 Gradle 反向依赖）。",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "license": "UNLICENSED"
+}
