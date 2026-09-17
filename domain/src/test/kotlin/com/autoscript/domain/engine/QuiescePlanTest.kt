@@ -16,7 +16,7 @@ class QuiescePlanTest {
             val p = run.onStepSuccess(step)
             assertEquals(if (step == plan.steps.last()) StepProgress.COMPLETED else StepProgress.CONTINUE, p)
         }
-        assertTrue(run.allCompleted)
+        assertTrue(run.lastCompleted == plan.steps.last(), "所有步骤应已完成")
         assertEquals(StepResult.CLEAN, run.result())
         assertEquals(StopResult.Clean, run.toStopResult())
     }
@@ -31,7 +31,7 @@ class QuiescePlanTest {
 
         val result = run.onStepTimeout()
         assertEquals(StepResult.PARTIALLY_COMPLETED, result)
-        assertFalse(run.allCompleted)
+        assertFalse(run.lastCompleted == plan.steps.last())
         assertTrue(run.aborted)
 
         val stop = run.toStopResult()

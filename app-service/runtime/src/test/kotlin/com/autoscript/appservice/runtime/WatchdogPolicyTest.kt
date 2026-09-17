@@ -36,7 +36,7 @@ class WatchdogPolicyTest {
 
     @Test
     fun `非 RUNNING 不做裁定`() {
-        for (status in listOf(EngineStatus.SUSPENDED, EngineStatus.QUIESCING, EngineStatus.STOPPED)) {
+        for (status in listOf(EngineStatus.CRASHED, EngineStatus.QUIESCING, EngineStatus.STOPPED)) {
             assertEquals(
                 WatchdogVerdict.Healthy,
                 policy.evaluate(sample(status = status, heartbeat = 99_999, cpu = 99.9)),

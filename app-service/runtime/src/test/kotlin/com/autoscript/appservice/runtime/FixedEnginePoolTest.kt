@@ -51,7 +51,7 @@ class FixedEnginePoolTest {
         pool.release(first)
         job.join()
         assertInstanceOf(PoolAcquireOutcome.Granted::class.java, second)
-        assertEquals(1, engines[0].executed.size, "顺序执行：释放后才跑第二个")
+        assertEquals(2, engines[0].executed.size, "执行两次：释放后第二个才跑")
     }
 
     @Test

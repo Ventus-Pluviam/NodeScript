@@ -23,15 +23,22 @@ interface ChannelSubscription {
     fun cancel()
 }
 
-/** engines.exec 的执行句柄：取消（走引擎停止）/ 通道 / 退出回调。 */
-data class EngineSessionHandle(
+/**
+ * engines.exec 的执行句柄：取消（走引擎停止）/ 通道 / 退出回调。
+ *
+ * 退出订阅不可能是领域的 free 实现——引擎退出事件由：engine:node-process 状态回调经桥
+ * EventBus 转发（docs §7/§12.3）。故 [exitSink] 由装配方注入（绑定引擎退出 → listener），
+ * 领域层只维护签名契约。作为句柄而非值对象，刻意不用 data class（无值语义）。
+ */
+class EngineSessionHandle(
     val engine: ScriptEngine,
     val runReceipt: EngineRunReceipt,
     val channel: RuntimeChannel,
+    private val exitSink: (listener: (CrashInfo?) -> Unit) -> ChannelSubscription,
 ) {
     /** 请求停止（优雅四步 quiesce，签名见 [ScriptEngine.stop]）。 */
     suspend fun cancel() = engine.stop()
 
-    /** 订阅退出（实现方在 STOPPED/CRASHED 时回调）。 */
-    fun onExit(listener: (CrashInfo?) -> Unit): ChannelSubscription
+    /** 订阅退出（委托装配方注入的 [exitSink]，STOPPED/CRASHED 时回调）。 */
+    fun onExit(listener: (CrashInfo?) -> Unit): ChannelSubscription = exitSink(listener)
 }
