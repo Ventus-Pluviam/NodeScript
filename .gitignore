@@ -10,5 +10,8 @@ captures/
 node_modules/
 *.log
 
+# node-runtime-build 构建产物（大体积二进制）
+node-runtime-build/work/
+
 # misc
 .DS_Store
