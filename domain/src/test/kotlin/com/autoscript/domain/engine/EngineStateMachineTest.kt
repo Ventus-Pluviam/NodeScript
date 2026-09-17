@@ -1,0 +1,75 @@
+package com.autoscript.domain.engine
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+
+class EngineStateMachineTest {
+
+    @Test
+    fun `happy path full lifecycle`() {
+        val m = EngineStateMachine()
+        assertEquals(EngineStatus.IDLE, m.status)
+
+        m.onExecuteRequested(); assertEquals(EngineStatus.BOOTING, m.status)
+        m.onBootCompleted();    assertEquals(EngineStatus.RUNNING, m.status)
+        m.onQuiesceStart();     assertEquals(EngineStatus.QUIESCING, m.status)
+        m.onQuiesceCompleted(); assertEquals(EngineStatus.STOPPED, m.status)
+        m.onRecycle();          assertEquals(EngineStatus.IDLE, m.status)
+    }
+
+    @Test
+    fun `crash from RUNNING goes CRASHED then recycle`() {
+        val m = EngineStateMachine()
+        m.onExecuteRequested()
+        m.onBootCompleted()
+        m.onCrash()
+        assertEquals(EngineStatus.CRASHED, m.status)
+        m.onRecycle()
+        assertEquals(EngineStatus.IDLE, m.status)
+    }
+
+    @Test
+    fun `invalid skip of BOOTING is rejected`() {
+        val m = EngineStateMachine()
+        assertThrows(IllegalStateTransition::class.java) { m.onBootCompleted() }  // IDLE → RUNNING
+    }
+
+    @Test
+    fun `quiesce only allowed from RUNNING or BOOTING`() {
+        val m = EngineStateMachine()
+        assertThrows(IllegalStateException::class.java) { m.onQuiesceStart() }   // IDLE
+        m.onExecuteRequested()
+        m.onQuiesceStart()   // BOOTING → QUIESCING allowed
+        assertEquals(EngineStatus.QUIESCING, m.status)
+    }
+
+    @Test
+    fun `kill maps cause to terminal state`() {
+        val m = EngineStateMachine()
+        m.onExecuteRequested(); m.onBootCompleted()
+        m.onKill(KillCause.REQUESTED)
+        assertEquals(EngineStatus.STOPPED, m.status)
+
+        val m2 = EngineStateMachine()
+        m2.onExecuteRequested(); m2.onBootCompleted()
+        m2.onKill(KillCause.WATCHDOG_CPU)
+        assertEquals(EngineStatus.CRASHED, m2.status)
+    }
+
+    @Test
+    fun `isLive covers active states`() {
+        val m = EngineStateMachine()
+        assertFalse(m.isLive)
+        m.onExecuteRequested()
+        assertTrue(m.isLive)
+        m.onBootCompleted()
+        assertTrue(m.isLive)
+        m.onQuiesceStart()
+        assertTrue(m.isLive)
+        m.onQuiesceCompleted()
+        assertFalse(m.isLive)
+    }
+}
