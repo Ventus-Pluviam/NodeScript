@@ -35,8 +35,9 @@
 
 ## 构建
 
-- 本机无 Android SDK：Android 模块的编译/验证在 **CI（Docker 构建镜像）** 完成；本机只有 JDK 17（`/root/develop/claude/tools/jdk-17.0.17+10`）。
-- JVM 模块（`:domain`、`:bridge:java`）可本地 `gradle :domain:test`（无 Gradle 时用 wrapper，内置后统一 `./gradlew`）。
+- 本机无 Android SDK：Android 模块的编译/验证在 **CI** 完成；本机只有 JDK 17（`/root/develop/claude/tools/jdk-17.0.17+10`）。
+- **CI 验证门**：`.github/workflows/ci.yml` —— JVM 单测（`:domain`、`:bridge:java`、`:app-service:script-repo`）+ archUnit，跑在 ubuntu-latest（JDK 17 + Gradle 8.9 + Android SDK license）。Android assemble 走后续 `node-runtime-build/Dockerfile`。
+- JVM 模块可本地 `gradle :domain:test`（当前无 gradle 二进制；`gradle wrapper` 生成后统一 `./gradlew`）。
 
 ## 协作纪律（子 agent 必须遵守）
 

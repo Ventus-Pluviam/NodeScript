@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  jvm-tests:
+    name: JVM 单测（domain / bridge:java / script-repo）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # Android SDK：无 visual/emulator，仅提供 AGP 所需的 SDK 组件 + license 接受，供 Gradle 配置期使用
+      - uses: android-actions/setup-android@v3
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"   # 与 AGP 8.5.2 匹配（≥8.7）；gradlew wrapper 就绪后改走 wrapper
+      - name: JVM 单元测试
+        run: |
+          ./gradlew :domain:test :bridge:java:test :app-service:script-repo:testDebugUnitTest --stacktrace
+        # 说明：Android 模块在无 wrapper 时用 setup-gradle 安装的 gradle 命令亦可（农场里等价 ./gradlew）
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/**
+            **/build/test-results/**
+  # Android 全量 assemble（APK）走 node-runtime-build 的 Docker 构建镜像（docs §14/§19 M1）；
+  # 等在 node-runtime-build 管线就绪后接入本文件并开启 :node / :bridge:native 交叉编译验证。
