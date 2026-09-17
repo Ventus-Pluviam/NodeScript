@@ -29,6 +29,7 @@ data class PoolAcquireRequest(
     val projectId: String,
     val scriptPath: String,
     val args: List<String> = emptyList(),
+    val runNonce: String? = null,               // 调度幂等锚点，透传 EngineRunRequest（§8.5）
     val scriptTimeoutMillis: Long? = null,      // 脚本自身超时，透传 EngineRunRequest
     val waitTimeoutMillis: Long? = null,        // 排队等待上限；null = 无限等
 )

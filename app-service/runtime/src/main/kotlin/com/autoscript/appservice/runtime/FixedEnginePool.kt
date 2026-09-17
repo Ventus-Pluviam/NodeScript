@@ -31,7 +31,8 @@ class FixedEnginePool(
 
     private val slots: List<PoolSlot> =
         List(capacity) { PoolSlot(it, engineFactory(EngineId(it)), clock) }
-    private val permits = Semaphore(capacity, fair = true)
+    // kotlinx-coroutines Semaphore 无 fair 参数（fair 是 JUC API），默认即 FIFO 公平队
+    private val permits = Semaphore(capacity)
     private val mutex = Mutex()
 
     override suspend fun acquire(request: PoolAcquireRequest): PoolAcquireOutcome {
@@ -50,6 +51,7 @@ class FixedEnginePool(
                     projectId = request.projectId,
                     scriptPath = request.scriptPath,
                     args = request.args,
+                    runNonce = request.runNonce,        // 幂等锚点透传执行体（§8.5）
                     timeoutMillis = request.scriptTimeoutMillis,
                 )
             )

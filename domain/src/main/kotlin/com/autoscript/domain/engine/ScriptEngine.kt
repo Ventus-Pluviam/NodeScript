@@ -26,6 +26,7 @@ data class EngineRunRequest(
     val projectId: String,
     val scriptPath: String,     // filesDir 相对路径
     val args: List<String> = emptyList(),
+    val runNonce: String? = null,   // 调度幂等锚点（§8.1/§8.5）：执行体用 runNonce 做对外副作用幂等键
     val timeoutMillis: Long? = null,
 )
 
