@@ -1,0 +1,14 @@
+# Android
+build/
+.gradle/
+local.properties
+.idea/
+*.iml
+captures/
+
+# Node
+node_modules/
+*.log
+
+# misc
+.DS_Store
