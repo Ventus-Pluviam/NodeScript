@@ -696,7 +696,7 @@ auto.npm.on('warning', e => ({ kind: 'scripts-skipped', pkg: ['esbuild', 'sharp'
 | `screen` | `images.ts` | `ScreenNamespaceHandler`（`:platform:capabilities`） | **已可挂**：同上，`screenHandler` 缝 |
 | `images`（fromFile/matchTemplate/findImage） | `images.ts` | 无 | 待建（`:bridge:image` / native，P1） |
 | `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | 无 | 待建（§9.4/§9.6，多为平台能力） |
-| `npm` | `npm.ts` | 无 | 待建（§10，P0 npm 切片） |
+| `npm` | `npm.ts` | `NpmBridgeHandler`（`:app-service:packager`，`mount(): NamespaceHandler`） | **已可挂**：`assemble` 的 `npmHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`；方法表 11 项，`resolveApproval` 刻意不在桥面，§10.5 人机分离） |
 | `workManager` | `workManager.ts` | 无（纯本地 helper，不发桥调用） | scheduler 面，另走 Scheduler SPI |
 
 **为什么能力命名空间走注入缝**：`a11y`/`screen` 的真实现住 `:platform:capabilities`，而 §6 禁止 `:app` 直连 `:platform`。解法是 `:domain` 上的挂载缝 `NamespaceHandler` + `:platform:capabilities` 的薄转接 `CapabilityNamespaces.{a11y,screen}`，由持有真实现的 Android 侧在调用 `assemble` 时注入；`BridgeRouter` 的 `RequestHandler` 只是这条缝的 typealias。这不违反依赖规则：两侧都只见 `:domain`。
