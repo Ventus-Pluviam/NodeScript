@@ -48,6 +48,8 @@
 
 4. **teardown 永远四步 quiesce。**
    停任何执行单元遵循固定协议：**① 停止新的 dispatch（进 SINKING）→ ② 用 generation 号等 in-flight 排空或超时斩杀（进 QUIESCED）→ ③ 释放引用/句柄/TSF → ④ 完成回调 + 归档**。禁止「直接 kill 还清理着共享资源」的野路子。资源句柄全部带 generation 号 + tombstone，跨代消息直接丢弃。
+   - 推论 A（**衍生命名**）：「quiesce 是默认、kill 是例外」不改变另一条同样硬的不变量 —— **kill 权威的落点必须同时归还槽位与许可证**。强杀省略收归 = 池容量静默缩水（后续任务全排队到超时），这是比「没杀干净」更难发现的故障形态，因为它不报错。
+   - 推论 B（**验收口径**）：一条终结路径写完，必须能看到「在途表摘除 + 槽位复位 + 许可证归还」三件事；三者缺一，该路径就还没写完。
 
 5. **依赖单向 + Domain SPI 防腐蚀。**
    Kotlin 侧依赖方向恒为 `UI / 服务层 → 领域层(纯 Kotlin) ← 平台适配层(实现 SPI)`；JS 侧恒为 `api 包 → 桥`。任何模块禁止向上依赖、禁止跨层。可替换点（ScriptEngine / AutomationChannel / ImageAnalyzer / OcrProvider / Datastore / UiHost）都以接口接缝暴露，实现可热切换。
@@ -182,7 +184,7 @@
 | 模块 | 职责 | 允许依赖 | 所有模块禁止 |
 |---|---|---|---|
 | `:app` | Compose UI（IDE/任务中心/控制台/能力中心/打包向导）＋ `AppShellApplication` 启动装配 | `:app-service:*`、`:domain` | 直连 `:platform`/`:bridge` |
-| `:app-service:runtime` | 执行编排：RuntimeController、EnginePool、Watchdog 仲裁、kill 权威 | `:domain`、`:bridge:java` | 依赖 UI/Dialog 类 |
+| `:app-service:runtime` | 执行编排：RuntimeController、EnginePool、Watchdog 仲裁、kill 权威、`engines` 命名空间处理器 | `:domain` | 依赖 UI/Dialog 类、`com.autoscript.bridge..`（archUnit 强制，严于本表的历史约定） |
 | `:app-service:scheduler` | 定时/Intent/事件任务、checkpoint 意图日志、runNonce 幂等 | `:domain` | 依赖 RunRecord 之外的引擎细节 |
 | `:app-service:script-repo` | 项目/资源/脚本库、assets→filesDir 原子部署（tmp+rename+sha256 校验） | `:domain` | 直访 danger 权限 |
 | `:app-service:permission-center` | 权限三态门禁、引导页、降级路径 | `:domain` | — |
@@ -195,7 +197,7 @@
 | `:engine:node-process` | `:nodeN` 进程宿主：main.cpp、Node config、JNI 注册、桥服务端 | `:bridge:native` | 禁 Android SDK UI |
 | `:engine:sandbox` | QuickJS 宿主进程（P1） | — | — |
 | `:platform:capabilities` | a11y 服务/UiNodeTreeReader、MediaProjection、截图 FrameSource、输入通道（无障碍/root/adb/Shizuku） | `:domain` + 系统 API | 禁服务逻辑 |
-| `:platform:system` | overlay、通知、datastore（SQLite）、shell、设备信息、zip、系统设置 | `:domain` | 禁服务逻辑 |
+| `:platform:system` | overlay、通知、datastore（SQLite）、shell、设备信息、zip、系统设置 | `:domain` | 禁服务逻辑；**仅空壳（build.gradle.kts + namespace，零源文件）**，§9.6 的实现尚未开始 |
 | `:node-runtime-build` | **构建管线（不打包进 APK）**：Node 源码 recipe、NDK 编译、16KB 对齐门禁、产物 hash | CI 脚本 | — |
 
 架构测试（archUnit）进 CI：验证「领域层零 Android import」「`:app` 不直连平台」「依赖方向无环」。
@@ -276,29 +278,34 @@ class AutojsError extends Error {
 
 ## 8. 执行层设计
 
-### 8.1 引擎抽象（`:domain:engine-api`，纯 Kotlin）
+### 8.1 引擎抽象（`:domain`，纯 Kotlin）—— 已落定形态
 ```kotlin
-interface ScriptEngine {
-  val id: EngineId; val generation: Long
-  suspend fun start(session: EngineSession): ExecutionHandle
-  suspend fun stop(reason: StopReason)                // quiesce 协议入口
-  suspend fun pause() / resume()
-  val console: Flow<ConsoleLine>                      // 数据面
-  val events: Flow<EngineEvent>                       // 控制面事件（crashed/stopped/lagged）
-  fun channel(name: String): RuntimeChannel           // engines 模块引擎间通信
+interface ScriptEngine {                              // 实现在 :engine:node-process
+  val id: EngineId
+  suspend fun execute(run: EngineRunRequest): EngineRunReceipt
+  suspend fun stop(): StopResult                      // 四步 quiesce 入口
+  suspend fun kill(): KillCause                       // 仅 RuntimeController 有调用权（§4.1 kill 权威）
+  suspend fun status(): EngineStatus
 }
-data class EngineSession(
-  val projectId: ProjectId, val entry: ScriptEntry,
-  val heapMaxMB: Int, val extraEnv: Map<String,String>,
-  val capabilities: CapabilityMask,                   // 该脚本被授予的子集
-  val runNonce: String,                               // 幂等
-)
-interface EnginePool {                                // :main 里控制 :nodeN 进程
-  suspend fun acquire(session): ExecutionHandle
-  suspend fun release(handle)                          // quiesce 四步
-  suspend fun killAll(reason)
+data class EngineRunRequest(projectId, scriptPath, args, runNonce, timeoutMillis)
+data class EngineRunReceipt(runId, handle: HandleRef)
+enum class EngineStatus { IDLE, BOOTING, RUNNING, QUIESCING, STOPPED, CRASHED }
+sealed interface StopResult { Clean; TimedOut(partial) }
+enum class KillCause { REQUESTED, WATCHDOG_HEARTBEAT, WATCHDOG_CPU, OOM, ENGINE_REQUEST }
+
+interface EnginePool {                                // 实现在 :app-service:runtime
+  val capacity: Int
+  suspend fun acquire(request: PoolAcquireRequest): PoolAcquireOutcome   // Granted | TimedOut | Failed
+  suspend fun release(handle: PoolHandle): StopResult
+  suspend fun killAll(reason: KillCause)
+  fun recycle(slot: PoolSlot)                         // 强杀后收归：槽位复位 + 还许可证（原子、幂等）
+  fun stats(): PoolStats                              // capacity / free / busy
 }
 ```
+四条与早期草案的差异（都是落地后收敛的结果，写下来防止文档倒着改代码）：
+- **无 `pause/resume`/`console: Flow`/`events: Flow`/`channel()`**：暂停未进 P0；控制台与事件走 §7.3 的 TSF 双队列 + EventBus 拉取，不建模成引擎侧 Flow（轮询式 Flow 会把「事件」伪装成「流」，丢失 TTL 与背压语义）；命名通道在 `:app-service:runtime` 的 `EnginesNamespaceHandler` 侧按 `channel/channelEmit/channelDrain/channelClose` 显式管理。
+- **引擎是一次一脚本**（`execute(run)` 非 `start(session)`）：同槽位不并发两个脚本，会话身份 = `runId`。
+- **`acquire/release` 收 `PoolAcquireRequest`/`PoolHandle`**而不是 `EngineSession`/`ExecutionHandle`：排队上限（`waitTimeoutMillis`）必须与请求同行，否则满池只能无限等。
 - 实现：`:engine:node-process`（NodeFactory）、`:engine:sandbox`（QuickJSFactory），通过 **Provider/SPI** 注入；界面完全面向接口，双引擎可互换。
 
 ### 8.2 引擎实例模型决议（批判决议）
@@ -307,7 +314,14 @@ interface EnginePool {                                // :main 里控制 :nodeN 
 - **做**：进程池 + 每脚本一进程。并发上限=池容量；超载任务进入队列（清晰的产品化语义，而不是偷偷并发）。
 - 执行中的 slot 在 `:main` 持 FGS/绑定，池进程按内存采样动态缩容（占位 slot 空闲超时回收）。
 
-### 8.3 生命周期状态机（每执行单元）
+**记账不变量（`FixedEnginePool` 强制，违反即池缩水）**：
+- 许可证（公平 `Semaphore`）与 FREE 槽位 **1:1**；夺槽必须在 `stateLock` 临界区内、且**先于** `engine.execute` —— 否则 execute 的启动耗时就是窗口期，并发 acquire 会选中同一槽位（同一进程跑两个脚本）。
+- 有证无槽 = 记账失真，立即还证返回失败，绝不吞证转死锁。
+- **每条终结路径都必须成对归还「槽位 + 许可证」**：正常 stop/release 走 `quiesce()` 后还证；启动失败与调用方取消走 `recycle`；**强杀（killRun）也必须收归** —— 这是踩过的坑：只 `kill()` 不还证，`free` 与可领许可证永久错位，池容量缩水，表现为「引擎再不接活」。
+- `recycle(slot)` 在池侧原子完成「状态复位 + 代次前进 + 还证」，幂等不超发；`PoolSlot.generation` 让过期句柄 release 时如实判定已净，绝不拆新占用者（§7.4 代次纪律）。
+- 满池时排队上限来自 `PoolAcquireRequest.waitTimeoutMillis`；**桥接路径上 `engines.exec` 的上限 = payload `waitTimeoutMillis` 优先，否则请求侧 TTL**（§7.4 每次跨进程操作必有 TTL）。TTL 若不递进池，满池只剩「无限等」一条路，调用方只能自己取消，无法诚实回 `ERR_TIMEOUT`。
+
+### 8.3 生命周期状态机（每执行单元）—— 目标态 vs P0 已落地
 
 ```
           ┌────────────────────────────────────────────────────────┐
@@ -332,16 +346,33 @@ interface EnginePool {                                // :main 里控制 :nodeN 
 - `SINKING → QUIESCED` 有容忍窗口（grace，默认 5s，可配置）：排空 in-flight（generation 匹配才算有效），窗口到未排枯则斩杀。
 - 任何路径都不可能「停在 RUNNING 无归宿」：RUNNING 必须挂一个心跳 deadline，超时即进 SINKING。
 
+**P0 已落地的收敛子集**（代码是事实来源，别按上图臆造）：
+- `:domain` 的 `EngineStateMachine` 实现了合法转移表与 `kill()` 归类（`REQUESTED → STOPPED`，其余原因 → `CRASHED`），目前**只被自己的单测驱动**；池侧（`PoolSlot`）用的是更小的三态投影 `SlotState{FREE, BUSY, QUIESCING}`（`FixedEnginePool`/`PoolSlot`），够表达 §8.2 记账，但还没有把 `EngineStatus` 的 BOOTING/RUNNING/CRASHED 差别带进槽位。
+- 因此上图里的 `SUSPENDED`（多源计数）与 `PENDING` 在 P0 **均不存在**：`EngineStatus` 枚举里没有 SUSPENDED，`awaitCompletion` 只把 RUNNING 判活（看门狗口径一致，见 §8.4）。
+- 接线的下一步（未做）：把 `EngineStateMachine` 挂到 `PoolSlot`（夺槽 → BOOTING，execute 返回 → RUNNING，quiesce → QUIESCING/STOPPED，kill 按 `KillCause` 归类），让 `status()` 由宿主真实驱动而不是 `FakeEngine` 那样的桩。**在那之前，任何依赖 SUSPENDED 的设计（暂停恢复、诊断暂停计数）都还没有代码基础。**
+
 ### 8.4 看门狗（三路，防死循环/僵尸/饥饿）
 - **心跳**（数据面，周期 ~500ms，携带自回事务序列号）：连失 K 次 → 重启判定；心跳与操作 TTL 互补——**await 的 RPC 有 TTL，整体执行有心跳**。
 - **CPU 外带差分**（`:main` 独立线程读 `/proc/<pid>/stat` utime+stime 差分，**不依赖 Node 合作**）：单核持续 >95% 超过阈值（默认 30s，可配）→ 杀。防 `while(true)`/Promise 风暴这种「心跳还活着但永不放行」的形态。
 - **内存**：RSS 超阈值（分级配置，池缩容信号）→ 降载警告，连续超阈 → kill + archive。
 - 看门狗**不作为业务**：只输出「恢复建议」（重启/重试/降级），不自动无人值守自愈（§1 诚实原则）。
 
+**P0 已落地**：`:app-service:runtime` 的 `WatchdogPolicy` 是三路纯判定（`WatchdogSample{pid,status,heartbeatMillis,cpuPercent,rssBytes} → Healthy | Kill(cause, reason)`），默认阈值：心跳 500ms × 连失 3 次、CPU ≥95% 持续 30s、RSS ≥512MB；只对 `RUNNING` 判活；`RuntimeController.judge()` 委托它，裁决落点 = `killRun`/`killAll`（kill 权威 §4.1）。
+**P0 缺口**：尚无任何生产代码喂样本 —— `/proc/<pid>/stat` 的 CPU 差分采样、心跳时间戳、RSS 轮询都还缺；pid→runId 的归属表也在调用方（`:app`）。在补上采样前，看门狗是「已就绪的判据、待接线的眼睛」，不能宣称活着。
+
 ### 8.5 崩溃恢复与幂等（checkpoint 意图日志）
 - `:main` 的 scheduler 持久化 **意图日志（intent log）**：`RUN_START(projectId, entry, runNonce, scheduledAt) → …execute… → COMMIT(result)` append-only（SQLite，启动即回放）。
 - **恢复只跟随 COMMIT**：进程/手机重启后，未 COMMIT 的 run 视为「未完成意向」→ 重新入队，但生成**新的 runId + 保留 runNonce**；执行体用 `runNonce` 做**幂等键**（外部副作用目标幂等，如「只发一次」的通知 id、datastore 原子键），杜绝重复业务副作用。
 - **rerun 新 RunRecord**（每次重跑都是新 runId）——满足批判「resume=新 runId」语义；「断点续跑」只对纯内存任务可选，涉及副作用任务默认不允许自动续。
+
+**归档入口（已落地契约，§8.5）**：两套 runId 是「一个真值的两个投影，必须成对写入」。
+
+| 侧 | 身份字段 | 寄存器 |
+|---|---|---|
+| 意图日志（scheduler） | `intentRunId`（`IntentRun.runId`） | intent log |
+| 引擎运行记录（engine） | `engineRunId`（`EngineRunReceipt.runId`） | `RunRecord(id)` |
+
+`:domain` 的 `EngineRunLink(intentRunId, engineRunId)` 是关联契约；`RunArchive` SPI 是引擎侧档案（`put(record, link)` / `record` / `link` / `recordsOfIntent` / `recordsOfProject` / `unfinished`）。纪律：终态（`SUCCEEDED/FAILED/CRASHED/CANCELLED`）append-only，**不可改写、不可复活**，违反必须响亮失败而不是静默吞。只写一侧 = 孤儿记录（「引擎在跑而任务中心查不到」或反之），`DispatchReport.link` 在门禁拒绝/排队超时/启动失败时如实为 null。接线在 `:app` 的 `ControllerRunDispatcher`（拿到 Receipt 后生成 link）+ `AppShell`（scheduler 持 `RunArchive`）。
 
 ### 8.6 调度系统
 - 触发源五类：`定时(cron/alarm) `、`Intent/广播`、`事件(无障碍/通知)`、`用户点击`、`引擎内部 engines.exec`。
