@@ -28,9 +28,11 @@ data class ControlRequest(
     val idLink: EngineRunLink? = null,
 )
 
-/**
- * 骨架实现：不接真实引擎，仅回「已受理」。生产替换为 runtime：pool → PoolHandle → EngineExecutionHandle。
- */
+/** 骨架实现：未接真实引擎/未接双 id 关联时沿用（不产生 EngineExecutionHandle）。 */
 class NoopDispatcherRunner : RunDispatcher {
     override suspend fun dispatch(pending: PendingRun): RunOutcome = RunOutcome.Succeeded
+
+    /** [outcome] 已知、无引擎侧 id 可关联（骨架期如实回 null link，绝不伪造 engineRunId）。 */
+    override suspend fun dispatchToReport(pending: PendingRun): DispatchReport =
+        DispatchReport(RunOutcome.Succeeded, null)
 }

@@ -1,5 +1,9 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.scripts.EngineRunLink
+import com.autoscript.domain.scripts.RunArchive
+import com.autoscript.domain.scripts.RunRecord
+import com.autoscript.domain.scripts.RunState
 import java.time.ZoneId
 
 /**
@@ -37,6 +41,8 @@ class Scheduler(
     private val provider: SchedulerProvider,
     private val log: IntentLog,
     private val dispatcher: RunDispatcher,
+    /** 引擎运行档案（§8.5 归档入口）。null = 未接归档（骨架/直投场景），两侧 id 关联暂缺。 */
+    private val archive: RunArchive? = null,
     private val nonceFactory: () -> String = { java.util.UUID.randomUUID().toString() },
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
@@ -95,8 +101,11 @@ class Scheduler(
                     scheduledAtMillis = scheduledAtMillis,
                     screen = task.screen,           // 恢复重投不得丢失屏幕契约（reopen 保留）
                 )
-                val outcome = dispatcher.dispatch(pending)
-                log.commit(started.runId, outcome)
+                // 归档入口（§8.5）：把日志已落行的 runId 交给 dispatcher，收回引擎侧身份，
+                // 由归档器把两侧成对写入（RunArchive.put + EngineRunLink）。
+                val report = dispatcher.dispatchToReport(pending.copy(intentRunId = started.runId))
+                log.commit(started.runId, report.outcome)
+                recordLink(pending, started.runId, report.link)
             }
         } catch (t: Throwable) {
             // 投递失败如实落地：本轮不 commit（意图日志无 STARTED 或保持未 COMMIT，交由恢复路径裁决），
@@ -134,13 +143,15 @@ class Scheduler(
         val recovered = mutableListOf<RecoveryRecord>()
         for (old in uncommitted) {
             val fresh = log.reopen(old.runId)                      // 单事务：封口 + 分配新 runId
-            val outcome = dispatcher.dispatch(fresh.toPendingRun())
-            log.commit(fresh.runId, outcome)
+            val pending = fresh.toPendingRun()
+            val report = dispatcher.dispatchToReport(pending)     // 恢复重投同样归档（§8.5）
+            log.commit(fresh.runId, report.outcome)
+            recordLink(pending, fresh.runId, report.link)
             recovered += RecoveryRecord(
                 oldRunId = old.runId,
                 newRunId = fresh.runId,
                 runNonce = old.runNonce,
-                outcome = outcome,
+                outcome = report.outcome,
             )
         }
         return recovered
@@ -168,7 +179,35 @@ class Scheduler(
         trigger = trigger,
         scheduledAtMillis = scheduledAtMillis,
         screen = screen,
+        intentRunId = runId,               // 恢复重投的新行身份（§8.5）
     )
+
+    /**
+     * 归档落点（§8.5）：把「意图日志行 ↔ 引擎执行」成对写入 [RunArchive]。
+     *
+     * 只在 dispatcher **真的产生了引擎执行**（[DispatchReport.link] != null）时写：
+     * - 登记一条 RUNNING 档案（含 [EngineRunLink]）——任务中心立即可见「引擎在跑」；
+     *   终态结算由任务中心/UI 侧按需前进（[RunState] 状态机不允许改写终态）。
+     * - link 为 null（门禁拒绝/排队超时/启动失败）如实不建档案，绝不写「有档案、实际没有
+     *   对应执行」的孤儿记录。
+     *
+     * 顺序：在 [log.commit] **之后**执行 —— 本次执行的对外副作用已发生并已落日志，
+     * 归档失败（持久层 IO 异常）只让档案缺失，不得回滚 COMMIT（否则 nonce 幂等集合丢失 →
+     * 崩溃恢复会重投同一副作用）。
+     */
+    private suspend fun recordLink(pending: PendingRun, intentRunId: Long, link: EngineRunLink?) {
+        val a = archive ?: return
+        if (link == null) return
+        val record = RunRecord(
+            id = link.engineRunId,
+            projectId = pending.projectId,
+            scriptPath = pending.scriptPath,
+            runNonce = pending.runNonce,
+            state = RunState.RUNNING,
+            startedAtMillis = clock(),
+        )
+        a.put(record, link)
+    }
 }
 
 /** 恢复结果：一次未完成意向的封口 + 重投（§8.5）。 */

@@ -3,6 +3,7 @@ package com.autoscript.shell
 import com.autoscript.appservice.runtime.EnginesNamespaceHandler
 import com.autoscript.appservice.runtime.FixedEnginePool
 import com.autoscript.appservice.runtime.RuntimeController
+import com.autoscript.appservice.scheduler.core.InMemoryRunArchive
 import com.autoscript.appservice.scheduler.core.IntentLog
 import com.autoscript.appservice.scheduler.core.Scheduler
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
@@ -15,6 +16,7 @@ import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.ScriptEngine
+import com.autoscript.domain.scripts.RunArchive
 
 /**
  * :app 装配根（docs §4.1 Composition Root，手写 DI，不用 Hilt）。
@@ -23,11 +25,14 @@ import com.autoscript.domain.engine.ScriptEngine
  * - 引擎池（[FixedEnginePool]，P0 定容 1）+ [RuntimeController]（kill 权威）；
  * - 调度（[Scheduler] + [IntentLog] + [SchedulerProvider]）经 [ControllerRunDispatcher]
  *   落到 controller（scheduler arch 门禁禁止 scheduler→runtime 直连，接线只能在此）；
+ * - **归档（§8.5）**：dispatcher 产出的 [com.autoscript.domain.scripts.EngineRunLink]
+ *   （intentRunId ↔ engineRunId）与 :domain `RunRecord` 一并写入 [RunArchive]，
+ *   使意图日志行与引擎执行可互相追溯（任务中心/UI 按 IntentRun 读引擎记录）；
  * - 桥（[BridgeRouter] + [RequestRegistry] + [EventBus]）挂 `console`/`engines`
  *   命名空间（a11y/images 等能力 handler 由真实现就绪后在此注册）。
  *
- * Android 能力缝（[engineFactory]/[schedulerProvider]/[screenGate]）由 Application/
- * Activity 在此注入；JVM 单测走 [forTest] 传 fake。
+ * Android 能力缝（[engineFactory]/[schedulerProvider]/[screenGate]/[runArchive]）由
+ * Application/Activity 在此注入；JVM 单测走 [assemble] 传 fake。
  */
 class AppShell(
     val router: BridgeRouter,
@@ -38,6 +43,7 @@ class AppShell(
     val dispatcher: ControllerRunDispatcher,
     val scheduler: Scheduler,
     val intentLog: IntentLog,
+    val runArchive: RunArchive,
 ) : AutoCloseable {
 
     /** 按 namespace 薄转接 handler 到 [BridgeRouter]（本层无逻辑，只做形状适配）。 */
@@ -53,6 +59,7 @@ class AppShell(
             engineFactory: (EngineId) -> ScriptEngine,
             schedulerProvider: SchedulerProvider,
             intentLog: IntentLog,
+            runArchive: RunArchive = InMemoryRunArchive(),
             screenGate: ScreenGate = ScreenGate.AllowAll,
             poolCapacity: Int = 1,
         ): AppShell {
@@ -67,7 +74,7 @@ class AppShell(
             router.register("engines") { request -> enginesHandler.handleLike(request) }
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
-            val scheduler = Scheduler(schedulerProvider, intentLog, dispatcher)
+            val scheduler = Scheduler(schedulerProvider, intentLog, dispatcher, runArchive)
 
             return AppShell(
                 router = router,
@@ -78,6 +85,7 @@ class AppShell(
                 dispatcher = dispatcher,
                 scheduler = scheduler,
                 intentLog = intentLog,
+                runArchive = runArchive,
             )
         }
     }
