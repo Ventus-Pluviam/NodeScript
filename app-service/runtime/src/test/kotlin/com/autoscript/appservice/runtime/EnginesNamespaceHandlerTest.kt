@@ -62,16 +62,44 @@ class EnginesNamespaceHandlerTest {
     @Test
     fun `exec 满池排队超时回 ERR_TIMEOUT`() = runBlocking {
         val (h, _) = handler()
-        h.handle(EnginesNamespaceHandler.Request(1, "exec", execPayload()))
-        // 池容量 1 已被占；JS 侧 exec 默认 ttl=15s，这里只验证"满池有请求进来"的映射语义——
-        // handler 不自己排队（池排队由 waitTimeoutMillis 驱动）；直接用 stop 释放后再 exec 成功。
-        val stopFirst = assertInstanceOf(
+        val first = assertInstanceOf(
             EnginesNamespaceHandler.Response.Ok::class.java,
-            h.handle(EnginesNamespaceHandler.Request(2, "stop", """{"runId":1}""")),
+            h.handle(EnginesNamespaceHandler.Request(1, "exec", execPayload())),
         )
-        assertEquals("true", stopFirst.payload)
-        val retry = h.handle(EnginesNamespaceHandler.Request(3, "exec", execPayload()))
-        assertInstanceOf(EnginesNamespaceHandler.Response.Ok::class.java, retry)
+        val held =
+            (EngineBridgeJson.decodeObject(first.payload!!)["runId"] as EngineBridgeJson.Value.N).raw.toLong()
+        // 排队上限只来自桥侧 TTL（payload 不再收 waitTimeoutMillis）：槽位被 held 占着，
+        // 第二个请求等满 300ms TTL → ERR_TIMEOUT，绝不无限挂住（§7.4 每次跨进程操作必有 TTL）。
+        val queued = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Err::class.java,
+            h.handle(
+                EnginesNamespaceHandler.Request(
+                    2,
+                    "exec",
+                    execPayload("p2", "b.js"),
+                    ttlMillis = 300,
+                ),
+            ),
+        )
+        assertEquals("ERR_TIMEOUT", queued.code, "满池 + TTL 到期 → ERR_TIMEOUT")
+        // 在途者不受排队失败影响：stop 后槽位归池，同参数请求随即拿到槽（池容量未缩水）。
+        val stopHeld = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(
+                EnginesNamespaceHandler.Request(3, "stop", """{"runId":$held}""", ttlMillis = 5_000),
+            ),
+        )
+        assertEquals("true", stopHeld.payload)
+        val retry = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(
+                EnginesNamespaceHandler.Request(4, "exec", execPayload("p2", "b.js"), ttlMillis = 5_000),
+            ),
+        )
+        val retryId =
+            (EngineBridgeJson.decodeObject(retry.payload!!)["runId"] as EngineBridgeJson.Value.N).raw.toLong()
+        assertTrue(retryId != held, "释放后的槽位应分配给新 run")
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
@@ -133,6 +161,7 @@ class EnginesNamespaceHandlerTest {
         )
         assertEquals("""{"capacity":1,"free":0,"busy":1}""", during.payload)
         h.handle(EnginesNamespaceHandler.Request(4, "stop", """{"runId":$runId}"""))
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test

@@ -97,6 +97,8 @@ class AppShellTest {
             val ok = assertInstanceOf(BridgeResponse.Ok::class.java, execResp)
             assertTrue(ok.payload!!.contains("runId"))
         }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
@@ -120,6 +122,8 @@ class AppShellTest {
             assertTrue(runs[0].outcome != null, "dispatcher 对偶后 scheduler 统一 COMMIT")
             assertEquals(log.all()[0].runNonce, engines.single().executed.single().runNonce)
         }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
@@ -130,5 +134,7 @@ class AppShellTest {
             val resp = s.router.dispatch(BridgeRequest(9, "echo", "ping", """"x"""", 5_000))
             assertEquals(""""x"""", (resp as BridgeResponse.Ok).payload)
         }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 }

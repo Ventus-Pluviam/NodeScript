@@ -85,6 +85,50 @@ class RuntimeControllerTest {
     }
 
     @Test
+    fun `强杀后归还槽位与许可证 池容量不缩水`() = runBlocking {
+        val (c, _) = controller()
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        assertEquals(PoolStats(1, free = 0, busy = 1), c.stats())
+
+        c.killRun(started.runId, KillCause.WATCHDOG_CPU)
+
+        // 强杀是终结路径：槽位必须回到 FREE 且许可证必须归还，否则池容量永久缩水
+        assertEquals(PoolStats(1, free = 1, busy = 0), c.stats(), "强杀后未归还槽位/许可证 → 池缩水")
+        // 缩水的直接后果：下一次 start 拿不到证，挂到排队超时
+        val second = c.start(PoolAcquireRequest("p2", "b.js", waitTimeoutMillis = 300))
+        assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java, second,
+            "强杀后槽位/许可证未归还：后续 start 只能排队到超时",
+        )
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `强杀后旧句柄 stop 不拆新占用者且不超发许可证`() = runBlocking {
+        val (c, _) = controller()
+        val first = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        c.killRun(first.runId, KillCause.OOM)
+        val second = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p2", "b.js", waitTimeoutMillis = 300)),
+        )
+        // 强杀推进了槽位代次：旧 runId 再 stop 必须如实 AlreadyGone，绝不释放新占用者的槽位
+        assertEquals(RuntimeController.StopOutcome.AlreadyGone, c.stop(first.runId))
+        assertEquals(setOf(second.runId), c.activeRunIds(), "新占用者仍在途")
+        assertEquals(PoolStats(1, free = 0, busy = 1), c.stats(), "许可证不超发")
+        c.stop(second.runId)
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
     fun `killAll 清空在途并与 start 串行`() = runBlocking {
         val (c, engines) = controller(capacity = 2)
         val a = assertInstanceOf(
@@ -185,6 +229,7 @@ class RuntimeControllerTest {
         assertEquals(setOf(b.runId), c.activeRunIds(), "只收走本 run 的槽位")
         assertEquals(PoolStats(2, free = 1, busy = 1), c.stats())
         c.stop(b.runId)
+                Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
@@ -203,6 +248,7 @@ class RuntimeControllerTest {
         assertEquals(RuntimeController.Completed.TimedOut, c.awaitCompletion(started.runId, timeoutMillis = 100))
         assertEquals(setOf(started.runId), c.activeRunIds(), "超时不收槽位，调用方决定 kill/续等")
         c.stop(started.runId)
+                Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test

@@ -110,6 +110,7 @@ class ControllerRunDispatcherArchiveTest {
         assertEquals(RunOutcome.Cancelled, report.outcome)
         assertNull(report.link, "排队取消未执行引擎 → 无关联")
         controller.stop(held.runId)
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test

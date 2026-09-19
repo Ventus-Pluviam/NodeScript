@@ -83,6 +83,8 @@ class PoolAccountingTest {
         engines[1].open()
         a.await()
         b.await()
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     /** 不变量 2：kill 收归 → 许可证必须归还，池容量不缩水。 */
@@ -106,6 +108,8 @@ class PoolAccountingTest {
             PoolAcquireOutcome.Granted::class.java, second,
             "杀槽必须归还许可证：否则 free=1 却无证可领，池容量永久缩水",
         )
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     /** 不变量 2b：recycle 幂等 —— 重复收归不超发许可证。 */
@@ -128,6 +132,8 @@ class PoolAccountingTest {
         val b = pool.acquire(PoolAcquireRequest("p3", "c.js", waitTimeoutMillis = 300))
         assertInstanceOf(PoolAcquireOutcome.Granted::class.java, a)
         assertInstanceOf(PoolAcquireOutcome.TimedOut::class.java, b, "容量 1：第二次 acquire 必须排队到超时")
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     /** 不变量 3：过期句柄（generation 不匹配）release 是空操作，不拆新占用者。 */

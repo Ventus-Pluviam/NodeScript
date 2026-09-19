@@ -66,11 +66,24 @@ class RuntimeController(
 
     /**
      * 强杀一次执行（看门狗裁决的落点；kill 权威 §4.1）。
+     *
+     * **终结路径必须收归槽位**：本方法既是 kill 入口也是这次 run 的结束点
+     * （[awaitCompletion] 的 CRASHED/ settleKilled 同口径），所以 kill 之后必须
+     * 把槽位与许可证一并还给池 —— 否则 `free` 与可领许可证永久错位，池容量缩水
+     * （后续 start 一律排队到超时，表现为「引擎再不接活」）。
+     * 收归走 [EnginePool.recycle]（池侧原子完成「槽位复位 + 还证」，幂等不超发），
+     * 与 [killAll] 的强释路径区分：killAll 是广播式全清，不逐个 recycle。
+     * 不用 [EnginePool.release]：那会先走四步 quiesce（stop）再 kill 兜底 ——
+     * 对一个已经决定强杀的执行体是多余的一次「礼貌请求」，且 stop 的语义是
+     * 优雅排空，与 kill 权威语义相反。
+     *
      * @return null = 该 runId 不在途（已被 stop/killAll 收走），调用方不得视为成功 kill。
      */
     suspend fun killRun(runId: Long, cause: KillCause): KillCause? {
         val handle = guard.withLock { active.remove(runId) } ?: return null
-        return handle.slot.engine.kill()
+        val killed = handle.slot.engine.kill()
+        pool.recycle(handle.slot)          // 强杀即终结：槽位 + 许可证必须成对归还（§8.2 记账）
+        return killed
     }
 
     /** 全部强杀（killAll 与 start/stop 串行，防许可证超发）。 */

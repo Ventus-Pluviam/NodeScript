@@ -12,9 +12,12 @@ import com.autoscript.domain.core.ErrorCode
  * internal TinyJson，架构门禁见 ArchitectureTest）。
  *
  * 方法表（与 `bridge/js` engines.ts 一一对应）：
- * - `exec`：payload `{projectId,scriptPath,args?,runNonce?,timeoutMillis?}` →
+ * - `exec`：payload `{projectId,scriptPath,args?,runNonce?,timeoutMillis?,waitTimeoutMillis?}` →
  *   [RuntimeController.start]；Started → Ok `{runId,handle:{refId,generation}}`，
  *   QueueTimeout → Err ERR_TIMEOUT，StartFailed → Err ERR_ENGINE_CRASHED；
+ *   排队上限 = payload `waitTimeoutMillis` 优先，否则桥侧 [Request.ttlMillis]
+ *   （§7.4 每次跨进程操作必有 TTL）——没有上限时满池即无限等，只能靠调用方取消兜底，
+ *   那条路径无法诚实回 ERR_TIMEOUT，故必须把 TTL 递进池；
  * - `stop`：payload `{runId}` → StoppedClean → Ok `true`；
  *   StoppedTimeout → Err ERR_TIMEOUT（软停未干净完成，已 kill 兜底，如实报错不伪造成功）；
  *   AlreadyGone → Err ERR_NOT_FOUND（未知 runId 不静默吞掉）；
@@ -30,7 +33,13 @@ class EnginesNamespaceHandler(
     private val controller: RuntimeController,
     private val channelCapacity: Int = DEFAULT_CHANNEL_CAPACITY,
 ) {
-    data class Request(val id: Long, val method: String, val payload: String?)
+    data class Request(
+        val id: Long,
+        val method: String,
+        val payload: String?,
+        /** 请求侧 TTL（§7.4）：`exec` 据此推导排队上限；null = 不设上限（无限等）。 */
+        val ttlMillis: Long? = null,
+    )
     sealed interface Response {
         data class Ok(val id: Long, val payload: String?) : Response
         data class Err(val id: Long, val code: String, val detail: String?) : Response
@@ -57,7 +66,8 @@ class EnginesNamespaceHandler(
         } catch (e: IllegalArgumentException) {
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
-        return when (val outcome = controller.start(p)) {
+        val bounded = p.copy(waitTimeoutMillis = p.waitTimeoutMillis ?: request.ttlMillis)
+        return when (val outcome = controller.start(bounded)) {
             is RuntimeController.StartOutcome.Started -> ok(
                 request.id,
                 EngineBridgeJson.encode(
@@ -109,6 +119,7 @@ class EnginesNamespaceHandler(
             args = optStrList(o, "args"),
             runNonce = optStr(o, "runNonce"),
             scriptTimeoutMillis = optLong(o, "timeoutMillis"),
+            waitTimeoutMillis = optLong(o, "waitTimeoutMillis"),
         )
     }
 

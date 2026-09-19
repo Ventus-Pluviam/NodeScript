@@ -99,6 +99,7 @@ class PermissionCenterTest {
         assertThrows(AutojsException::class.java) {
             runBlocking { c.requireGrantedOrThrow(Capability.OVERLAY, "弹窗") }
         }
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test

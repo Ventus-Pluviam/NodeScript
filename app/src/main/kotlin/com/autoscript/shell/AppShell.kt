@@ -94,7 +94,14 @@ class AppShell(
 /** engines handler 用自有 Request/Response 形状；桥接层做字段级转接（无逻辑）。 */
 private suspend fun EnginesNamespaceHandler.handleLike(request: BridgeRequest): BridgeResponse {
     return when (
-        val r = handle(EnginesNamespaceHandler.Request(request.id, request.method, request.payload))
+        val r = handle(
+            EnginesNamespaceHandler.Request(
+                id = request.id,
+                method = request.method,
+                payload = request.payload,
+                ttlMillis = request.ttlMillis,
+            ),
+        )
     ) {
         is EnginesNamespaceHandler.Response.Ok ->
             BridgeResponse.Ok(r.id, r.payload)

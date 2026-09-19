@@ -91,6 +91,7 @@ class InMemoryIntentLogTest {
 
         assertThrows(IllegalArgumentException::class.java) { runBlocking { log.reopen(9999L) } }
         assertThrows(IllegalArgumentException::class.java) { runBlocking { log.reopen(a.runId) } }
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
@@ -108,6 +109,7 @@ class InMemoryIntentLogTest {
         assertThrows(IllegalStateException::class.java) {
             runBlocking { log.appendStart("p", "c.js", "nonce-done", TriggerSource.TIMED, 5000) }
         }
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test

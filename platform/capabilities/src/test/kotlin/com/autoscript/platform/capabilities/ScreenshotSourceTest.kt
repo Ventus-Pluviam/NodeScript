@@ -71,6 +71,7 @@ class ScreenshotSourceTest {
         assertCode(ErrorCode.ERR_INVALID_PARAM) { src.capture() }
         now += 300
         src.capture() // 窗口外恢复
+        Unit                                           // 显式收尾：节流窗口外恢复成功
     }
 
     @Test

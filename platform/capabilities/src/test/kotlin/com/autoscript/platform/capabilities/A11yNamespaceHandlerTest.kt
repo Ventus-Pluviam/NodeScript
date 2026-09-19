@@ -133,6 +133,8 @@ class A11yNamespaceHandlerTest {
             handler.handle(A11yNamespaceHandler.Request(14, "setText", """{"ref":$refJson,"text":"x"}""")),
         )
         assertEquals("false", setNo.payload)
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
@@ -218,6 +220,8 @@ class A11yNamespaceHandlerTest {
             handler.handle(A11yNamespaceHandler.Request(44, "scroll", """{"ref":$refJson,"direction":"斜向"}""")),
         )
         assertEquals("ERR_INVALID_PARAM", bad.code)
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test

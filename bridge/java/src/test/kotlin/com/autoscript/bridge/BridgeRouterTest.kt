@@ -53,6 +53,7 @@ class BridgeRouterTest {
         assertEquals(ErrorCode.ERR_INVALID_PARAM.code, err.errorCode)
         gate.complete(Unit)                                // 放行首个，避免超时噪音
         first.await()
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
