@@ -24,9 +24,9 @@ import org.junit.jupiter.api.Test
  * `:app` 只按注入缝拿 [NamespaceHandler] 挂 Router，不 new 具体实现。
  *
  * 覆盖三件事：
- * 1. 注入 `a11y`/`screen` 缝 → 请求可达真实逻辑（这里用内存假实现，等价于
- *    `:platform:capabilities` 的真实现）；
- * 2. 不注入 → 桥对 `a11y.*`/`screen.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
+ * 1. 注入 `a11y`/`screen`/`npm` 缝 → 请求可达真实逻辑（这里用内存假实现，等价于
+ *    `:platform:capabilities` 的真实现与 `:app-service:packager` 的 npm 真实现）；
+ * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
  *    **绝不伪造可用**；
  * 3. `console`/`engines` 与能力缝共存，互不抢占 namespace。
  */
@@ -53,6 +53,7 @@ class AppShellCapabilityMountTest {
             intentLog = InMemoryIntentLog(),
             a11yHandler = map["a11y"],
             screenHandler = map["screen"],
+            npmHandler = map["npm"],
         )
     }
 
@@ -76,9 +77,17 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
+    private val fakeNpm = NamespaceHandler { request ->
+        when (request.method) {
+            "list" -> BridgeResponse.Ok(request.id, """[{"name":"axios","version":"1.7.0"}]""")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeNpm only implements list")
+        }
+    }
+
     @Test
     fun `注入能力缝后 a11y screen 可达`() = runBlocking {
-        val s = shell("a11y" to fakeA11y, "screen" to fakeScreen)
+        val s = shell("a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm)
         s.use {
             val a11yResp = s.router.dispatch(
                 BridgeRequest(1, "a11y", "findOne", """{"conditions":{"text":"启动"}}""", 5_000),
@@ -91,6 +100,12 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(2, "screen", "capture", null, 5_000),
             )
             assertInstanceOf(BridgeResponse.Ok::class.java, screenResp)
+
+            val npmResp = s.router.dispatch(
+                BridgeRequest(5, "npm", "list", """{"projectId":"p1"}""", 5_000),
+            )
+            assertEquals("""[{"name":"axios","version":"1.7.0"}]""",
+                (npmResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -118,6 +133,9 @@ class AppShellCapabilityMountTest {
 
             val screenResp = s.router.dispatch(BridgeRequest(2, "screen", "capture", null, 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (screenResp as BridgeResponse.Err).errorCode)
+
+            val npmResp = s.router.dispatch(BridgeRequest(3, "npm", "list", null, 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (npmResp as BridgeResponse.Err).errorCode)
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
@@ -133,6 +151,9 @@ class AppShellCapabilityMountTest {
             )
             val screenResp = s.router.dispatch(BridgeRequest(2, "screen", "capture", null, 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (screenResp as BridgeResponse.Err).errorCode)
+
+            val npmResp = s.router.dispatch(BridgeRequest(3, "npm", "list", null, 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (npmResp as BridgeResponse.Err).errorCode)
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
