@@ -161,7 +161,9 @@ class ControllerRunDispatcherTest {
             RuntimeController.StartOutcome.Started::class.java,
             controller.start(PoolAcquireRequest("p0", "hold.js")),
         )
-        // 构造时不给 queueTimeoutMillis，但给慢时钟：上限仍会到期（不是无限等）
+        // 构造时不给 queueTimeoutMillis：上限来自分级表，仍是有限等而不是无限等。
+        // 这里注入 40s 只为「一眼看得出不是 0/无限等」，真实默认值见 DEFAULT_QUEUE_TIMEOUTS
+        // （ENGINE_INTERNAL 15s）；真要等满 15s 单测就太慢了，故用注入缝缩短验证目标。
         val d = ControllerRunDispatcher(controller, queueTimeoutFor = { 40_000L })
         val p = pending(trigger = TriggerSource.ENGINE_INTERNAL)
         val outcome = d.dispatch(p)
