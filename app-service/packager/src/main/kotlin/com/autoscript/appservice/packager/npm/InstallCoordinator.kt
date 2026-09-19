@@ -187,6 +187,7 @@ class InstallCoordinator(
         val lines = if (Files.exists(npmrc)) Files.readAllLines(npmrc).toMutableList() else mutableListOf()
         lines.removeIf { it.startsWith("$k=") }
         if (value != null) lines.add("$k=$value")
+        Files.createDirectories(npmrc.parent)
         Files.write(npmrc, lines)
     }
 
