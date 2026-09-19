@@ -6,6 +6,7 @@ import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalStatus
 import com.autoscript.domain.npm.InstallEvent
+import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.PackageSpec
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -338,6 +339,36 @@ class InstallCoordinatorTest {
             runBlocking { coordinator().install("full", listOf(PackageSpec("axios"))) }
         }
         assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
+    }
+
+    // ═══ TTL（铁律 3：zombie RUNNING 不可构造） ═══
+
+    @Test
+    fun `执行体超时 → ERR_TIMEOUT + journal fail + 残骸清扫（绝不挂起卡死）`() = runBlocking {
+        val exec = FakeExecutor { kotlinx.coroutines.delay(Long.MAX_VALUE / 1000) }
+        val c = coordinator(executor = exec)
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.install("p1", listOf(PackageSpec("axios")), InstallFlags(timeoutMillis = 120)) }
+        }
+        assertEquals(ErrorCode.ERR_TIMEOUT, ex.error, "超时必须 ERR_TIMEOUT，不能假装成功")
+        assertEquals(InstallJournal.State.FAIL, journal.all().last().state, "超时也走 fail 封口")
+        assertTrue(
+            Files.list(layout.projectRoot("p1")).noneMatch { it.fileName.toString().startsWith("node_modules.part-") },
+            "暂存残骸必须清扫",
+        )
+    }
+
+    @Test
+    fun `超时后锁已释放：同一项目可立即重试（TTL 不变成永久排队）`() = runBlocking {
+        val exec = FakeExecutor { kotlinx.coroutines.delay(Long.MAX_VALUE / 1000) }
+        val c = coordinator(executor = exec)
+        assertThrows(AutojsException::class.java) {
+            runBlocking { c.install("p1", listOf(PackageSpec("axios")), InstallFlags(timeoutMillis = 120)) }
+        }
+        // 换一个会成功的执行体，同一项目重试必须不被上一次超时卡住
+        val ok = coordinator(executor = FakeExecutor())
+        ok.install("p1", listOf(PackageSpec("axios")))
+        assertTrue(journal.all().last().state == InstallJournal.State.COMMIT, "重试必须能走通")
     }
 
     // ═══ 事件流 ═══

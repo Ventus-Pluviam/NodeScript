@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Files
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -73,6 +74,11 @@ class InstallCoordinator(
         /**
          * 在已分配的事务上下文里执行重操作；args 为 npm CLI 参数（install/ci/…）。
          * 实现方负责进度事件（经 [ProgressSink]）。
+         *
+         * **TTL 契约（铁律 3）**：协调器已对本次调用套 [op.timeoutMillis]（withTimeoutOrNull），
+         * 超时即取消并回 err 路径收尾（journal fail + 残骸清扫 + 锁释放）。故实现方必须
+         * 合作式响应取消（阻塞 IO 拆成可中断段、子进程随取消销毁）——不响应取消的执行体
+         * 会在超时后变成孤儿：项目锁虽已释放，但它仍可能与新会话争抢同一 stageDir。
          */
         suspend fun execute(op: HeavyOp, sink: ProgressSink): String   // 返回摘要（人类可读）
 
@@ -341,9 +347,19 @@ class InstallCoordinator(
         try {
             if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "安装已取消")
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.RESOLVE))
-            val summary = executor.execute(HeavyOp(nonce, projectId, args, layout.projectRoot(projectId), stageDir, timeoutMillis)) { ev ->
-                events.tryEmit(ev)
-            }
+            // 铁律 3「每次操作必有 TTL，zombie RUNNING 不可构造」：执行体必须被时限终结。
+            // 不用 withTimeout 而用 withTimeoutOrNull：后者只在**本次**超时时返回 null，
+            // 不会把外层协程的取消（用户取消/UI 销毁）吞成异常再往下传。
+            // 无此时限的后果是具体故障而非理论风险：npm 会话卡死 → projectLock 与
+            // globalSession 双双不释放 → 此后所有 npm 操作排队到天荒地老。
+            val summary = withTimeoutOrNull(timeoutMillis) {
+                executor.execute(
+                    HeavyOp(nonce, projectId, args, layout.projectRoot(projectId), stageDir, timeoutMillis),
+                ) { ev -> events.tryEmit(ev) }
+            } ?: throw AutojsException(
+                ErrorCode.ERR_TIMEOUT,
+                "安装会话超时（${timeoutMillis}ms）：npm ${args.joinToString(" ")}（执行体未在 TTL 内收尾）",
+            )
             // §10.2 调用链末段：post-check（lock/产物就位校验）→ 落位 → 归档
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.POST_CHECK))
             warnScriptsSkipped(projectId, handle.id, stageDir)
