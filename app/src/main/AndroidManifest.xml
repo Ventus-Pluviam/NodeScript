@@ -1,9 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 精确闹钟（§8.6 守时契约）：用户/系统可在设置里收回，收回后走 setWindow 降级
+         并在能力中心标注「可能偏差」（AlarmSchedulerProvider.degradedTasks），不静默降级。 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 唤醒锁 + specialUse FGS：见 §8.7（本轮未接线 PowerManager 调用，权限先按契约就位）。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- P0 最小闭环宿主：specialUse FGS / 精确闹钟等权限项按 §8.7 逐步补齐 -->
     <application
         android:name=".AppShellApplication"
         android:label="AutoScript"
-        android:supportsRtl="true" />
+        android:supportsRtl="true">
+
+        <!--
+          闹钟接收器（§8.6「AlarmManager setExactAndAllowWhileIdle → receiver」）：
+          **静态注册**——精确闹钟响时进程可能已被 ROM 杀掉，registerReceiver 收不到。
+          ACTION_FIRE 是自家广播，无需 exported：Intent(context, cls) 构造时显式
+          component 已限定目标，外部应用无权也没有理由触发这条 action。
+        -->
+        <receiver
+            android:name="com.autoscript.shell.AlarmReceiver"
+            android:directBootAware="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.autoscript.shell.action.ALARM_FIRE" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>
