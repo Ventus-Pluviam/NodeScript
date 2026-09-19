@@ -45,6 +45,7 @@ class InstallCoordinator(
     private val staging: InstallStaging,
     private val ledger: ApprovalLedger,
     private val history: InstallHistory? = null,
+    private val lockSigner: LockSigner? = null,
     private val cacheIndex: CacheIndex,
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
     private val freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
@@ -137,8 +138,12 @@ class InstallCoordinator(
         return enqueueHeavy(projectId, args, flags.timeoutMillis)
     }
 
-    override suspend fun ci(projectId: String, offline: Boolean): InstallHandle =
-        enqueueHeavy(projectId, listOf("ci") + if (offline) listOf("--prefer-offline") else emptyList())
+    override suspend fun ci(projectId: String, offline: Boolean): InstallHandle {
+        // §10.5-1：npm ci 严格按 lock 重建，故 ci 前必须验签——lock 被改/被换/跨项目搬运
+        // 一律 ERR_PERMISSION_DENIED，绝不「没签就跳过」（TOFU 自签正是被批判的形态）。
+        lockSigner?.verifyOrThrow(projectId, layout.lockfile(projectId))
+        return enqueueHeavy(projectId, listOf("ci") + if (offline) listOf("--prefer-offline") else emptyList())
+    }
 
     override suspend fun update(projectId: String, spec: String?): InstallHandle =
         enqueueHeavy(projectId, listOf("update") + listOfNotNull(spec))
@@ -346,6 +351,19 @@ class InstallCoordinator(
             staging.commit(projectId, nonce)
             journal.commit(nonce, projectId, stageDir.fileName.toString())
             tracked.done = true
+            // §10.5-1：install 会重写项目 lock（执行体 harvest 写回），签要跟着更新——
+            // 用旧签会导致紧随其后的 ci 验签失败。签名失败 = 不谎称成功（回滚太重，
+            // 改为中止本次安装：journal 已 commit 但 UI 拿到的是失败事件，用户可重试）。
+            try {
+                lockSigner?.sign(projectId, layout.lockfile(projectId))
+            } catch (e: Exception) {
+                history?.record(opName(args), projectId, false, "lock 签名失败: ${e.message}")
+                emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = "lock 签名失败: ${e.message}"))
+                throw AutojsException(
+                    ErrorCode.ERR_PERMISSION_DENIED,
+                    "lock 签名失败（应用密钥不可用？§10.5-1 安全降级须显式）：${e.message}",
+                )
+            }
             history?.record(opName(args), projectId, true, summary)
             emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
         } catch (e: Exception) {
