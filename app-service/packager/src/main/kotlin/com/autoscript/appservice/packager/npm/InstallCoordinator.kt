@@ -60,6 +60,13 @@ class InstallCoordinator(
         val quotaWarnRatio: Double = 0.8,                  // 80% 黄
     )
 
+    /** lifecycle 脚本字段（§10.5-3 的扫描面）：出现任一即视为「装了但脚本没跑」。 */
+    private val LIFECYCLE_KEYS = listOf(
+        "preinstall", "install", "postinstall",
+        "preuninstall", "uninstall", "postuninstall",
+        "prepare", "preprepare", "preparePack",
+    )
+
     /** 重操作执行体接缝：拉起安装会话跑 vendored npm CLI（§10.2 调用链末段）。 */
     fun interface HeavyOpExecutor {
         /**
@@ -334,6 +341,7 @@ class InstallCoordinator(
             }
             // §10.2 调用链末段：post-check（lock/产物就位校验）→ 落位 → 归档
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.POST_CHECK))
+            warnScriptsSkipped(projectId, handle.id, stageDir)
             // 执行体把产物写在 stageDir；落位由 staging.commit 原子 rename
             staging.commit(projectId, nonce)
             journal.commit(nonce, projectId, stageDir.fileName.toString())
@@ -348,6 +356,45 @@ class InstallCoordinator(
             emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
             throw e
         }
+    }
+
+    /**
+     * §10.5-3「禁止静默」：T0 主路径全程 `--ignore-scripts`（HostNodeExecutor 参数面），
+     * 所以带 lifecycle 脚本的包必然有脚本**没跑**。落位前扫一遍暂存树，命中即发
+     * [InstallEvent.Warning]SCRIPTS_SKIPPED + 包名清单——不阻塞安装（T0 契约就是这样），
+     * 但绝不假装无事发生；UI 依赖该事件显式告知「脚本未运行」。
+     *
+     * 扫描面：各顶层依赖 package.json 的 install-scripts 字段（pre/post install，
+     * preuninstall/uninstall，prepare/preparePack）。只读顶层（深度 1 的 node_modules/＊）
+     * —— 传递依赖同属这些包自己的声明，按顶层包汇总即可覆盖。
+     */
+    private suspend fun warnScriptsSkipped(projectId: String, handleId: String, stageDir: java.nio.file.Path) {
+        val marked = ArrayList<String>()
+        if (Files.isDirectory(stageDir)) {
+            Files.list(stageDir).use { s ->
+                s.filter { Files.isDirectory(it) && it.fileName.toString().let { n -> !n.startsWith(".") && n != "node_modules" } }
+                    .forEach { pkgDir ->
+                        if (hasLifecycleScript(pkgDir.resolve("package.json"))) marked += pkgDir.fileName.toString()
+                    }
+            }
+        }
+        if (marked.isEmpty()) return
+        emit(
+            InstallEvent.Warning(
+                projectId = projectId,
+                handleId = handleId,
+                kind = InstallEvent.Kind.SCRIPTS_SKIPPED,
+                pkgs = marked.sorted(),
+                message = "以下包的安装脚本未运行（零 spawn 契约 --ignore-scripts）：${marked.sorted().joinToString(", ")}",
+            ),
+        )
+    }
+
+    /** 该包的 package.json 是否声明 install-scripts 字段（不解析脚本内容）。 */
+    private fun hasLifecycleScript(pkgJson: java.nio.file.Path): Boolean {
+        if (!Files.isRegularFile(pkgJson)) return false
+        val text = Files.readString(pkgJson, java.nio.charset.StandardCharsets.UTF_8)
+        return LIFECYCLE_KEYS.any { "\"$it\"" in text }
     }
 
     /**

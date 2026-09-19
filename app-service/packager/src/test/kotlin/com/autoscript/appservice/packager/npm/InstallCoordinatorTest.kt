@@ -156,6 +156,46 @@ class InstallCoordinatorTest {
     // ═══ 审计史（§10.2 install-history） ═══
 
     @Test
+    fun `带 install 脚本的包装完发 SCRIPTS_SKIPPED 显式警告（禁止静默）`() = runBlocking {
+        // T0 契约全程 --ignore-scripts：脚本必然没跑，必须显式告知而不是假装无事
+        val exec = FakeExecutor { op ->
+            val pkg = op.stageDir.resolve("esbuild")
+            Files.createDirectories(pkg)
+            Files.writeString(pkg.resolve("package.json"), """{"name":"esbuild","version":"0.19.0","scripts":{"postinstall":"node install.js"}}""")
+        }
+        val c = coordinator(executor = exec)
+        val events = mutableListOf<InstallEvent>()
+        val collect = launch { c.progress("p1").collect { events += it } }
+        kotlinx.coroutines.delay(50)   // 先让收集协程就位（否则事件在订阅前就发完）
+        c.install("p1", listOf(PackageSpec("esbuild", "0.19.0")))
+        kotlinx.coroutines.delay(50)   // 让缓冲事件被收集协程排干（SharedFlow replay=0）
+        collect.cancel()
+
+        val ws = events.filterIsInstance<InstallEvent.Warning>().filter { it.kind == InstallEvent.Kind.SCRIPTS_SKIPPED }
+        assertTrue(ws.isNotEmpty(), "必须发 SCRIPTS_SKIPPED（–ignore-scripts 的静默面，§10.5-3）")
+        assertEquals(listOf("esbuild"), ws.single().pkgs, "警告须点名具体包（UI 才能显示哪些没跑）")
+        // 安装本身仍成功（T0 契约：--ignore-scripts 不阻塞安装）
+        assertTrue(events.filterIsInstance<InstallEvent.Finished>().any { it.success })
+    }
+
+    @Test
+    fun `无 install 脚本包不发 SCRIPTS_SKIPPED（不制造噪音警告）`() = runBlocking {
+        val exec = FakeExecutor { op ->
+            val pkg = op.stageDir.resolve("lodash")
+            Files.createDirectories(pkg)
+            Files.writeString(pkg.resolve("package.json"), """{"name":"lodash","version":"4.17.21","scripts":{"test":"echo x"}}""")
+        }
+        val c = coordinator(executor = exec)
+        val events = mutableListOf<InstallEvent>()
+        val collect = launch { c.progress("p1").collect { events += it } }
+        c.install("p1", listOf(PackageSpec("lodash", "4.17.21")))
+        kotlinx.coroutines.delay(50)
+        collect.cancel()
+        assertTrue(events.filterIsInstance<InstallEvent.Warning>().none { it.kind == InstallEvent.Kind.SCRIPTS_SKIPPED },
+            "test 脚本不算 install-scripts，不该误报")
+    }
+
+    @Test
     fun `成功安装入史：op 名取 npm 子命令`() = runBlocking {
         val exec = FakeExecutor { op ->
             Files.write(op.stageDir.resolve("axios.js"), "console.log(1)".toByteArray())
