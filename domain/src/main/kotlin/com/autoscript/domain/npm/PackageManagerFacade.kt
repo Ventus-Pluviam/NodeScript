@@ -159,7 +159,7 @@ interface PackageManagerFacade {
     // —— 轻操作（:main Kotlin 直读，零 Node 进程）——
     suspend fun list(projectId: String, depth: Int = 0): List<PkgNode>
     suspend fun offlineGap(projectId: String): List<MissingPkg>
-    suspend fun config(projectId: String?, key: NpmConfigKey, value: String?)
+    suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String? = null)
     suspend fun storage(): Map<String, NodeModulesStats>
 
     // —— 审批（人机分离 §10.5）——

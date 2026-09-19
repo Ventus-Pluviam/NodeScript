@@ -178,19 +178,23 @@ class InstallCoordinator(
             .filter { it.integrity == null || !cacheIndex.has(it.integrity) }
             .map { MissingPkg(it.name, it.version, it.resolvedSize) }
 
-    override suspend fun config(projectId: String?, key: NpmConfigKey, value: String?) {
+    override suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String?) {
         val npmrc = layout.npmrc(projectId ?: throw AutojsException(ErrorCode.ERR_INVALID_PARAM, "projectId 必填"))
         val k = when (key) {
             NpmConfigKey.REGISTRY -> "registry"
             NpmConfigKey.PROXY -> "https-proxy"
             NpmConfigKey.CACHE_RETENTION -> "cache-retention"
         }
+        // §10.2 registry 三层：项目 .npmrc 支持 `<scope>:registry`（npm 官方键形）；
+        // scope 缺省/null = 全局 registry 键。作用域键与全局键互为一对一替换，不叠加。
+        val scoped = scope?.takeIf { it.isNotBlank() }
+        val keyName = if (scoped != null) "$scoped:$k" else k
         val lines = if (Files.exists(npmrc)) Files.readAllLines(npmrc).toMutableList() else mutableListOf()
-        lines.removeIf { it.startsWith("$k=") }
-        if (value != null) lines.add("$k=$value")
+        lines.removeIf { it.startsWith("$keyName=") }
+        if (value != null) lines.add("$keyName=$value")
         Files.createDirectories(npmrc.parent)
         Files.write(npmrc, lines)
-        history?.record(InstallHistory.Op.REGISTRY, projectId, true, "$k=$value")
+        history?.record(InstallHistory.Op.REGISTRY, projectId, true, "$keyName=$value")
     }
 
     override suspend fun storage(): Map<String, NodeModulesStats> {

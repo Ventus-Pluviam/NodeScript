@@ -26,7 +26,7 @@ import com.autoscript.domain.core.ErrorCode
  * - `prune`/`dedupe`：无参；
  * - `offlineGap`：无参 → `[{name,version,size}]`；
  * - `audit`：`{offline?}` → `{vulnerabilities:[],level,offline}`（P0 诚实空报告）；
- * - `setRegistry`：`{registry}` → 无参（经 :main 可配列表 + 审计）；
+ * - `setRegistry`：`{registry,scope?}` → 无参（scope→npmrc `<scope>:registry`，§10.2 三层注册表配置；经 :main 可配列表 + 审计）；
  * - `importOfflineBundle`/`importTarball`：`{uri}`/`{path}`；
  * - `requestApprove`：`{pkg,versionHash?,action?}` → 票 JSON（**只入队**；脚本绝无 resolve 权）。
  */
@@ -108,7 +108,11 @@ class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageMana
             }
             "setRegistry" -> {
                 val registry = NpmBridgeJson.reqStr(f, "registry")
-                facade.config(projectId, com.autoscript.domain.npm.NpmConfigKey.REGISTRY, registry)
+                // scope（@my）→ npmrc 的 `<scope>:registry` 键（§10.2 registry 配置三层）。
+                // JS facade 的 setRegistry(registry, {scope}) 会带此字段；不认就是静默丢弃
+                // 用户显式声明的作用域（比报错更糟），故在此如实落地而非忽略。
+                val scope = NpmBridgeJson.optStr(f, "scope")?.takeIf { it.isNotBlank() }
+                facade.config(projectId, com.autoscript.domain.npm.NpmConfigKey.REGISTRY, registry, scope)
                 null
             }
             "importOfflineBundle" -> {

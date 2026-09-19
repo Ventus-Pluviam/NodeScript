@@ -145,6 +145,29 @@ class NpmBridgeHandlerTest {
     }
 
     @Test
+    fun `setRegistry scope 落地为 npmrc 作用域键（不静默丢弃）`() = runBlocking {
+        val h = handler()
+        // bridge/js 的 setRegistry(registry, {scope}) 会带 scope；宿主不认就是静默丢用户声明
+        h.handle(req("setRegistry", json("projectId" to "p1", "registry" to "https://registry.npmmirror.com", "scope" to "@my")))
+        assertEquals(
+            listOf("@my:registry=https://registry.npmmirror.com"),
+            Files.readAllLines(layout.npmrc("p1")),
+            "scope 须映射 npm 官方 `<scope>:registry` 键形",
+        )
+    }
+
+    @Test
+    fun `setRegistry 空 scope 当全局（不产出孤立的冒号键）`() = runBlocking {
+        val h = handler()
+        h.handle(req("setRegistry", json("projectId" to "p1", "registry" to "https://registry.npmjs.org", "scope" to "")))
+        assertEquals(
+            listOf("registry=https://registry.npmjs.org"),
+            Files.readAllLines(layout.npmrc("p1")),
+            "空串 scope 退化为全局键（与 JS 侧 opts.scope ?? null 同义）",
+        )
+    }
+
+    @Test
     fun `requestApprove 只入队（脚本无 resolve 权）`() = runBlocking {
         val h = handler()
         val r = h.handle(req("requestApprove", json("projectId" to "p1", "pkg" to "esbuild", "versionHash" to "sha512-a")))
