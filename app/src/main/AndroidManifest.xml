@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- P0 最小闭环宿主：specialUse FGS / 精确闹钟等权限项按 §8.7 逐步补齐 -->
+    <application
+        android:name=".AppShellApplication"
+        android:label="AutoScript"
+        android:supportsRtl="true" />
+</manifest>

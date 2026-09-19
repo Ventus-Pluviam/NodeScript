@@ -20,6 +20,11 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    testOptions {
+        unitTests {
+            all { it.useJUnitPlatform() }
+        }
+    }
 }
 
 dependencies {
@@ -29,6 +34,9 @@ dependencies {
     implementation(project(":app-service:permission-center"))
     implementation(project(":app-service:packager"))
     implementation(project(":domain"))
+    // 仅 Composition Root（com.autoscript.shell.AppShell）可碰 :bridge:java：
+    // 把各 handler 薄转接挂到 BridgeRouter。不做业务逻辑，见 AppShell 注释 + ArchitectureTest。
+    implementation(project(":bridge:java"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -37,4 +45,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation(libs.archunit.junit5)
 }
