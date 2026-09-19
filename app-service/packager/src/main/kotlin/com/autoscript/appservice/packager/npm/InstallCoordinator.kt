@@ -44,6 +44,7 @@ class InstallCoordinator(
     private val journal: InstallJournal,
     private val staging: InstallStaging,
     private val ledger: ApprovalLedger,
+    private val history: InstallHistory? = null,
     private val cacheIndex: CacheIndex,
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
     private val freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
@@ -189,6 +190,7 @@ class InstallCoordinator(
         if (value != null) lines.add("$k=$value")
         Files.createDirectories(npmrc.parent)
         Files.write(npmrc, lines)
+        history?.record(InstallHistory.Op.REGISTRY, projectId, true, "$k=$value")
     }
 
     override suspend fun storage(): Map<String, NodeModulesStats> {
@@ -332,14 +334,27 @@ class InstallCoordinator(
             staging.commit(projectId, nonce)
             journal.commit(nonce, projectId, stageDir.fileName.toString())
             tracked.done = true
+            history?.record(opName(args), projectId, true, summary)
             emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
         } catch (e: Exception) {
             journal.fail(nonce, projectId, stageDir.fileName.toString(), e.message)
             staging.sweep(projectId, setOf(nonce))
             tracked.done = true
+            history?.record(opName(args), projectId, false, e.message)
             emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
             throw e
         }
+    }
+
+    /**
+     * 审计 op 名：取 npm CLI 子命令（install/ci/uninstall/prune/dedupe）；tarball/bundle 导入
+     * 统一归 [InstallHistory.Op.IMPORT]（args 里的路径是用户数据，不入 op 名——明细走 detail）。
+     */
+    private fun opName(args: List<String>): String {
+        val sub = args.firstOrNull() ?: "unknown"
+        return if (sub == "install" && args.any { it == "--from-bundle" || it.endsWith(".tgz") || it.endsWith(".tar.gz") })
+            InstallHistory.Op.IMPORT
+        else sub
     }
 
     private suspend fun emit(e: InstallEvent) {
