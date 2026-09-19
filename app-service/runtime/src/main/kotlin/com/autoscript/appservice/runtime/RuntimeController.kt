@@ -23,7 +23,9 @@ import kotlinx.coroutines.sync.withLock
  *   [com.autoscript.domain.engine.EngineRunReceipt.pid]（随启动 receipt 一并给出，不可得为
  *   null），调度循环自己不另建一张 pid 表 —— 在途表就在本类里，再抄一份必然错位；
  * - [heartbeat] 收引擎进程打来的心跳（§8.4 缺口②的宿主侧收单方），[heartbeatMillis]
- *   供看门狗问「距上次心跳多久」。心跳账本与在途账同生共死：run 终结即 [HeartbeatLedger.forget]。
+ *   供看门狗问「距上次心跳多久」。心跳账本与在途账同生共死：run 终结即 [HeartbeatLedger.forget]；
+ * - [statusOf] 同时读宿主自报状态与池侧状态机投影并**比对**（§8.3 最后一项：两者尚未互相校准时
+ *   由本类如实报出分歧，而不是假装一致）。
  */
 class RuntimeController(
     private val pool: EnginePool,
@@ -209,6 +211,62 @@ class RuntimeController(
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * 宿主自报状态 + 池侧状态机投影的**对照**（§8.3 最后一项落地的第一步：不静默，只如实报分歧）。
+     *
+     * 为什么要这个：池侧状态机（[PoolSlot.status]）是记账投影，宿主 [ScriptEngine.status] 才是
+     * 执行真相。真实现接上前两者必然有窗口期差距（宿主还报 RUNNING、池已回 IDLE），
+     * 此前的缺口正是「不会响亮失败」。本方法不擅自修任何一侧，只把差异交出来 ——
+     * 由看门狗/UI/日志决定怎么处理，调用方看得见才算校准。
+     *
+     * @return null = 该 runId 不在途（已结算/从未存在），无状态可校准。
+     */
+    suspend fun statusOf(runId: Long): RunStatus? {
+        val handle = guard.withLock { active[runId] } ?: return null
+        val host = try {
+            handle.slot.engine.status()
+        } catch (_: Exception) {
+            null
+        }
+        val pool = handle.slot.status()
+        val drift = host != null && !agrees(host, pool)
+        return RunStatus(runId = runId, host = host, pool = pool, drift = drift)
+    }
+
+    /** 在途 run 的全量状态对照（诊断/看门狗用；不在途 → 空）。 */
+    suspend fun runStatuses(): List<RunStatus> = guard.withLock {
+        active.keys.toList()
+    }.mapNotNull { statusOf(it) }
+
+    /** 一次执行的两个状态来源（§8.3 校准）。 */
+    data class RunStatus(
+        val runId: Long,
+        /** 宿主自报（[ScriptEngine.status]）；读不到 → null（引擎已死/实现未接线）。 */
+        val host: EngineStatus?,
+        /** 池侧状态机投影（[PoolSlot.status]）。 */
+        val pool: EngineStatus,
+        /** 两侧是否**不一致**（host 读不到时不判分歧：那可能是宿主已死，见 [statusOf] KDoc）。 */
+        val drift: Boolean,
+    )
+
+    /**
+     * 池侧投影与宿主自报何时算一致。
+     *
+     * 合法组合（其余视为分歧）：
+     * - 池 BOOTING ↔ 宿主 IDLE/BOOTING：execute 尚未返回，池先跳；
+     * - 池 RUNNING ↔ 宿主 RUNNING：稳态；
+     * - 池 QUIESCING ↔ 宿主 QUIESCING/STOPPED：四步排空，宿主可能已先净；
+     * - 池 IDLE ↔ 宿主任意：**不算分歧**（已回收，宿主此刻说什么都不该算异常）；
+     * - host 为 null → 由 [RunStatus.drift] 单独表达，不进本函数。
+     */
+    private fun agrees(host: EngineStatus, pool: EngineStatus): Boolean = when (pool) {
+        EngineStatus.IDLE -> true
+        EngineStatus.BOOTING -> host == EngineStatus.BOOTING || host == EngineStatus.IDLE
+        EngineStatus.RUNNING -> host == EngineStatus.RUNNING
+        EngineStatus.QUIESCING -> host == EngineStatus.QUIESCING || host == EngineStatus.STOPPED
+        EngineStatus.STOPPED, EngineStatus.CRASHED -> true
     }
 
     /** 在途执行的看门狗锚点（[watchAnchors] 的元素）。 */

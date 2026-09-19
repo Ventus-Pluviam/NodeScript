@@ -296,6 +296,61 @@ class RuntimeControllerTest {
     }
 
     @Test
+    fun `statusOf 对照宿主自报与池侧投影，不一致如实报 drift`() = runBlocking {
+        val (c, engines) = controller()
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        val st = c.statusOf(started.runId)!!
+        assertEquals(EngineStatus.RUNNING, st.host, "宿主自报（FakeEngine execute 后置 RUNNING）")
+        assertEquals(EngineStatus.RUNNING, st.pool, "池侧状态机：BOOTING → RUNNING")
+        assertFalse(st.drift, "稳态一致")
+
+        // 宿主侧被外部改掉（真实现里=引擎自己飞了/野进程崩了）：如实报分歧，不自动修
+        engines[0].statusToReturn = EngineStatus.STOPPED
+        assertTrue(c.statusOf(started.runId)!!.drift, "分歧必须可见，不静默")
+        assertEquals(PoolStats(1, free = 0, busy = 1), c.stats(), "报分歧不动记账")
+        c.stop(started.runId)
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `statusOf 引擎读不到时 host 为 null 且不算 drift`() = runBlocking {
+        val (c, engines) = controller()
+        engines[0].statusToReturn = EngineStatus.RUNNING
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        engines[0].blowStatus = true
+        val st = c.statusOf(started.runId)!!
+        assertNull(st.host, "宿主读不到 = 量不到（引擎已死/实现未接线）")
+        assertFalse(st.drift, "量不到不是分歧：分歧需要两侧都能读")
+        assertEquals(EngineStatus.RUNNING, st.pool, "池侧投影照常给出")
+        engines[0].blowStatus = false
+        c.stop(started.runId)
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `statusOf 不在途回 null，runStatuses 只列在途`() = runBlocking {
+        val (c, _) = controller(capacity = 2)
+        assertNull(c.statusOf(999L))
+        val a = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        c.start(PoolAcquireRequest("p2", "b.js"))
+        assertEquals(2, c.runStatuses().size)
+        c.stop(a.runId)
+        assertEquals(1, c.runStatuses().size, "收走的 run 不再对照")
+        c.killAll(com.autoscript.domain.engine.KillCause.REQUESTED)
+        assertTrue(c.runStatuses().isEmpty())
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
     fun `killAll 清掉全部心跳账`() = runBlocking {
         val (c, _) = controller(capacity = 2)
         val a = assertInstanceOf(

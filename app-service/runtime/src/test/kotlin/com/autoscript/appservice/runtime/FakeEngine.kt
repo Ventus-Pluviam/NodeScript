@@ -28,6 +28,9 @@ class FakeEngine(
     /** 宿主进程 pid；null = 宿主不给（看门狗据此"无法度量"，见 ScriptEngine.pid 契约）。 */
     override var pid: Int? = null
 
+    /** status() 抛错开关：模拟宿主已死/实现未接线（探针读不到，不是"没状态"）。 */
+    var blowStatus = false
+
     override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
         if (failOnExecute) throw IllegalStateException("fake boot failure")
         executed += run
@@ -52,5 +55,8 @@ class FakeEngine(
     }
 
 
-    override suspend fun status(): EngineStatus = statusToReturn
+    override suspend fun status(): EngineStatus {
+        if (blowStatus) throw IllegalStateException("模拟宿主探针失败")
+        return statusToReturn
+    }
 }

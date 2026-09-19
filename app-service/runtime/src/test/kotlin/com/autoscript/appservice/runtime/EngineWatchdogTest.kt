@@ -80,6 +80,23 @@ class EngineWatchdogTest {
     }
 
     @Test
+    fun `宿主自报与池侧投影分歧时如实记 drift，不改状态也不判死`() = runBlocking {
+        val monitor = ProcessMonitor(100, statReader = { stat(0) }, statusReader = { status() })
+        val (controller, watchdog, engine) = rig(monitor)
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            controller.start(PoolAcquireRequest("p", "a.js")),
+        )
+        assertTrue(watchdog.tick().drift.isEmpty(), "稳态无分歧")
+
+        engine.statusToReturn = EngineStatus.STOPPED            // 宿主飞了，池还占着
+        val t = watchdog.tick()
+        assertEquals(listOf(started.runId), t.drift, "分歧进清单：谁看见谁处理")
+        assertTrue(t.killed.isEmpty(), "报分歧不是判死：不擅自改任何一侧状态")
+        assertEquals(PoolStats(1, free = 0, busy = 1), controller.stats(), "记账不动")
+    }
+
+    @Test
     fun `心跳失联的裁决经 controller 落到强杀`() = runBlocking {
         val monitor = ProcessMonitor(100, statReader = { stat(0) }, statusReader = { status() })
         // 距上次心跳 2000ms ≥ 500×3：policy 判杀

@@ -81,6 +81,8 @@ class EngineWatchdog(
         val noHeartbeat: List<Long> = emptyList(),
         val procUnreadable: List<Long> = emptyList(),
         val forgotten: List<Int> = emptyList(),
+        /** 宿主自报与池侧状态机投影**不一致**的在途 runId（§8.3 校准：只报分歧，不擅自改状态）。 */
+        val drift: List<Long> = emptyList(),
     )
 
     private val book = LinkedHashMap<Int, RunBook>()
@@ -134,8 +136,10 @@ class EngineWatchdog(
      * 诚实口径，一条一条对着 §8.4：
      * - 量不到的输入**不喂值**：没有 pid / 没有心跳来源 / `/proc` 读不到，都如实记账并
      *   跳过该 run 本轮判定，绝不猜 0% 也绝不判死；
-     * - 拿不到引擎状态（[RuntimeController.probeStatus] 回 null：已收走或引擎已死）→ 同样
+     * - 拿不到引擎状态（[RuntimeController.statusOf] 回 null：已收走或引擎已死）→ 同样
      *   记账跳过。**不拿 RUNNING 兜底**：那不是"乐观"，是伪造一个会被 policy 当真的输入；
+     * - 宿主自报与池侧投影分歧时如实进 [Tick.drift]，但**不改任一侧状态**（§8.3 校准只在
+     *   report 层：挑一侧当真就等于用猜测覆盖另一半真相）。
      * - pid 复用不背旧账：book 以 pid 为键但带 runId，pid 落到另一个 run 头上就整段清零；
      * - 收尾时对已不在途的 pid 调 [ProcessMonitor.forget]（含刚被 kill 的）——"kill 后立刻
      *   收尾"和"下轮才发现不在了"两条路都走这里，免得调用方漏调，看门狗自己保证。
@@ -147,6 +151,7 @@ class EngineWatchdog(
         val noHeartbeat = mutableListOf<Long>()
         val procUnreadable = mutableListOf<Long>()
         val forgotten = mutableListOf<Int>()
+        val drift = mutableListOf<Long>()
 
         for (anchor in anchors) {
             val pid = anchor.pid
@@ -159,7 +164,13 @@ class EngineWatchdog(
                 noHeartbeat += anchor.runId
                 continue
             }
-            val status = controller.probeStatus(anchor.runId)
+            val run = controller.statusOf(anchor.runId)
+            // 池侧投影与宿主自报关照（§8.3）：分歧只记账不改状态 —— 谁看见谁处理，
+            // 但绝不让"池说 RUNNING、宿主说 STOPPED"这种分裂无声地过去。
+            if (run != null && run.drift) drift += anchor.runId
+            // 判定输入取**池侧投影**（[RuntimeController.judge] 的 RUNNING 口径本就以它为准），
+            // 但宿主读不到时同样如实记 procUnreadable：那不是"没状态"，是"量不到"。
+            val status = run?.pool
             if (status == null) {
                 procUnreadable += anchor.runId      // 引擎状态不可得：本轮不判（原因见 KDoc）
                 continue
@@ -199,6 +210,7 @@ class EngineWatchdog(
             noHeartbeat = noHeartbeat,
             procUnreadable = procUnreadable,
             forgotten = forgotten,
+            drift = drift,
         )
     }
 
