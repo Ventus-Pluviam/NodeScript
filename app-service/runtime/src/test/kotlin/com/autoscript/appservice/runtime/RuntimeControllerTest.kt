@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -229,7 +230,7 @@ class RuntimeControllerTest {
         assertEquals(setOf(b.runId), c.activeRunIds(), "只收走本 run 的槽位")
         assertEquals(PoolStats(2, free = 1, busy = 1), c.stats())
         c.stop(b.runId)
-                Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 
     @Test
@@ -262,5 +263,53 @@ class RuntimeControllerTest {
         assertEquals(EngineStatus.RUNNING, c.probeStatus(started.runId))
         c.stop(started.runId)
         assertNull(c.probeStatus(started.runId))
+    }
+
+    @Test
+    fun `heartbeat 记账与 run 终结同生共死`() = runBlocking {
+        val (c, _) = controller()
+        assertNull(c.heartbeatMillis(1L), "未打过点：量不到，不回 0")
+
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        assertTrue(c.heartbeat(started.runId, seq = 1))
+        assertTrue(c.heartbeatMillis(started.runId)!! >= 0)
+        // 同/旧 seq 不刷新时间戳 —— 积压帧不得让死掉的 run 装作活着
+        assertFalse(c.heartbeat(started.runId, seq = 1))
+
+        c.stop(started.runId)
+        assertNull(c.heartbeatMillis(started.runId), "run 终结即遗忘：不留『假年轻』给复用 runId")
+    }
+
+    @Test
+    fun `killRun 强杀也遗忘心跳`() = runBlocking {
+        val (c, _) = controller()
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "k.js")),
+        )
+        c.heartbeat(started.runId, seq = 1)
+        assertEquals(KillCause.REQUESTED, c.killRun(started.runId, KillCause.WATCHDOG_CPU), "回的是引擎 kill 的 cause")
+        assertNull(c.heartbeatMillis(started.runId), "killRun 同样是这条 run 的终点，一样遗忘")
+    }
+
+    @Test
+    fun `killAll 清掉全部心跳账`() = runBlocking {
+        val (c, _) = controller(capacity = 2)
+        val a = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        val b = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p2", "b.js")),
+        )
+        c.heartbeat(a.runId, seq = 1)
+        c.heartbeat(b.runId, seq = 1)
+        c.killAll(KillCause.REQUESTED)
+        assertNull(c.heartbeatMillis(a.runId))
+        assertNull(c.heartbeatMillis(b.runId))
     }
 }

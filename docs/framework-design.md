@@ -368,7 +368,13 @@ interface EnginePool {                                // 实现在 :app-service:
 - **pid 终结即忘**：无论正常结束、被 watchdog 杀掉还是本轮采样后不在途，`EngineWatchdog` 都调 `ProcessMonitor.forget(pid)`。Linux 复用 pid，不遗忘等于让新进程背旧 CPU 基线（虚高 → 误杀）；pid 落到别的 runId 时 CPU 历史整段清零，同理。
 - **不另建 pid→runId 表**（§8.4 原口径不变）：归属表只有一份，就在 `RuntimeController` 的在途账里。`:app` 侧再抄一份必然漂移（stop/kill 路径不止一条），`watchAnchors()` 是它的只读投影。
 
-**P0 缺口（只剩一条）**：**心跳时间戳**仍无生产来源。`EngineWatchdog` 的 `heartbeatMillis` 缝默认回 null（`Tick.noHeartbeat` 如实记账、不判死），**不能拿 watchdog 自己的轮转周期当心跳** —— 那是伪造心跳：`while(true)` 这种「心跳活着、CPU 打满」的形态恰好是 CPU 外带差分这一路唯一能抓到的，拿轮转周期打点会让它永久失效。JS 侧心跳到达的打点通道（桥侧事件 → 控制器记账 → `heartbeatMillis(runId)`）尚未建立。补完前，看门狗处于「三路判据已就绪、外带采样在跑、心跳一路未接线」的状态：CPU/RSS 两路真的会杀，心跳失联一路暂时不触发。
+**心跳一路已接线**（§8.4 缺口② 补齐）：`HeartbeatLedger`（`:app-service:runtime`）是心跳的宿主侧收单方，`RuntimeController.heartbeat(runId, seq)` 是它的桥侧入口，`RuntimeController.heartbeatMillis(runId)` 是看门狗的问讯口 —— `EngineWatchdog` 缺省就问 controller 那份账本（`AppShell.assemble` 的 `heartbeatMillis` 缺省 null = 装配时接真账本；显式传 `{ null }` = 明示这一路不接，看门狗如实记 `Tick.noHeartbeat`）。JS 侧 `engines.heartbeat {runId,seq}` + `startHeartbeat(runId)` 定时打点（`unref` 定时器，不保活事件循环）。
+- **序号即真伪**：账本只认**递增** `seq`。同/旧 seq 一律拒收（只累计 `staleBeats()`，不刷时间戳）—— 否则宿主张力下积压的旧心跳会把一个**已经死了**的 run 一直喂成活的，那正是心跳这一路要抓的形态。
+- **从未打点回 null，不回 0**：0 会被当成「刚刚打过」，失联判定永不触发；null = 量不到，看门狗据此记 `noHeartbeat`。
+- **与 run 同生共死**：`stop`/`killRun`/`killAll`/`settleDone`/`settleKilled` 五条终结路径全部 `forget(runId)`。不遗忘 = runId 复用时新 run 背上一段「假年轻」，失联判定被推迟到下一次自然打点。
+- **仍不伪造**：拿 watchdog 自己的轮转周期当心跳依旧是禁止的 —— `while(true)`（心跳活着、CPU 打满）只靠外带差分抓得到。
+
+至此 §8.4 三路判据、采样、调度、心跳打点全部闭环。**仍未接线**：`ScriptEngine.pid`/心跳的**原生宿主**（`:engine:node-process` native 侧尚未把 pid 与心跳送出来，见 §19 native/NDK 空壳清单），因此真机上当前生效的是「宿主不给 pid → noPid」「宿主不打点 → noHeartbeat」两条量不到路径 —— 这由 `Tick` 的三个清单如实区分，不是一个笼统的 `unmeasurable`。
 
 ### 8.5 崩溃恢复与幂等（checkpoint 意图日志）
 - `:main` 的 scheduler 持久化 **意图日志（intent log）**：`RUN_START(projectId, entry, runNonce, scheduledAt) → …execute… → COMMIT(result)` append-only（SQLite，启动即回放）。
@@ -680,7 +686,7 @@ auto.npm.on('warning', e => ({ kind: 'scripts-skipped', pkg: ['esbuild', 'sharp'
 | 命名空间 | JS facade | Kotlin handler | 挂载状态 |
 |---|---|---|---|
 | `console` | `console.ts` | `ConsoleCollector`（`:bridge:java`） | `AppShell.assemble` 已挂 |
-| `engines` | `engines.ts` | `EnginesNamespaceHandler`（`:app-service:runtime`） | 已挂 |
+| `engines` | `engines.ts` | `EnginesNamespaceHandler`（`:app-service:runtime`） | 已挂（含 `heartbeat` 打点，§8.4） |
 | `a11y` | `a11y.ts` | `A11yNamespaceHandler`（`:platform:capabilities`） | **已可挂**：`assemble` 的 `a11yHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`） |
 | `screen` | `images.ts` | `ScreenNamespaceHandler`（`:platform:capabilities`） | **已可挂**：同上，`screenHandler` 缝 |
 | `images`（fromFile/matchTemplate/findImage） | `images.ts` | 无 | 待建（`:bridge:image` / native，P1） |
@@ -907,4 +913,4 @@ AutoScript 的骨架可以一句话记住：
 3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
 4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。
 
-**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再补 §8.4 剩下的心跳打点（采样调度循环 `EngineWatchdog` 已落地、pid 归属表仍归在途账不另建）、§8.3 的宿主状态与池侧状态机校准（`EngineStateMachine`→`PoolSlot` 已接线）；§8.6 的 dispatcher 排队默认上限已按触发源分级落地，仅剩 `PendingRun` 侧 deadline 记账。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。
+**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现）；§8.4 已闭环（判据/采样/`EngineWatchdog` 调度/`HeartbeatLedger` 心跳打点；pid 归属表仍归在途账不另建），仅剩 native 宿主送出 pid 与心跳；再往后补 §8.3 的宿主状态与池侧状态机校准（`EngineStateMachine`→`PoolSlot` 已接线）；§8.6 的 dispatcher 排队默认上限已按触发源分级落地，仅剩 `PendingRun` 侧 deadline 记账。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。

@@ -4,6 +4,7 @@ import com.autoscript.appservice.runtime.EngineWatchdog
 import com.autoscript.appservice.runtime.EnginesNamespaceHandler
 import com.autoscript.appservice.runtime.ProcessMonitor
 import com.autoscript.appservice.runtime.FixedEnginePool
+import com.autoscript.appservice.runtime.HeartbeatLedger
 import com.autoscript.appservice.runtime.RuntimeController
 import com.autoscript.appservice.scheduler.core.InMemoryRunArchive
 import com.autoscript.appservice.scheduler.core.IntentLog
@@ -93,11 +94,18 @@ class AppShell(
              */
             monitor: ProcessMonitor = ProcessMonitor(),
             /**
-             * 心跳来源（runId → 距上次心跳毫秒；null = 该 run 量不到心跳）。§8.4 缺口②：
-             * JS 侧心跳到达宿主的打点通道未建，故缺省 null —— 缺了它看门狗只跑 CPU/RSS 两路，
-             * [EngineWatchdog.Tick.noHeartbeat] 如实记账，**不拿轮转周期冒充心跳**。
+             * 心跳来源（runId → 距上次心跳毫秒；null = 该 run 量不到心跳）。
+             *
+             * 生产问的是 [HeartbeatLedger]（[RuntimeController.heartbeatMillis]，
+             * §8.4 缺口②的宿主侧收单方）：JS 侧经 `engines.heartbeat {runId,seq}` 打点，
+             * 账本只认递增序号，`forget` 与 run 终结同生共死。
+             *
+             * **绝不拿看门狗轮转周期冒充心跳**（那是伪造：`while(true)` 这种「心跳活着、
+             * CPU 打满」的形态正是 CPU 外带差分唯一抓得到的，伪造会让它永久失效）。
+             * null（缺省）= 不显式指定，装配时换成 controller 的真账本；显式传 `{ null }`
+             * = 明确"这一路不接"：看门狗如实记 [EngineWatchdog.Tick.noHeartbeat]，不猜值也不伪造。
              */
-            heartbeatMillis: (Long) -> Long? = { null },
+            heartbeatMillis: ((Long) -> Long?)? = null,
             watchdog: EngineWatchdog? = null,
         ): AppShell {
             val events = EventBus()
@@ -122,7 +130,7 @@ class AppShell(
             // 看门狗：采样器 + 心跳来源在此装配；policy 取 controller 自己那份（单一事实来源，
             //  Threshold 改变只改一处）。缺省 new 一个套在真 controller 上的生产实例。
             val dog = watchdog ?: EngineWatchdog(controller)
-            dog.withMonitor(monitor).withHeartbeat(heartbeatMillis)
+            dog.withMonitor(monitor).withHeartbeat(heartbeatMillis ?: { runId -> controller.heartbeatMillis(runId) })
 
             return AppShell(
                 router = router,

@@ -22,6 +22,10 @@ import com.autoscript.domain.core.ErrorCode
  *   StoppedTimeout → Err ERR_TIMEOUT（软停未干净完成，已 kill 兜底，如实报错不伪造成功）；
  *   AlreadyGone → Err ERR_NOT_FOUND（未知 runId 不静默吞掉）；
  * - `poolStats`：无参 → Ok `{capacity,free,busy}`；
+ * - `heartbeat`：payload `{runId,seq}` → [RuntimeController.heartbeat]（§8.4 缺口②的
+ *   宿主侧收单方；JS 侧定时打点）。同/旧 seq 不刷时间戳 → Ok `false`（如实告知未被采纳，
+ *   不是错误）；未知 runId → 仍 Ok `false` —— 账本按 runId 记账，"不知道这个 run"本身
+ *   不是调用方错误，但也不得把它伪装成一次有效心跳；
  * - `channel`：payload `{name}` → 创建或复用命名通道 → Ok `{name,channelId}`；
  * - `channelEmit`：payload `{channelId,event,payload?}` → 记入通道事件缓冲 → Ok null；
  * - `channelDrain`：payload `{channelId,sinceSeq?,max?}` → 游标拉取（供 :app 层经
@@ -50,6 +54,7 @@ class EnginesNamespaceHandler(
             "exec" -> exec(request)
             "stop" -> stop(request)
             "poolStats" -> ok(request.id, EngineBridgeJson.encode(poolStatsPayload()))
+            "heartbeat" -> heartbeat(request)
             "channel" -> channel(request)
             "channelEmit" -> channelEmit(request)
             "channelDrain" -> channelDrain(request)
@@ -105,6 +110,28 @@ class EnginesNamespaceHandler(
     private fun poolStatsPayload(): Map<String, Any?> {
         val s = controller.stats()
         return mapOf("capacity" to s.capacity.toLong(), "free" to s.free.toLong(), "busy" to s.busy.toLong())
+    }
+
+    /**
+     * 心跳打点（§8.4 缺口②）。seq 由引擎侧自增：落后/重复的帧被账本拒收
+     * （不刷时间戳），否则宿主张力下积压的旧心跳会让死掉的 run 一直"活着"。
+     */
+    private fun heartbeat(request: Request): Response {
+        val o = try {
+            decodePayload(request.payload)
+        } catch (e: IllegalArgumentException) {
+            return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
+        val runId: Long
+        val seq: Long
+        try {
+            runId = requiredLong(o, "runId")
+            seq = requiredLong(o, "seq")
+        } catch (e: IllegalArgumentException) {
+            return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
+        val accepted = controller.heartbeat(runId, seq)
+        return ok(request.id, EngineBridgeJson.encode(accepted))
     }
 
     private fun parseExec(payload: String?): PoolAcquireRequest {

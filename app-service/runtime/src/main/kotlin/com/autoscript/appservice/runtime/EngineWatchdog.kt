@@ -34,14 +34,16 @@ class EngineWatchdog(
     /**
      * 心跳来源（runId → 距上次心跳毫秒）；null = 该 run 量不到心跳。
      *
-     * §8.4 缺口②：JS 侧心跳到达宿主的打点通道尚未建立，故**缺省 null** —— 缺了它看门狗
-     * 只跑 CPU/RSS 两路，[Tick.noHeartbeat] 如实记账。
+     * 缺省问 [RuntimeController.heartbeatMillis] —— 宿主持有的 [HeartbeatLedger]
+     * （§8.4 缺口②的宿主侧收单方，JS 侧经 `engines.heartbeat` 打点）。装配层也可换成自己
+     * 的账本（[withHeartbeat]）。
      *
-     * 为什么必须由外部注入而不是本类自己记账：心跳要由**引擎进程**打点。拿看门狗自己的
-     * 轮转周期当心跳，等于"我每秒问一次它还没死"—— 那不是心跳而是心跳的伪造，会静默
-     * 关掉 §8.4 最要害的一路（死循环脚本心跳还活着、CPU 满载，只靠外带差分抓得到）。
+     * 为什么**不由本类自己记账**：心跳要由**引擎进程**打点。拿看门狗自己的轮转周期当心跳，
+     * 等于"我每秒问一次它还没死"—— 那不是心跳而是心跳的伪造，会静默关掉 §8.4 最要害的
+     * 一路（死循环脚本心跳还活着、CPU 满载，只靠外带差分抓得到）。本类只问不记账，
+     * 才是这条缝能被诚实关闭（回 null → [Tick.noHeartbeat]）的原因。
      */
-    private var heartbeatMillis: (Long) -> Long? = { null }
+    private var heartbeatMillis: (Long) -> Long? = { runId -> controller.heartbeatMillis(runId) }
 
     /** 装配期注入心跳来源（轮转启动前调用；轮转中改 = 边跑边换口径，禁止）。 */
     fun withHeartbeat(source: (Long) -> Long?): EngineWatchdog {

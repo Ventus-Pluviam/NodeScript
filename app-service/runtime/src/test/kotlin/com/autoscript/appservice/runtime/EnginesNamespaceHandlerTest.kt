@@ -165,6 +165,34 @@ class EnginesNamespaceHandlerTest {
     }
 
     @Test
+    fun `heartbeat 记账到宿主账本，重复 seq 不被采纳`() = runBlocking {
+        val (h, _) = handler()
+        val exec = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(EnginesNamespaceHandler.Request(1, "exec", execPayload())),
+        )
+        val runId = (EngineBridgeJson.decodeObject(exec.payload!!)["runId"] as EngineBridgeJson.Value.N).raw.toLong()
+
+        val first = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(EnginesNamespaceHandler.Request(2, "heartbeat", """{"runId":$runId,"seq":5}""")),
+        )
+        assertEquals("true", first.payload)
+        val dup = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(EnginesNamespaceHandler.Request(3, "heartbeat", """{"runId":$runId,"seq":5}""")),
+        )
+        assertEquals("false", dup.payload, "同 seq 不刷时间戳：积压帧不得让死掉的 run 装作活着")
+
+        val bad = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Err::class.java,
+            h.handle(EnginesNamespaceHandler.Request(4, "heartbeat", """{"runId":$runId}""")),
+        )
+        assertEquals("ERR_INVALID_PARAM", bad.code)
+        h.handle(EnginesNamespaceHandler.Request(5, "stop", """{"runId":$runId}"""))
+    }
+
+    @Test
     fun `未知方法回 ERR_NOT_IMPLEMENTED`() = runBlocking {
         val (h, _) = handler()
         val resp = assertInstanceOf(

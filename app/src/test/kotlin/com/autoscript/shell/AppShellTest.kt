@@ -21,8 +21,8 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -44,7 +44,7 @@ private class ShellFakeEngine(override val id: EngineId, override val pid: Int? 
             }
             if (statusToReturn == EngineStatus.RUNNING) statusToReturn = EngineStatus.STOPPED
         }).also { it.isDaemon = true }.start()
-        return EngineRunReceipt(runId = runId, handle = HandleRef(refId = runId, generation = 1))
+        return EngineRunReceipt(runId = runId, handle = HandleRef(refId = runId, generation = 1), pid = pid)
     }
 
     override suspend fun stop(): StopResult {
@@ -74,12 +74,12 @@ class AppShellTest {
 
     private fun shell(
         log: IntentLog = InMemoryIntentLog(),
-        heartbeatMillis: (Long) -> Long? = { null },
+        heartbeatMillis: ((Long) -> Long?)? = null,
     ): Triple<AppShell, MutableList<ShellFakeEngine>, ShellFakeProvider> {
         val engines = mutableListOf<ShellFakeEngine>()
         val provider = ShellFakeProvider()
         val s = AppShell.assemble(
-            engineFactory = { id -> ShellFakeEngine(id).also { engines += it } },
+            engineFactory = { id -> ShellFakeEngine(id, pid = 4242).also { engines += it } },
             schedulerProvider = provider,
             intentLog = log,
             heartbeatMillis = heartbeatMillis,
@@ -146,8 +146,38 @@ class AppShellTest {
     }
 
     @Test
+    fun `心跳经桥打点后看门狗问得到，run 终结即遗忘`() = runBlocking {
+        // 不显式指定 → 装配接上生产心跳账本（controller 持有的 HeartbeatLedger）
+        val (s, _, _) = shell(heartbeatMillis = null)
+        s.use {
+            val resp = s.router.dispatch(
+                BridgeRequest(1, "engines", "exec", """{"projectId":"p1","scriptPath":"a.js"}""", 5_000),
+            )
+            val ok = assertInstanceOf(BridgeResponse.Ok::class.java, resp)
+            val runId = Regex("""runId"\s*:\s*(\d+)""").find(ok.payload!!)!!.groupValues[1].toLong()
+
+            // 没打过点 → 看门狗如实记 noHeartbeat（不猜 0，也不拿轮转周期冒充心跳）
+            assertTrue(s.watchdog.tick().noHeartbeat.contains(runId), "未打点：心跳一路不判死")
+
+            // 打点（JS engines.heartbeat 的 Kotlin 落点）后同一轮就量得到
+            val beat = s.router.dispatch(
+                BridgeRequest(2, "engines", "heartbeat", """{"runId":$runId,"seq":1}""", 5_000),
+            )
+            assertEquals("true", (assertInstanceOf(BridgeResponse.Ok::class.java, beat)).payload)
+            val tick = s.watchdog.tick()
+            assertTrue(tick.noHeartbeat.isEmpty(), "打点后心跳一路已接线")
+            assertTrue(tick.killed.isEmpty())
+
+            s.controller.stop(runId)
+            assertNull(s.controller.heartbeatMillis(runId), "run 终结即遗忘：不给复用 runId 留假年轻")
+        }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
     fun `看门狗监督经桥启动的在途 run`() = runBlocking {
-        // 心跳来源在此注入（§8.4 的生产缺省是 null：JS 侧打点通道未建）
+        // 显式替身心跳来源（§8.4 的生产缺省是 controller 的 HeartbeatLedger）
         val (s, _, _) = shell(heartbeatMillis = { 100L })
         s.use {
             val resp = s.router.dispatch(

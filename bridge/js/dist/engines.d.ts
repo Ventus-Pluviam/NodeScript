@@ -100,7 +100,31 @@ export declare const engines: {
     channel(name: string, opts?: {
         timeout?: number;
     }): Promise<RuntimeChannel>;
+    /**
+     * 心跳打点（§8.4 缺口②的引擎侧源头）：宿主据此算「距上次心跳多久」，看门狗据此判失联。
+     *
+     * `seq` 单调递增，由本进程内计数器给出（见 [heartbeatSeq]）：宿主的账本只认递增序号，
+     * 重复/乱序帧不被采纳（回 false）。**不要**为了"显得活着"而高频重发同一 seq ——
+     * 那既骗不过账本，也会让积压帧把死掉之后的样子伪装成活的。
+     */
+    heartbeat(runId: number, seq: number, opts?: {
+        timeout?: number;
+    }): Promise<boolean>;
 };
+export declare function nextHeartbeatSeq(): number;
+/**
+ * 心跳定时打点（§8.4 缺口②）：按宿主周期发一次心跳，返回取消句柄。
+ *
+ * 周期取宿主 `heartbeatPeriodMillis`（装配侧经 [installHeartbeatPeriod] 注入；缺省 500ms）。
+ * 原生宿主侧由引擎启动脚本在 isolate 起来后调用；桌面/测试可直接调 [engines.heartbeat]。
+ *
+ * 语义：unref 的定时器不保活事件循环（§5.3 `napi_unref_threadsafe_function` 同思路）——
+ * 心跳不该让一个"脚本已跑完"的进程赖着不死。
+ */
+export declare function startHeartbeat(runId: number, opts?: {
+    periodMillis?: number;
+}): () => void;
+export declare function installHeartbeatPeriod(millis: number): void;
 /**
  * 运行句柄代理（§7.4 句柄面）：exec 签发；cancel = 四步 quiesce（§8.3），onExit 绑退出事件。
  * 与 Kotlin :domain EngineSessionHandle 对齐（engine/receipt/channel/exitSink 由运行时实现注入）。

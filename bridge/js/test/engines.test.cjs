@@ -14,10 +14,12 @@ const auto = autoModule.default
 
 /** mock engines 宿主：按 Kotlin EnginesNamespaceHandler 的响应形状回包。 */
 let sharedRuns = null
+let sharedSeq = null
 function installMockEngines() {
   if (sharedRuns) return sharedRuns
   const runs = new Map()
   sharedRuns = runs
+  sharedSeq = new Map()
   let nextRun = 100
   auto.install((ns, method, payloadJson, reqId) => {
     if (ns !== 'engines') return undefined
@@ -58,6 +60,19 @@ function installMockEngines() {
         } else {
           auto.handleResponse({ t: 'ok', id: reqId, payload: JSON.stringify({ name: p.name, channelId: 7 }) })
         }
+        return undefined
+      }
+      case 'heartbeat': {
+        // Kotlin HeartbeatLedger 语义：缺字段 → ERR_INVALID_PARAM；
+        // 采纳与否由 **序号** 判（同/旧 seq 不刷时间戳 → Ok false，不是错误）。
+        if (!p || typeof p.runId !== 'number' || typeof p.seq !== 'number') {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '缺 runId/seq' })
+          return undefined
+        }
+        const prev = sharedSeq.get(p.runId) ?? 0
+        const accepted = p.seq > prev
+        if (accepted) sharedSeq.set(p.runId, p.seq)
+        auto.handleResponse({ t: 'ok', id: reqId, payload: accepted ? 'true' : 'false' })
         return undefined
       }
       default:
@@ -106,4 +121,29 @@ test('engines.channel：命名通道回 {name,channelId}', async () => {
   const ch = await auto.engines.channel('progress')
   assert.strictEqual(ch.name, 'progress')
   assert.strictEqual(ch.channelId, 7)
+})
+
+/**
+ * engines.heartbeat（§8.4 缺口②）：wire 形状与 Kotlin HeartbeatLedger 对齐 ——
+ * `{runId,seq}` 为上、采纳与否由 **序号** 判（不是调用方自称）。这里用 mock 宿主验证
+ * JS 侧"发的出去、回的来能解析"；账本真机语义由 HeartbeatLedgerTest 覆盖。
+ */
+test('engines.heartbeat：递增 seq 被采纳，重复 seq 回 false', async () => {
+  const runs = installMockEngines()
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  assert.strictEqual(await auto.engines.heartbeat(s.runId, 1), true)
+  assert.strictEqual(await auto.engines.heartbeat(s.runId, 2), true)
+  assert.strictEqual(await auto.engines.heartbeat(s.runId, 2), false, '同 seq = 积压帧，不刷时间戳')
+  assert.strictEqual(await auto.engines.heartbeat(s.runId, 1), false, '旧 seq 同理')
+  assert.ok(runs.has(s.runId))
+  await auto.engines.stop(s.runId)
+})
+
+test('engines.heartbeat：缺字段回 ERR_INVALID_PARAM（不伪造成功）', async () => {
+  installMockEngines()
+  await assert.rejects(
+    () => auto.engines.heartbeat(1),
+    (e) => e.code === 'ERR_INVALID_PARAM',
+    '缺 seq 不得悄悄当作心跳',
+  )
 })

@@ -21,11 +21,18 @@ import kotlinx.coroutines.sync.withLock
  * - [judge] 纯委托 [WatchdogPolicy]（只判 RUNNING 等语义见该类）；
  * - [watchAnchors] 供 [EngineWatchdog] 取「runId → 本次执行的引擎 pid」：pid 的事实来源是
  *   [com.autoscript.domain.engine.EngineRunReceipt.pid]（随启动 receipt 一并给出，不可得为
- *   null），调度循环自己不另建一张 pid 表 —— 在途表就在本类里，再抄一份必然错位。
+ *   null），调度循环自己不另建一张 pid 表 —— 在途表就在本类里，再抄一份必然错位；
+ * - [heartbeat] 收引擎进程打来的心跳（§8.4 缺口②的宿主侧收单方），[heartbeatMillis]
+ *   供看门狗问「距上次心跳多久」。心跳账本与在途账同生共死：run 终结即 [HeartbeatLedger.forget]。
  */
 class RuntimeController(
     private val pool: EnginePool,
     private val watchdog: WatchdogPolicy = WatchdogPolicy(),
+    /**
+     * 心跳账本（§8.4「引擎进程打点、宿主记账」）。可注入：装配层与单测各持一份
+     * （Application 域一个进程一个，替身进程各自隔离）。默认新建生产实例。
+     */
+    private val heartbeats: HeartbeatLedger = HeartbeatLedger(),
 ) {
     private val guard = Mutex()
     private val active = HashMap<Long, PoolHandle>()
@@ -60,6 +67,7 @@ class RuntimeController(
     /** 优雅停止一次执行（四步 quiesce 由池/槽位驱动，TimedOut 已 kill 兜底）。 */
     suspend fun stop(runId: Long): StopOutcome {
         val handle = guard.withLock { active.remove(runId) } ?: return StopOutcome.AlreadyGone
+        heartbeats.forget(runId)
         return when (val result = pool.release(handle)) {
             StopResult.Clean -> StopOutcome.StoppedClean
             is StopResult.TimedOut -> StopOutcome.StoppedTimeout(result.partial)
@@ -83,6 +91,7 @@ class RuntimeController(
      */
     suspend fun killRun(runId: Long, cause: KillCause): KillCause? {
         val handle = guard.withLock { active.remove(runId) } ?: return null
+        heartbeats.forget(runId)
         val killed = handle.slot.engine.kill()
         // 强杀即终结：槽位 + 许可证必须成对归还（§8.2 记账）；
         // cause 透传给状态机归类（§8.3：REQUESTED→STOPPED，watchdog/OOM→CRASHED）
@@ -92,7 +101,9 @@ class RuntimeController(
 
     /** 全部强杀（killAll 与 start/stop 串行，防许可证超发）。 */
     suspend fun killAll(reason: KillCause) = guard.withLock {
+        val gone = active.keys.toList()
         active.clear()
+        gone.forEach { heartbeats.forget(it) }
         pool.killAll(reason)
     }
 
@@ -108,6 +119,22 @@ class RuntimeController(
      * "看门狗按 95% 判、循环按别的节奏跑"，极难查。
      */
     fun watchdogPolicy(): WatchdogPolicy = watchdog
+
+    /** 心跳账本（[HeartbeatLedger]）：装配层经它把宿主持有的账本喂给看门狗。 */
+    fun heartbeats(): HeartbeatLedger = heartbeats
+
+    /**
+     * 收一次心跳（§8.4 缺口②的宿主侧入口；JS `engines.heartbeat` 的落点）。
+     *
+     * 幂等由序号保证（[HeartbeatLedger.beat]）：同 seq 或更旧不回刷时间戳，
+     * 所以重发/乱序帧不会把一个死掉的 run 假装成活的。
+     *
+     * @return false = 该 seq 过期/重复（未被采纳）；true = 已刷新时间戳。
+     */
+    fun heartbeat(runId: Long, seq: Long): Boolean = heartbeats.beat(runId, seq)
+
+    /** 距上次心跳毫秒（从未打过点 → null，看门狗据此记 [EngineWatchdog.Tick.noHeartbeat]）。 */
+    fun heartbeatMillis(runId: Long): Long? = heartbeats.sinceLastBeat(runId)
 
     fun stats(): PoolStats = pool.stats()
 
@@ -194,6 +221,7 @@ class RuntimeController(
     /** 完成结算：release 槽位 + 归档在途表（与 stop/killAll 串行，经 guard）。 */
     private suspend fun settleDone(runId: Long): Completed {
         val handle = guard.withLock { active.remove(runId) } ?: return Completed.UnknownRun
+        heartbeats.forget(runId)
         return when (pool.release(handle)) {
             StopResult.Clean -> Completed.StoppedClean
             is StopResult.TimedOut -> Completed.StopTimeout
@@ -203,6 +231,7 @@ class RuntimeController(
     /** 强杀结算：只收走本 run 的槽位（release 走 quiesce+kill 兜底），不碰其他在途。 */
     private suspend fun settleKilled(runId: Long): Completed {
         val handle = guard.withLock { active.remove(runId) } ?: return Completed.UnknownRun
+        heartbeats.forget(runId)
         pool.release(handle)
         return Completed.Killed
     }
