@@ -41,7 +41,7 @@ class ControllerRunDispatcherTest {
         autoExitAfterMillis: Long? = 50,
     ): Triple<ControllerRunDispatcher, RuntimeController, MutableList<FakeEngineForDispatcher>> {
         val engines = MutableList(capacity) {
-            FakeEngineForDispatcher(EngineId(it), autoExitAfterMillis).also { e ->
+            FakeEngineForDispatcher(EngineId(it), autoExitAfterMillis = autoExitAfterMillis).also { e ->
                 e.failOnExecute = failOnExecute
                 e.stopResult = stopResult
             }

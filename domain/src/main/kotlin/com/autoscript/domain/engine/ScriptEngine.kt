@@ -7,6 +7,15 @@ interface ScriptEngine {
     /** 进程标识（pool id 派生），用于归属日志/看门狗。 */
     val id: EngineId
 
+    /**
+     * 引擎宿主进程的 OS pid；不存在（未启动 / 已退出）回 null。
+     *
+     * **看门狗的外带采样锚点**（§8.4）：CPU/RSS 走 `/proc/<pid>/stat|status`，
+     * 不依赖引擎合作。不可得时**如实回 null，绝不给 0/自身 pid** —— 0 会被 `/proc/0`
+     * 解析失败污染 CPU 基线，自身 pid 会让看门狗误杀 App 主进程。
+     */
+    val pid: Int?
+
     /** 启动一次执行；同引擎一次一脚本。 */
     suspend fun execute(run: EngineRunRequest): EngineRunReceipt
 
@@ -33,6 +42,14 @@ data class EngineRunRequest(
 data class EngineRunReceipt(
     val runId: Long,
     val handle: HandleRef,      // 用于引擎通道/控制（RuntimeChannel 关联）
+    /**
+     * 这次执行所落的引擎进程 pid（启动瞬间的快照）；不可得（宿主不给 / 已退出）为 null。
+     *
+     * 看门狗按 pid 采样 `/proc/<pid>/stat|status`（§8.4），所以 pid 必须随 receipt 出来，
+     * 而不能让调用方自己去问 [ScriptEngine.pid]（那会读到"当前"pid，而非这次 run 的 pid
+     * —— 同一槽位换过一次执行体后两者就不同了）。回路见 §8.4 的调度循环说明。
+     */
+    val pid: Int? = null,
 )
 
 enum class EngineStatus { IDLE, BOOTING, RUNNING, QUIESCING, STOPPED, CRASHED }

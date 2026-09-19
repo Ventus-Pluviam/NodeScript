@@ -26,12 +26,19 @@ import java.nio.file.Path
  *
  * 首采样 / pid 变化 / 时钟回拨 / 计数回绕：一律回 0.0%（重新起步），**绝不给假差分**。
  *
+ * **按 pid 分别记账**（不是只记一条"上次"）：池里 N 个引擎并发跑时，调度循环是轮询采样的，
+ * 只记单条基线会让每次采样都判"pid 变了"→ 清一色 0.0%，CPU 风暴这一路永远不触发（漏杀）。
+ *
  * 进程不存在或 /proc 不可读（Android 对异 UID 进程常如此）→ 采样回 null，调用方按
  * 「无法度量」处理（不猜 0%、不伪造健康）。RSS 缺失单独回 0（内存这一路降级为不判定），
  * 不因此让整个样本作废 —— CPU 与 RSS 是两个独立的判定输入。
  */
 class ProcessMonitor(
     private val clockTicksPerSecond: Long = SC_CLK_TCK_FALLBACK,
+    /** 实例级读取缝：生产走 [statFile]/[statusFile]。上层次级循环持有本类，故缝也要能整体注入。 */
+    private val statReader: StatReader = StatReader { statFile(it) },
+    /** 实例级读取缝；单测/桌面无 Android 时可整体换成假 /proc。 */
+    private val statusReader: StatusReader = StatusReader { statusFile(it) },
 ) {
     init {
         require(clockTicksPerSecond > 0) { "clockTicksPerSecond 必须 > 0: $clockTicksPerSecond" }
@@ -41,24 +48,30 @@ class ProcessMonitor(
     fun interface StatReader { fun read(pid: Int): String? }
     fun interface StatusReader { fun read(pid: Int): String? }
 
-    /** 上次采样状态（同 pid 才有差分意义）。 */
+    /** 某个 pid 的上次采样状态（差分只对同一 pid 有意义）。 */
     private data class Last(val pid: Int, val cpuMillis: Long, val atMillis: Long)
 
     private val lock = Any()
-    private var last: Last? = null
+
+    /**
+     * pid → 上次采样（插入序 = 首次观测序，供 [MAX_TRACKED_PIDS] 淘汰时定位最旧条目）。
+     * 必须每 pid 一份：见类注释的"按 pid 分别记账"。
+     */
+    private val baselines = LinkedHashMap<Int, Last>()
 
     /**
      * 采一次样。
      *
-     * @param pid 引擎进程 pid；与上次采样的 pid 不同 → 重新起步（不做跨进程差分）。
+     * @param pid 引擎进程 pid。差分只对**同一 pid 的连续两次采样**有意义：换 pid 即重新起步
+     *   （不做跨进程差分，见 [baselines]）。
      */
     fun sample(
         pid: Int,
         status: EngineStatus,
         sinceHeartbeatMillis: Long,
         atMillis: Long = System.currentTimeMillis(),
-        statReader: StatReader = StatReader { p -> readFile(Path.of("/proc/$p/stat")) },
-        statusReader: StatusReader = StatusReader { p -> readFile(Path.of("/proc/$p/status")) },
+        statReader: StatReader = this.statReader,       // 缺省走实例缝（生产 = /proc，测试 = 假文本）
+        statusReader: StatusReader = this.statusReader,
     ): WatchdogSample? {
         val statText = statReader.read(pid) ?: return null
         val millisPerTick = 1000L / clockTicksPerSecond
@@ -69,12 +82,10 @@ class ProcessMonitor(
         }
 
         val cpuPercent = synchronized(lock) {
-            val prev = this.last
-            this.last = Last(pid, cpu, atMillis)
-            when {
-                prev == null || prev.pid != pid -> 0.0
-                else -> cpuBetween(prev.cpuMillis, cpu, prev.atMillis, atMillis)
-            }
+            val prev = baselines[pid]
+            baselines[pid] = Last(pid, cpu, atMillis)   // 覆盖写不改变插入序（旧条目位置不变）
+            pruneLocked()
+            if (prev == null) 0.0 else cpuBetween(prev.cpuMillis, cpu, prev.atMillis, atMillis)
         }
 
         return WatchdogSample(
@@ -98,8 +109,18 @@ class ProcessMonitor(
      */
     fun forget(pid: Int) {
         synchronized(lock) {
-            if (last?.pid == pid) last = null
+            baselines.remove(pid)
         }
+    }
+
+    /** 当前持有基线的 pid 集合（诊断/单测用：验证忘记真的发生了）。 */
+    fun trackedPids(): Set<Int> = synchronized(lock) { baselines.keys.toSet() }
+
+    /** 淘汰最旧的一条基线（按 atMillis）：调用方漏调 [forget] 时降级为丢 CPU 判定，而不是无界增长。 */
+    private fun pruneLocked() {
+        if (baselines.size <= MAX_TRACKED_PIDS) return
+        val stalest = baselines.values.minByOrNull { it.atMillis } ?: return
+        baselines.remove(stalest.pid)
     }
 
     private fun cpuBetween(prevCpu: Long, nowCpu: Long, prevAt: Long, nowAt: Long): Double {
@@ -109,18 +130,17 @@ class ProcessMonitor(
         return used * 100.0 / (nowAt - prevAt)
     }
 
-    /** 读 /proc 文本：不存在/不可读/读失败统一回 null（调用方按「不可度量」处理）。 */
-    private fun readFile(path: Path): String? =
-        try {
-            if (Files.isReadable(path)) Files.readString(path).ifEmpty { null } else null
-        } catch (_: Exception) {
-            null
-        }
-
     companion object {
 
         /** Linux/Android 用户态 `SC_CLK_TCK` 恒为 100（每 jiffy 10ms）；可覆盖便于测试。 */
         val SC_CLK_TCK_FALLBACK: Long = 100L
+
+        /**
+         * 同时保有基线的 pid 数上限。取 128 的理由：默认口径下 30s 窗口 × 2 次/秒 = 60 段，
+         * 128 足够覆盖任何合理配置的在途引擎数；真超过了说明调用方漏调 [forget]
+         * （漏调是 bug，但看门狗不该因此 OOM）——淘汰最旧基线，退化成"这个 pid 没有 CPU 判定"。
+         */
+        const val MAX_TRACKED_PIDS: Int = 128
 
         /**
          * 解析 `/proc/<pid>/stat`，取字段 14/15（utime/stime）折成毫秒。
@@ -152,4 +172,17 @@ class ProcessMonitor(
         fun statReaderOf(text: String): StatReader = StatReader { text }
         fun statusReaderOf(text: String): StatusReader = StatusReader { text }
     }
+}
+
+/** /proc/<pid>/stat 的默认读法：文件级函数，供构造默认值引用（构造期还不可用实例成员）。 */
+private fun statFile(pid: Int): String? = readFile(Path.of("/proc/$pid/stat"))
+
+/** /proc/<pid>/status 的默认读法。 */
+private fun statusFile(pid: Int): String? = readFile(Path.of("/proc/$pid/status"))
+
+/** 读 /proc 文本：不存在/不可读/读失败统一回 null（调用方按「不可度量」处理）。 */
+private fun readFile(path: Path): String? = try {
+    if (Files.isReadable(path)) Files.readString(path).ifEmpty { null } else null
+} catch (_: Exception) {
+    null
 }

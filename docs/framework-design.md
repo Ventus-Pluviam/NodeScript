@@ -363,7 +363,12 @@ interface EnginePool {                                // 实现在 :app-service:
 **P0 已落地**：`:app-service:runtime` 的 `WatchdogPolicy` 是三路纯判定（`WatchdogSample{pid,status,heartbeatMillis,cpuPercent,rssBytes} → Healthy | Kill(cause, reason)`），默认阈值：心跳 500ms × 连失 3 次、CPU ≥95% 持续 30s、RSS ≥512MB；只对 `RUNNING` 判活；`RuntimeController.judge()` 委托它，裁决落点 = `killRun`/`killAll`（kill 权威 §4.1）。
 **采样已落地**（`ProcessMonitor`，`:app-service:runtime`）：`/proc/<pid>/stat` 与 `/proc/<pid>/status` 的读取 + 折算，产出同一份 `WatchdogSample`，交给 `WatchdogPolicy` 判定。诚实口径写死在实现与单测里：CPU 分子 = 两次 `utime+stime` 差（jiffies → ms），分母 = 调用方给的墙钟间隔，**不折算单核**（多核满载必须看着就 >100%，否则漏杀 Promise 风暴）；`comm` 含空格括号时从**最后一个 `)`** 之后切字段；首采样 / 换 pid / 时钟回拨 / 计数回绕一律回 0.0%，不给假差分；`/proc` 不可读 → 整份样本回 null（按「无法度量」处理，不猜健康），`status` 读不到只丢 RSS 这一路，不作废 CPU 样本。**本类只采样不裁决**（裁决仍归 `WatchdogPolicy`，kill 仍归 `RuntimeController`，runId→pid 归属表仍归 `:app`）。
 
-**P0 缺口（仍缺，未接完）**：① 没有**生产调度循环** —— 谁周期性调用 `ProcessMonitor.sample()` 并把 `WatchdogSample` 递给 `RuntimeController.judge()` 还没写（当前调用方只有单测）；② **心跳时间戳**仍无来源（`heartbeatMillis` 由调度方记账后传入，JS 侧心跳到达打点的通道未建）；③ **pid→runId 归属表**在 `:app`，尚未建立。补完这三项前，看门狗依然是「已就绪的判据 + 已就绪的采样 + 缺失的调度」，不能宣称活着。
+**调度循环已落地**（`EngineWatchdog`，`:app-service:runtime`）：§8.4 的三路分工终于有了周期性调度者 —— `RuntimeController.watchAnchors()` 交出在途执行的 `WatchAnchor{runId, receipt.pid}`（**pid 取 `EngineRunReceipt.pid` 快照，不是 `ScriptEngine.pid` 当前值**；槽位复用后两者会分叉），`ProcessMonitor` 按 pid 分别记账采样本，`RuntimeController.judge()` 裁决，`Kill` 落 `killRun(runId, cause)` —— 判据、采样、执行三方仍是三个类，调度者只负责「到点把三者接起来」，不自己长判定口径。`AppShell.assemble` 交出 watchdog 实例与 `ProcessMonitor`/`heartbeatMillis` 注入缝，`startWatchdog(scope)` 之前不转。
+- **采样周期 = `heartbeatIntervalMillis`**（`WatchdogPolicy` 那条因此从 private 变 public）：周期长于心跳阈值会把活引擎判死（500ms×3 的阈值配 3s 轮询 = 假阳性），controller 的这份 policy 经 `RuntimeController.watchdogPolicy()` 原样交给 watchdog —— **只有一份阈值**，不在装配层另造一个。
+- **pid 终结即忘**：无论正常结束、被 watchdog 杀掉还是本轮采样后不在途，`EngineWatchdog` 都调 `ProcessMonitor.forget(pid)`。Linux 复用 pid，不遗忘等于让新进程背旧 CPU 基线（虚高 → 误杀）；pid 落到别的 runId 时 CPU 历史整段清零，同理。
+- **不另建 pid→runId 表**（§8.4 原口径不变）：归属表只有一份，就在 `RuntimeController` 的在途账里。`:app` 侧再抄一份必然漂移（stop/kill 路径不止一条），`watchAnchors()` 是它的只读投影。
+
+**P0 缺口（只剩一条）**：**心跳时间戳**仍无生产来源。`EngineWatchdog` 的 `heartbeatMillis` 缝默认回 null（`Tick.noHeartbeat` 如实记账、不判死），**不能拿 watchdog 自己的轮转周期当心跳** —— 那是伪造心跳：`while(true)` 这种「心跳活着、CPU 打满」的形态恰好是 CPU 外带差分这一路唯一能抓到的，拿轮转周期打点会让它永久失效。JS 侧心跳到达的打点通道（桥侧事件 → 控制器记账 → `heartbeatMillis(runId)`）尚未建立。补完前，看门狗处于「三路判据已就绪、外带采样在跑、心跳一路未接线」的状态：CPU/RSS 两路真的会杀，心跳失联一路暂时不触发。
 
 ### 8.5 崩溃恢复与幂等（checkpoint 意图日志）
 - `:main` 的 scheduler 持久化 **意图日志（intent log）**：`RUN_START(projectId, entry, runNonce, scheduledAt) → …execute… → COMMIT(result)` append-only（SQLite，启动即回放）。
@@ -902,4 +907,4 @@ AutoScript 的骨架可以一句话记住：
 3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
 4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。
 
-**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再依次补 §8.4 剩下的采样调度循环/心跳打点/pid→runId 归属表（采集器 `ProcessMonitor` 已落地）、§8.3 的宿主状态与池侧状态机校准（`EngineStateMachine`→`PoolSlot` 已接线）；§8.6 的 dispatcher 排队默认上限已按触发源分级落地，仅剩 `PendingRun` 侧 deadline 记账。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。
+**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再补 §8.4 剩下的心跳打点（采样调度循环 `EngineWatchdog` 已落地、pid 归属表仍归在途账不另建）、§8.3 的宿主状态与池侧状态机校准（`EngineStateMachine`→`PoolSlot` 已接线）；§8.6 的 dispatcher 排队默认上限已按触发源分级落地，仅剩 `PendingRun` 侧 deadline 记账。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。

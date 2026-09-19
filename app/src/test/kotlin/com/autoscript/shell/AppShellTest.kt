@@ -20,13 +20,15 @@ import com.autoscript.domain.engine.StopResult
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 private val shellRunIds = AtomicLong(10_000)
 
-private class ShellFakeEngine(override val id: EngineId) : ScriptEngine {
+private class ShellFakeEngine(override val id: EngineId, override val pid: Int? = null) : ScriptEngine {
     val executed = mutableListOf<EngineRunRequest>()
     var statusToReturn: EngineStatus = EngineStatus.IDLE
 
@@ -70,13 +72,17 @@ private class ShellFakeProvider : SchedulerProvider {
 
 class AppShellTest {
 
-    private fun shell(log: IntentLog = InMemoryIntentLog()): Triple<AppShell, MutableList<ShellFakeEngine>, ShellFakeProvider> {
+    private fun shell(
+        log: IntentLog = InMemoryIntentLog(),
+        heartbeatMillis: (Long) -> Long? = { null },
+    ): Triple<AppShell, MutableList<ShellFakeEngine>, ShellFakeProvider> {
         val engines = mutableListOf<ShellFakeEngine>()
         val provider = ShellFakeProvider()
         val s = AppShell.assemble(
             engineFactory = { id -> ShellFakeEngine(id).also { engines += it } },
             schedulerProvider = provider,
             intentLog = log,
+            heartbeatMillis = heartbeatMillis,
         )
         return Triple(s, engines, provider)
     }
@@ -121,6 +127,37 @@ class AppShellTest {
             assertEquals(1, runs.size)
             assertTrue(runs[0].outcome != null, "dispatcher 对偶后 scheduler 统一 COMMIT")
             assertEquals(log.all()[0].runNonce, engines.single().executed.single().runNonce)
+        }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `装配交出看门狗实例但不自行轮转`() = runBlocking {
+        val (s, _, _) = shell()
+        s.use {
+            // 生命周期归调用方（Application 的 SupervisorJob 域）：assemble 只交出实例
+            assertFalse(s.watchdog.isRunning(), "assemble 不自行启动轮转")
+            val tick = s.watchdog.tick()
+            assertEquals(0, tick.sampled, "无在途 run：本轮不采样")
+        }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `看门狗监督经桥启动的在途 run`() = runBlocking {
+        // 心跳来源在此注入（§8.4 的生产缺省是 null：JS 侧打点通道未建）
+        val (s, _, _) = shell(heartbeatMillis = { 100L })
+        s.use {
+            val resp = s.router.dispatch(
+                BridgeRequest(1, "engines", "exec", """{"projectId":"p1","scriptPath":"a.js"}""", 5_000),
+            )
+            assertInstanceOf(BridgeResponse.Ok::class.java, resp)
+            val tick = s.watchdog.tick()
+            assertEquals(1, tick.sampled, "在途一个 run → 采一次")
+            assertTrue(tick.killed.isEmpty(), "健康样本不杀")
+            assertTrue(tick.noHeartbeat.isEmpty(), "心跳来源已注入")
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试

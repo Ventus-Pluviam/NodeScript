@@ -26,15 +26,18 @@ sealed interface WatchdogVerdict {
 }
 
 class WatchdogPolicy(
-    private val heartbeatIntervalMillis: Long = 500,
+    /** 心跳周期：也即**采样周期**——调度循环必须与它同源，否则"活着的引擎被误判失联"。 */
+    val heartbeatIntervalMillis: Long = 500,
     private val missedHeartbeatLimit: Int = 3,
-    private val cpuHighPercent: Double = 95.0,
+    val cpuHighPercent: Double = 95.0,
     private val cpuWindowMillis: Long = 30_000,
     private val rssHardLimitBytes: Long = 512L * 1024 * 1024,
 ) {
     init {
+        require(heartbeatIntervalMillis > 0) { "heartbeatIntervalMillis 必须 > 0（采样周期与失联阈值同源）" }
         require(missedHeartbeatLimit > 0)
         require(cpuWindowMillis > 0)
+        require(cpuHighPercent > 0.0)
     }
 
     /**

@@ -29,7 +29,7 @@ import org.junit.jupiter.api.Test
 class PoolAccountingTest {
 
     /** 可挂起的假引擎：execute 停在 gate 上，用于把「选槽 → 占槽」窗口撑开。 */
-    private class GatedEngine(override val id: EngineId) : ScriptEngine {
+    private class GatedEngine(override val id: EngineId, override val pid: Int? = null) : ScriptEngine {
         val started = CompletableDeferred<Unit>()
         var gate = CompletableDeferred<Unit>()
         var executeCount = 0

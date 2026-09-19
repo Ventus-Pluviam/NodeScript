@@ -18,8 +18,10 @@ import kotlinx.coroutines.sync.withLock
  * - 以 runId 为键维护在途表：`stop(未知 runId)` 如实回 [StopOutcome.AlreadyGone]，
  *   绝不静默吞掉（JS `engines.stop(runId)` 语义）；
  * - kill 权威：[killRun]/[killAll] 是唯一强杀入口（看门狗只给裁决，见 [judge]）；
- * - [judge] 纯委托 [WatchdogPolicy]（只判 RUNNING 等语义见该类）；pid→run 的映射由
- *   调用方（:app 持 /proc 表）完成，本类只按 runId 强杀。
+ * - [judge] 纯委托 [WatchdogPolicy]（只判 RUNNING 等语义见该类）；
+ * - [watchAnchors] 供 [EngineWatchdog] 取「runId → 本次执行的引擎 pid」：pid 的事实来源是
+ *   [com.autoscript.domain.engine.EngineRunReceipt.pid]（随启动 receipt 一并给出，不可得为
+ *   null），调度循环自己不另建一张 pid 表 —— 在途表就在本类里，再抄一份必然错位。
  */
 class RuntimeController(
     private val pool: EnginePool,
@@ -98,7 +100,27 @@ class RuntimeController(
     fun judge(sample: WatchdogSample, history: List<WatchdogSample> = emptyList()): WatchdogVerdict =
         watchdog.evaluate(sample, history)
 
+    /**
+     * 本控制器持有的裁决口径（装配层给 [EngineWatchdog] 用，保证**只有一份**阈值）。
+     *
+     * 为什么必须从这里取：裁决是 controller 落的（[judge] → [watchdog]），若装配层另 new 一个
+     * [WatchdogPolicy]，两处的阈值就是两份事实 —— 改了其一，另一个静默不一致，现场表现为
+     * "看门狗按 95% 判、循环按别的节奏跑"，极难查。
+     */
+    fun watchdogPolicy(): WatchdogPolicy = watchdog
+
     fun stats(): PoolStats = pool.stats()
+
+    /**
+     * 看门狗锚点：在途 runId → 该次执行的引擎 pid（docs §8.4 调度循环的取数口）。
+     *
+     * pid 取 [com.autoscript.domain.engine.EngineRunReceipt.pid]，即**这次 run** 的 pid，
+     * 而非宿主 [com.autoscript.domain.engine.ScriptEngine.pid] 的"当前值"——同一槽位换过
+     * 执行体后两者不同。宿主不给 pid（实现未接线）时如实给 null：调用方按"无法度量"处理。
+     */
+    suspend fun watchAnchors(): List<WatchAnchor> = guard.withLock {
+        active.values.map { WatchAnchor(it.receipt.runId, it.receipt.pid) }
+    }
 
     /** 在途 runId 快照（诊断/UI 用）。 */
     fun activeRunIds(): Set<Long> = active.keys.toSet()
@@ -161,6 +183,9 @@ class RuntimeController(
             null
         }
     }
+
+    /** 在途执行的看门狗锚点（[watchAnchors] 的元素）。 */
+    data class WatchAnchor(val runId: Long, val pid: Int?)
 
     companion object {
         const val POLL_INTERVAL_MILLIS: Long = 200

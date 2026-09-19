@@ -15,6 +15,7 @@ private val fakeRunIds = AtomicLong(1)
 /** 测试替身引擎（对齐 runtime FakeEngine 语义；:app test 不可见其 test source，自备）。 */
 class FakeEngineForDispatcher(
     override val id: EngineId,
+    override val pid: Int? = null,
     /** 脚本执行体 run 起来后多久"自退出"（真机：脚本跑完宿主推 STOPPED）；null = 永不退出（悬挂）。 */
     @Volatile var autoExitAfterMillis: Long? = 50,
 ) : ScriptEngine {

@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Test
  */
 class AppShellCapabilityMountTest {
 
-    private class MountFakeEngine(override val id: EngineId) : ScriptEngine {
+    private class MountFakeEngine(override val id: EngineId, override val pid: Int? = null) : ScriptEngine {
         override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
             return EngineRunReceipt(runId = 1, handle = HandleRef(1, 1))
         }

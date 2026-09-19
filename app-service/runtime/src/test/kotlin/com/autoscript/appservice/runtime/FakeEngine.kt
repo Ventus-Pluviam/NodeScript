@@ -25,12 +25,15 @@ class FakeEngine(
     var stopCalls = 0
     var statusToReturn: EngineStatus = EngineStatus.IDLE
 
+    /** 宿主进程 pid；null = 宿主不给（看门狗据此"无法度量"，见 ScriptEngine.pid 契约）。 */
+    override var pid: Int? = null
+
     override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
         if (failOnExecute) throw IllegalStateException("fake boot failure")
         executed += run
         statusToReturn = EngineStatus.RUNNING
         val runId = fakeRunIds.getAndIncrement()
-        return EngineRunReceipt(runId = runId, handle = HandleRef(refId = runId, generation = 1))
+        return EngineRunReceipt(runId = runId, handle = HandleRef(refId = runId, generation = 1), pid = pid)
     }
 
     override suspend fun stop(): StopResult {
@@ -47,6 +50,7 @@ class FakeEngine(
         statusToReturn = EngineStatus.CRASHED
         return KillCause.REQUESTED
     }
+
 
     override suspend fun status(): EngineStatus = statusToReturn
 }

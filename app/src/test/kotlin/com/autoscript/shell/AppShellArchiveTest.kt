@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test
 
 private val archiveRunIds = AtomicLong(20_000)
 
-private class ArchiveFakeEngine(override val id: EngineId) : ScriptEngine {
+private class ArchiveFakeEngine(override val id: EngineId, override val pid: Int? = null) : ScriptEngine {
     val executed = mutableListOf<EngineRunRequest>()
     var statusToReturn: EngineStatus = EngineStatus.IDLE
 

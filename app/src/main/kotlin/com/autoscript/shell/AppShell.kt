@@ -1,6 +1,8 @@
 package com.autoscript.shell
 
+import com.autoscript.appservice.runtime.EngineWatchdog
 import com.autoscript.appservice.runtime.EnginesNamespaceHandler
+import com.autoscript.appservice.runtime.ProcessMonitor
 import com.autoscript.appservice.runtime.FixedEnginePool
 import com.autoscript.appservice.runtime.RuntimeController
 import com.autoscript.appservice.scheduler.core.InMemoryRunArchive
@@ -46,11 +48,23 @@ class AppShell(
     val scheduler: Scheduler,
     val intentLog: IntentLog,
     val runArchive: RunArchive,
+    /**
+     * 看门狗调度循环（§8.4）：周期性把 [ProcessMonitor][com.autoscript.appservice.runtime.ProcessMonitor]
+     * 的采样喂给 [controller] 的裁决（[WatchdogPolicy][com.autoscript.appservice.runtime.WatchdogPolicy]），
+     * Kill 落 [RuntimeController.killRun]。是否轮转由调用方决定 —— 见 [startWatchdog]。
+     */
+    val watchdog: EngineWatchdog,
 ) : AutoCloseable {
 
     /** 按 namespace 薄转接 handler 到 [BridgeRouter]（本层无逻辑，只做形状适配）。 */
     fun mount(namespace: String, handler: RequestHandler): Boolean =
         router.register(namespace, handler)
+
+    /** 启动看门狗轮转（幂等）。[scope] 的所有权归调用方（Application 的 SupervisorJob 域）。 */
+    fun startWatchdog(scope: kotlinx.coroutines.CoroutineScope) = watchdog.start(scope)
+
+    /** 停止看门狗轮转（幂等；不夺调用方 scope 的所有权）。 */
+    suspend fun stopWatchdog() = watchdog.stop()
 
     override fun close() {
         router.close()
@@ -73,6 +87,18 @@ class AppShell(
             a11yHandler: NamespaceHandler? = null,
             /** `screen` 命名空间实现（§9.2）；同 [a11yHandler] 的注入缝。 */
             screenHandler: NamespaceHandler? = null,
+            /**
+             * 看门狗的采样器（§8.4 `/proc` 读取缝）。缺省读宿主自己的 `/proc`；
+             * 桌面/测试无对应进程时注入替身 —— 看门狗不会因此假装健康。
+             */
+            monitor: ProcessMonitor = ProcessMonitor(),
+            /**
+             * 心跳来源（runId → 距上次心跳毫秒；null = 该 run 量不到心跳）。§8.4 缺口②：
+             * JS 侧心跳到达宿主的打点通道未建，故缺省 null —— 缺了它看门狗只跑 CPU/RSS 两路，
+             * [EngineWatchdog.Tick.noHeartbeat] 如实记账，**不拿轮转周期冒充心跳**。
+             */
+            heartbeatMillis: (Long) -> Long? = { null },
+            watchdog: EngineWatchdog? = null,
         ): AppShell {
             val events = EventBus()
             val registry = RequestRegistry()
@@ -93,6 +119,11 @@ class AppShell(
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
             val scheduler = Scheduler(schedulerProvider, intentLog, dispatcher, runArchive)
 
+            // 看门狗：采样器 + 心跳来源在此装配；policy 取 controller 自己那份（单一事实来源，
+            //  Threshold 改变只改一处）。缺省 new 一个套在真 controller 上的生产实例。
+            val dog = watchdog ?: EngineWatchdog(controller)
+            dog.withMonitor(monitor).withHeartbeat(heartbeatMillis)
+
             return AppShell(
                 router = router,
                 console = console,
@@ -103,6 +134,7 @@ class AppShell(
                 scheduler = scheduler,
                 intentLog = intentLog,
                 runArchive = runArchive,
+                watchdog = dog,
             )
         }
     }
