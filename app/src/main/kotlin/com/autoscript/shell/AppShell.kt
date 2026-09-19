@@ -15,6 +15,7 @@ import com.autoscript.bridge.RequestRegistry
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.engine.EngineId
+import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.scripts.RunArchive
 
@@ -29,7 +30,8 @@ import com.autoscript.domain.scripts.RunArchive
  *   （intentRunId ↔ engineRunId）与 :domain `RunRecord` 一并写入 [RunArchive]，
  *   使意图日志行与引擎执行可互相追溯（任务中心/UI 按 IntentRun 读引擎记录）；
  * - 桥（[BridgeRouter] + [RequestRegistry] + [EventBus]）挂 `console`/`engines`
- *   命名空间（a11y/images 等能力 handler 由真实现就绪后在此注册）。
+ *   命名空间；`a11y`/`screen` 走 [NamespaceHandler] 挂载缝（见 [assemble] 的
+ *   [a11yHandler]/[screenHandler] 注入说明）。
  *
  * Android 能力缝（[engineFactory]/[schedulerProvider]/[screenGate]/[runArchive]）由
  * Application/Activity 在此注入；JVM 单测走 [assemble] 传 fake。
@@ -62,6 +64,15 @@ class AppShell(
             runArchive: RunArchive = InMemoryRunArchive(),
             screenGate: ScreenGate = ScreenGate.AllowAll,
             poolCapacity: Int = 1,
+            /**
+             * `a11y` 命名空间实现（§9.1）。注入缝：实现在 `:platform:capabilities`，
+             * 而 `:app` 禁止直连 `:platform`（§6，archUnit 强制），故由持有实现的
+             * Android 侧（Application/Activity）在调用 [assemble] 时传入；
+             * null = 未接线，桥对 `a11y.*` 如实回 ERR_NOT_IMPLEMENTED（不伪造可用）。
+             */
+            a11yHandler: NamespaceHandler? = null,
+            /** `screen` 命名空间实现（§9.2）；同 [a11yHandler] 的注入缝。 */
+            screenHandler: NamespaceHandler? = null,
         ): AppShell {
             val events = EventBus()
             val registry = RequestRegistry()
@@ -72,6 +83,12 @@ class AppShell(
             val controller = RuntimeController(FixedEnginePool(engineFactory, poolCapacity))
             val enginesHandler = EnginesNamespaceHandler(controller)
             router.register("engines") { request -> enginesHandler.handleLike(request) }
+
+            // 能力命名空间按挂载缝注入（§4.1/§6）：本层只负责把 handler 挂上 Router，
+            // 不 new 具体实现（那需要直连 :platform，被 archUnit 禁止）。缺省不挂 =
+            // 未知 namespace → ERR_NOT_IMPLEMENTED（§7.5 Router 契约，诚实上报）。
+            if (a11yHandler != null) router.register("a11y", a11yHandler)
+            if (screenHandler != null) router.register("screen", screenHandler)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
             val scheduler = Scheduler(schedulerProvider, intentLog, dispatcher, runArchive)

@@ -85,7 +85,7 @@ export interface UiObject {
 export declare const a11y: {
     /** 创建选择器：链式条件，findOne 失败抛 NotFoundError。 */
     selector(): UiSelector;
-    /** 等待某条件出现（一定次数内触发则成功；§12.3 waitFor）。 */
+    /** 等待某条件出现（一定次数内触发则成功；§12.3 waitFor）。载荷键见下：`conditions`。 */
     waitFor(sel: UiSelector, opts?: {
         timeout?: number;
         interval?: number;

@@ -63,6 +63,16 @@ function installMockA11y() {
         } else ok('true')
         return undefined
       }
+      case 'waitFor': {
+        // Kotlin 侧 waitFor 复用 findOne 的选择器解析路径：载荷键是 conditions，
+        // 与 findOne 同构（JS facade 曾发 selector，会因白名单外字段被拒）。
+        const m = matches(p.conditions)
+        if (Object.prototype.hasOwnProperty.call(p, 'selector')) {
+          err('ERR_INVALID_PARAM', '未知选择器条件 selector')
+        } else if (m.length === 0) err('ERR_NOT_FOUND', '选择器无匹配')
+        else ok('true')
+        return undefined
+      }
       case 'copy': {
         if (!nodes.has(p.ref.refId)) err('ERR_STALE_HANDLE', '节点已释放')
         else ok('true')
@@ -158,4 +168,14 @@ test('a11y.gesture 上送 strokes；canPerformGestures 回门状态', async () =
   })
   assert.strictEqual(ok, true)
   await assert.rejects(() => auto.a11y.gesture({ strokes: [] }), (e) => e.code === 'ERR_INVALID_PARAM')
+})
+
+test('a11y.waitFor 发 conditions 键（对偶 Kotlin waitFor 解析路径）', async () => {
+  installMockA11y()
+  assert.strictEqual(await auto.a11y.waitFor(auto.a11y.selector().text('启动')), true)
+  // 发错键（selector）被如实拒绝，不静默变全量匹配
+  await assert.rejects(
+    () => auto.bridge.invoke('a11y', 'waitFor', { selector: { text: '启动' } }),
+    (e) => e.code === 'ERR_INVALID_PARAM',
+  )
 })

@@ -23,7 +23,7 @@ data class ConsoleLine(
 )
 
 /**
- * console 数据面收集器：Kotlin Router 侧注册 `console` namespace 的 [RequestHandler]。
+ * console 数据面收集器：Kotlin Router 侧注册 `console` namespace 的 [NamespaceHandler]。
  *
  * - `log` 方法：payload JSON `{"level":"log|info|warn|error|debug","text":"..."}`，
  *   `side.runId` 透传执行归属（无则 0 = 引擎外日志）→ 有界追加 → `Ok(id, null)`；

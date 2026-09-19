@@ -2,6 +2,7 @@ package com.autoscript.bridge
 
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
+import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.core.ErrorCode
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -15,10 +16,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
 
-/** namespace → 请求处理器（实现方注册，如 a11y / images / npm）。 */
-fun interface RequestHandler {
-    suspend fun handle(request: BridgeRequest): BridgeResponse
-}
+/**
+ * namespace → 请求处理器（实现方注册，如 a11y / images / npm）。
+ *
+ * 即 `:domain` 的 [com.autoscript.domain.bridge.NamespaceHandler]（§4.1/§6）：
+ * 实现方（`:platform:capabilities` 的 a11y/screen handler）只允许依赖 `:domain`，
+ * 因此挂载缝的类型必须住在 `:domain`，本名保留了「桥侧叫法」，两端是同一个函数类型。
+ */
+typealias RequestHandler = com.autoscript.domain.bridge.NamespaceHandler
 
 /**
  * 桥路由器（docs/framework-design.md §7.5）：

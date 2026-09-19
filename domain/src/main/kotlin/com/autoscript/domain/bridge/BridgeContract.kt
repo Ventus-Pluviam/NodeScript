@@ -35,3 +35,19 @@ data class HandleRef(
     val refId: Long,
     val generation: Long,
 )
+
+/**
+ * 挂载缝（§4.1/§6 依赖规则的必然产物）：namespace → 请求处理器。
+ *
+ * 为什么这个函数类型住 `:domain`：`BridgeRouter` 按 namespace 路由，而实现方
+ * （`:platform:capabilities` 的 a11y/screen handler）**不允许**依赖 `:bridge:java`
+ * （§6：capabilities 只依赖 `:domain` + 系统 API，其 archUnit 门禁把
+ * `com.autoscript.bridge..` 列进黑名单）。把接缝类型放在两端都看得见的 `:domain`，
+ * `:bridge:java` 用 typealias 保留 `RequestHandler` 名字，
+ * `:app` 装配层（AppShell.assemble 注入）只负责把它挂上 Router。
+ *
+ * 语义仍完全是 [BridgeRequest]/[BridgeResponse]（§7），此处不新增任何契约字段。
+ */
+fun interface NamespaceHandler {
+    suspend fun handle(request: BridgeRequest): BridgeResponse
+}

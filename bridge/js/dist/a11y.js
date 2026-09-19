@@ -15,10 +15,13 @@ exports.a11y = {
     selector() {
         return new UiSelectorBuilder();
     },
-    /** 等待某条件出现（一定次数内触发则成功；§12.3 waitFor）。 */
+    /** 等待某条件出现（一定次数内触发则成功；§12.3 waitFor）。载荷键见下：`conditions`。 */
     async waitFor(sel, opts = {}) {
+        // 载荷键是 conditions（与 findOne 同构）：Kotlin A11yNamespaceHandler 的
+        // waitFor 复用同一条选择器解析路径，只认这一个键；发 selector 会被拒为
+        // ERR_INVALID_PARAM（白名单外字段，诚实失败，不静默变全量匹配）。
         const result = await runtime_1.runtimeBridge.invoke('a11y', 'waitFor', {
-            selector: conditionsOf(sel),
+            conditions: conditionsOf(sel),
             timeout: opts.timeout,
             interval: opts.interval,
         });

@@ -8,6 +8,10 @@ import org.junit.jupiter.api.Test
 /**
  * 依赖方向守护（docs §6 模块表）：capabilities 实现 :domain SPI，不反向；
  * 禁服务逻辑（app-service）、禁桥/引擎直连、禁 UI。
+ *
+ * `a11y`/`screen` 命名空间挂 Router 所需的接缝类型（`com.autoscript.domain.bridge.
+ * NamespaceHandler`）住 `:domain`，本模块只见 `:domain`（见 [CapabilityNamespaces]）；
+ * `com.autoscript.bridge..` 仍整体在黑名单里 —— 依赖 `:domain` 的挂载缝不等于依赖桥实现层。
  */
 class ArchitectureTest {
 

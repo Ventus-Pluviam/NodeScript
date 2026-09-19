@@ -183,7 +183,7 @@
 
 | 模块 | 职责 | 允许依赖 | 所有模块禁止 |
 |---|---|---|---|
-| `:app` | Compose UI（IDE/任务中心/控制台/能力中心/打包向导）＋ `AppShellApplication` 启动装配 | `:app-service:*`、`:domain` | 直连 `:platform`/`:bridge` |
+| `:app` | Compose UI（IDE/任务中心/控制台/能力中心/打包向导）＋ `AppShellApplication` 启动装配 | `:app-service:*`、`:domain` | 直连 `:platform`/`:bridge`（**唯一例外**：`com.autoscript.shell` 装配包为把 handler 挂上 `BridgeRouter` 可依赖 `:bridge:java`，只做字段级转接，无业务逻辑） |
 | `:app-service:runtime` | 执行编排：RuntimeController、EnginePool、Watchdog 仲裁、kill 权威、`engines` 命名空间处理器 | `:domain` | 依赖 UI/Dialog 类、`com.autoscript.bridge..`（archUnit 强制，严于本表的历史约定） |
 | `:app-service:scheduler` | 定时/Intent/事件任务、checkpoint 意图日志、runNonce 幂等 | `:domain` | 依赖 RunRecord 之外的引擎细节 |
 | `:app-service:script-repo` | 项目/资源/脚本库、assets→filesDir 原子部署（tmp+rename+sha256 校验） | `:domain` | 直访 danger 权限 |
@@ -196,11 +196,13 @@
 | `:bridge:js` | npm workspace：TS facade SDK（`@autojs/*`）、RuntimeChannel、bootstrap loader、d.ts | 仅 npm 依赖 | 禁 Gradle 反向 |
 | `:engine:node-process` | `:nodeN` 进程宿主：main.cpp、Node config、JNI 注册、桥服务端 | `:bridge:native` | 禁 Android SDK UI |
 | `:engine:sandbox` | QuickJS 宿主进程（P1） | — | — |
-| `:platform:capabilities` | a11y 服务/UiNodeTreeReader、MediaProjection、截图 FrameSource、输入通道（无障碍/root/adb/Shizuku） | `:domain` + 系统 API | 禁服务逻辑 |
+| `:platform:capabilities` | a11y 服务/UiNodeTreeReader、MediaProjection、截图 FrameSource、输入通道（无障碍/root/adb/Shizuku）、`a11y`/`screen` 命名空间 handler + 挂载缝薄转接 | `:domain` + 系统 API | 禁服务逻辑；禁直连 `com.autoscript.bridge..`（挂载缝类型住 `:domain`，见 §12.2） |
 | `:platform:system` | overlay、通知、datastore（SQLite）、shell、设备信息、zip、系统设置 | `:domain` | 禁服务逻辑；**仅空壳（build.gradle.kts + namespace，零源文件）**，§9.6 的实现尚未开始 |
 | `:node-runtime-build` | **构建管线（不打包进 APK）**：Node 源码 recipe、NDK 编译、16KB 对齐门禁、产物 hash | CI 脚本 | — |
 
 架构测试（archUnit）进 CI：验证「领域层零 Android import」「`:app` 不直连平台」「依赖方向无环」。
+
+**例外不是开后门**：`:app` 碰 `:bridge:java` 只发生在 `com.autoscript.shell` 一个包；`:platform:capabilities` 挂 Router 只碰 `:domain` 的 `NamespaceHandler`。两侧的越界都由各自的 `ArchitectureTest` 量化执行，不是口头约定。
 
 ---
 
@@ -402,6 +404,7 @@ interface EnginePool {                                // 实现在 :app-service:
 - **句柄代理**：JS 侧 `UiObject` = 代理对象（§7.4），操作带 generation，控件已离开窗口树 → `ERR_STALE_HANDLE`。
 - 窗口树：`window('modal/active/…)`、`UiObject.window`、event 监听（`EventEmitter`）。
 - 全链路如实时树可能加速：惰性属性化已内建在索引树设计中。
+- **已落地（Kotlin 侧）**：`A11yNamespaceHandler`（方法表与 payload 见该类 KDoc）+ 内存窗口树/输入替身，共 53 项 JVM 单测；**Kotlin 侧 `waitFor` 读的载荷键是 `conditions`**（与 `findOne` 同构；轮询等待是宿主责任，内存树是单次快照，`timeout/interval` 只透传回显，不伪造等待）。JS facade `a11y.ts` 的 `waitFor` 已对齐：发 `conditions`（曾发 `selector`，会在白名单外字段上回 `ERR_INVALID_PARAM`——已修，两侧同构），其余方法键早已对齐。
 
 ### 9.2 截图与图像管线（`media_projection` / `image` / `@autojs/opencv`）
 ```
@@ -413,6 +416,7 @@ FrameSource (SPI)
 ```
 - 截图对象生命周期：JS `Image` 句柄 → native 帧句柄；`recycle()` 显式 + finalize 兜底；`dispose` tombstone 协议同 §7.4。
 - `FLAG_SECURE` → 分类错误（§7.6），不返回黑图（让脚本可判断）。
+- **已落地（Kotlin 侧）**：`ScreenshotSource`（333ms 节流 / generation=1 单帧句柄 / 会话 open-close）+ `ScreenNamespaceHandler`（`capture/recycle/startCapturer/nextFrame/closeSession`）。
 - MediaProjection **会话语义**：`capture()` 一次性授权会话（API34 每会话确认）；`reconnect` 不自动重试授权，由 PermissionCenter 引导用户重授权。
 
 ### 9.3 输入通道（`root_automator` / 手势）
@@ -662,6 +666,21 @@ auto.npm.on('warning', e => ({ kind: 'scripts-skipped', pkg: ['esbuild', 'sharp'
 - `auto.npm`（包管理与依赖生态，§10：install/ci/list/audit/offlineGap/importOfflineBundle/requestApprove——审批人机分离，QuickJS 沙箱缺失该命名空间）
 - Node 内建：`fs/path/http/os/process` 等**完整可用**（除 `child_process` 显式报 `ERR_NOT_IMPLEMENTED`）；`@autojs/*` npm 包 SDK（`@autojs/opencv` 对齐 Pro）。
 
+**接线现状（Kotlin 侧，与 `AppShell.assemble` 对齐；未列出的命名空间在两侧都还没有 handler）**：
+
+| 命名空间 | JS facade | Kotlin handler | 挂载状态 |
+|---|---|---|---|
+| `console` | `console.ts` | `ConsoleCollector`（`:bridge:java`） | `AppShell.assemble` 已挂 |
+| `engines` | `engines.ts` | `EnginesNamespaceHandler`（`:app-service:runtime`） | 已挂 |
+| `a11y` | `a11y.ts` | `A11yNamespaceHandler`（`:platform:capabilities`） | **已可挂**：`assemble` 的 `a11yHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`） |
+| `screen` | `images.ts` | `ScreenNamespaceHandler`（`:platform:capabilities`） | **已可挂**：同上，`screenHandler` 缝 |
+| `images`（fromFile/matchTemplate/findImage） | `images.ts` | 无 | 待建（`:bridge:image` / native，P1） |
+| `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | 无 | 待建（§9.4/§9.6，多为平台能力） |
+| `npm` | `npm.ts` | 无 | 待建（§10，P0 npm 切片） |
+| `workManager` | `workManager.ts` | 无（纯本地 helper，不发桥调用） | scheduler 面，另走 Scheduler SPI |
+
+**为什么能力命名空间走注入缝**：`a11y`/`screen` 的真实现住 `:platform:capabilities`，而 §6 禁止 `:app` 直连 `:platform`。解法是 `:domain` 上的挂载缝 `NamespaceHandler` + `:platform:capabilities` 的薄转接 `CapabilityNamespaces.{a11y,screen}`，由持有真实现的 Android 侧在调用 `assemble` 时注入；`BridgeRouter` 的 `RequestHandler` 只是这条缝的 typealias。这不违反依赖规则：两侧都只见 `:domain`。
+
 ### 12.3 关键签名示例（风格示范）
 ```ts
 // a11y 选择器（Promise + 超时）
@@ -751,6 +770,7 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 - 构建链行：`:node` 进程宿主（单脚本）、Node 24 自建管线 + 16KB 门禁。
 - 最小桥：TSF 双队列 + RPC + TTL + HandleRegistry、`console` 回传。
 - a11y 基础：选择器/click/scroll/setText/文本事件；a11y 截图（333ms）。
+  **Kotlin 侧已落地**：选择器/点击/滚动/文本/剪贴板/事件流/手势 + 截图（333ms 节流/会话），均 JVM 可测；`AppShell.assemble` 已留 `a11yHandler`/`screenHandler` 挂载缝（见 §12.2 接线现状表）。
 - 执行：池（默认 1）状态机、四步 quiesce、心跳+Cpu+OOM 看门狗、崩溃重启(仅本轮 run)。
 - 定时：单 alarm 定时任务 + 意图日志 + runNonce 幂等。
 - 权限三态中心 UI + 引导页；specialUse FGS 骨架。
@@ -877,3 +897,5 @@ AutoScript 的骨架可以一句话记住：
 2. 在 `:node-runtime-build` 上跑通「Node 24 → 16KB 对齐 libnode.so → 最小 `:node` 进程能执行 `console.log` 并回传」的**垂直切片**——这是全架构的第一块里程碑，也是最硬的一块骨头；
 3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
 4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。
+
+**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再依次补 §8.4 的 `/proc` 采样、§8.6 的 dispatcher 排队默认上限、§8.3 的 `EngineStateMachine`→`PoolSlot` 接线。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。
