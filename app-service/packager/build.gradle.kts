@@ -21,6 +21,7 @@ android {
 
 dependencies {
     implementation(project(":domain"))
+    implementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.archunit.junit5)
