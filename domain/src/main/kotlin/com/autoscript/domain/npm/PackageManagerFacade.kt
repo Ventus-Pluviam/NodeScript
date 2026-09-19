@@ -129,7 +129,12 @@ data class NodeModulesStats(
     val lastInstallAtMillis: Long? = null,
 )
 
-/** 快照导出引用（node_modules.zip + lock + ledger → SAF）。 */
+/**
+ * 快照导出引用（§10.9.4 高信任通道：node_modules.zip + manifest 链 + ledger + lock.sig → SAF）。
+ *
+ * [sha256] 是**归档字节**的摘要，供调用方在落盘/传输后自校验文件没坏；它与
+ * `snapshot.sig` 签的内容清单是两回事——导入侧验信用的是签，不用这个。
+ */
 data class SnapshotRef(
     val uri: String,
     val sizeBytes: Long,
