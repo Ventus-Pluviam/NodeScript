@@ -40,11 +40,14 @@ class InstallCoordinatorTest {
         }
     }
 
+    private fun newHistory() = InstallHistory(dir.resolve(".autojs"))
+
     private fun coordinator(
         executor: InstallCoordinator.HeavyOpExecutor = FakeExecutor(),
         free: Long = 10L * 1024 * 1024 * 1024,
         cache: CacheIndex = CacheIndex { false },
         ledger: ApprovalLedger = ApprovalLedger(),
+        history: InstallHistory? = newHistory(),
     ) = InstallCoordinator(
         layout = layout,
         journal = journal,
@@ -53,6 +56,7 @@ class InstallCoordinatorTest {
         cacheIndex = cache,
         executor = executor,
         freeSpaceProbe = { free },
+        history = history,
     )
 
     // ═══ 门禁 ═══
@@ -147,6 +151,54 @@ class InstallCoordinatorTest {
 
         assertEquals(InstallJournal.State.FAIL, journal.all().lastOrNull()?.state)
         assertTrue(events.filterIsInstance<InstallEvent.Finished>().any { !it.success })
+    }
+
+    // ═══ 审计史（§10.2 install-history） ═══
+
+    @Test
+    fun `成功安装入史：op 名取 npm 子命令`() = runBlocking {
+        val exec = FakeExecutor { op ->
+            Files.write(op.stageDir.resolve("axios.js"), "console.log(1)".toByteArray())
+        }
+        val h = newHistory()
+        coordinator(executor = exec, history = h).install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        val e = h.all().single()
+        assertEquals(InstallHistory.Op.INSTALL, e.op)
+        assertEquals("p1", e.projectId)
+        assertTrue(e.success, "成功安装必须如实入史")
+    }
+
+    @Test
+    fun `失败安装也入史（审计不能只答成功面）`() = runBlocking {
+        val h = newHistory()
+        val exec = FakeExecutor { throw RuntimeException("registry 502") }
+        assertThrows(RuntimeException::class.java) {
+            runBlocking { coordinator(executor = exec, history = h).install("p1", listOf(PackageSpec("axios"))) }
+        }
+        val e = h.all().single()
+        assertEquals(InstallHistory.Op.INSTALL, e.op)
+        assertTrue(!e.success, "失败也要入史")
+        assertTrue(e.detail?.contains("registry 502") == true, "失败明细必须带得上：${e.detail}")
+    }
+
+    @Test
+    fun `tarball 导入归并为 import op（路径只进 detail）`() = runBlocking {
+        val h = newHistory()
+        val exec = FakeExecutor { /* 假执行 */ }
+        coordinator(executor = exec, history = h)
+            .importTarball("p1", "/sdcard/Download/pkg.tgz")
+        val e = h.all().single()
+        assertEquals(InstallHistory.Op.IMPORT, e.op, "导入统一归 import（用户路径不是 op 名）")
+        assertTrue(e.success)
+    }
+
+    @Test
+    fun `registry 变更入史（可审计）`() = runBlocking {
+        val h = newHistory()
+        coordinator(history = h).config("p1", com.autoscript.domain.npm.NpmConfigKey.REGISTRY, "https://registry.npmjs.org")
+        val e = h.all().single()
+        assertEquals(InstallHistory.Op.REGISTRY, e.op)
+        assertTrue(e.detail?.contains("registry=https://registry.npmjs.org") == true, "明细须含键值：${e.detail}")
     }
 
     // ═══ 审批（人机分离） ═══
