@@ -14,7 +14,14 @@ android {
     kotlinOptions { jvmTarget = "17" }
     testOptions {
         unitTests {
-            all { it.useJUnitPlatform() }
+            all {
+                it.useJUnitPlatform()
+                // 真实 npm e2e（HostNodeNpmE2ETest）默认跳过：CI 走 -PskipNpmE2E，
+                // 本机闭环由 tools/jvm-test.sh 直跑（宿主机 node+npm 存在才启用）。
+                if (project.hasProperty("skipNpmE2E")) {
+                    it.exclude("**/HostNodeNpmE2ETest*")
+                }
+            }
         }
     }
 }

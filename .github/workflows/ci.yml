@@ -23,7 +23,7 @@ jobs:
           gradle-version: "8.9"   # 与 AGP 8.5.2 匹配（≥8.7）；仓库已带 gradlew wrapper
       - name: JVM 单元测试
         run: |
-          ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:testDebugUnitTest :app-service:script-repo:testDebugUnitTest :app-service:permission-center:testDebugUnitTest :app-service:packager:testDebugUnitTest :platform:capabilities:testDebugUnitTest :app:testDebugUnitTest --stacktrace
+          ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:testDebugUnitTest :app-service:script-repo:testDebugUnitTest :app-service:permission-center:testDebugUnitTest :app-service:packager:testDebugUnitTest :platform:capabilities:testDebugUnitTest :app:testDebugUnitTest --stacktrace -PskipNpmE2E
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@v4
