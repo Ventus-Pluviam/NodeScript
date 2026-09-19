@@ -69,6 +69,7 @@ class FixedEnginePool(
                     timeoutMillis = request.scriptTimeoutMillis,
                 )
             )
+            slot.markRunning()               // execute 返回 = 进程已拉起：BOOTING → RUNNING（§8.3）
             PoolAcquireOutcome.Granted(PoolHandle(request, slot, receipt))
         } catch (e: CancellationException) {
             recycle(slot)               // 调用方取消：槽位复位 + 还证必须成对，否则池缩水
@@ -97,7 +98,7 @@ class FixedEnginePool(
         slots.forEach { slot ->
             if (slot.state != SlotState.FREE) {
                 slot.engine.kill()
-                slot.forceFree()
+                slot.forceFree(reason)
                 permits.release()
             }
         }
@@ -115,11 +116,14 @@ class FixedEnginePool(
      * - 未还证 → free=1 但无证可领，池容量永久缩水；
      * - release（旧句柄）补还 → 超发一证，两个占用者并存。
      * 收归同时推进占位代次：旧句柄在此之后一律过期，放不进 [release]。
+     *
+     * @param cause 收归原因（§8.3 状态机归类）：watchdog/OOM 原因 → CRASHED；null 或
+     *   [KillCause.REQUESTED] → STOPPED。调用方不关心终态归因时可省。
      */
-    override fun recycle(slot: PoolSlot) {
+    override fun recycle(slot: PoolSlot, cause: KillCause?) {
         synchronized(stateLock) {
             if (slot.state != SlotState.FREE) {
-                slot.reuse()
+                slot.reuse(cause ?: KillCause.REQUESTED)   // 无原因=调用方主动收归 → STOPPED 而非 CRASHED
                 slot.occupy()          // 收归也推进代次：旧句柄此后一律过期
                 permits.release()
             }

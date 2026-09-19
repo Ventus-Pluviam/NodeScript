@@ -349,9 +349,10 @@ interface EnginePool {                                // 实现在 :app-service:
 - 任何路径都不可能「停在 RUNNING 无归宿」：RUNNING 必须挂一个心跳 deadline，超时即进 SINKING。
 
 **P0 已落地的收敛子集**（代码是事实来源，别按上图臆造）：
-- `:domain` 的 `EngineStateMachine` 实现了合法转移表与 `kill()` 归类（`REQUESTED → STOPPED`，其余原因 → `CRASHED`），目前**只被自己的单测驱动**；池侧（`PoolSlot`）用的是更小的三态投影 `SlotState{FREE, BUSY, QUIESCING}`（`FixedEnginePool`/`PoolSlot`），够表达 §8.2 记账，但还没有把 `EngineStatus` 的 BOOTING/RUNNING/CRASHED 差别带进槽位。
-- 因此上图里的 `SUSPENDED`（多源计数）与 `PENDING` 在 P0 **均不存在**：`EngineStatus` 枚举里没有 SUSPENDED，`awaitCompletion` 只把 RUNNING 判活（看门狗口径一致，见 §8.4）。
-- 接线的下一步（未做）：把 `EngineStateMachine` 挂到 `PoolSlot`（夺槽 → BOOTING，execute 返回 → RUNNING，quiesce → QUIESCING/STOPPED，kill 按 `KillCause` 归类），让 `status()` 由宿主真实驱动而不是 `FakeEngine` 那样的桩。**在那之前，任何依赖 SUSPENDED 的设计（暂停恢复、诊断暂停计数）都还没有代码基础。**
+- `:domain` 的 `EngineStateMachine`（合法转移表 + `kill()` 归因：`REQUESTED → STOPPED`，其余原因 → `CRASHED`）**已真正驱动池侧**：`PoolSlot` 持一个状态机实例，与「占槽/回收」同生共死 —— 夺槽 `markBusy` → `BOOTING`，`execute` 拿到 `EngineRunReceipt` → `RUNNING`（`PoolSlot.markRunning`），`quiesce` → `QUIESCING → STOPPED`（stop 超时兜底杀掉则归 `REQUESTED`），`recycle`/`forceFree` 按传入 `KillCause` 归因（watchdog/OOM → `CRASHED`）后回收回 `IDLE`。槽位侧的三态投影 `SlotState{FREE, BUSY, QUIESCING}` 仍在（§8.2 记账要用），但不再与 `EngineStatus` 脱节。
+- 为什么状态机挂 `PoolSlot` 而不是另建一张表：状态机必须与占槽/回收同生共死，分表就要处理「表里有行、槽位已 FREE」的孤儿；`FixedEnginePool` 的 stateLock 已保证读写与记账原子。非法转移抛 `IllegalStateTransition`（响亮失败，不静默修状态）。
+- **仍缺**：`awaitCompletion`/`probeStatus` 判活读的是宿主引擎的 `ScriptEngine.status()`（真实现方的事），池侧状态机是记账投影；两者尚未互相校准（例如「引擎自报 RUNNING 但池已 FREE」目前不会响亮失败）。
+- 上图里的 `SUSPENDED`（多源计数）与 `PENDING` 在 P0 **均不存在**：`EngineStatus` 枚举里没有 SUSPENDED，`awaitCompletion` 只把 RUNNING 判活（看门狗口径一致，见 §8.4）。**任何依赖 SUSPENDED 的设计（暂停恢复、诊断暂停计数）仍然没有代码基础。**
 
 ### 8.4 看门狗（三路，防死循环/僵尸/饥饿）
 - **心跳**（数据面，周期 ~500ms，携带自回事务序列号）：连失 K 次 → 重启判定；心跳与操作 TTL 互补——**await 的 RPC 有 TTL，整体执行有心跳**。
@@ -901,4 +902,4 @@ AutoScript 的骨架可以一句话记住：
 3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
 4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。
 
-**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再依次补 §8.4 剩下的采样调度循环/心跳打点/pid→runId 归属表（采集器 `ProcessMonitor` 已落地）、§8.3 的 `EngineStateMachine`→`PoolSlot` 接线（§8.6 的 dispatcher 排队默认上限已按触发源分级落地，仅剩 `PendingRun` 侧 deadline 记账）。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。
+**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再依次补 §8.4 剩下的采样调度循环/心跳打点/pid→runId 归属表（采集器 `ProcessMonitor` 已落地）、§8.3 的宿主状态与池侧状态机校准（`EngineStateMachine`→`PoolSlot` 已接线）；§8.6 的 dispatcher 排队默认上限已按触发源分级落地，仅剩 `PendingRun` 侧 deadline 记账。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。

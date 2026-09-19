@@ -82,7 +82,9 @@ class RuntimeController(
     suspend fun killRun(runId: Long, cause: KillCause): KillCause? {
         val handle = guard.withLock { active.remove(runId) } ?: return null
         val killed = handle.slot.engine.kill()
-        pool.recycle(handle.slot)          // 强杀即终结：槽位 + 许可证必须成对归还（§8.2 记账）
+        // 强杀即终结：槽位 + 许可证必须成对归还（§8.2 记账）；
+        // cause 透传给状态机归类（§8.3：REQUESTED→STOPPED，watchdog/OOM→CRASHED）
+        pool.recycle(handle.slot, cause)
         return killed
     }
 

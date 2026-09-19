@@ -169,4 +169,62 @@ class PoolAccountingTest {
         pool.release(fresh)
         assertEquals(PoolStats(1, free = 1, busy = 0), pool.stats())
     }
+
+    /** 不变量 4（§8.3 接线）：状态机与槽位同生共死，占槽→BOOTING、kill 按原因归类、回收回 IDLE。 */
+    @Test
+    fun `EngineStateMachine 真正驱动 PoolSlot：占槽 BOOTING、kill 归类、回收回 IDLE`() = runBlocking {
+        val engines = MutableList(1) { FakeEngine(EngineId(it)) }
+        val pool = FixedEnginePool({ id -> engines[id.poolIndex] }, capacity = 1)
+
+        val handle = assertInstanceOf(
+            PoolAcquireOutcome.Granted::class.java,
+            pool.acquire(PoolAcquireRequest("p1", "a.js")),
+        ).handle
+        // execute 已返回 → BOOTING → RUNNING（不是停在 BOOTING 假装活着）
+        assertEquals(EngineStatus.RUNNING, handle.slot.status(), "execute 返回即 RUNNING")
+        assertEquals(1, engines[0].executed.size)
+        assertEquals(0, engines[0].stopCalls, "acquire 不得顺手 stop")
+
+        // watchdog 原因收归 → CRASHED 归类，但槽位仍回收可复用（容量不缩水）
+        pool.recycle(handle.slot, KillCause.WATCHDOG_CPU)
+        assertEquals(EngineStatus.IDLE, handle.slot.status(), "CRASHED 必须经回收回 IDLE 才能复用")
+
+        // 第二次夺槽：状态机从 IDLE → BOOTING → RUNNING 重走（不是复用上轮残态）
+        val second = assertInstanceOf(
+            PoolAcquireOutcome.Granted::class.java,
+            pool.acquire(PoolAcquireRequest("p2", "b.js", waitTimeoutMillis = 300)),
+        ).handle
+        assertEquals(EngineStatus.RUNNING, second.slot.status(), "重分配后状态机重新起步")
+
+        // 优雅停止走 quiesce：QUIESCING → STOPPED → IDLE，且引擎侧确实被 stop 过
+        assertEquals(StopResult.Clean, pool.release(second))
+        assertEquals(1, engines[0].stopCalls, "优雅释放必须 stop 引擎")
+        assertEquals(EngineStatus.IDLE, second.slot.status(), "STOPPED 回收回 IDLE")
+        assertEquals(PoolStats(1, free = 1, busy = 0), pool.stats())
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    /** 不变量 4b：killAll 的广播强释也要把状态机收干净（否则下一轮夺槽非法转移）。 */
+    @Test
+    fun `killAll 广播强释后 状态机回 IDLE 且可再次夺槽`() = runBlocking {
+        val engines = MutableList(1) { FakeEngine(EngineId(it)) }
+        val pool = FixedEnginePool({ id -> engines[id.poolIndex] }, capacity = 1)
+
+        val handle = assertInstanceOf(
+            PoolAcquireOutcome.Granted::class.java,
+            pool.acquire(PoolAcquireRequest("p1", "a.js")),
+        ).handle
+        assertEquals(EngineStatus.RUNNING, handle.slot.status())
+
+        pool.killAll(KillCause.OOM)
+        assertEquals(EngineStatus.IDLE, handle.slot.status(), "OOM → CRASHED → 回收 IDLE")
+        assertEquals(PoolStats(1, free = 1, busy = 0), pool.stats(), "全清后容量不缩水")
+
+        val again = pool.acquire(PoolAcquireRequest("p2", "b.js", waitTimeoutMillis = 300))
+        assertInstanceOf(PoolAcquireOutcome.Granted::class.java, again, "状态机没收回干净则夺槽必炸")
+        assertEquals(EngineStatus.RUNNING, (again as PoolAcquireOutcome.Granted).handle.slot.status())
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
 }

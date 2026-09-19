@@ -1,5 +1,8 @@
 package com.autoscript.appservice.runtime
 
+import com.autoscript.domain.engine.EngineStateMachine
+import com.autoscript.domain.engine.EngineStatus
+import com.autoscript.domain.engine.KillCause
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.engine.StopResult
 
@@ -22,6 +25,18 @@ class PoolSlot internal constructor(
 ) {
     var state: SlotState = SlotState.FREE
         private set
+
+    /**
+     * 每执行单元的 `EngineStatus` 投影（§8.3 接线：`:domain` 的 [EngineStateMachine] 现在
+     * 真正驱动本槽位，而不是只被自己的单测驱动）。
+     *
+     * 为什么挂在 [PoolSlot] 上而不是另建一张表：状态机必须与「占槽/回收」同生共死，
+     * 分表就得处理「表里有行、槽位已 FREE」的孤儿清理；而 [FixedEnginePool] 的
+     * stateLock 已保证这里的读写与记账原子。非法转移抛 [IllegalStateTransition]：
+     * 状态机跳变是**响亮失败**，绝不静默修一个看似合理的状态。
+     */
+    private val statusMachine = EngineStateMachine(EngineStatus.IDLE)
+
     var busySinceMillis: Long = 0L
         private set
 
@@ -41,6 +56,7 @@ class PoolSlot internal constructor(
 
     fun markBusy(now: Long) {
         require(state == SlotState.FREE) { "槽位 $index 状态非法: $state" }
+        statusMachine.onExecuteRequested()      // IDLE → BOOTING：execute 尚未返回
         state = SlotState.BUSY
         busySinceMillis = now
     }
@@ -48,25 +64,50 @@ class PoolSlot internal constructor(
     /** 四步 quiesce（§8.3）：stop 超时由池 kill 兜底，然后回 FREE。幂等：非 BUSY 视为已净。 */
     suspend fun quiesce(): StopResult {
         if (state != SlotState.BUSY) return StopResult.Clean
+        statusMachine.onQuiesceStart()          // BOOTING|RUNNING → QUIESCING
         state = SlotState.QUIESCING
         val result = engine.stop()
         if (result is StopResult.TimedOut) {
             engine.kill()
+            statusMachine.onKill(KillCause.REQUESTED)   // 兜底杀也归类：不是干净的 STOPPED
+        } else {
+            statusMachine.onQuiesceCompleted()  // QUIESCING → STOPPED
         }
+        // 回收复用：STOPPED|CRASHED → IDLE（下次夺槽又从 BOOTING 起）
+        statusMachine.onRecycle()
         state = SlotState.FREE
         busySinceMillis = 0L
         return result
     }
 
     /** 强杀后强制复位（仅 killAll 用）；调用方保证与 release 串行。 */
-    fun forceFree() {
+    fun forceFree(cause: KillCause = KillCause.REQUESTED) {
+        if (state != SlotState.FREE) {
+            statusMachine.onKill(cause)          // 按原因归类 REQUESTED→STOPPED / 其余→CRASHED
+            statusMachine.onRecycle()            // CRASHED|STOPPED → IDLE，槽位可再次夺用
+        }
         state = SlotState.FREE
         busySinceMillis = 0L
     }
 
     /** kill 收归复用（仅 [FixedEnginePool.recycle] 用，调用方持 stateLock）：状态复位，不触碰许可证。 */
-    fun reuse() {
+    fun reuse(cause: KillCause = KillCause.REQUESTED) {
+        if (state != SlotState.FREE) {
+            statusMachine.onKill(cause)          // watchdog/OOM 杀 → CRASHED；REQUESTED → STOPPED
+            statusMachine.onRecycle()            // → IDLE：槽位可再次夺用（容量不缩水）
+        }
         state = SlotState.FREE
         busySinceMillis = 0L
+    }
+
+    /** 当前 [EngineStatus]（§8.3 状态机投影）：BOOTING/RUNNING/QUIESCING/IDLE(空闲)。 */
+    fun status(): EngineStatus = statusMachine.status
+
+    /**
+     * execute 已返回（:domain 状态机的 BOOTING → RUNNING；§8.3）。
+     * 由 [FixedEnginePool.acquire] 在拿到 [EngineRunReceipt] 后调用 —— 进程起来了。
+     */
+    fun markRunning() {
+        statusMachine.onBootCompleted()
     }
 }

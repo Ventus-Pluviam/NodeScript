@@ -27,7 +27,7 @@ interface EnginePool {
      * 池侧原子完成「槽位复位 + 许可证归还」，保证杀槽不缩水池容量（free 与可领证恒一致）。
      * 重复收归（槽位已 FREE）幂等，绝不超发许可证。
      */
-    fun recycle(slot: PoolSlot)
+    fun recycle(slot: PoolSlot, cause: KillCause? = null)
 
     fun stats(): PoolStats
 }
