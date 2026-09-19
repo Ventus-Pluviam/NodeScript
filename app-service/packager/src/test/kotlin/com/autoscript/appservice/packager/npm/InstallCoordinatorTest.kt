@@ -41,7 +41,38 @@ class InstallCoordinatorTest {
         }
     }
 
+    /**
+     * 会 harvest 的假执行体：除 reify 产物外，还按 work-prefix 模型第 3 步把
+     * `package.json` + `package-lock.json` 写回项目根（HostNodeExecutor 的真实行为）。
+     * 只有承认这个前提，install 后的 lock 验签/快照导出才有对象可测。
+     */
+    private fun harvesting(vararg deps: Pair<String, String>): InstallCoordinator.HeavyOpExecutor =
+        object : InstallCoordinator.HeavyOpExecutor {
+            override suspend fun execute(op: InstallCoordinator.HeavyOp, sink: InstallCoordinator.ProgressSink): String {
+                for ((name, version) in deps) {
+                    val p = op.stageDir.resolve(name)
+                    Files.createDirectories(p)
+                    Files.writeString(p.resolve("package.json"), """{"name":"$name","version":"$version"}""")
+                    Files.writeString(p.resolve("index.js"), "module.exports = {}\n")
+                }
+                val depJson = deps.joinToString(",") { (n, v) -> "\"$n\":\"$v\"" }
+                val lockJson = deps.joinToString(",") { (n, v) -> "\"node_modules/$n\":{\"version\":\"$v\",\"integrity\":\"sha512-x\"}" }
+                Files.writeString(
+                    op.projectRoot.resolve("package.json"),
+                    """{"name":"p1","version":"1.0.0","dependencies":{""" + depJson + """}}""",
+                )
+                Files.writeString(
+                    op.projectRoot.resolve("package-lock.json"),
+                    """{"lockfileVersion":3,"packages":{"":{},""" + lockJson + """}}""",
+                )
+                return "ok:" + op.args.first()
+            }
+        }
+
     private fun newHistory() = InstallHistory(dir.resolve(".autojs"))
+
+    private fun snapshots(key: LockSigner.KeyProvider = LockSigner.KeyProvider { "test-app-key-32bytes-aaaaaaaaaaaa".toByteArray() }) =
+        NpmSnapshot(layout, dir.resolve(".autojs"), key)
 
     private fun coordinator(
         executor: InstallCoordinator.HeavyOpExecutor = FakeExecutor(),
@@ -49,6 +80,8 @@ class InstallCoordinatorTest {
         cache: CacheIndex = CacheIndex { false },
         ledger: ApprovalLedger = ApprovalLedger(),
         history: InstallHistory? = newHistory(),
+        lockSigner: LockSigner? = null,
+        snapshots: NpmSnapshot? = null,
     ) = InstallCoordinator(
         layout = layout,
         journal = journal,
@@ -58,6 +91,8 @@ class InstallCoordinatorTest {
         executor = executor,
         freeSpaceProbe = { free },
         history = history,
+        lockSigner = lockSigner,
+        snapshots = snapshots,
     )
 
     // ═══ 门禁 ═══
@@ -339,6 +374,56 @@ class InstallCoordinatorTest {
             runBlocking { coordinator().install("full", listOf(PackageSpec("axios"))) }
         }
         assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
+    }
+
+    // ═══ 快照导出（§10.9.4 高信任通道） ═══
+
+    @Test
+    fun `未注入 NpmSnapshot 时导出如实失败（不交付未签名包）`() = runBlocking {
+        val c = coordinator()
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.exportSnapshot("p1", "/tmp/never.zip") }
+        }
+        assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED, ex.error)
+    }
+
+    @Test
+    fun `无 node_modules 拒绝导出（先 install 后快照）`() = runBlocking {
+        val c = coordinator(snapshots = snapshots())
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.exportSnapshot("nothing-here", "/tmp/never.zip") }
+        }
+        assertEquals(ErrorCode.ERR_FILE_NOT_FOUND, ex.error)
+    }
+
+    @Test
+    fun `导出落地且入史（成败都审计）`() = runBlocking {
+        val exec = harvesting("axios" to "1.7.0")
+        val h = newHistory()
+        val out = dir.resolve("out/snap.zip")
+        val c = coordinator(executor = exec, history = h, snapshots = snapshots())
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        val ref = c.exportSnapshot("p1", out.toString())
+        assertTrue(Files.isRegularFile(out), "快照必须真的落盘（不是只返回一个 Ref）")
+        assertTrue(ref.sha256.length == 64, "SnapshotRef 须带内容摘要，供导入侧比对")
+        val e = h.all().single { it.op == InstallHistory.Op.EXPORT }
+        assertTrue(e.success, "导出成功须入史")
+    }
+
+    @Test
+    fun `导出的 zip 过验签闭环（export→verify 一体）`() = runBlocking {
+        val exec = harvesting("axios" to "1.7.0")
+        val out = dir.resolve("out/snap2.zip")
+        val snapper = snapshots()
+        // 带锁签名器：install 成功后重签（harvest 写回了新 lock，旧签会让紧随的 ci 失败）
+        val signer = LockSigner(dir.resolve(".autojs"), LockSigner.KeyProvider { "test-app-key-32bytes-aaaaaaaaaaaa".toByteArray() })
+        val c = coordinator(executor = exec, snapshots = snapper, lockSigner = signer)
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        assertTrue(Files.exists(dir.resolve(".autojs/lock.sig")), "install 后必须重签")
+        c.exportSnapshot("p1", out.toString())
+        val m = snapper.verify("p1", out)   // 不抛即过
+        assertTrue(m.entries >= 2, "manifest + node_modules 至少各一条（实为 ${m.entries}）")
+        assertTrue(m.lockSig != null, "两层验签闭环：lock.sig 须随包同行")
     }
 
     // ═══ TTL（铁律 3：zombie RUNNING 不可构造） ═══

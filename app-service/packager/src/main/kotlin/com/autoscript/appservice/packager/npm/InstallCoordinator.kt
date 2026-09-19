@@ -47,6 +47,7 @@ class InstallCoordinator(
     private val ledger: ApprovalLedger,
     private val history: InstallHistory? = null,
     private val lockSigner: LockSigner? = null,
+    private val snapshots: NpmSnapshot? = null,
     private val cacheIndex: CacheIndex,
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
     private val freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
@@ -276,10 +277,39 @@ class InstallCoordinator(
     // ══════════ 快照 ══════════
 
     override suspend fun exportSnapshot(projectId: String, uri: String): SnapshotRef {
-        throw AutojsException(
+        // §10.9.4 高信任通道：node_modules.zip + manifest 链 + ledger + lock.sig，
+        // 外加 snapshot.sig（HMAC(应用密钥, 内容清单)）。无执行体/无快照件 = 诚实失败，
+        // 不交付未签名的包（那会让「导入侧验签」变成空转的门）。
+        val snapper = snapshots ?: throw AutojsException(
             ErrorCode.ERR_NOT_IMPLEMENTED,
-            "快照导出（node_modules.zip+lock+ledger→SAF）属高信任通道，随打包向导 P0 后段接入",
+            "快照导出未接线（NpmSnapshot 未注入，缺应用密钥接缝）",
         )
+        val root = layout.projectRoot(projectId)
+        if (!Files.isDirectory(layout.nodeModules(projectId))) {
+            throw AutojsException(
+                ErrorCode.ERR_FILE_NOT_FOUND,
+                "项目 $projectId 无 node_modules，无可导出的快照（先 install/ci）",
+            )
+        }
+        val tmp = Files.createTempFile(root.parent, "npm-snapshot-", ".zip")
+        try {
+            val built = snapper.export(projectId, tmp)
+            snapper.sync(built, uri)
+            history?.record(InstallHistory.Op.EXPORT, projectId, true, "entries=${built.entries} bytes=${built.contentBytes}")
+            return SnapshotRef(
+                uri = uri,
+                sizeBytes = built.sizeBytes,
+                sha256 = built.archiveSha256,
+            )
+        } catch (e: AutojsException) {
+            history?.record(InstallHistory.Op.EXPORT, projectId, false, e.message)
+            throw e
+        } catch (e: Exception) {
+            history?.record(InstallHistory.Op.EXPORT, projectId, false, e.message)
+            throw AutojsException(ErrorCode.ERR_IO, "快照导出失败：${e.message}", e)
+        } finally {
+            Files.deleteIfExists(tmp)
+        }
     }
 
     // ══════════ 编排核心 ══════════

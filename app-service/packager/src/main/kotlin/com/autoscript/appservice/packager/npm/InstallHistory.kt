@@ -62,6 +62,7 @@ class InstallHistory(private val dir: Path) {
         const val DEDUPE = "dedupe"
         const val REGISTRY = "registry"     // §10.5-2 registry 变更须审计
         const val IMPORT = "import"
+        const val EXPORT = "export"
     }
 
     private fun append(line: String) {

@@ -24,7 +24,8 @@ enum class ErrorCode(val code: String, val summary: String) {
     ERR_NPM_SPAWN_BLOCKED("ERR_NPM_SPAWN_BLOCKED", "非批准 spawn 被拦截"),
     ERR_NOT_SUPPORTED("ERR_NOT_SUPPORTED", "本平台不支持该特性（如 git: 依赖）"),
     ERR_REGISTRY_UNAVAILABLE("ERR_REGISTRY_UNAVAILABLE", "包注册表不可用"),
-    ERR_NPM_LOWMEM("ERR_NPM_LOWMEM", "安装会话内存不足");
+    ERR_NPM_LOWMEM("ERR_NPM_LOWMEM", "安装会话内存不足"),
+    ERR_IO("ERR_IO", "文件系统/归档读写失败");
 
     fun message(detail: String? = null): String =
         "$code: $summary" + (detail?.let { " —— $it" } ?: "")
