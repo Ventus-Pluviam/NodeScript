@@ -12,8 +12,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    testOptions {
+        unitTests {
+            all { it.useJUnitPlatform() }
+        }
+    }
 }
 
 dependencies {
     implementation(project(":domain"))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation(libs.archunit.junit5)
 }

@@ -3,9 +3,9 @@ package com.autoscript.domain.automation
 import com.autoscript.domain.bridge.HandleRef
 
 /**
- * 帧源 SPI（docs/framework-design.md §9.2）。
+ * 帧源 SPI（docs/framework-design.md §9.2，已有契约，本文件只补错误分类）。
  * 默认 a11y takeScreenshot（API34 333ms 节流）；会话式走 MediaProjection（Surface→ImageReader→libimgnative.so）。
- * FLAG_SECURE → ERR_SCREEN_LOCKED/ERR_BLACK_FRAME，不返回黑图。
+ * FLAG_SECURE → ERR_SCREEN_LOCKED/ERR_BLACK_FRAME（§8.8），不返回黑图。
  */
 interface FrameSource {
     suspend fun capture(): ImageFrame
@@ -25,3 +25,44 @@ interface ScreenCaptureSession {
     suspend fun nextFrame(): ImageFrame
     suspend fun close()
 }
+
+/**
+ * 屏幕可用性判定（§8.8 截图直连 §9.2：分类错误而非黑图）。
+ * 实现层（:app ScreenGate 真实现 / capabilities 截图源）在采集前调用：
+ * 锁屏/无可用窗口/FLAG_SECURE 一律抛分类错误的 [AutojsException]，
+ * 脚本侧可 try/catch 策略分支（重试/降级/报错），绝不拿到一张黑图还以为成功。
+ */
+object ScreenPolicy {
+    /**
+     * 按屏幕快照判定可否采集。不允许时抛对应 [com.autoscript.domain.core.ErrorCode]：
+     * - 锁屏（keyguard）→ ERR_SCREEN_LOCKED；
+     * - FLAG_SECURE 前台窗口 → ERR_BLACK_FRAME；
+     * - a11y 锁屏无可用窗口 → ERR_SERVICE_DISABLED（无障碍通道本身不可用）。
+     */
+    fun requireCapturable(snapshot: ScreenSnapshot) {
+        when {
+            snapshot.secureForeground ->
+                throw com.autoscript.domain.core.AutojsException(
+                    com.autoscript.domain.core.ErrorCode.ERR_BLACK_FRAME,
+                    "前台窗口含 FLAG_SECURE，拒绝返回黑图",
+                )
+            snapshot.locked ->
+                throw com.autoscript.domain.core.AutojsException(
+                    com.autoscript.domain.core.ErrorCode.ERR_SCREEN_LOCKED,
+                    "屏幕锁定，无法截取",
+                )
+            !snapshot.hasWindows ->
+                throw com.autoscript.domain.core.AutojsException(
+                    com.autoscript.domain.core.ErrorCode.ERR_SERVICE_DISABLED,
+                    "无可用窗口（a11y 锁屏无窗口树），截图通道不可用",
+                )
+        }
+    }
+}
+
+/** 屏幕快照（采集前的一次只读判定输入；Android 实现由 :app 经 KeyguardManager/窗口态组装）。 */
+data class ScreenSnapshot(
+    val locked: Boolean,
+    val secureForeground: Boolean,
+    val hasWindows: Boolean,
+)

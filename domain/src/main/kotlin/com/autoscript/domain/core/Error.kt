@@ -18,7 +18,13 @@ enum class ErrorCode(val code: String, val summary: String) {
     ERR_INVALID_PARAM("ERR_INVALID_PARAM", "参数非法"),
     ERR_FILE_NOT_FOUND("ERR_FILE_NOT_FOUND", "文件不存在"),
     ERR_DISK_FULL("ERR_DISK_FULL", "磁盘空间不足"),
-    ERR_NOT_FOUND("ERR_NOT_FOUND", "未找到（如 UiSelector 无匹配）");
+    ERR_NOT_FOUND("ERR_NOT_FOUND", "未找到（如 UiSelector 无匹配）"),
+
+    // §10.8 npm 专用码（P0 依赖管理）
+    ERR_NPM_SPAWN_BLOCKED("ERR_NPM_SPAWN_BLOCKED", "非批准 spawn 被拦截"),
+    ERR_NOT_SUPPORTED("ERR_NOT_SUPPORTED", "本平台不支持该特性（如 git: 依赖）"),
+    ERR_REGISTRY_UNAVAILABLE("ERR_REGISTRY_UNAVAILABLE", "包注册表不可用"),
+    ERR_NPM_LOWMEM("ERR_NPM_LOWMEM", "安装会话内存不足");
 
     fun message(detail: String? = null): String =
         "$code: $summary" + (detail?.let { " —— $it" } ?: "")
