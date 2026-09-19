@@ -130,8 +130,11 @@ object LockfileReader {
     }
 }
 
-/** 目录尺寸遍历（storage 轻操作）。 */
+/** 目录尺寸遍历（storage 轻操作）+ 字节哈希（部署校验）。 */
 object DirSizer {
+    fun sha256(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(bytes).joinToString("") { "%02x".format(it) }
+
     fun sizeBytes(root: Path): Long {
         if (!Files.isDirectory(root)) return 0
         var total = 0L
