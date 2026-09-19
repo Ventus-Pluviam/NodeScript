@@ -83,6 +83,7 @@ class InstallCoordinator(
         val nonce: String,
         val projectId: String,
         val args: List<String>,
+        val projectRoot: java.nio.file.Path,
         val stageDir: java.nio.file.Path,
         val timeoutMillis: Long,
     )
@@ -309,7 +310,7 @@ class InstallCoordinator(
         try {
             if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "安装已取消")
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.RESOLVE))
-            val summary = executor.execute(HeavyOp(nonce, projectId, args, stageDir, timeoutMillis)) { ev ->
+            val summary = executor.execute(HeavyOp(nonce, projectId, args, layout.projectRoot(projectId), stageDir, timeoutMillis)) { ev ->
                 events.tryEmit(ev)
             }
             // 执行体把产物写在 stageDir；落位由 staging.commit 原子 rename
