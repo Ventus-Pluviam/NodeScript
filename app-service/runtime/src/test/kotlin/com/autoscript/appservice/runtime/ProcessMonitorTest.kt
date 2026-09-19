@@ -177,4 +177,59 @@ class ProcessMonitorTest {
         assertTrue(verdict is WatchdogVerdict.Kill, "RSS 600MB ≥ 512MB 硬阈值：由 policy 判杀，非采样器")
         Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
+
+    @Test
+    fun `forget 后 pid 复用不背旧账`() {
+        val m = ProcessMonitor(100)
+        // 第一轮：pid 88 用掉 1000ms CPU
+        m.sample(
+            pid = 88, status = EngineStatus.RUNNING, sinceHeartbeatMillis = 0, atMillis = 1_000,
+            statReader = ProcessMonitor.statReaderOf(stat(utime = 100, stime = 0)),
+            statusReader = ProcessMonitor.statusReaderOf(status(1)),
+        )
+        // 该 run 终结 → 调用方 forget
+        m.forget(88)
+
+        // pid 88 被 OS 复用给新进程：新进程累计 20ms（不是接着 1000ms）
+        val reused = m.sample(
+            pid = 88, status = EngineStatus.RUNNING, sinceHeartbeatMillis = 0, atMillis = 2_000,
+            statReader = ProcessMonitor.statReaderOf(stat(utime = 2, stime = 0)),
+            statusReader = ProcessMonitor.statusReaderOf(status(1)),
+        )
+        assertEquals(0.0, reused!!.cpuPercent, "忘记基线后是首采样：不拿旧进程的计数做分母")
+
+        // 下一轮才重新起步算差分：+20ms / 1000ms = 2%
+        val after = m.sample(
+            pid = 88, status = EngineStatus.RUNNING, sinceHeartbeatMillis = 0, atMillis = 3_000,
+            statReader = ProcessMonitor.statReaderOf(stat(utime = 4, stime = 0)),
+            statusReader = ProcessMonitor.statusReaderOf(status(1)),
+        )
+        assertEquals(2.0, after!!.cpuPercent)
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `forget 未知 pid 幂等，不影响其他 pid 的基线`() {
+        val m = ProcessMonitor(100)
+        m.sample(
+            pid = 1, status = EngineStatus.RUNNING, sinceHeartbeatMillis = 0, atMillis = 1_000,
+            statReader = ProcessMonitor.statReaderOf(stat(utime = 100, stime = 0)),
+            statusReader = ProcessMonitor.statusReaderOf(status(1)),
+        )
+        m.sample(
+            pid = 2, status = EngineStatus.RUNNING, sinceHeartbeatMillis = 0, atMillis = 1_000,
+            statReader = ProcessMonitor.statReaderOf(stat(utime = 100, stime = 0)),
+            statusReader = ProcessMonitor.statusReaderOf(status(1)),
+        )
+        m.forget(999)                                  // 从未采过：空操作不抛
+        m.forget(1)                                    // 只忘记 pid 1
+
+        val second = m.sample(
+            pid = 2, status = EngineStatus.RUNNING, sinceHeartbeatMillis = 0, atMillis = 2_000,
+            statReader = ProcessMonitor.statReaderOf(stat(utime = 200, stime = 0)),
+            statusReader = ProcessMonitor.statusReaderOf(status(1)),
+        )
+        assertEquals(100.0, second!!.cpuPercent, "pid 2 的基线未被无关的 forget 抹掉：+1000ms/1000ms 墙钟")
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
 }

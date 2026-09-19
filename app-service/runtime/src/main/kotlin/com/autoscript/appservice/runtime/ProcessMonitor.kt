@@ -14,6 +14,9 @@ import java.nio.file.Path
  * - kill 归 [RuntimeController.killRun]/[killAll]（kill 权威 §4.1）；
  * - **runId→pid 归属表归调用方**（`:app` 持，§8.4）：本类按 pid 采样，不认识 runId。
  *
+ * pid 一旦终结（stop/kill/换执行体）调用方必须调 [forget]，否则 OS 复用该 pid 时
+ * 新进程会背上旧进程的 CPU 计数做差分，被误判成风暴。详见 [forget] 的注释。
+ *
  * CPU 差分的诚实口径：
  * - 分子 = 本次 (utime+stime) − 上次 (utime+stime)，单位 jiffies，按 `clockTicksPerSecond`
  *   归一化到毫秒；
@@ -81,6 +84,22 @@ class ProcessMonitor(
             cpuPercent = cpuPercent,
             rssBytes = rss,
         )
+    }
+
+    /**
+     * 忘记某个 pid 的采样基线（run 终结 / 被 kill / 换执行体时必须调用，§8.4）。
+     *
+     * 为什么必需：Linux 会**复用 pid**。不忘记基线，同一个 pid 号落到新进程头上时，
+     * [cpuBetween] 拿旧进程的 utime+stime 做分子 —— 新进程可能因此拿到一个虚高的
+     * cpuPercent，看门狗据此判「CPU 风暴」杀掉一个刚起步的无辜进程。
+     * 忘记后该 pid 的下一次采样是首采样 → 0.0%（重新起步，不背旧账）。
+     *
+     * 幂等：从不认识该 pid 时也是空操作。
+     */
+    fun forget(pid: Int) {
+        synchronized(lock) {
+            if (last?.pid == pid) last = null
+        }
     }
 
     private fun cpuBetween(prevCpu: Long, nowCpu: Long, prevAt: Long, nowAt: Long): Double {
