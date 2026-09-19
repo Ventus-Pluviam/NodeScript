@@ -35,3 +35,20 @@ data class RunRecord(
 )
 
 enum class RunState { PENDING, RUNNING, SUCCEEDED, FAILED, CRASHED, CANCELLED }
+/**
+ * 一次执行在两端寄存器的关联合约（docs/framework-design.md §8.5）：两套 runId 是
+ * **一个真值的两个投影，必须成对写入** —— 只写一侧会变成「引擎在跑，任务中心查不到」
+ * 或「有档案，实际没有对应执行」的孤儿记录。
+ *
+ * | 侧 | 身份字段 | 寄存器 |
+ * |---|---|---|
+ * | 意图日志（scheduler） | intentRunId（IntentRun.runId） | sqlite intent log |
+ * | 引擎运行记录（engine） | engineRunId（EngineRunReceipt.runId） | RunRecord(id) |
+ *
+ * 关联时机：dispatcher 实现（:app 装配层）拿到 EngineRunReceipt 后一次性写两侧；
+ * UI/任务中心按 intent 追溯引擎记录（反过来也可以）。
+ */
+data class EngineRunLink(
+    val intentRunId: Long,           // 意图日志 runId（§8.5 RUN_START 行身份）
+    val engineRunId: Long,           // 引擎 RunRecord 身份（EngineRunReceipt.runId）
+)
