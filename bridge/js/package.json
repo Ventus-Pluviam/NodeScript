@@ -7,10 +7,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
-    "test": "node --test"
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.5.0"
   },
   "license": "UNLICENSED"
