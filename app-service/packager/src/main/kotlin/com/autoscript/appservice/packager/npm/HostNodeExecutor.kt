@@ -51,8 +51,21 @@ class HostNodeExecutor(
             val workDir = op.stageDir.resolveSibling("npmwork-" + op.nonce)
             try {
                 prepareWorkDir(op, workDir)
+                // REIFY/DONE：npm 进程内 reify 是黑盒，主机形态只能粗粒度标注阶段
+                sink.emit(
+                    com.autoscript.domain.npm.InstallEvent.Progress(
+                        op.projectId, op.nonce,
+                        com.autoscript.domain.npm.InstallEvent.Phase.REIFY,
+                    ),
+                )
                 runNpm(op, workDir)
                 harvest(op, workDir)
+                sink.emit(
+                    com.autoscript.domain.npm.InstallEvent.Progress(
+                        op.projectId, op.nonce,
+                        com.autoscript.domain.npm.InstallEvent.Phase.DONE,
+                    ),
+                )
                 "npm ${op.args.first()} 完成"
             } finally {
                 workDir.toFile().deleteRecursively()

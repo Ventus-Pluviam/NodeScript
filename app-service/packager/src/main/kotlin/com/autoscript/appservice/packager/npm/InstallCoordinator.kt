@@ -281,6 +281,8 @@ class InstallCoordinator(
         if (used >= config.projectQuotaBytes) {
             throw AutojsException(ErrorCode.ERR_DISK_FULL, "项目 node_modules 已达配额 ${config.projectQuotaBytes / 1024 / 1024}MB")
         }
+        // 80% 黄（§10.2 「项目+全局配额(80%黄·100%拦）」）：不拦，发 Warning 事件
+        val quotaWarned = used >= (config.projectQuotaBytes * config.quotaWarnRatio).toLong()
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
         val nonce = UUID.randomUUID().toString()
         val tracked = TrackedOp(handle, nonce)
@@ -290,6 +292,16 @@ class InstallCoordinator(
         // 协程内联执行（挂起语义 = 排队；调用方要 fire-and-forget 可自行 launch）
         projectLock.withLock {
             globalSession.withLock {
+                if (quotaWarned) {
+                    emit(
+                        InstallEvent.Warning(
+                            projectId = projectId,
+                            handleId = handle.id,
+                            kind = InstallEvent.Kind.DISK_QUOTA,
+                            message = "项目 node_modules 已用 ${used / 1024 / 1024}MB ≥ 配额 80%（${config.projectQuotaBytes / 1024 / 1024}MB）",
+                        ),
+                    )
+                }
                 runHeavy(tracked, args, timeoutMillis)
             }
         }
@@ -314,6 +326,8 @@ class InstallCoordinator(
             val summary = executor.execute(HeavyOp(nonce, projectId, args, layout.projectRoot(projectId), stageDir, timeoutMillis)) { ev ->
                 events.tryEmit(ev)
             }
+            // §10.2 调用链末段：post-check（lock/产物就位校验）→ 落位 → 归档
+            emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.POST_CHECK))
             // 执行体把产物写在 stageDir；落位由 staging.commit 原子 rename
             staging.commit(projectId, nonce)
             journal.commit(nonce, projectId, stageDir.fileName.toString())

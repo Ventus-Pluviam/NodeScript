@@ -217,6 +217,37 @@ class InstallCoordinatorTest {
         assertEquals(100L, stats["p1"]!!.totalBytes)
     }
 
+    @Test
+    fun `配额 80% 黄：Warning(DISK_QUOTA) 不拦安装`() = runBlocking {
+        // 项目已有 node_modules ~ 430MB（> 512MB×80%=409.6MB）——用稀疏文件撑尺寸
+        val nm = layout.nodeModules("big")
+        Files.createDirectories(nm)
+        val probe = nm.resolve("blob")
+        java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(430L * 1024 * 1024) }
+        val events = mutableListOf<InstallEvent>()
+        val c = coordinator()
+        val collect = launch { c.progress("big").collect { events += it } }
+        kotlinx.coroutines.delay(50)
+        c.install("big", listOf(PackageSpec("axios")))
+        kotlinx.coroutines.delay(50)
+        collect.cancel()
+        val warns = events.filterIsInstance<InstallEvent.Warning>()
+        assertTrue(warns.any { it.kind == InstallEvent.Kind.DISK_QUOTA }, "80% 阈值必须发黄（实为 $events）")
+        assertTrue(events.any { it is InstallEvent.Finished && it.success }, "黄警不拦：安装仍完成")
+    }
+
+    @Test
+    fun `配额 100% 拦 ERR_DISK_FULL`() = runBlocking {
+        val nm = layout.nodeModules("full")
+        Files.createDirectories(nm)
+        val probe = nm.resolve("blob")
+        java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { coordinator().install("full", listOf(PackageSpec("axios"))) }
+        }
+        assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
+    }
+
     // ═══ 事件流 ═══
 
     @Test

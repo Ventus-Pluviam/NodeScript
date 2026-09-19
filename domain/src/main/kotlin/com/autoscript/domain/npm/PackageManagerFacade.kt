@@ -117,7 +117,7 @@ sealed interface InstallEvent {
     ) : InstallEvent
 
     enum class Phase { QUEUED, RESOLVE, DOWNLOAD, REIFY, POST_CHECK, DONE }
-    enum class Kind { SCRIPTS_SKIPPED, TRUST_DOWNGRADED, LOW_MEMORY, REGISTRY_FALLBACK }
+    enum class Kind { SCRIPTS_SKIPPED, TRUST_DOWNGRADED, LOW_MEMORY, REGISTRY_FALLBACK, DISK_QUOTA }
 }
 
 /** node_modules 体积统计（storage() 轻操作，Kotlin 目录遍历算尺寸）。 */
