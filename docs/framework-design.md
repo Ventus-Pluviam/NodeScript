@@ -379,6 +379,8 @@ interface EnginePool {                                // 实现在 :app-service:
 - **SchedulerProvider SPI**：同一接口后 P1 可切 `WorkManager` 之外的实现（保活场景自持 alarm + 注册 receiver）。触发→拉起引擎进程→注入 API→归日志。
 - **守时语义诚实化**（批判 11 定案）：设备**亮屏 + 解锁**是保底契约；预热闹钟 `scheduledAt - 60s` 先拉起进程（引擎进程需时 ~1s），axexact 闹钟失败时降级到 setWindow 并在 UI 标注「可能偏差」。**熄屏任务**＝任务显式声明三态之一：`screen.on`(需 wakelock+确认)/`screen.any`/`screen.off`(禁 MediaProjection，只允许无障碍+网络)。
 - 触发时若引擎池满 → 排队，绝无静默丢任务（日志+UI）。
+- **排队上限由投递方给**：`ControllerRunDispatcher` 的 `queueTimeoutMillis`（当前默认 null = 无限等）。上限到期 → `RunOutcome.Cancelled`（"排队取消"口径：未获槽、未执行，link 为 null）。
+- **P0 缺口**：无限等在工程上意味着「任务挂在调度器里，没有时限兜底」，与铁律 3（每次操作必有 TTL、zombie RUNNING 不可构造）方向相反。补法有两条，都还没做：给 dispatcher 一个默认 `queueTimeoutMillis`（按触发源分级），或让 scheduler 侧对 PendingRun 也记 deadline。**在补上前，不要宣称调度链路无悬挂风险。**
 
 ### 8.7 保活与电源
 - `:main` 持 **specialUse FGS**（`onCreate` 启动，`TYPE_SPECIAL_USE` 勾选 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE="automation"`，无超时）。
