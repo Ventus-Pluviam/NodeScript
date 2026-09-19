@@ -23,12 +23,15 @@ import java.util.concurrent.ConcurrentHashMap
  * 持久化由实现层决定（P0 内存账本 + JVM 单测；Android 生产落 `files/.autojs/approve-ledger.json`，
  * HMAC keyed 于 :main，§10.2 存储布局）。
  */
-class ApprovalLedger(private val now: () -> Long = { System.currentTimeMillis() }) {
+class ApprovalLedger(
+    private val store: ApprovalStore? = null,
+    private val now: () -> Long = { System.currentTimeMillis() },
+) {
 
     private val lock = Any()
     private val records = LinkedHashMap<String, ApprovalTicket>()          // requestId → 票
     private val requests = LinkedHashMap<String, ApprovalRequest>()        // requestId → 请求
-    private var seq = 0L
+    private var seq = store?.lastSeq() ?: 0L
 
     /** 入队（幂等：同 projectId+pkg+versionHash+action 的 PENDING 请求合并复用同一张票）。 */
     fun submit(projectId: String, pkg: String, versionHash: String, action: ApprovalAction): ApprovalTicket =
@@ -39,9 +42,11 @@ class ApprovalLedger(private val now: () -> Long = { System.currentTimeMillis() 
             }
             if (dup != null) return records[dup.id]!!
             val id = "apr-${++seq}"
-            requests[id] = ApprovalRequest(id, projectId, pkg, versionHash, action, now())
+            val req = ApprovalRequest(id, projectId, pkg, versionHash, action, now())
+            requests[id] = req
             val ticket = ApprovalTicket(id, ApprovalStatus.PENDING)
             records[id] = ticket
+            store?.insertSubmit(req)
             ticket
         }
 
@@ -55,6 +60,7 @@ class ApprovalLedger(private val now: () -> Long = { System.currentTimeMillis() 
             decidedAtMillis = now(),
         )
         records[requestId] = next
+        store?.insertResolve(requestId, next.status, next.decidedAtMillis ?: now())
         next
     }
 
@@ -66,6 +72,14 @@ class ApprovalLedger(private val now: () -> Long = { System.currentTimeMillis() 
                     it.action == action && records[it.id]?.status == ApprovalStatus.APPROVED
             }
         }
+
+    init {
+        store?.all()?.forEach { e ->
+            requests[e.request.id] = e.request
+            records[e.request.id] = ApprovalTicket(e.request.id, e.status, e.decidedAtMillis)
+            seq = maxOf(seq, e.request.id.removePrefix("apr-").toLongOrNull() ?: 0L)
+        }
+    }
 
     fun pending(projectId: String): List<ApprovalRequest> = synchronized(lock) {
         requests.values.filter { it.projectId == projectId && records[it.id]?.status == ApprovalStatus.PENDING }
