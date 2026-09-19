@@ -62,4 +62,29 @@ class JsonTransportTest {
             transport.decodeRequest(notReq.toByteArray())
         }
     }
+
+    @Test
+    fun `截断输入抛契约异常 不抛越界`() {
+        // 对端崩溃半截写：未闭合字符串 / 结尾转义符 / 截断 \u 都必须走 IllegalArgumentException 拒绝通道
+        val truncated = listOf(
+            """{"t":"req","id":1,"ns":"a11""",
+            """{"t":"req","id":1,"ns":"a\""",
+            """{"t":"req","id":1,"ns":"a\u12""",
+            """{"t":"req","id":1,"ns":""",
+        )
+        for (raw in truncated) {
+            assertThrows(IllegalArgumentException::class.java) {
+                transport.decodeRequest(raw.toByteArray())
+            }
+        }
+    }
+
+    @Test
+    fun `数字 payload 显式拒绝 不得静默丢为 null`() {
+        // payload 契约是字符串（JSON 编码参数）；对端发来裸数字时静默丢弃会让 handler 收到无参请求
+        val numericPayload = """{"t":"req","id":1,"ns":"images","m":"findOne","ttl":5000,"payload":123}"""
+        assertThrows(IllegalArgumentException::class.java) {
+            transport.decodeRequest(numericPayload.toByteArray())
+        }
+    }
 }

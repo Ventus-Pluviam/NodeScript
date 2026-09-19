@@ -59,6 +59,7 @@ internal object TinyJson {
 
     private fun readValue(text: String, p0: Int): Pair<Field, Int> {
         var p = p0
+        if (p >= text.length) throw IllegalArgumentException("值缺失（意外结束）@$p0")
         return when {
             text[p] == '"' -> {
                 val (s, q) = readString(text, p)
@@ -72,7 +73,7 @@ internal object TinyJson {
                 while (p < text.length && (text[p] in '0'..'9' || text[p] in "-.eE+")) p++
                 Field.N(text.substring(start, p)) to p
             }
-            else -> throw IllegalArgumentException("非法值 @$p: ${text[p] ?: "EOF"}")
+            else -> throw IllegalArgumentException("非法值 @$p: ${text.getOrNull(p) ?: "EOF"}")
         }
     }
 
@@ -89,10 +90,12 @@ internal object TinyJson {
         val sb = StringBuilder()
         var p = p0 + 1
         while (true) {
+            if (p >= text.length) throw IllegalArgumentException("未闭合字符串 @$p0")
             val c = text[p]
             when (c) {
                 '"' -> return sb.toString() to (p + 1)
                 '\\' -> {
+                    if (p + 1 >= text.length) throw IllegalArgumentException("转义符后意外结束 @$p")
                     val e = text[p + 1]
                     when (e) {
                         '"' -> { sb.append('"'); p += 2 }
@@ -105,6 +108,7 @@ internal object TinyJson {
                         'r' -> { sb.append('\r'); p += 2 }
                         't' -> { sb.append('\t'); p += 2 }
                         'u' -> {
+                            if (p + 6 > text.length) throw IllegalArgumentException("\\u 转义截断 @$p")
                             val hex = text.substring(p + 2, p + 6)
                             sb.append(hex.toInt(16).toChar())
                             p += 6

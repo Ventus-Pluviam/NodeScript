@@ -40,6 +40,7 @@ class Scheduler(
     private val nonceFactory: () -> String = { java.util.UUID.randomUUID().toString() },
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
+    private val stateLock = Any()
     private val running = hashMapOf<String, ScheduledTask>()
     private val handles = hashMapOf<String, TriggerHandle>()
 
@@ -48,60 +49,77 @@ class Scheduler(
      * [task.schedule] 为 Once 时即单次投递；Daily/Cron 由 [onTrigger] 尾部自推进到下一轮。
      */
     suspend fun schedule(task: ScheduledTask) {
-        running[task.id] = task
+        synchronized(stateLock) { running[task.id] = task }
         rearmFor(task)
     }
 
     /** 取消任务：撤销已注册触发并移出注册表（已投递的 runs 不追回）。 */
     suspend fun cancel(taskId: String) {
-        running.remove(taskId)
-        handles.remove(taskId)?.cancel()
+        synchronized(stateLock) {
+            running.remove(taskId)
+            handles.remove(taskId)
+        }?.cancel()
     }
 
-    suspend fun tasks(): List<ScheduledTask> = running.values.sortedBy { it.name }
+    suspend fun tasks(): List<ScheduledTask> =
+        synchronized(stateLock) { running.values.toList() }.sortedBy { it.name }
 
     /**
      * 统一触发入口。调度把「实际排期时刻」作为意图日志的 scheduledAt（诚实记录，而非 delay 推测）。
      * @param scheduledAtMillis 本次投递的排期时刻（alarm 预拉/wakeAhead 后真实触发时间由 :app 解析）。
+     * 投递路径整段包 try/catch：dispatcher/log 抛错绝不逃逸 —— 否则异常会跳过 [rearmFor]，
+     * 周期任务静默停排，且日志里的 STARTED 行下次启动被当崩溃重投（副作用双发）。
      */
     suspend fun onTrigger(taskId: String, source: TriggerSource = TriggerSource.TIMED, scheduledAtMillis: Long = clock()) {
-        val task = running[taskId] ?: return
+        val task = synchronized(stateLock) { running[taskId] } ?: return
         if (!task.enabled && source != TriggerSource.USER_CLICK) return   // §8.6 enabled 守卫
 
-        val pending = PendingRun(
-            projectId = task.projectId,
-            scriptPath = task.scriptPath,
-            args = task.args,
-            runNonce = nonceFactory(),
-            trigger = source,
-            scheduledAtMillis = scheduledAtMillis,
-            screen = task.screen,               // §8.6：屏幕契约透传 dispatcher（门禁在实现层落地）
-            timeoutMillis = task.scriptTimeoutMillis,
-        )
-        // 快速路径预检：同 nonce 已完成则不投。真正的幂等兜底是存储层的原子拒绝（appendStart。
-        if (log.isCommitted(pending.runNonce)) return                       // §8.5 同 nonce 不重复投递
-
-        val started = log.appendStart(
-            projectId = pending.projectId,
-            scriptPath = pending.scriptPath,
-            runNonce = pending.runNonce,
-            trigger = source,
-            scheduledAtMillis = scheduledAtMillis,
-            screen = task.screen,               // 恢复重投不得丢失屏幕契约（reopen 保留）
-        )
-        val outcome = dispatcher.dispatch(pending)
-        log.commit(started.runId, outcome)
-
-        when {
-            // Once：一次性任务，触发完成即终态化（取消已注册句柄并移出注册表），不接受重复触发
-            task.schedule is TimedSchedule.Once -> {
-                running.remove(task.id)
-                handles.remove(task.id)?.cancel()
+        try {
+            val pending = PendingRun(
+                projectId = task.projectId,
+                scriptPath = task.scriptPath,
+                args = task.args,
+                runNonce = nonceFactory(),
+                trigger = source,
+                scheduledAtMillis = scheduledAtMillis,
+                screen = task.screen,               // §8.6：屏幕契约透传 dispatcher（门禁在实现层落地）
+                timeoutMillis = task.scriptTimeoutMillis,
+            )
+            // 快速路径预检：同 nonce 已完成则不投。真正的幂等兜底是存储层的原子拒绝（appendStart。
+            if (!log.isCommitted(pending.runNonce)) {                       // §8.5 同 nonce 不重复投递
+                val started = log.appendStart(
+                    projectId = pending.projectId,
+                    scriptPath = pending.scriptPath,
+                    runNonce = pending.runNonce,
+                    trigger = source,
+                    scheduledAtMillis = scheduledAtMillis,
+                    screen = task.screen,           // 恢复重投不得丢失屏幕契约（reopen 保留）
+                )
+                val outcome = dispatcher.dispatch(pending)
+                log.commit(started.runId, outcome)
             }
-            // 周期定时任务：仅 TIMED 闹钟触发后推进到下一轮；非 TIMED 来源是一次独立投递，
-            // 不触碰已有排期（否则事件触发 → 下一闹钟点再投 = 双路径重复执行）。
-            source == TriggerSource.TIMED -> rearmFor(task)
-            else -> Unit
+        } catch (t: Throwable) {
+            // 投递失败如实落地：本轮不 commit（意图日志无 STARTED 或保持未 COMMIT，交由恢复路径裁决），
+            // 但**绝不**牺牲排期推进 —— 异常逃逸会让周期任务从此静默（评审确认缺陷）。
+            when (t) {
+                is kotlinx.coroutines.CancellationException -> throw t      // 取消语义照常传播
+                else -> Unit                                                // 其余失败：落 finally 续排
+            }
+        } finally {
+            when {
+                // Once：一次性任务，触发完成即终态化（取消已注册句柄并移出注册表），不接受重复触发
+                task.schedule is TimedSchedule.Once -> {
+                    val stale = synchronized(stateLock) {
+                        running.remove(task.id)
+                        handles.remove(task.id)
+                    }
+                    stale?.cancel()
+                }
+                // 周期定时任务：仅 TIMED 闹钟触发后推进到下一轮；非 TIMED 来源是一次独立投递，
+                // 不触碰已有排期（否则事件触发 → 下一闹钟点再投 = 双路径重复执行）。
+                source == TriggerSource.TIMED -> rearmFor(task)
+                else -> Unit
+            }
         }
     }
 
@@ -136,8 +154,11 @@ class Scheduler(
         val now = clock()
         val next = task.schedule.nextFireAfter(now, task.timezone) ?: return
         val fresh = provider.registerTrigger(next, task.id)
-        handles.remove(task.id)?.cancel()
-        handles[task.id] = fresh
+        val stale = synchronized(stateLock) {
+            val prev = handles.put(task.id, fresh)
+            prev
+        }
+        stale?.cancel()
     }
 
     private fun IntentRun.toPendingRun() = PendingRun(

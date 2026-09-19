@@ -25,6 +25,20 @@ class PoolSlot internal constructor(
     var busySinceMillis: Long = 0L
         private set
 
+    /**
+     * 占位代次（docs §7.4 generation 纪律）：每次夺槽 / kill 收归都 +1。
+     * [PoolHandle] 获取时记下代次；release 时对不上即过期句柄 —— 绝不拆新占用者。
+     * 须在池的互斥临界区（[FixedEnginePool] 的 stateLock）内读写。
+     */
+    var generation: Long = 0L
+        private set
+
+    /** 代次前进并返回新值（夺槽 [FixedEnginePool.acquire] 与 kill 收归 [FixedEnginePool.recycle] 共用）。 */
+    fun occupy(): Long {
+        generation += 1
+        return generation
+    }
+
     fun markBusy(now: Long) {
         require(state == SlotState.FREE) { "槽位 $index 状态非法: $state" }
         state = SlotState.BUSY
@@ -46,6 +60,12 @@ class PoolSlot internal constructor(
 
     /** 强杀后强制复位（仅 killAll 用）；调用方保证与 release 串行。 */
     fun forceFree() {
+        state = SlotState.FREE
+        busySinceMillis = 0L
+    }
+
+    /** kill 收归复用（仅 [FixedEnginePool.recycle] 用，调用方持 stateLock）：状态复位，不触碰许可证。 */
+    fun reuse() {
         state = SlotState.FREE
         busySinceMillis = 0L
     }

@@ -17,7 +17,17 @@ class ProjectDeployer(private val store: ProjectStore) {
     fun deploy(projectId: String, files: Map<String, ByteArray>): Int {
         if (!store.exists(projectId)) store.create(projectId)
         val deployer = deployerFor(projectId)
-        files.forEach { (rel, bytes) -> deployer.finalize(deployer.stage(rel, bytes)) }
+        // 两阶段提交：全部 stage 成功（写 stage 区 + sha256 登记）后才逐条 finalize。
+        // 若 stage 中途失败，已 stage 的全部 abort 回滚 —— 绝不把「半组文件」留进 finalize，
+        // 否则项目目录会处于跨版本混合态（a.js 新版 + b.js 旧版），recover 也无从识别。
+        val staged = mutableListOf<AtomicDeployer.Staged>()
+        try {
+            files.forEach { (rel, bytes) -> staged += deployer.stage(rel, bytes) }
+        } catch (t: Throwable) {
+            staged.forEach { s -> runCatching { deployer.abort(s) } }
+            throw t
+        }
+        staged.forEach { deployer.finalize(it) }
         return files.size
     }
 

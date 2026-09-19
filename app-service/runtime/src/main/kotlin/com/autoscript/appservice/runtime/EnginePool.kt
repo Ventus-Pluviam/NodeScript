@@ -22,6 +22,13 @@ interface EnginePool {
     /** 全部槽位强杀（kill 权威仅归 RuntimeController，§4.1）。 */
     suspend fun killAll(reason: KillCause)
 
+    /**
+     * 看门狗 kill 后的槽位收归（kill 权威归 RuntimeController，§4.1；许可证记账归池）。
+     * 池侧原子完成「槽位复位 + 许可证归还」，保证杀槽不缩水池容量（free 与可领证恒一致）。
+     * 重复收归（槽位已 FREE）幂等，绝不超发许可证。
+     */
+    fun recycle(slot: PoolSlot)
+
     fun stats(): PoolStats
 }
 
@@ -45,6 +52,8 @@ class PoolHandle internal constructor(
     val request: PoolAcquireRequest,
     val slot: PoolSlot,
     val receipt: EngineRunReceipt,
+    /** 获取时的槽位代次（§7.4 generation 纪律）：release 时对不上即过期句柄。 */
+    internal val slotGeneration: Long = slot.generation,
 )
 
 data class PoolStats(

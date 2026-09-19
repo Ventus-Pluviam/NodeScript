@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -14,9 +15,9 @@ class ProjectIndexTest {
     fun `从仓库布局派生项目元数据`(@TempDir tmp: Path) {
         val store = FsProjectStore(tmp)
         val root = store.create("demo")
-        Files.writeString(root.resolve("package.json"), """{"name":"demo","version":"2","main":"src/index.js"}""")
+        Files.write(root.resolve("package.json"), """{"name":"demo","version":"2","main":"src/index.js"}""".toByteArray(StandardCharsets.UTF_8))
         Files.createDirectories(root.resolve("src"))
-        Files.writeString(root.resolve("src/index.js"), "console.log(1)")
+        Files.write(root.resolve("src/index.js"), "console.log(1)".toByteArray(StandardCharsets.UTF_8))
 
         val proj = ProjectIndex(store).read("demo")!!
         assertEquals("demo", proj.id)
@@ -26,11 +27,12 @@ class ProjectIndexTest {
     }
 
     @Test
-    fun `缺 package.json 时回退 main 猜测`(@TempDir tmp: Path) {
+    // 注：Kotlin 反引号函数名不允许含 '.'，故不写成 package.json
+    fun `缺 package 元数据时回退 main 猜测`(@TempDir tmp: Path) {
         val store = FsProjectStore(tmp)
         val root = store.create("legacy")
-        Files.writeString(root.resolve("main.js"), "x")
-        Files.writeString(root.resolve("index.js"), "y")
+        Files.write(root.resolve("main.js"), "x".toByteArray(StandardCharsets.UTF_8))
+        Files.write(root.resolve("index.js"), "y".toByteArray(StandardCharsets.UTF_8))
 
         val proj = ProjectIndex(store).read("legacy")!!
         assertEquals("main.js", proj.mainScript, "main.js 优先于 index.js")

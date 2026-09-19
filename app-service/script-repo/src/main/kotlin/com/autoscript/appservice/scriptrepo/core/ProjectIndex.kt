@@ -37,7 +37,9 @@ class ProjectIndex(private val store: ProjectStore) {
     private fun resolveMain(root: Path): String {
         val pkg = root.resolve("package.json")
         if (Files.isRegularFile(pkg)) {
-            val text = Files.readString(pkg, StandardCharsets.UTF_8)
+            // 不用 Files.readString（Java 11 API，Android android.jar 的 java.nio.file 存根不提供）；
+            // readAllBytes 在 API26+ 存根可用，手动解码 UTF-8。
+            val text = Files.readAllBytes(pkg).toString(StandardCharsets.UTF_8)
             MAIN_FIELD_REGEX.find(text)?.let { return it.groupValues[1] }
         }
         return when {
@@ -50,7 +52,7 @@ class ProjectIndex(private val store: ProjectStore) {
     private fun readVersion(root: Path): Int {
         val pkg = root.resolve("package.json")
         if (!Files.isRegularFile(pkg)) return 1
-        val text = Files.readString(pkg, StandardCharsets.UTF_8)
+        val text = Files.readAllBytes(pkg).toString(StandardCharsets.UTF_8)
         return VERSION_REGEX.find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 1
     }
 

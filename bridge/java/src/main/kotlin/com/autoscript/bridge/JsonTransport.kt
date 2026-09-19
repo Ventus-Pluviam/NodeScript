@@ -37,7 +37,7 @@ class JsonTransport : BridgeTransport {
             id = num(m, "id").toLong(),
             namespace = str(m, "ns"),
             method = str(m, "m"),
-            payload = m["payload"]?.let { (it as? TinyJson.Field.S)?.v },
+            payload = payloadOrNull(m),
             ttlMillis = num(m, "ttl").toLong(),
         )
     }
@@ -65,10 +65,24 @@ class JsonTransport : BridgeTransport {
         val m = TinyJson.decode(String(bytes, StandardCharsets.UTF_8), setOf("t", "id", "payload", "side", "code", "detail"))
         val id = num(m, "id").toLong()
         return when ((m["t"] as? TinyJson.Field.S)?.v) {
-            "ok" -> BridgeResponse.Ok(id, m["payload"]?.let { (it as? TinyJson.Field.S)?.v })
-            "err" -> BridgeResponse.Err(id, str(m, "code"), m["detail"]?.let { (it as? TinyJson.Field.S)?.v })
+            "ok" -> BridgeResponse.Ok(id, payloadOrNull(m))
+            "err" -> BridgeResponse.Err(id, str(m, "code"), detailOrNull(m))
             else -> throw IllegalArgumentException("未知响应类型")
         }
+    }
+
+    /** payload 契约：字符串（JSON 编码参数）或 null。非字符串值显式拒绝 —— 静默丢 null 会让 handler 收到无参请求。 */
+    private fun payloadOrNull(m: Map<String, TinyJson.Field>): String? = when (val f = m["payload"]) {
+        null, TinyJson.Field.Null -> null
+        is TinyJson.Field.S -> f.v
+        is TinyJson.Field.N -> throw IllegalArgumentException("payload 必须是 JSON 字符串或 null（收到数字 ${f.v}）")
+    }
+
+    /** detail 同理：字符串或 null，绝不静默丢弃。 */
+    private fun detailOrNull(m: Map<String, TinyJson.Field>): String? = when (val f = m["detail"]) {
+        null, TinyJson.Field.Null -> null
+        is TinyJson.Field.S -> f.v
+        is TinyJson.Field.N -> throw IllegalArgumentException("detail 必须是字符串或 null（收到数字 ${f.v}）")
     }
 
     private fun str(m: Map<String, TinyJson.Field>, k: String): String =

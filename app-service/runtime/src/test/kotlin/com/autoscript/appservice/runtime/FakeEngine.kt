@@ -18,6 +18,7 @@ class FakeEngine(
     var stopResult: StopResult = StopResult.Clean
     var failOnExecute = false
     var killCalls = 0
+    var stopCalls = 0
     var statusToReturn: EngineStatus = EngineStatus.IDLE
     private var nextRunId = 1L
 
@@ -31,6 +32,7 @@ class FakeEngine(
     private fun runIdBase(id: EngineId): Long = id.poolIndex * 1000L
 
     override suspend fun stop(): StopResult {
+        stopCalls++
         statusToReturn = when (stopResult) {
             StopResult.Clean -> EngineStatus.STOPPED
             else -> EngineStatus.QUIESCING

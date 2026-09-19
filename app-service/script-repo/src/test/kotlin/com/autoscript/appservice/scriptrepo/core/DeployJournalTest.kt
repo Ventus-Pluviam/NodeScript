@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 
 class DeployJournalTest {
@@ -53,5 +54,23 @@ class DeployJournalTest {
         val rec = j.unfinished().single()
         assertEquals("sub/中文 名.js", rec.relPath)
         assertEquals("hash  with sep", rec.sha256)
+    }
+
+    @Test
+    fun `撕裂残行只丢该行 完好记录正常解析`(@TempDir tmp: Path) {
+        val file = tmp.resolve("deploy.journal")
+        val j = DeployJournal(file)
+        j.begin("n1", "a.js", "h1")
+        j.commit("n1", "a.js", "h1")
+        // 模拟崩溃发生在 append 中途：写入一条含 1 个分隔符的残行（无换行结尾）
+        // append 使用 Files.write + APPEND（不自动换行），残行与后续 n3 粘连为一行
+        val US = '\u001F'
+        Files.write(file, "n2b.jsxx${US}partial".toByteArray(), java.nio.file.StandardOpenOption.APPEND)
+        j.begin("n3", "c.js", "h3")   // 与残行粘连成同一行 → parseLine 返回 null → n3 整行丢失
+
+        // 残行与 n3 粘连成同一行 → split 后 5 段 != 4 → parseLine 返回 null → n3 整行丢失
+        // n1 的两次完整写入（STAGED + COMMITTED）不受影响
+        assertEquals(2, j.all().size, "粘连残行导致 n3 丢失，仅 n1 的两次写入存活")
+        assertTrue(j.all().all { it.nonce == "n1" })
     }
 }

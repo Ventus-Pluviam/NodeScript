@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -26,7 +27,7 @@ class AtomicDeployerTest {
         d.finalize(staged)
         val target = tmp.resolve("main.js")
         assertTrue(Files.isRegularFile(target), "目标文件应就位")
-        assertEquals("console.log(1)", Files.readString(target))
+        assertEquals("console.log(1)", String(Files.readAllBytes(target), StandardCharsets.UTF_8))
         assertTrue(j.unfinished().isEmpty())
         assertFalse(Files.exists(tmp.resolve(".stage")), "stage 目录应清空")
     }
@@ -77,7 +78,7 @@ class AtomicDeployerTest {
         assertEquals(0, d.recover())
         assertTrue(journal.unfinished().isEmpty())
         assertEquals(2, journal.all().size) // STAGED + 补写的 COMMITTED
-        assertEquals("done", Files.readString(tmp.resolve("c.js")))
+        assertEquals("done", String(Files.readAllBytes(tmp.resolve("c.js")), StandardCharsets.UTF_8))
         // 恢复幂等：再跑一次无事发生
         assertEquals(0, d.recover())
     }

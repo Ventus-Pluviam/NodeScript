@@ -135,4 +135,45 @@ class SchedulerTest {
         assertEquals(ScreenGuarantee.SCREEN_ON, dispatched.single().screen, "PendingRun 携带屏幕契约")
         assertEquals(TriggerSource.TIMED, dispatched[0].trigger)
     }
+
+    @Test
+    fun `投递抛错不失排：Daily 本轮失败后仍续排下一轮`() = runBlocking {
+        val provider = RecordingProvider()
+        val scheduler = testScheduler(provider)
+        scheduler.schedule(ScheduledTask("d1", "每日", "p", "daily.js", TimedSchedule.Daily(9, 30)))
+
+        // dispatcher 本轮抛错（引擎池满/IO 失败）——异常不得逃逸、排期必须推进
+        val failing = Scheduler(
+            provider = provider,
+            log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now }),
+            dispatcher = RunDispatcher { throw IllegalStateException("池满拒收") },
+            nonceFactory = { "nonce-${++nonceSeq}" },
+            clock = { now },
+        )
+        failing.schedule(ScheduledTask("d2", "每日失败", "p", "daily.js", TimedSchedule.Daily(9, 30)))
+        val base = provider.fires.size
+        now = provider.fires.last().first + 1_000
+        failing.onTrigger("d2", scheduledAtMillis = provider.fires.last().first)
+
+        assertEquals(base + 1, provider.fires.size, "投递失败后 Daily 必须续排，不得静默停排")
+    }
+
+    @Test
+    fun `并发 schedule 与 cancel 不破坏注册表一致性`() = runBlocking {
+        val provider = RecordingProvider()
+        val scheduler = testScheduler(provider)
+        // 多线程并发登记/取消同一批任务：串行化后注册表与句柄表必须一一对应
+        val threads = (1..32).map { i ->
+            Thread {
+                runBlocking {
+                    scheduler.schedule(ScheduledTask("t$i", "任务$i", "p", "a.js", TimedSchedule.Once(60)))
+                    if (i % 2 == 0) scheduler.cancel("t$i")
+                }
+            }.apply { start() }
+        }
+        threads.forEach { it.join() }
+        val remaining = scheduler.tasks()
+        assertEquals(16, remaining.size, "奇数号任务留存：并发登记/取消串行化后注册表与句柄表一一对应")
+        assertTrue(remaining.all { it.id.removePrefix("t").toInt() % 2 == 1 })
+    }
 }
