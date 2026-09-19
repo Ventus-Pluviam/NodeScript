@@ -7,7 +7,7 @@ on:
 
 jobs:
   jvm-tests:
-    name: JVM 单测（domain / bridge:java / runtime / scheduler / script-repo）
+    name: JVM 单测（domain / bridge:java / runtime / scheduler / script-repo / permission-center / packager / capabilities / app）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
           gradle-version: "8.9"   # 与 AGP 8.5.2 匹配（≥8.7）；仓库已带 gradlew wrapper
       - name: JVM 单元测试
         run: |
-          ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:testDebugUnitTest :app-service:script-repo:testDebugUnitTest --stacktrace
+          ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:testDebugUnitTest :app-service:script-repo:testDebugUnitTest :app-service:permission-center:testDebugUnitTest :app-service:packager:testDebugUnitTest :platform:capabilities:testDebugUnitTest :app:testDebugUnitTest --stacktrace
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -32,5 +32,20 @@ jobs:
           path: |
             **/build/reports/tests/**
             **/build/test-results/**
+  js-tests:
+    name: bridge/js facade 单测（tsc + node --test）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: bridge/js/package-lock.json
+      - name: facade 单元测试
+        working-directory: bridge/js
+        run: |
+          npm ci
+          npm test
   # Android 全量 assemble（APK）走 node-runtime-build 的 Docker 构建镜像（docs §14/§19 M1）；
   # 等在 node-runtime-build 管线就绪后接入本文件并开启 :node / :bridge:native 交叉编译验证。
