@@ -6,6 +6,7 @@ import com.autoscript.appservice.scheduler.core.DispatchReport
 import com.autoscript.appservice.scheduler.core.PendingRun
 import com.autoscript.appservice.scheduler.core.RunDispatcher
 import com.autoscript.appservice.scheduler.core.RunOutcome
+import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.engine.KillCause
 import com.autoscript.domain.scripts.EngineRunLink
 
@@ -36,13 +37,25 @@ import com.autoscript.domain.scripts.EngineRunLink
  * scheduler 据此决定是否写档案 —— 绝不写「有档案、实际没有对应执行」的孤儿记录。
  *
  * 等待上限：[PendingRun.timeoutMillis]（脚本自身超时）优先，否则 [defaultAwaitTimeoutMillis]。
+ *
+ * 排队上限（§8.6 铁律 3：满池排队也必须有 TTL，绝不无限等）：[queueTimeoutMillis] 显式覆盖优先，
+ * 否则按 [DEFAULT_QUEUE_TIMEOUTS] 的触发源分级表取默认值 —— 没有「默认无限等」这条路，
+ * 真要例外就在装配处显式传值并自己负责那条路径的时限。
  */
 class ControllerRunDispatcher(
     private val controller: RuntimeController,
     private val screenGate: ScreenGate = ScreenGate.AllowAll,
     private val defaultAwaitTimeoutMillis: Long = DEFAULT_AWAIT_TIMEOUT_MILLIS,
+    /** 满池排队上限的显式覆盖；null = 按触发源分级取 [queueTimeoutFor]（§8.6 默认有界）。 */
     private val queueTimeoutMillis: Long? = null,
+    /** 分级表（§8.6 铁律 3）；测试注入小值，避免为了验边界真等十几秒。 */
+    private val queueTimeoutFor: (TriggerSource) -> Long = DEFAULT_QUEUE_TIMEOUTS,
 ) : RunDispatcher {
+    init {
+        require(queueTimeoutMillis == null || queueTimeoutMillis > 0) {
+            "queueTimeoutMillis 必须 > 0（0 会让每次满池立即取消，疑似漏配）: $queueTimeoutMillis"
+        }
+    }
 
     override suspend fun dispatch(pending: PendingRun): RunOutcome = run(pending).outcome
 
@@ -61,7 +74,8 @@ class ControllerRunDispatcher(
                     args = pending.args,
                     runNonce = pending.runNonce,
                     scriptTimeoutMillis = pending.timeoutMillis,
-                    waitTimeoutMillis = queueTimeoutMillis,
+                    // 满池排队必有 TTL（铁律 3 / §8.6）：显式覆盖优先，否则按触发源分级。
+                    waitTimeoutMillis = queueTimeoutMillis ?: queueTimeoutFor(pending.trigger),
                 ),
             )
         ) {
@@ -91,6 +105,31 @@ class ControllerRunDispatcher(
 
     companion object {
         const val DEFAULT_AWAIT_TIMEOUT_MILLIS: Long = 30_000
+
+        /**
+         * 满池排队上限的分级表（§8.6「排队上限由投递方给」的落地默认值；铁律 3）。
+         *
+         * 分级依据 = **谁在等、等久了会不会连带出事**：
+         * - [TriggerSource.ENGINE_INTERNAL] 最紧：一个已占槽的引擎在等另一个引擎，
+         *   满池时这是「持有者等后来者」的嵌套形态，等久了就是跨引擎死锁，必须先爆；
+         * - [TriggerSource.USER_CLICK] 次之：人盯着 UI，10s 给不出结果就该如实回 Cancelled，
+         *   让任务中心呈现「引擎忙，未执行」，而不是让按钮原地转圈；
+         * - [TriggerSource.INTENT_BROADCAST] / [TriggerSource.EVENT] 宽一些：外部涌入的批量
+         *   触发本就该容忍排队（且非人盯等），1 分钟兜底；
+         * - [TriggerSource.TIMED] 最宽：守时任务已承诺「亮屏+解锁保底 + 可能偏差」（§8.6），
+         *   2 分钟兜底只为满足铁律 3，不追求抢跑。
+         *
+         * 每个值都必须 > 0：0 等于「永不允许排队」，与「绝不静默丢任务」（§8.6）相反。
+         */
+        val DEFAULT_QUEUE_TIMEOUTS: (TriggerSource) -> Long = { trigger ->
+            when (trigger) {
+                TriggerSource.ENGINE_INTERNAL -> 15_000L
+                TriggerSource.USER_CLICK -> 10_000L
+                TriggerSource.INTENT_BROADCAST -> 60_000L
+                TriggerSource.EVENT -> 60_000L
+                TriggerSource.TIMED -> 120_000L
+            }
+        }
 
         /** 未挂意图日志的直投（PendingRun.intentRunId == null）的哨兵值：关联存在但无日志行可追。 */
         const val NO_INTENT_RUN_ID: Long = 0L

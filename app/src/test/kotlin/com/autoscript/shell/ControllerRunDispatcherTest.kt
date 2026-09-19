@@ -1,6 +1,7 @@
 package com.autoscript.shell
 
 import com.autoscript.appservice.runtime.FixedEnginePool
+import com.autoscript.appservice.runtime.PoolAcquireRequest
 import com.autoscript.appservice.runtime.PoolStats
 import com.autoscript.appservice.runtime.RuntimeController
 import com.autoscript.appservice.scheduler.core.PendingRun
@@ -12,6 +13,7 @@ import com.autoscript.domain.engine.StopResult
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -20,11 +22,12 @@ class ControllerRunDispatcherTest {
     private fun pending(
         nonce: String = "n-${System.nanoTime()}",
         timeoutMillis: Long? = null,
+        trigger: TriggerSource = TriggerSource.TIMED,
     ) = PendingRun(
         projectId = "p1",
         scriptPath = "a.js",
         runNonce = nonce,
-        trigger = TriggerSource.TIMED,
+        trigger = trigger,
         scheduledAtMillis = 0L,
         screen = ScreenGuarantee.ANY,
         timeoutMillis = timeoutMillis,
@@ -45,7 +48,14 @@ class ControllerRunDispatcherTest {
         }
         val pool = FixedEnginePool({ id -> engines[id.poolIndex] }, capacity)
         val controller = RuntimeController(pool)
-        return Triple(ControllerRunDispatcher(controller, gate), controller, engines)
+        // 局部分级表取小值：满池排队上限默认 10s~2min（见 DEFAULT_QUEUE_TIMEOUTS），
+        // 单测不该真等那么久 —— 分级口径本身由 DEFAULT_QUEUE_TIMEOUTS 的专项测试覆盖。
+        val d = ControllerRunDispatcher(
+            controller,
+            screenGate = gate,
+            queueTimeoutFor = { 100L },
+        )
+        return Triple(d, controller, engines)
     }
 
     @Test
@@ -126,5 +136,46 @@ class ControllerRunDispatcherTest {
         assertEquals(RunOutcome.Succeeded, d.dispatch(pending()))
         assertEquals(RunOutcome.Succeeded, d.dispatch(pending()))
         assertEquals(PoolStats(1, free = 1, busy = 0), controller.stats())
+    }
+
+    @Test
+    fun `排队上限按触发源分级，ENGINE_INTERNAL 最紧、TIMED 最宽`() {
+        val q = ControllerRunDispatcher.DEFAULT_QUEUE_TIMEOUTS
+        val table = TriggerSource.entries.associateWith { q(it) }
+        assertTrue(table.values.all { it > 0 }, "铁律 3：任何触发源都不许无限等：$table")
+        assertTrue(
+            table[TriggerSource.ENGINE_INTERNAL]!! < table[TriggerSource.TIMED]!!,
+            "嵌套等待（持有者等后来者）比守时任务更该先爆：$table",
+        )
+        assertTrue(
+            table[TriggerSource.USER_CLICK]!! < table[TriggerSource.EVENT]!!,
+            "人盯 UI 等不及就如实 Cancelled，别让按钮原地转圈：$table",
+        )
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `未显式覆盖时满池也不会无限等（按触发源取默认上限）`() = runBlocking {
+        val (_, controller, _) = rig()
+        val held = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            controller.start(PoolAcquireRequest("p0", "hold.js")),
+        )
+        // 构造时不给 queueTimeoutMillis，但给慢时钟：上限仍会到期（不是无限等）
+        val d = ControllerRunDispatcher(controller, queueTimeoutFor = { 40_000L })
+        val p = pending(trigger = TriggerSource.ENGINE_INTERNAL)
+        val outcome = d.dispatch(p)
+        assertEquals(RunOutcome.Cancelled, outcome, "满池上限到期按「排队取消」口径回 Cancelled")
+        controller.stop(held.runId)
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `queueTimeoutMillis 为 0 视为漏配，构造即响亮失败`() {
+        val (_, controller, _) = rig()
+        assertThrows(IllegalArgumentException::class.java) {
+            ControllerRunDispatcher(controller, queueTimeoutMillis = 0)
+        }
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 }

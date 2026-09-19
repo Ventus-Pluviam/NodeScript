@@ -383,8 +383,9 @@ interface EnginePool {                                // 实现在 :app-service:
 - **SchedulerProvider SPI**：同一接口后 P1 可切 `WorkManager` 之外的实现（保活场景自持 alarm + 注册 receiver）。触发→拉起引擎进程→注入 API→归日志。
 - **守时语义诚实化**（批判 11 定案）：设备**亮屏 + 解锁**是保底契约；预热闹钟 `scheduledAt - 60s` 先拉起进程（引擎进程需时 ~1s），axexact 闹钟失败时降级到 setWindow 并在 UI 标注「可能偏差」。**熄屏任务**＝任务显式声明三态之一：`screen.on`(需 wakelock+确认)/`screen.any`/`screen.off`(禁 MediaProjection，只允许无障碍+网络)。
 - 触发时若引擎池满 → 排队，绝无静默丢任务（日志+UI）。
-- **排队上限由投递方给**：`ControllerRunDispatcher` 的 `queueTimeoutMillis`（当前默认 null = 无限等）。上限到期 → `RunOutcome.Cancelled`（"排队取消"口径：未获槽、未执行，link 为 null）。
-- **P0 缺口**：无限等在工程上意味着「任务挂在调度器里，没有时限兜底」，与铁律 3（每次操作必有 TTL、zombie RUNNING 不可构造）方向相反。补法有两条，都还没做：给 dispatcher 一个默认 `queueTimeoutMillis`（按触发源分级），或让 scheduler 侧对 PendingRun 也记 deadline。**在补上前，不要宣称调度链路无悬挂风险。**
+- **排队上限由投递方给**：`ControllerRunDispatcher` 的 `queueTimeoutMillis`；到期 → `RunOutcome.Cancelled`（"排队取消"口径：未获槽、未执行，link 为 null）。
+- **P0 已落地**：满池排队**默认有界**，不再有"默认无限等"这条路。`queueTimeoutMillis` 显式覆盖优先；不传则按触发源分级取默认上限（`ControllerRunDispatcher.DEFAULT_QUEUE_TIMEOUTS`）：`ENGINE_INTERNAL` 15s（满池下的跨引擎调用是"持有者等后来者"的嵌套形态，必须最先爆，否则变跨引擎死锁）、`USER_CLICK` 10s（人盯 UI，等不及就如实 Cancelled，不让按钮原地转圈）、`INTENT_BROADCAST`/`EVENT` 60s（外部涌入本应容忍排队）、`TIMED` 120s（守时任务已承诺"亮屏+解锁保底 + 可能偏差"，2 分钟只为满足铁律 3，不追求抢跑）。分级表是**注入缝**（构造函数参数），装配层可换成自己的口径；`queueTimeoutMillis` 传 0 视为漏配，构造即 `IllegalArgumentException`——0 等于"永不允许排队"，与"绝不静默丢任务"相反。
+- **P0 缺口（只剩一条）**：上限有了，但**排队中的 PendingRun 没有自己的 deadline 记账**——scheduler 侧的 `PendingRun` 仍不记 deadline，取消后由恢复路径裁决是否重投。补法二选一，都还没做：给 `PendingRun` 加 deadline 字段并在恢复重投时参考它，或让 scheduler 侧维护独立于 dispatcher 的排队表。补上前，可以说"排队不会无限等、到期如实 Cancelled"，但**不要宣称调度链路无悬挂风险**——引擎侧 waitCompletion 超时不发起的场景仍待覆盖。
 
 ### 8.7 保活与电源
 - `:main` 持 **specialUse FGS**（`onCreate` 启动，`TYPE_SPECIAL_USE` 勾选 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE="automation"`，无超时）。
@@ -900,4 +901,4 @@ AutoScript 的骨架可以一句话记住：
 3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
 4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。
 
-**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再依次补 §8.4 剩下的采样调度循环/心跳打点/pid→runId 归属表（采集器 `ProcessMonitor` 已落地）、§8.6 的 dispatcher 排队默认上限、§8.3 的 `EngineStateMachine`→`PoolSlot` 接线。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。
+**本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；下一步是把 `AppShellApplication` 从 11 行桩变成真装配（`assemble` 有了生产调用方，`a11y`/`screen` 注入 Android 真实现），再依次补 §8.4 剩下的采样调度循环/心跳打点/pid→runId 归属表（采集器 `ProcessMonitor` 已落地）、§8.3 的 `EngineStateMachine`→`PoolSlot` 接线（§8.6 的 dispatcher 排队默认上限已按触发源分级落地，仅剩 `PendingRun` 侧 deadline 记账）。native/NDK 侧（`:bridge:native`、`:engine:node-process`、`:bridge:image`、`:platform:system`）仍是空壳，见第 2 条的切片路线。
