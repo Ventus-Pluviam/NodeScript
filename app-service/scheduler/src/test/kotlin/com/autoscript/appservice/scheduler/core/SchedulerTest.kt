@@ -2,6 +2,7 @@ package com.autoscript.appservice.scheduler.core
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -97,6 +98,90 @@ class SchedulerTest {
         assertEquals("nonce-orphan", dispatched[0].runNonce, "重投的 PendingRun 沿用同一 nonce")
         assertTrue(log.uncommitted().none { it.runId == recovered[0].oldRunId })
         assertTrue(log.uncommitted().none { it.runId == recovered[0].newRunId })
+    }
+
+    @Test
+    fun `onTrigger 给每次投递写上到期时刻（排期 + 排队上限）`() = runBlocking {
+        val scheduler = testScheduler()
+        scheduler.schedule(ScheduledTask("t1", "demo", "p", "a.js", TimedSchedule.Once(60)))
+        scheduler.onTrigger("t1", TriggerSource.TIMED, scheduledAtMillis = now)
+
+        val deadline = dispatched.single().deadlineMillis
+        // 触发源是 TIMED → 分级表最宽 120s（与 :app 的 DEFAULT_QUEUE_TIMEOUTS 同口径）
+        assertEquals(now + 120_000, deadline, "到期时刻 = 排期 + 排队上限，写在投递上")
+        assertTrue(dispatched.single().runNonce.isNotBlank())
+    }
+
+    @Test
+    fun `排队上限分级表同口径且无无限等`() {
+        val table = TriggerSource.entries.associateWith { DefaultDeadlines(it) }
+        assertTrue(table.values.all { it > 0 }, "铁律 3：任何触发源都不许无限等: $table")
+        assertTrue(
+            table[TriggerSource.ENGINE_INTERNAL]!! < table[TriggerSource.TIMED]!!,
+            "嵌套等待（持有者等后来者）须最先爆: $table",
+        )
+    }
+
+    @Test
+    fun `过期意向不重投：封口 Cancelled 且不投给 dispatcher`() = runBlocking {
+        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val scheduler = testScheduler(log = log)
+
+        // 崩溃遗留：RUN_START 已写、期限只有 1s；宿主重启拖了 10 分钟才走到恢复路径
+        log.appendStart(
+            projectId = "p",
+            scriptPath = "a.js",
+            runNonce = "nonce-stale",
+            trigger = TriggerSource.TIMED,
+            scheduledAtMillis = now,
+            deadlineMillis = now + 1_000,
+        )
+        now += 600_000                                   // 墙钟推进：重启后的恢复时刻
+
+        val recovered = scheduler.recoverUncommitted()
+
+        assertEquals(1, recovered.size)
+        assertTrue(recovered[0].expired, "到期了：这一笔标记为过期未重投")
+        assertEquals(RunOutcome.Cancelled, recovered[0].outcome, "过期如实封口 Cancelled（未获槽、未执行）")
+        assertTrue(dispatched.isEmpty(), "绝不再投一个注定迟到的任务")
+        val rows = log.all()
+        assertEquals(2, rows.size, "旧行封口 + 新行记账：历史可追溯「为何没跑」")
+        assertEquals(RunOutcome.Interrupted, rows[0].outcome, "旧行按 §8.5 封口")
+        assertEquals(RunOutcome.Cancelled, rows[1].outcome)
+        assertEquals("nonce-stale", rows[1].runNonce, "同一 nonce：幂等锚点不因过期丢失")
+        assertTrue(log.uncommitted().isEmpty(), "恢复后无悬挂意向")
+    }
+
+    @Test
+    fun `未到期意向照常重投，到期与否由期限而非成败决定`() = runBlocking {
+        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val scheduler = testScheduler(log = log)
+        log.appendStart(
+            projectId = "p",
+            scriptPath = "a.js",
+            runNonce = "nonce-fresh",
+            trigger = TriggerSource.USER_CLICK,
+            scheduledAtMillis = now,
+            deadlineMillis = now + 600_000,
+        )
+
+        val recovered = scheduler.recoverUncommitted()
+
+        assertEquals(1, dispatched.size, "未到期：照旧重投")
+        assertFalse(recovered[0].expired)
+        assertEquals(RunOutcome.Succeeded, recovered[0].outcome, "结果仍由 dispatcher 给")
+    }
+
+    @Test
+    fun `无期限的遗留意向（老路径）永不被判过期`() = runBlocking {
+        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val scheduler = testScheduler(log = log)
+        log.appendStart("p", "a.js", "nonce-nodl", TriggerSource.TIMED, now)   // 不传 deadline
+
+        val recovered = scheduler.recoverUncommitted()
+
+        assertEquals(1, dispatched.size, "null 期限 = 不判过期（直投/未挂日志的老路径）")
+        assertFalse(recovered[0].expired)
     }
 
     @Test

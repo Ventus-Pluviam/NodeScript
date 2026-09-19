@@ -29,6 +29,7 @@ interface IntentLog {
         trigger: TriggerSource,
         scheduledAtMillis: Long,
         screen: ScreenGuarantee = ScreenGuarantee.ANY,
+        deadlineMillis: Long? = null,
     ): IntentRun
 
     /** 对该 runId 追加 COMMIT 行；重复 COMMIT 幂等返回已提交结果。 */
@@ -63,6 +64,8 @@ data class IntentRun(
     val screen: ScreenGuarantee,            // 投递时的屏幕契约（恢复重投不得丢失）
     val outcome: RunOutcome?,               // null = 未 COMMIT（STARTED）
     val startedAtMillis: Long,
+    /** 本次投递的到期时刻（§8.6：排期 + 排队上限；null = 无期限，恢复时不判过期）。 */
+    val deadlineMillis: Long? = null,
     val committedAtMillis: Long? = null,
 )
 

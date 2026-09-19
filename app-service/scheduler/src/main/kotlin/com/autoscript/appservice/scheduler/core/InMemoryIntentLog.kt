@@ -31,6 +31,7 @@ class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) :
         trigger: TriggerSource,
         scheduledAtMillis: Long,
         screen: ScreenGuarantee,
+        deadlineMillis: Long?,
     ): IntentRun = synchronized(lock) {
         // 原子幂等兜底（§8.5 + 评审 S3）：同一 nonce 已有 STARTED 存活行，或该 nonce 的副作用
         // 已 COMMIT 过，都拒绝——杜绝 isCommitted 预检的 check-then-act 竞态（SQLite 唯一索引对齐）。
@@ -51,6 +52,7 @@ class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) :
             screen = screen,
             outcome = null,
             startedAtMillis = now.millis(),
+            deadlineMillis = deadlineMillis,
         )
         store += run
         run
@@ -90,6 +92,7 @@ class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) :
             screen = old.screen,
             outcome = null,
             startedAtMillis = now.millis(),
+            deadlineMillis = old.deadlineMillis,   // 恢复重投不得变期限：否则同一意向两套到期口径
         )
         store += fresh
         fresh

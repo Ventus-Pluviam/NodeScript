@@ -73,6 +73,7 @@ class InMemoryIntentLogTest {
         assertEquals(old.runId + 1, fresh.runId, "重开分配新 runId")
         assertEquals("nonce-y", fresh.runNonce, "保留原 runNonce（§8.5 幂等锚点）")
         assertEquals(ScreenGuarantee.SCREEN_ON, fresh.screen, "恢复重投不得丢失屏幕契约")
+        assertEquals(old.deadlineMillis, fresh.deadlineMillis, "恢复重投不得变期限（§8.6：同一意向一套到期口径）")
 
         // 旧行已封口为 Interrupted（可追溯），新行是未完成意向（可继续派发）
         val sealedOld = log.all().single { it.runId == old.runId }
@@ -81,6 +82,21 @@ class InMemoryIntentLogTest {
 
         // 崩溃窗口（reclaim+append 间隙）语义：封口已完成，无「丢失一行」的中间态
         assertTrue(log.isCommitted("nonce-y") == false, "Interrupted 不计入幂等集合——同一 nonce 还要重投")
+    }
+
+    @Test
+    fun `appendStart 落行带 deadline，恢复据此判过期`() = runBlocking {
+        val log = log()
+        // 显式期限进了日志行（§8.6）：崩溃恢复读的是这一行，不是内存里的某个表
+        val a = log.appendStart(
+            "p", "a.js", "nonce-dl", TriggerSource.TIMED, 5000, ScreenGuarantee.ANY, deadlineMillis = 9_000,
+        )
+        assertEquals(9_000L, a.deadlineMillis)
+        assertTrue(log.all().single { it.runId == a.runId }.deadlineMillis == 9_000L, "期限随行落档")
+
+        // 不传 = 无期限（老路径/直投）：恢复路径不得因此把它判死
+        val b = log.appendStart("p", "b.js", "nonce-nodl", TriggerSource.USER_CLICK, 6000)
+        assertNull(b.deadlineMillis)
     }
 
     @Test

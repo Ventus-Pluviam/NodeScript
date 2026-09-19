@@ -34,7 +34,28 @@ data class PendingRun(
     val screen: ScreenGuarantee,                // 屏幕契约（§8.6）：SCREEN_ON 需 wakelock+亮屏确认后才投递；SCREEN_OFF 禁画面能力
     val timeoutMillis: Long? = null,            // 脚本自身超时（透传引擎）
     val intentRunId: Long? = null,              // 意图日志 runId（§8.5 归档关联）
-)
+    /**
+     * 本次投递的**到期时刻**（epoch millis；null = 不设期限，直投/未挂日志的老路径）。
+     *
+     * §8.6 最后一条缺口的补法之一：排队上限本是 dispatcher 的在途口径（排队等槽的 TTL），
+     * 而崩溃恢复面对的是另一件事 —— **宿主机死过一次之后，这条意向还值不值得投**。
+     * 到期之后才被恢复路径捞起来的意向，跑了也是迟到；如实封口 Cancelled，
+     * 比"重投一个注定迟到的任务"诚实，也比"静默丢掉"可追溯（deadline 就在日志行上）。
+     *
+     * 不替代 dispatcher 的排队上限：在途排队该什么时候炸仍由投递方自己的缝决定
+     * （`ControllerRunDispatcher` 的 `queueTimeoutMillis`/分级表），本字段只供
+     * 恢复路径与审计读。**两处口径同源由装配层保证**（`AppShell.assemble` 把同一张
+     * 排队上限表喂给 scheduler），否则必然出现"恢复按一套、排队按另一套"的漂移。
+     */
+    val deadlineMillis: Long? = null,
+) {
+    /**
+     * 是否已到期（[deadlineMillis] 已过）。无期限（null）永不到期 ——
+     * 直投/未挂日志的老路径不该被恢复逻辑突然判死。
+     */
+    fun isExpired(nowMillis: Long): Boolean =
+        deadlineMillis != null && nowMillis >= deadlineMillis
+}
 
 /**
  * 执行对偶到 [DispatchReport]，由 scheduler 统一 COMMIT，不外泄引擎细节。
