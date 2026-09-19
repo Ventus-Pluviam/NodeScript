@@ -3,6 +3,8 @@ package com.autoscript.bridge
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.core.ErrorCode
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -37,11 +39,20 @@ class BridgeRouterTest {
     @Test
     fun `duplicate requestId rejected`() = runBlocking {
         val r = router
-        r.register("echo") { req -> BridgeResponse.Ok(req.id, null) }
-        r.dispatch(BridgeRequest(5, "echo", "echo", null, 5_000))
+        // 首个 dispatch 以挂起态 handler 占住 requestId=5（未完成 → 仍在册），
+        // 这样第二次同 id dispatch 才能命中 registry.register 的重复拒绝路径。
+        val gate = CompletableDeferred<Unit>()
+        r.register("echo") { req ->
+            gate.await()                                   // 持续挂起，保持请求在册
+            BridgeResponse.Ok(req.id, null)
+        }
+        val first = async { r.dispatch(BridgeRequest(5, "echo", "echo", null, 5_000)) }
+        delay(50)                                           // 确保首个 dispatch 进入 registry
         val second = r.dispatch(BridgeRequest(5, "echo", "echo", null, 5_000))
         val err = assertInstanceOf(BridgeResponse.Err::class.java, second)
         assertEquals(ErrorCode.ERR_INVALID_PARAM.code, err.errorCode)
+        gate.complete(Unit)                                // 放行首个，避免超时噪音
+        first.await()
     }
 
     @Test

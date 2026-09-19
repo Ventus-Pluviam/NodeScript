@@ -14,8 +14,9 @@ internal object TinyJson {
 
     fun encode(fields: List<Pair<String, Field>>): String = buildString {
         append('{')
-        for ((i, (k, f)) in fields.withIndex()) {
-            if (i > 0) append(',')
+        for ((indexed, pair) in fields.withIndex()) {
+            val (k, f) = pair
+            if (indexed > 0) append(',')
             append(quote(k)).append(':').append(encodeValue(f))
         }
         append('}')
@@ -98,7 +99,8 @@ internal object TinyJson {
                         '\\' -> { sb.append('\\'); p += 2 }
                         '/' -> { sb.append('/'); p += 2 }
                         'b' -> { sb.append('\b'); p += 2 }
-                        'f' -> { sb.append('\f'); p += 2 }
+                        // Kotlin 无 \f 转义（Java 特有）：form feed 用码点显式表达
+                        'f' -> { sb.append('\u000C'); p += 2 }
                         'n' -> { sb.append('\n'); p += 2 }
                         'r' -> { sb.append('\r'); p += 2 }
                         't' -> { sb.append('\t'); p += 2 }
