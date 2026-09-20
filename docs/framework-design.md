@@ -543,7 +543,6 @@ FrameSource (SPI)
    - 审批记录绑定 `pkg+版本+脚本内容哈希`，版本升级必须重新审批；审计日志（approve/registry 变更/lock 重签）落 App 且可导出。
 3. **恶意包防线（缺省启用）**：
    - 默认**拒绝全部 install 脚本**（对操纵无障碍/root 的自动化脚本是最大投毒面）；postinstall 包装完即出「脚本未运行」显式警告，**禁止静默**。
-   - 安装时查**每日更新的已知恶意包清单**；「首次出现的包名+版本」显式降信任并 UI 提示；`min-release-age` 之外加「老名字换毒/依赖图与体积漂移 → 二次确认」。
    - 在线 `npm audit` + `audit signatures`（ECDSA）；离线捆绑 OSV 库 + `osv-scanner --offline`；签名端点不可用**绝不静默降级**。
 4. **低信任边界**：T1 脚本执行会话一律**独立最小 CapabilityMask**（仅 npm 目录 fs+network，无 a11y/shell/root），与用户脚本会话物理区分；UI 明示「审批 postinstall ≠ 授权自动化能力」；高信任须**可验证签名 + 用户显式升级**（不用软签名）。
 5. **QuickJS 白名单库独立 vendored**：冻结版本 + 独立 integrity + 只读区（npm 可写目录之外），禁止从 npm 目录/共享 store 解析；未来共享 store 必须持「store 内容哈希 == 各项目 lock 哈希」的加签映射校验。
@@ -863,7 +862,7 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 | **桥死锁回归** | 事件循环冻结 | archUnit + 专项契约测试（双向同步禁令的静态检查 + 死锁压力测试）；线程规则写进 code review checklist |
 | **脚本间广播/通信滥用** | 引擎间干扰 | RuntimeChannel 按来源分级过滤；低信任不得控制高信任引擎 |
 | **打包 APK 依赖宿主引擎版本** | 旧 APK + 新宿主 mismatch | 打包时记录引擎 ABI 哈希，启动校验 |
-| **npm 供应链 / 零 spawn 漂移 / 安装中断** | 依赖投毒、护栏静默消失、半截 node_modules | §10.5（带外信任锚/审批人机分离/恶意包筛查）与 §10.12（拦截 shim 金标准/事务化安装/离线闭包差距），不再在此重复 |
+| **npm 供应链 / 零 spawn 漂移 / 安装中断** | 依赖投毒、护栏静默消失、半截 node_modules | §10.5（带外信任锚/审批人机分离）与 §10.12（拦截 shim 金标准/事务化安装/离线闭包差距），不再在此重复 |
 
 ---
 
