@@ -152,6 +152,17 @@ class AppShell(
              * null = 未接线，桥对 `npm.*` 如实回 ERR_NOT_IMPLEMENTED（不伪造可用）。
              */
             npmHandler: NamespaceHandler? = null,
+            /**
+             * `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6）。
+             * 与 [a11yHandler] 同一注入缝，但合成一个参数而非五个：五个命名空间在 §12.2
+             * 的 JS facade（`extras.ts`）里是一个整体，且共一批能力门禁（OVERLAY /
+             * ROOT / ADB_INPUT），装配层按「接就五个一起接」处理更符合现场。
+             *
+             * 每个字段 null = 该命名空间未接线，桥如实回 ERR_NOT_IMPLEMENTED。
+             * 真实现经 `:platform:capabilities` 的 [com.autoscript.platform.capabilities.CapabilityNamespaces]
+             * 工厂产出后注入；`:app` 不 new 具体实现、不直连 `:platform`（§6）。
+             */
+            systemHandlers: SystemHandlers? = null,
         ): AppShell {
             val events = EventBus()
             val registry = RequestRegistry()
@@ -169,6 +180,7 @@ class AppShell(
             if (a11yHandler != null) router.register("a11y", a11yHandler)
             if (screenHandler != null) router.register("screen", screenHandler)
             if (npmHandler != null) router.register("npm", npmHandler)
+            systemHandlers?.registerAll(router::register)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
             // §8.6 同源接线：deadline（恢复判过期）与排队上限（dispatcher 在途等多久）
@@ -221,5 +233,32 @@ private suspend fun EnginesNamespaceHandler.handleLike(request: BridgeRequest): 
             BridgeResponse.Ok(r.id, r.payload)
         is EnginesNamespaceHandler.Response.Err ->
             BridgeResponse.Err(r.id, r.code, r.detail)
+    }
+}
+
+/**
+ * `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间的注入束（§9.4/§9.6/§12.2）。
+ *
+ * 合成一个类型而不是五个 `NamespaceHandler?` 参数：五个命名空间在 JS facade（`extras.ts`）
+ * 里是一个整体、共一批能力门禁（OVERLAY/ROOT/ADB_INPUT），装配层按「接就五个一起接」
+ * 处理；[registerAll] 逐个 null 检查，缺哪个就哪个如实 ERR_NOT_IMPLEMENTED（§7.5）。
+ *
+ * 字段由 `:platform:capabilities` 的 [com.autoscript.platform.capabilities.CapabilityNamespaces]
+ * 工厂产出后填入；`:app` 只搬运，不 new 具体实现、不直连 `:platform`（§6）。
+ */
+data class SystemHandlers(
+    val dialogs: NamespaceHandler? = null,
+    val shell: NamespaceHandler? = null,
+    val device: NamespaceHandler? = null,
+    val app: NamespaceHandler? = null,
+    val floatingWindow: NamespaceHandler? = null,
+) {
+    /** 逐个挂 Router；null 项跳过（未接线 → Router 的未知 namespace 路径，如实未实现）。 */
+    fun registerAll(register: (String, NamespaceHandler) -> Boolean) {
+        if (dialogs != null) register("dialogs", dialogs)
+        if (shell != null) register("shell", shell)
+        if (device != null) register("device", device)
+        if (app != null) register("app", app)
+        if (floatingWindow != null) register("floatingWindow", floatingWindow)
     }
 }
