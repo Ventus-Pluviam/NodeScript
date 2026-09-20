@@ -41,11 +41,13 @@ class NpmBridgeHandlerTest {
 
     private fun handler(executor: InstallCoordinator.HeavyOpExecutor = RecordingExecutor { p, s -> installed += p to s }) = NpmBridgeHandler(
         InstallCoordinator(
-            layout = layout,
-            journal = InstallJournal(dir.resolve(".autojs")),
-            staging = InstallStaging(layout),
-            ledger = ApprovalLedger(),
-            cacheIndex = CacheIndex { false },
+            services = NpmServices(
+                layout = layout,
+                journal = InstallJournal(dir.resolve(".autojs")),
+                staging = InstallStaging(layout),
+                ledger = ApprovalLedger(),
+                cacheIndex = CacheIndex { false },
+            ),
             executor = executor,
             freeSpaceProbe = { 10L * 1024 * 1024 * 1024 },
         ),

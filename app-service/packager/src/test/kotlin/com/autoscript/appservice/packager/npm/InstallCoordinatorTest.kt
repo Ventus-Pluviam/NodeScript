@@ -120,27 +120,21 @@ class InstallCoordinatorTest {
          */
         registryOf: ((String) -> String?)? = null,
     ) = InstallCoordinator(
-        layout = layout,
-        journal = journal,
-        staging = staging,
-        ledger = ledger,
-        cacheIndex = cache,
+        services = NpmServices(
+            layout = layout,
+            journal = journal,
+            staging = staging,
+            ledger = ledger,
+            history = history,
+            lockSigner = lockSigner,
+            snapshots = snapshots,
+            cacheIndex = cache,
+            bundleImporter = bundleImporter,
+            registryVerifier = registryVerifier,
+        ),
         executor = executor,
         freeSpaceProbe = { free },
-        history = history,
-        lockSigner = lockSigner,
-        snapshots = snapshots,
-        bundleImporter = bundleImporter,
-        registryVerifier = registryVerifier,
-        // null 不能直接传给构造默认值：那会写成「永远不知道注册表」。这里区分
-        // 「调用方显式要求不读配置」与「调用方没意见」——后者交给缺省实现。
-        registryOf = registryOf ?: { projectId ->
-            val rc = layout.npmrc(projectId)
-            if (!Files.isRegularFile(rc)) null else
-                Files.readAllLines(rc).asReversed()
-                    .firstOrNull { it.startsWith("registry=") }
-                    ?.substringAfter("registry=")?.trim()?.takeIf { it.isNotEmpty() }
-        },
+        registryOf = registryOf,
     )
 
     /**

@@ -40,11 +40,13 @@ class HostNodeNpmE2ETest {
     private fun coordinatorAt(root: Path, cacheDir: Path): InstallCoordinator {
         val layout = NpmProjectLayout(root.resolve("scripts"))
         return InstallCoordinator(
-            layout = layout,
-            journal = InstallJournal(root.resolve(".autojs")),
-            staging = InstallStaging(layout),
-            ledger = ApprovalLedger(),
-            cacheIndex = CacheIndex { false },
+            services = NpmServices(
+                layout = layout,
+                journal = InstallJournal(root.resolve(".autojs")),
+                staging = InstallStaging(layout),
+                ledger = ApprovalLedger(),
+                cacheIndex = CacheIndex { false },
+            ),
             executor = HostNodeExecutor(npmCli!!, cacheDir),
         )
     }

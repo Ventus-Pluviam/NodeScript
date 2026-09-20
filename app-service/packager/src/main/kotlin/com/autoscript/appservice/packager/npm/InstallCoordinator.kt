@@ -42,57 +42,21 @@ import java.util.concurrent.atomic.AtomicLong
  * 项目配额（0.8 黄 / 1.0 拦）+ git: 依赖入口即拒（ERR_NOT_SUPPORTED）。
  */
 class InstallCoordinator(
-    private val layout: NpmProjectLayout,
-    private val journal: InstallJournal,
-    private val staging: InstallStaging,
-    private val ledger: ApprovalLedger,
-    private val history: InstallHistory? = null,
-    private val lockSigner: LockSigner? = null,
-    private val snapshots: NpmSnapshot? = null,
-    private val cacheIndex: CacheIndex,
-    /**
-     * 离线 bundle 导入接缝（§10.9 UX 4）：注入前 [importOfflineBundle] 如实失败
-     * （不把用户文件路径拼成 npm 不认识的旗标）；注入后先合入 cacache 再按 lock 重建。
-     * 与 snapshots/lockSigner 同为「真值在 Android 侧」的装配缝，纯 JVM 可测。
-     */
-    private val bundleImporter: NpmOfflineBundleImporter? = null,
-    /**
-     * 多镜像交叉校验缝（§10.5-1）：install 前对每个 spec 取两镜像声明核对。
-     *
-     * 三分裁决的处置是**这一步的全部意义**，写死在这里以免各调用点各自打折：
-     * - Agreed：放行（校验通过不额外发事件，否则每个包一条噪音警告，真警告就被埋了）；
-     * - Disagreed：**抛** `ERR_REGISTRY_UNAVAILABLE`（附两家的版本/摘要）——两个运营独立的
-     *   镜像对同一版本给出不同 integrity，只有投毒或镜像被改能解释，继续装等于把已经
-     *   发现的结论当没发生（§10.5-1「不一致即拒」）；
-     * - Unverifiable：**不拦**（副镜像不可达/版本只在一侧/无 integrity 锚点都是「没验成」
-     *   而非「验出问题」），但必须显式告知：TRUST_DOWNGRADED 告警 + 入史，即
-     *   §10.5-1「设备端首生锁标记『来源未校验』降信任级 + UI 明示」。
-     *
-     * null = 未接线（装配缺口，不等于「不需要校验」）：此时 install 静默跳过本步，
-     * 与 [lockSigner]/[snapshots] 同一约定——何时补齐由装配层定，这里不假装验过。
-     */
-    private val registryVerifier: RegistryVerifier? = null,
-    /**
-     * 本次的首选注册表（读项目 `.npmrc` 的 `registry=`，§10.2；null = 交给校验器用自己
-     * 的默认值）。只在 [registryVerifier] 已注入时求值——没接线就不为一次不发生的校验
-     * 付读盘代价。
-     */
-    private val registryOf: (String) -> String? = { projectId ->
-        val rc = layout.npmrc(projectId)   // projectId 合法性由 NpmProjectLayout 把着
-        if (!Files.isRegularFile(rc)) null else
-            Files.readAllLines(rc).asReversed()
-                .firstOrNull { it.startsWith("registry=") }
-                ?.substringAfter("registry=")
-                ?.trim()?.takeIf { it.isNotEmpty() }
-    },
+    private val services: NpmServices,
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
-    private val freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
+    /**
+     * 首选注册表解析（缺省读项目 `.npmrc`）。null ≠ 「永远不知道」：
+     * 与 [NpmServices.registryOf] 同一约定——未传时用协调器自己的 npmrc 读取，
+     * 测试显式关校验/换源时才注入。
+     */
+    registryOf: ((String) -> String?)? = null,
+    freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
         Files.getFileStore(it).usableSpace
     },
-    private val now: () -> Long = { System.currentTimeMillis() },
-    private val config: Config = Config(),
+    now: () -> Long = { System.currentTimeMillis() },
+    config: Config = Config(),
     /** 真 cacheDir（`<data>/cache/npm-cache`，§10.2；Android 装配层注入）。 */
-    private val npmCacheDir: Path? = null,
+    npmCacheDir: Path? = null,
 ) : PackageManagerFacade {
 
     data class Config(
@@ -100,6 +64,40 @@ class InstallCoordinator(
         val projectQuotaBytes: Long = 512L * 1024 * 1024,  // 项目 node_modules 配额（100% 拦）
         val quotaWarnRatio: Double = 0.8,                  // 80% 黄
     )
+
+    // 探针/时钟/配额不走 [NpmServices]：它们不是「外部协作者」而是本类行为参数，
+    // 收进 services 会让「换一份 layout 就顺手换掉时钟」变得合法——那是两回事。
+    // 保留为构造参数 + 就地私有化，测试按需注入（时钟/磁盘探针是门禁断言的输入）。
+    private val freeSpaceProbe = freeSpaceProbe
+    private val now = now
+    private val config = config
+    private val npmCacheDir = npmCacheDir
+
+    // —— services 成员的本类私有别名 ——
+    // 十一个协作者全部经 [NpmServices] 供给；这些别名把「构造面上是分组」与
+    // 「使用处仍是扁平的」隔开——不然每个用法都要写 `services.xxx`，读起来像
+    // 委托壳而不是协调器自己的状态。零运行时开销（构造期一次性解引用）。
+    private val layout: NpmProjectLayout = services.layout
+    private val journal: InstallJournal = services.journal
+    private val staging: InstallStaging = services.staging
+    private val ledger: ApprovalLedger = services.ledger
+    private val history: InstallHistory? = services.history
+    private val lockSigner: LockSigner? = services.lockSigner
+    private val snapshots: NpmSnapshot? = services.snapshots
+    private val cacheIndex: CacheIndex = services.cacheIndex
+    private val bundleImporter: NpmOfflineBundleImporter? = services.bundleImporter
+    private val registryVerifier: RegistryVerifier? = services.registryVerifier
+    private val registryOf: (String) -> String? = registryOf ?: ::readRegistryFromNpmrc
+
+    /** 项目 `.npmrc` 的 registry=（§10.2 默认首选；缺文件/缺键/空值 → null，不猜镜像）。 */
+    private fun readRegistryFromNpmrc(projectId: String): String? {
+        val rc = layout.npmrc(projectId)   // projectId 合法性由 NpmProjectLayout 把着
+        if (!Files.isRegularFile(rc)) return null
+        return Files.readAllLines(rc).asReversed()
+            .firstOrNull { it.startsWith("registry=") }
+            ?.substringAfter("registry=")
+            ?.trim()?.takeIf { it.isNotEmpty() }
+    }
 
     /** lifecycle 脚本字段（§10.5-3 的扫描面）：出现任一即视为「装了但脚本没跑」。 */
     private val LIFECYCLE_KEYS = listOf(
