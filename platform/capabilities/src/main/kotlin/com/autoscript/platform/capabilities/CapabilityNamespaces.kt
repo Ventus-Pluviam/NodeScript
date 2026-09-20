@@ -7,6 +7,11 @@ import com.autoscript.domain.automation.UiEventStream
 import com.autoscript.domain.automation.UiNodeTreeReader
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.NamespaceHandler
+import com.autoscript.domain.system.AppLauncher
+import com.autoscript.domain.system.DeviceInfoProvider
+import com.autoscript.domain.system.DialogHost
+import com.autoscript.domain.system.FloatingWindowHost
+import com.autoscript.domain.system.ShellExecutor
 
 /**
  * 能力 handler → 桥挂载缝的薄转接（§4.1/§6）。
@@ -67,4 +72,51 @@ object CapabilityNamespaces {
             }
         }
     }
+
+    // ── 系统侧五个命名空间（§9.4/§9.6，handler 见 SystemNamespaces.kt）──────
+
+    /** `shell` 命名空间：`exec`/`shell` 两方法（JS `extras.ts` 的 `shell()` 只是 `exec()` 的别名）。 */
+    fun shell(
+        executor: ShellExecutor,
+        defaultTimeoutMillis: Long = DEFAULT_SHELL_TIMEOUT_MILLIS,
+    ): NamespaceHandler {
+        val handler = ShellNamespaceHandler(executor, defaultTimeoutMillis)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /** `device` 命名空间：`model`/`sdkInt`（P0 最小集，§12.3）。 */
+    fun device(info: DeviceInfoProvider): NamespaceHandler {
+        val handler = DeviceNamespaceHandler(info)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /** `app` 命名空间：`launch`/`currentPackage`。 */
+    fun app(launcher: AppLauncher): NamespaceHandler {
+        val handler = AppNamespaceHandler(launcher)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /** `dialogs` 命名空间：`prompt`/`choose`（§9.4 BAL 安全路径）。 */
+    fun dialogs(host: DialogHost): NamespaceHandler {
+        val handler = DialogsNamespaceHandler(host)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /** `floatingWindow` 命名空间：`create`/`close`（§9.4）。 */
+    fun floatingWindow(host: FloatingWindowHost): NamespaceHandler {
+        val handler = FloatingWindowNamespaceHandler(host)
+        return lite { request -> handler.handle(request) }
+    }
 }
+
+/**
+ * [BridgeRequestLite] 形状的 handler → 桥信封的字段级转接（本文件私有）。
+ * 五个系统侧命名空间共用（§9.4/§9.6）；同 [NamespaceHandler] 缝，无逻辑。
+ */
+private inline fun lite(crossinline handle: suspend (BridgeRequestLite) -> ResponseLite): NamespaceHandler =
+    NamespaceHandler { request ->
+        when (val r = handle(BridgeRequestLite(request.id, request.method, request.payload))) {
+            is ResponseLite.Ok -> BridgeResponse.Ok(r.id, r.payload)
+            is ResponseLite.Err -> BridgeResponse.Err(r.id, r.code, r.detail)
+        }
+    }
