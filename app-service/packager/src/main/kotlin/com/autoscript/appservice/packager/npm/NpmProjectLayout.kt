@@ -135,6 +135,10 @@ object DirSizer {
     fun sha256(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-256")
         .digest(bytes).joinToString("") { "%02x".format(it) }
 
+    /** cacache 的默认摘要算法（内容路径按 sha512 分段；与 lockfile v3 integrity 同口径）。 */
+    fun sha512(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-512")
+        .digest(bytes).joinToString("") { "%02x".format(it) }
+
     fun sizeBytes(root: Path): Long {
         if (!Files.isDirectory(root)) return 0
         var total = 0L
