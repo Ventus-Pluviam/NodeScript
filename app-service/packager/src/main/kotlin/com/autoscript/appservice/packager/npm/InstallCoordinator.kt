@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Files
+import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -49,12 +50,20 @@ class InstallCoordinator(
     private val lockSigner: LockSigner? = null,
     private val snapshots: NpmSnapshot? = null,
     private val cacheIndex: CacheIndex,
+    /**
+     * 离线 bundle 导入接缝（§10.9 UX 4）：注入前 [importOfflineBundle] 如实失败
+     * （不把用户文件路径拼成 npm 不认识的旗标）；注入后先合入 cacache 再按 lock 重建。
+     * 与 snapshots/lockSigner 同为「真值在 Android 侧」的装配缝，纯 JVM 可测。
+     */
+    private val bundleImporter: NpmOfflineBundleImporter? = null,
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
     private val freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
         Files.getFileStore(it).usableSpace
     },
     private val now: () -> Long = { System.currentTimeMillis() },
     private val config: Config = Config(),
+    /** 真 cacheDir（`<data>/cache/npm-cache`，§10.2；Android 装配层注入）。 */
+    private val npmCacheDir: Path? = null,
 ) : PackageManagerFacade {
 
     data class Config(
@@ -162,8 +171,49 @@ class InstallCoordinator(
 
     override suspend fun prune(projectId: String): InstallHandle = enqueueHeavy(projectId, listOf("prune"))
 
-    override suspend fun importOfflineBundle(projectId: String, uri: String): InstallHandle =
-        enqueueHeavy(projectId, listOf("install", "--offline", "--from-bundle", uri))
+    /**
+     * 离线 bundle 导入（§10.9 UX 4：SAF 选「lock+cacache bundle」→ 合入缓存 → 按 lock 重建）。
+     *
+     * 链路：bundle → [NpmOfflineBundleImporter] 合入 cacache（逐条目复核 + zip slip 检疫）
+     * → `npm ci --offline` 按当前 lock 离线重建。设计要点：**导入不等于安装**——
+     * 合入缓存后仍走正规事务链（journal/门禁/落位），绝不「解压即算装上」。
+     *
+     * 未注入导入件时如实 ERR_NOT_IMPLEMENTED：把 uri 拼成 `--from-bundle` 传给 npm
+     * 只会得到一个必然失败的假命令（npm 无此旗标）——那比报错更糟。
+     */
+    override suspend fun importOfflineBundle(projectId: String, uri: String): InstallHandle {
+        val importer = bundleImporter ?: throw AutojsException(
+            ErrorCode.ERR_NOT_IMPLEMENTED,
+            "离线 bundle 导入未接线（NpmOfflineBundleImporter 未注入）：无法把 $uri 合入 npm 缓存",
+        )
+        val root = layout.projectRoot(projectId)   // projectId 合法性先过（防路径逃逸）
+        val src = Path.of(uri)
+        if (!Files.isRegularFile(src)) {
+            throw AutojsException(ErrorCode.ERR_FILE_NOT_FOUND, "离线 bundle 不存在：$uri（SAF 副本是否已落地？）")
+        }
+        val result = importer.import(src, resolveCacheDir())
+        if (!result.clean) {
+            // §10.5-3 禁止静默：有拒收条目必须说，否则用户以为整包都进来了
+            history?.record(
+                InstallHistory.Op.IMPORT, projectId, false,
+                "bundle 有 ${result.rejected.size} 个条目被拒（路径非法或摘要不符）：${result.rejected.take(3)}",
+            )
+        }
+        history?.record(
+            InstallHistory.Op.IMPORT, projectId, true,
+            "bundle 合入缓存 imported=${result.imported} skipped=${result.skipped} rejected=${result.rejected.size} bytes=${result.bytes}",
+        )
+        emit(
+            InstallEvent.Warning(
+                projectId = projectId,
+                handleId = "bundle",
+                kind = InstallEvent.Kind.REGISTRY_FALLBACK,
+                pkgs = emptyList(),
+                message = "离线 bundle 已合入缓存（${result.imported} 条新 / ${result.skipped} 条已存在）；随后按 lock 离线重建",
+            ),
+        )
+        return enqueueHeavy(projectId, listOf("ci", "--offline"))
+    }
 
     override suspend fun importTarball(projectId: String, path: String): InstallHandle =
         enqueueHeavy(projectId, listOf("install", path))
@@ -453,6 +503,22 @@ class InstallCoordinator(
             ),
         )
     }
+
+    /**
+     * cacheDir（npm 的 `--cache` 值，cacache 根）解析。
+     *
+     * 布局：npm cache 目录下**直接**就是 `_cacache/`（`cacache(cache)` = `<cache>/_cacache`，
+     * 见 cacache `contentDir`），故 `--cache <dir>` 与 [NpmCacheSeedDeployer.cacacheDir]
+     * 之间差一层 `_cacache`。生产形态应是 `<App 数据根>/cache/npm-cache`（与 filesDir 平级，
+     * §10.2「系统可自动清，损失可接受」）；但协调器只被喂了 projectsRoot，**没有 cacheDir
+     * 这个真值**——反推 `<projectsRoot>/../../cache/npm-cache` 在 `files/scripts` 布局下才对，
+     * 一旦 projectsRoot 不在这棵树下（测试/非常规布局）就静默指错地方。
+     *
+     * 处置：承认这是装配缺口而不是猜。缺省用 projectsRoot 同级的 `.npm-cache`（可预测、
+     * 测试可断言），并保留 [npmCacheDir] 注入点供 Android 装配层传入真值。
+     */
+    private fun resolveCacheDir(): Path =
+        npmCacheDir ?: layout.projectsRoot.resolveSibling(".npm-cache")
 
     /** 该包的 package.json 是否声明 install-scripts 字段（不解析脚本内容）。 */
     private fun hasLifecycleScript(pkgJson: java.nio.file.Path): Boolean {

@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class InstallCoordinatorTest {
 
@@ -71,6 +73,31 @@ class InstallCoordinatorTest {
 
     private fun newHistory() = InstallHistory(dir.resolve(".autojs"))
 
+    /** 造一个 bundle zip：entries = (path, bytes)。 */
+    private fun bundleZip(vararg entries: Pair<String, ByteArray>): Path {
+        val zip = dir.resolve("bundle-${System.nanoTime()}.zip")
+        ZipOutputStream(Files.newOutputStream(zip)).use { z ->
+            for ((name, data) in entries) {
+                z.putNextEntry(ZipEntry(name)); z.write(data); z.closeEntry()
+            }
+        }
+        return zip
+    }
+
+    /** content-v2 路径段（同 cacache hash-to-segments）。 */
+    private fun segments(bytes: ByteArray): String {
+        val hex = DirSizer.sha512(bytes)
+        return "${hex.substring(0, 2)}/${hex.substring(2, 4)}/${hex.substring(4)}"
+    }
+
+    /** 未注入 npmCacheDir 时协调器退到 projectsRoot 同级 `.npm-cache`（可断言、不猜）。 */
+    private fun cacheDir(): Path = dir.resolve(".npm-cache")
+
+    private fun sha512Segments(payload: ByteArray): String {
+        val hex = DirSizer.sha512(payload)
+        return "sha512/${hex.substring(0, 2)}/${hex.substring(2, 4)}/${hex.substring(4)}"
+    }
+
     private fun snapshots(key: LockSigner.KeyProvider = LockSigner.KeyProvider { "test-app-key-32bytes-aaaaaaaaaaaa".toByteArray() }) =
         NpmSnapshot(layout, dir.resolve(".autojs"), key)
 
@@ -82,6 +109,7 @@ class InstallCoordinatorTest {
         history: InstallHistory? = newHistory(),
         lockSigner: LockSigner? = null,
         snapshots: NpmSnapshot? = null,
+        bundleImporter: NpmOfflineBundleImporter? = null,
     ) = InstallCoordinator(
         layout = layout,
         journal = journal,
@@ -93,6 +121,7 @@ class InstallCoordinatorTest {
         history = history,
         lockSigner = lockSigner,
         snapshots = snapshots,
+        bundleImporter = bundleImporter,
     )
 
     // ═══ 门禁 ═══
@@ -266,6 +295,61 @@ class InstallCoordinatorTest {
         val e = h.all().single()
         assertEquals(InstallHistory.Op.IMPORT, e.op, "导入统一归 import（用户路径不是 op 名）")
         assertTrue(e.success)
+    }
+
+    @Test
+    fun `bundle 导入：未注入导入件如实失败（不拼 npm 不认识的旗标）`() = runBlocking {
+        val c = coordinator()   // bundleImporter 缺省 null
+        val e = assertThrows(AutojsException::class.java) { runBlocking { c.importOfflineBundle("p1", "/sdcard/x.zip") } }
+        assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED, e.error)
+    }
+
+    @Test
+    fun `bundle 导入：合入缓存后按 lock 离线重建（导入 != 安装）`() = runBlocking {
+        val payload = "bundle-tarball".toByteArray()
+        val zip = bundleZip("_cacache/content-v2/sha512/" + segments(payload) to payload)
+        val h = newHistory()
+        val exec = FakeExecutor { }
+        val c = coordinator(
+            executor = exec,
+            history = h,
+            bundleImporter = NpmOfflineBundleImporter,
+        )
+        c.importOfflineBundle("p1", zip.toString())
+
+        // 1) bundle 内容进了缓存（导入侧真做事，不是把 uri 抛给 npm）
+        val cacheDir = cacheDir()
+        assertTrue(Files.isRegularFile(cacheDir.resolve("_cacache/content-v2/sha512/" + segments(payload))))
+        // 2) 随后走正规事务链：ci --offline（不是「解压即算装上」）
+        assertEquals(listOf("ci", "--offline"), exec.calls.single().args)
+        // 3) 成败都入史：合入与重建各一条 import/ci
+        assertEquals(
+            listOf(InstallHistory.Op.IMPORT, "ci"),
+            h.all().map { it.op },
+        )
+        assertTrue(h.all().all { it.success })
+    }
+
+    @Test
+    fun `bundle 导入：有条目被拒则如实入史（不静默整包导入）`() = runBlocking {
+        val honest = "honest".toByteArray()
+        val zip = bundleZip(
+            ("_cacache/content-v2/sha512/" + segments(honest)) to honest,
+            "../escape.bin" to "pwned".toByteArray(),
+        )
+        val h = newHistory()
+        val c = coordinator(executor = FakeExecutor { }, history = h, bundleImporter = NpmOfflineBundleImporter)
+        c.importOfflineBundle("p1", zip.toString())
+        val failed = h.all().first { !it.success }
+        assertEquals(InstallHistory.Op.IMPORT, failed.op)
+        assertTrue(failed.detail!!.contains("被拒"), "拒收必须点名：${failed.detail}")
+    }
+
+    @Test
+    fun `bundle 导入：文件不存在 → ERR_FILE_NOT_FOUND（SAF 副本未着陆）`() = runBlocking {
+        val c = coordinator(bundleImporter = NpmOfflineBundleImporter)
+        val e = assertThrows(AutojsException::class.java) { runBlocking { c.importOfflineBundle("p1", "/sdcard/nope.zip") } }
+        assertEquals(ErrorCode.ERR_FILE_NOT_FOUND, e.error)
     }
 
     @Test
