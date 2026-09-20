@@ -73,11 +73,18 @@ class InstallCoordinator(
      */
     private val registryVerifier: RegistryVerifier? = null,
     /**
-     * 本次的首选注册表（读项目/全局 `.npmrc` 的 `registry=`，§10.2；null = 交给校验器
-     * 用自己的默认）。只在 [registryVerifier] 已注入时求值——没接线就不为一次不发生的
-     * 校验付读盘代价。
+     * 本次的首选注册表（读项目 `.npmrc` 的 `registry=`，§10.2；null = 交给校验器用自己
+     * 的默认值）。只在 [registryVerifier] 已注入时求值——没接线就不为一次不发生的校验
+     * 付读盘代价。
      */
-    private val registryOf: (String) -> String? = { null },
+    private val registryOf: (String) -> String? = { projectId ->
+        val rc = layout.npmrc(projectId)   // projectId 合法性由 NpmProjectLayout 把着
+        if (!Files.isRegularFile(rc)) null else
+            Files.readAllLines(rc).asReversed()
+                .firstOrNull { it.startsWith("registry=") }
+                ?.substringAfter("registry=")
+                ?.trim()?.takeIf { it.isNotEmpty() }
+    },
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
     private val freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
         Files.getFileStore(it).usableSpace

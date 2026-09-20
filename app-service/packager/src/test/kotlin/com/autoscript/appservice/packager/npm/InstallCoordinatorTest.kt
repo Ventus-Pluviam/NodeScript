@@ -114,7 +114,11 @@ class InstallCoordinatorTest {
         snapshots: NpmSnapshot? = null,
         bundleImporter: NpmOfflineBundleImporter? = null,
         registryVerifier: RegistryVerifier? = null,
-        registryOf: (String) -> String? = { null },
+        /**
+         * 真校验器接上装路径（`:app-service:packager`）：两镜像声明比对 → 三分裁决 → 处置。
+         * null = 走 InstallCoordinator 自己的缺省（读项目 npmrc 的 registry=）。
+         */
+        registryOf: ((String) -> String?)? = null,
     ) = InstallCoordinator(
         layout = layout,
         journal = journal,
@@ -128,7 +132,15 @@ class InstallCoordinatorTest {
         snapshots = snapshots,
         bundleImporter = bundleImporter,
         registryVerifier = registryVerifier,
-        registryOf = registryOf,
+        // null 不能直接传给构造默认值：那会写成「永远不知道注册表」。这里区分
+        // 「调用方显式要求不读配置」与「调用方没意见」——后者交给缺省实现。
+        registryOf = registryOf ?: { projectId ->
+            val rc = layout.npmrc(projectId)
+            if (!Files.isRegularFile(rc)) null else
+                Files.readAllLines(rc).asReversed()
+                    .firstOrNull { it.startsWith("registry=") }
+                    ?.substringAfter("registry=")?.trim()?.takeIf { it.isNotEmpty() }
+        },
     )
 
     /**
@@ -758,6 +770,36 @@ class InstallCoordinatorTest {
         }
         assertEquals(ErrorCode.ERR_REGISTRY_UNAVAILABLE, ex.error)
         assertTrue(exec.calls.isEmpty(), "真校验器判不一致也不许进会话")
+    }
+
+    @Test
+    fun `首选注册表缺省读项目 npmrc（registry= 最后一行生效，与 npm 口径一致）`() = runBlocking {
+        val v = FakeVerifier(
+            mapOf("axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", false)),
+        )
+        val rc = layout.npmrc("p1")
+        Files.createDirectories(rc.parent)
+        // 两行 registry：config() 的写入语义是「先删后加」，故后者应覆盖前者
+        Files.write(rc, listOf("registry=https://registry.npmjs.org", "registry=https://harbor.example.com/registry/"))
+        val c = coordinator(executor = FakeExecutor(), registryVerifier = v)   // registryOf 走缺省实现
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        assertEquals(
+            "https://harbor.example.com/registry/", v.asked.single().third,
+            "没显式喂注册表时，须读项目 .npmrc 的 registry=（后者覆盖前者）",
+        )
+    }
+
+    @Test
+    fun `无项目 npmrc 或无 registry 行 → 传给 null（校验器用自己的默认）`() = runBlocking {
+        val v = FakeVerifier(
+            mapOf("axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", false)),
+        )
+        val rc = layout.npmrc("p1")
+        Files.createDirectories(rc.parent)
+        Files.write(rc, listOf("https-proxy=http://127.0.0.1:7890"))   // 有 npmrc 但没有 registry 行
+        val c = coordinator(executor = FakeExecutor(), registryVerifier = v)
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        assertEquals(null, v.asked.single().third, "读不到就别猜：交给校验器的默认，而不是硬套 npmmirror")
     }
 
     @Test
