@@ -16,10 +16,13 @@ android {
         unitTests {
             all {
                 it.useJUnitPlatform()
-                // 真实 npm e2e（HostNodeNpmE2ETest）默认跳过：CI 走 -PskipNpmE2E，
+                // 真实 npm e2e 默认跳过：CI 走 -PskipNpmE2E，
                 // 本机闭环由 tools/jvm-test.sh 直跑（宿主机 node+npm 存在才启用）。
+                // 清单：HostNodeNpmE2ETest（install/ci 真跑）+ NpmCacheSeedDeployerTest
+                // 的金标准（仅凭种子 npm ci --offline）——两者都要拉真 npm 进程。
                 if (project.hasProperty("skipNpmE2E")) {
                     it.exclude("**/HostNodeNpmE2ETest*")
+                    it.exclude("**/NpmCacheSeedDeployerTest*")
                 }
             }
         }
