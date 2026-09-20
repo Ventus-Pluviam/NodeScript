@@ -65,7 +65,7 @@ class NpmRegistryVerifierTest {
     @Test
     fun `一致 → Agreed（版本、摘要、tarball 都要，并如实标记以 latest 复核）`() {
         val r = verifier(packument("1.11.23", listOf("1.11.23" to I1)), packument("1.11.23", listOf("1.11.23" to I1)))
-            .verify("dayjs", null) as NpmRegistryVerifier.Verdict.Agreed
+            .verify("dayjs", null, null) as NpmRegistryVerifier.Verdict.Agreed
         assertEquals("1.11.23", r.version)
         assertEquals(I1, r.integrity)
         assertEquals("https://registry.example/dayjs/-/dayjs-1.11.23.tgz", r.tarball)
@@ -75,7 +75,7 @@ class NpmRegistryVerifierTest {
     @Test
     fun `精确版本命中时 viaLatestTag 为 false`() {
         val p = packument("9.9.9", listOf("1.11.23" to I1))
-        val r = verifier(p, p).verify("dayjs", "1.11.23") as NpmRegistryVerifier.Verdict.Agreed
+        val r = verifier(p, p).verify("dayjs", "1.11.23", null) as NpmRegistryVerifier.Verdict.Agreed
         assertEquals("1.11.23", r.version)
         assertTrue(!r.viaLatestTag, "精确复核不背漂移标记")
     }
@@ -84,7 +84,7 @@ class NpmRegistryVerifierTest {
     fun `同一版本 integrity 不一致 → Disagreed（绝不折成通过）`() {
         val p = packument("1.11.23", listOf("1.11.23" to I1))
         val s = packument("1.11.23", listOf("1.11.23" to I2))
-        val r = verifier(p, s).verify("dayjs", "1.11.23")
+        val r = verifier(p, s).verify("dayjs", "1.11.23", null)
         assertTrue(r is NpmRegistryVerifier.Verdict.Disagreed, "声明不一致必须拒：$r")
         assertTrue((r as NpmRegistryVerifier.Verdict.Disagreed).reason.contains("integrity"))
     }
@@ -93,20 +93,20 @@ class NpmRegistryVerifierTest {
     fun `latest 版本漂移 → Disagreed（两个最新不是同一个就不算数）`() {
         val p = packument("1.11.23", listOf("1.11.23" to I1))
         val s = packument("1.12.0", listOf("1.12.0" to I2))
-        val r = verifier(p, s).verify("dayjs", null)
+        val r = verifier(p, s).verify("dayjs", null, null)
         assertTrue(r is NpmRegistryVerifier.Verdict.Disagreed, "漂移即分歧：$r")
         assertTrue((r as NpmRegistryVerifier.Verdict.Disagreed).reason.contains("漂移"))
     }
 
     @Test
     fun `副镜像不可达 → Unverifiable（不静默通过）`() {
-        val r = verifier(packument("1.11.23", listOf("1.11.23" to I1)), null).verify("dayjs", null)
+        val r = verifier(packument("1.11.23", listOf("1.11.23" to I1)), null).verify("dayjs", null, null)
         assertTrue(r is NpmRegistryVerifier.Verdict.Unverifiable, "第二意见不在场不能算一致：$r")
     }
 
     @Test
     fun `主镜像不可达 → Unverifiable`() {
-        val r = verifier(null, packument("1.11.23", listOf("1.11.23" to I1))).verify("dayjs", null)
+        val r = verifier(null, packument("1.11.23", listOf("1.11.23" to I1))).verify("dayjs", null, null)
         assertTrue(r is NpmRegistryVerifier.Verdict.Unverifiable, "$r")
     }
 
@@ -114,14 +114,14 @@ class NpmRegistryVerifierTest {
     fun `副镜像缺该版本 → Unverifiable（同步窗口期不当分歧也不放行）`() {
         val p = packument("1.11.23", listOf("1.11.23" to I1))
         val s = packument("1.11.22", listOf("1.11.22" to I2))
-        val r = verifier(p, s).verify("dayjs", "1.11.23")
+        val r = verifier(p, s).verify("dayjs", "1.11.23", null)
         assertTrue(r is NpmRegistryVerifier.Verdict.Unverifiable, "只在一侧有的版本：$r")
     }
 
     @Test
     fun `缺 dist-integrity → Unverifiable（无交叉校验锚点）`() {
         val noIntegrity = """{"dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{"version":"1.0.0","dist":{"tarball":"https://x/y.tgz"}}}}"""
-        val r = verifier(noIntegrity, noIntegrity).verify("dayjs", "1.0.0")
+        val r = verifier(noIntegrity, noIntegrity).verify("dayjs", "1.0.0", null)
         assertTrue(r is NpmRegistryVerifier.Verdict.Unverifiable, "无锚点不得算通过：$r")
         // 解析层能给出版本/URL（它确实在 packument 里），锚点缺失由 verify 折叠——故
         // parsePackument 此时是「解析成功、integrity=null」，不是解析失败。
@@ -142,7 +142,7 @@ class NpmRegistryVerifierTest {
     @Test
     fun `作用域包名走百分号转义（与 npm npa escapedName 同形）`() {
         val v = verifier(packument("1.0.0", listOf("1.0.0" to I1)), packument("1.0.0", listOf("1.0.0" to I1)))
-        v.verify("@types/node", "1.0.0")
+        v.verify("@types/node", "1.0.0", null)
         assertTrue(sourceOf(v).requested.contains("https://registry.npmjs.org/@types%2fnode"))
     }
 
@@ -150,7 +150,7 @@ class NpmRegistryVerifierTest {
     fun `非法包名（路径与查询注入）一律拒，请求一个都不发`() {
         val v = verifier(packument("1.0.0", listOf("1.0.0" to I1)), packument("1.0.0", listOf("1.0.0" to I1)))
         for (bad in listOf("../etc/passwd", "a/../../b", "https://evil.example/x", "pkg?x=1", "", "   ", "pkg/name/extra")) {
-            assertThrows(IllegalArgumentException::class.java) { v.verify(bad, "1.0.0") }
+            assertThrows(IllegalArgumentException::class.java) { v.verify(bad, "1.0.0", null) }
         }
         assertTrue(sourceOf(v).requested.isEmpty(), "非法输入连请求都不该发出：${sourceOf(v).requested}")
     }
@@ -197,7 +197,7 @@ class NpmRegistryVerifierTest {
     @Test
     fun `范围请求按 latest 且标记 viaLatestTag`() {
         val p = packument("1.11.23", listOf("1.11.23" to I1))
-        val r = verifier(p, p).verify("dayjs", "^1.0.0") as NpmRegistryVerifier.Verdict.Agreed
+        val r = verifier(p, p).verify("dayjs", "^1.0.0", null) as NpmRegistryVerifier.Verdict.Agreed
         assertTrue(r.viaLatestTag)
         assertEquals("1.11.23", r.version)
     }

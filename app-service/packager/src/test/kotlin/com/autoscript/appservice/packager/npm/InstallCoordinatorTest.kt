@@ -26,6 +26,9 @@ class InstallCoordinatorTest {
     @TempDir
     lateinit var dir: Path
 
+    /** 交叉校验断言里用的占位 integrity（真形状由 NpmRegistryVerifierTest 管）。 */
+    private val I = "sha512-" + "a".repeat(24)
+
     private val layout get() = NpmProjectLayout(dir.resolve("scripts"))
     private val journal get() = InstallJournal(dir.resolve(".autojs"))
     private val staging get() = InstallStaging(layout)
@@ -110,6 +113,8 @@ class InstallCoordinatorTest {
         lockSigner: LockSigner? = null,
         snapshots: NpmSnapshot? = null,
         bundleImporter: NpmOfflineBundleImporter? = null,
+        registryVerifier: RegistryVerifier? = null,
+        registryOf: (String) -> String? = { null },
     ) = InstallCoordinator(
         layout = layout,
         journal = journal,
@@ -122,7 +127,40 @@ class InstallCoordinatorTest {
         lockSigner = lockSigner,
         snapshots = snapshots,
         bundleImporter = bundleImporter,
+        registryVerifier = registryVerifier,
+        registryOf = registryOf,
     )
+
+    /**
+     * 裁决假源：按包名查表，并把「被问过什么、首选注册表给了什么」记下来。
+     *
+     * 记 [asked] 是这条链路的双断言点：一是别把版本猜成 latest 才去问（要原样问），
+     * 二是首选注册表必须由调用方喂（不许校验器拿自己的默认去比，§10.5-1）。
+     */
+    private class FakeVerifier(private val verdicts: Map<String, NpmRegistryVerifier.Verdict>) : RegistryVerifier {
+        val asked = mutableListOf<Triple<String, String?, String?>>()
+        override fun verify(name: String, version: String?, primary: String?): NpmRegistryVerifier.Verdict {
+            asked += Triple(name, version, primary)
+            return verdicts[name] ?: error("未预期的校验请求：$name@$version")
+        }
+    }
+
+    /** 一份合法极简 packument（只有一个版本，dist.integrity 由参数定）。 */
+    private fun packumentJson(version: String, integrity: String): String =
+        """{"dist-tags":{"latest":"$version"},"versions":{"$version":{"version":"$version","dist":{"tarball":"https://registry.example/axios/-/axios-$version.tgz","integrity":"$integrity"}}}}"""
+
+    /** 两镜像给同一份声明的假源（真 verifier 的 RegistrySource 缝，零网络）。 */
+    private fun agreeingSource(integrity: String, version: String = "1.7.0") =
+        NpmRegistryVerifier(source = object : NpmRegistryVerifier.RegistrySource {
+            override fun packument(registryBase: String, escapedName: String): String = packumentJson(version, integrity)
+        })
+
+    /** 两镜像各说各话的假源（按 host 分两份声明）。 */
+    private fun disagreeingSource(mirrorIntegrity: String, officialIntegrity: String, version: String = "1.7.0") =
+        NpmRegistryVerifier(source = object : NpmRegistryVerifier.RegistrySource {
+            override fun packument(registryBase: String, escapedName: String): String =
+                packumentJson(version, if (registryBase.contains("npmjs.org")) officialIntegrity else mirrorIntegrity)
+        })
 
     // ═══ 门禁 ═══
 
@@ -555,6 +593,190 @@ class InstallCoordinatorTest {
         c1.cancel(); c2.cancel()
         assertTrue(p1Events.isNotEmpty())
         assertTrue(p2Events.isEmpty(), "事件不得跨项目串流")
+    }
+
+    // ═══ 多镜像交叉校验接进 install 路径（§10.5-1 三分裁决的处置） ═══
+
+    @Test
+    fun `交叉校验一致 → 放行（不广播成功，成功不是事件）`() = runBlocking {
+        val v = FakeVerifier(
+            mapOf("axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", false)),
+        )
+        val c = coordinator(executor = FakeExecutor(), registryVerifier = v)
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        // 版本要原样问过去（不许把范围猜成 latest 再问，那会漂移面）
+        assertEquals(listOf(Triple("axios", "1.7.0", null)), v.asked)
+        assertTrue(
+            journal.all().map { it.state } == listOf(InstallJournal.State.BEGIN, InstallJournal.State.COMMIT),
+            "一致即照常进事务",
+        )
+    }
+
+    @Test
+    fun `两镜像声明不一致 → ERR_REGISTRY_UNAVAILABLE，安装会话压根不起`() = runBlocking {
+        val v = FakeVerifier(
+            mapOf(
+                "evil" to NpmRegistryVerifier.Verdict.Disagreed(
+                    "evil", "1.0.0",
+                    NpmRegistryVerifier.Resolved("1.0.0", "sha512-" + "a".repeat(16), "https://m/x.tgz"),
+                    NpmRegistryVerifier.Resolved("1.0.0", "sha512-" + "b".repeat(16), "https://n/x.tgz"),
+                    "同一版本 evil@1.0.0 的 dist.integrity 不一致：首选=sha512-aaaaaaaaaaaaaaaa vs 第二=sha512-bbbbbbbbbbbbbbbb",
+                ),
+            ),
+        )
+        val exec = FakeExecutor()
+        val h = newHistory()
+        val c = coordinator(executor = exec, history = h, registryVerifier = v)
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.install("p1", listOf(PackageSpec("evil", "1.0.0"))) }
+        }
+        assertEquals(ErrorCode.ERR_REGISTRY_UNAVAILABLE, ex.error, "不一致即拒：错误码要可诊断")
+        assertTrue(ex.message!!.contains("sha512-" + "a".repeat(16)), "报错必须带得上两家的摘要（否则无从判断）：${ex.message}")
+        assertTrue(ex.message!!.contains("sha512-" + "b".repeat(16)), "两侧都要给，不能只给一边：${ex.message}")
+        assertTrue(exec.calls.isEmpty(), "被拒的安装不进会话（否则 journal 会像成功一样推进）")
+        assertTrue(journal.all().isEmpty(), "未进会话即无事务，也谈不上残骸")
+        val e = h.all().single()
+        assertTrue(!e.success, "拒也要入史——审计要能回答「用户看到成功了吗」")
+        assertTrue(e.detail!!.contains("交叉校验不一致"))
+    }
+
+    @Test
+    fun `逐个 spec 裁：不一致即点名拒，后面的包不再问`() = runBlocking {
+        val v = FakeVerifier(
+            mapOf(
+                "evil" to NpmRegistryVerifier.Verdict.Disagreed(
+                    "evil", null, null, null, "evil 两注册表 latest 版本漂移",
+                ),
+                "axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", true),
+            ),
+        )
+        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.install("p1", listOf(PackageSpec("evil"), PackageSpec("axios"))) }
+        }
+        assertTrue(ex.message!!.contains("evil"), "拒必须点名是哪个包：${ex.message}")
+        assertEquals(listOf("evil"), v.asked.map { it.first }, "已明确拒了就停机，别把剩下的包装上")
+    }
+
+    @Test
+    fun `没验成 → TRUST_DOWNGRADED 告警且入史，但不拦安装（禁止静默）`() = runBlocking {
+        val v = FakeVerifier(mapOf("axios" to NpmRegistryVerifier.Verdict.Unverifiable("axios", "第二意见未返回该版本（不可达或尚未同步），无法交叉校验")))
+        val h = newHistory()
+        val c = coordinator(executor = FakeExecutor(), history = h, registryVerifier = v)
+        val events = mutableListOf<InstallEvent>()
+        val collect = launch { c.progress("p1").collect { events += it } }
+        kotlinx.coroutines.delay(50)
+        c.install("p1", listOf(PackageSpec("axios")))
+        kotlinx.coroutines.delay(50)
+        collect.cancel()
+
+        val w = events.filterIsInstance<InstallEvent.Warning>().filter { it.kind == InstallEvent.Kind.TRUST_DOWNGRADED }
+        assertEquals(1, w.size, "降信任必须显式告知：$w")
+        assertEquals(listOf("axios"), w.single().pkgs, "要点名（UI 才能显示哪些降级）")
+        assertTrue(w.single().message.contains("来源未校验"), "说清降的是什么级")
+        assertTrue(events.any { it is InstallEvent.Finished && it.success }, "没验成不拦：装仍完成")
+        val marked = h.all().first { it.detail?.contains("来源未校验") == true }
+        assertEquals(InstallHistory.Op.INSTALL, marked.op)
+        assertTrue(marked.success, "「来源未校验」与「安装成功」是两件事，都要如实记")
+    }
+
+    @Test
+    fun `一批里混着降信任：告警一次点齐所有未校验包（不逐包刷屏）`() = runBlocking {
+        val v = FakeVerifier(
+            mapOf(
+                "a" to NpmRegistryVerifier.Verdict.Unverifiable("a", "副镜像不可达"),
+                "b" to NpmRegistryVerifier.Verdict.Unverifiable("b", "无 integrity 锚点"),
+            ),
+        )
+        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val events = mutableListOf<InstallEvent>()
+        val collect = launch { c.progress("p1").collect { events += it } }
+        kotlinx.coroutines.delay(50)
+        c.install("p1", listOf(PackageSpec("a"), PackageSpec("b")))
+        kotlinx.coroutines.delay(50)
+        collect.cancel()
+        val w = events.filterIsInstance<InstallEvent.Warning>().filter { it.kind == InstallEvent.Kind.TRUST_DOWNGRADED }
+        assertEquals(1, w.size, "一次安装一条降信任告警，包清单里列全：$w")
+        assertEquals(listOf("a", "b"), w.single().pkgs)
+    }
+
+    @Test
+    fun `首选注册表取自项目配置，并原样透传给校验器`() = runBlocking {
+        val v = FakeVerifier(
+            mapOf("axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", false)),
+        )
+        var askedProject: String? = null
+        val c = coordinator(
+            executor = FakeExecutor(),
+            registryVerifier = v,
+            registryOf = { p -> askedProject = p; "https://harbor.example.com/registry/" },
+        )
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        assertEquals("p1", askedProject, "按项目查注册表（项目 .npmrc 可覆盖全局，§10.2）")
+        assertEquals("https://harbor.example.com/registry/", v.asked.single().third, "调用方配的首选必须喂给校验器")
+    }
+
+    @Test
+    fun `未注入校验缝 → install 不校验、也不假装置验过`() = runBlocking {
+        var registryAsked = false
+        val c = coordinator(
+            executor = FakeExecutor(),
+            registryOf = { registryAsked = true; "https://x.example" },   // 缝在，校验件不在
+        )
+        val events = mutableListOf<InstallEvent>()
+        val collect = launch { c.progress("p1").collect { events += it } }
+        kotlinx.coroutines.delay(50)
+        c.install("p1", listOf(PackageSpec("axios")))
+        kotlinx.coroutines.delay(50)
+        collect.cancel()
+        assertTrue(!registryAsked, "没有校验器就不该为一次不发生的校验读配置")
+        assertTrue(events.none { it is InstallEvent.Warning }, "缺口不是降级：不许发一条假的 TRUST_DOWNGRADED")
+        assertTrue(events.any { it is InstallEvent.Finished && it.success })
+    }
+
+    @Test
+    fun `真校验器接上装路径：两镜像一致即放行（端到端零网络）`() = runBlocking {
+        val v = agreeingSource("sha512-" + "a".repeat(24))
+        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val events = mutableListOf<InstallEvent>()
+        val collect = launch { c.progress("p1").collect { events += it } }
+        kotlinx.coroutines.delay(50)
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        kotlinx.coroutines.delay(50)
+        collect.cancel()
+        assertTrue(events.any { it is InstallEvent.Finished && it.success })
+        assertTrue(events.none { it is InstallEvent.Warning })
+    }
+
+    @Test
+    fun `真校验器接上装路径：两镜像不一致即拒`() = runBlocking {
+        val v = disagreeingSource("sha512-" + "a".repeat(24), "sha512-" + "b".repeat(24))
+        val exec = FakeExecutor()
+        val c = coordinator(executor = exec, registryVerifier = v)
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.install("p1", listOf(PackageSpec("axios", "1.7.0"))) }
+        }
+        assertEquals(ErrorCode.ERR_REGISTRY_UNAVAILABLE, ex.error)
+        assertTrue(exec.calls.isEmpty(), "真校验器判不一致也不许进会话")
+    }
+
+    @Test
+    fun `真校验器接上装路径：非法包名原样抛 IAE（不折成「没验成」）`() = runBlocking {
+        // 攻击面：把包名写成路径/URL。若在这一步被折叠成 Unverifiable，调用方会当成
+        // 「没验成」继续装——注入尝试就静默溜过 install 路径了。必须响亮失败。
+        val asked = mutableListOf<String>()
+        val v = NpmRegistryVerifier(source = object : NpmRegistryVerifier.RegistrySource {
+            override fun packument(registryBase: String, escapedName: String): String? {
+                asked += "$registryBase/$escapedName"; return null
+            }
+        })
+        val c = coordinator(executor = FakeExecutor(), registryVerifier = v)
+        for (bad in listOf("../etc/passwd", "https://evil.example/x", "pkg?x=1")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { c.install("p1", listOf(PackageSpec(bad, "1.0.0"))) }
+            }
+        }
+        assertTrue(asked.isEmpty(), "非法输入连请求都不该发出：$asked")
     }
 
     // —— helpers ——

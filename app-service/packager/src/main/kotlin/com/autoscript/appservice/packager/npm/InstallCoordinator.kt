@@ -56,6 +56,28 @@ class InstallCoordinator(
      * 与 snapshots/lockSigner 同为「真值在 Android 侧」的装配缝，纯 JVM 可测。
      */
     private val bundleImporter: NpmOfflineBundleImporter? = null,
+    /**
+     * 多镜像交叉校验缝（§10.5-1）：install 前对每个 spec 取两镜像声明核对。
+     *
+     * 三分裁决的处置是**这一步的全部意义**，写死在这里以免各调用点各自打折：
+     * - Agreed：放行（校验通过不额外发事件，否则每个包一条噪音警告，真警告就被埋了）；
+     * - Disagreed：**抛** `ERR_REGISTRY_UNAVAILABLE`（附两家的版本/摘要）——两个运营独立的
+     *   镜像对同一版本给出不同 integrity，只有投毒或镜像被改能解释，继续装等于把已经
+     *   发现的结论当没发生（§10.5-1「不一致即拒」）；
+     * - Unverifiable：**不拦**（副镜像不可达/版本只在一侧/无 integrity 锚点都是「没验成」
+     *   而非「验出问题」），但必须显式告知：TRUST_DOWNGRADED 告警 + 入史，即
+     *   §10.5-1「设备端首生锁标记『来源未校验』降信任级 + UI 明示」。
+     *
+     * null = 未接线（装配缺口，不等于「不需要校验」）：此时 install 静默跳过本步，
+     * 与 [lockSigner]/[snapshots] 同一约定——何时补齐由装配层定，这里不假装验过。
+     */
+    private val registryVerifier: RegistryVerifier? = null,
+    /**
+     * 本次的首选注册表（读项目/全局 `.npmrc` 的 `registry=`，§10.2；null = 交给校验器
+     * 用自己的默认）。只在 [registryVerifier] 已注入时求值——没接线就不为一次不发生的
+     * 校验付读盘代价。
+     */
+    private val registryOf: (String) -> String? = { null },
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
     private val freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
         Files.getFileStore(it).usableSpace
@@ -151,7 +173,67 @@ class InstallCoordinator(
             if (!flags.save) add("--no-save")
             if (flags.offline) add("--prefer-offline")
         }
+        crossCheckRegistry(projectId, specs, args)
         return enqueueHeavy(projectId, args, flags.timeoutMillis)
+    }
+
+    /**
+     * §10.5-1 多镜像 integrity 交叉校验（install 前预检，不挡住后面的门禁）。
+     *
+     * 摆在 [enqueueHeavy] **之前**是刻意的：交叉校验要联网取两份 packument，是最慢的一步，
+     * 若放在门禁之后，磁盘不够也会先付这次的网络代价；而「先校验再排队」让用户在等锁时
+     * 拿到的就是最终结论，不会出现「排到队了才被告知镜像声明不一致」。
+     *
+     * 逐 spec 而非整批：一批里某个包被投毒不该连带另外几个清白的包也说不了话——
+     * 单个包要么明确拒、要么明确降信任，报错要点名（[NpmRegistryVerifier.Verdict.Disagreed.name]）。
+     *
+     * [IllegalArgumentException]（包名形态非法）不在这层兜：调用方拿它当 ERR_INVALID_PARAM
+     * （§7），与 git: 依赖的入口即拒同一路径。
+     */
+    private suspend fun crossCheckRegistry(projectId: String, specs: List<PackageSpec>, args: List<String>) {
+        val verifier = registryVerifier ?: return
+        val primary = registryOf(projectId)
+        val downgraded = ArrayList<String>()
+        for (spec in specs) {
+            val verdict = verifier.verify(spec.name, spec.version, primary)
+            when (verdict) {
+                is NpmRegistryVerifier.Verdict.Agreed -> Unit   // 一致即放行（不广播成功）
+                is NpmRegistryVerifier.Verdict.Disagreed -> {
+                    // 「不一致即拒」：消息带两家的版本与摘要，否则用户/日志无从判断是谁的问题。
+                    // reason 已点名包名（verifier 侧保证），这里补上两边的具体值。
+                    val p = verdict.primary
+                    val s = verdict.secondary
+                    val detail = buildString {
+                        append(verdict.reason)
+                        if (p != null) append("；首选 ${p.version} ${p.integrity}")
+                        if (s != null) append("；第二 ${s.version} ${s.integrity}")
+                    }
+                    history?.record(opName(args), projectId, false, "交叉校验不一致: $detail")
+                    throw AutojsException(ErrorCode.ERR_REGISTRY_UNAVAILABLE, detail)
+                }
+                is NpmRegistryVerifier.Verdict.Unverifiable -> {
+                    // 没验成 ≠ 有问题，但必须显式：降信任 + UI 明示，禁止静默按「通过」处理。
+                    // pkgs 只放包名（与 SCRIPTS_SKIPPED 同口径：UI 拿这些名字去渲染列表），
+                    // 「到底想问的是 latest 还是范围」写进 message，不塞进 pkgs。
+                    downgraded += spec.name
+                    val asked = "${spec.name}@${spec.version ?: "latest"}"
+                    history?.record(opName(args), projectId, true, "来源未校验: $asked —— ${verdict.reason}")
+                }
+            }
+        }
+        if (downgraded.isEmpty()) return
+        emit(
+            InstallEvent.Warning(
+                projectId = projectId,
+                // 尚无 InstallHandle（还没过门禁）→ handleId 空串。为空是刻意的：拿一个
+                // 还没分配的 id 去填，会让 cancel()/handles 账与事件流对不上
+                handleId = "",
+                kind = InstallEvent.Kind.TRUST_DOWNGRADED,
+                pkgs = downgraded,
+                message = "以下包的来源未能多镜像交叉校验，已标记『来源未校验』并降信任级（§10.5-1）：" +
+                    "${downgraded.joinToString(", ")}。安装仍可继续，但这与『两镜像声明一致』不是同一级保证。",
+            ),
+        )
     }
 
     override suspend fun ci(projectId: String, offline: Boolean): InstallHandle {

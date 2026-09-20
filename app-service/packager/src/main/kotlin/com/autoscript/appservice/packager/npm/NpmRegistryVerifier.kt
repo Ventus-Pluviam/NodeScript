@@ -29,7 +29,7 @@ class NpmRegistryVerifier(
     /** 第二意见（npm 官方；与首选镜像运营主体独立，这是交叉校验成立的前提）。 */
     private val secondary: String = OFFICIAL,
     private val source: RegistrySource = HttpRegistrySource(),
-) {
+) : RegistryVerifier {
 
     /**
      * packument 获取缝：生产走 [HttpRegistrySource]，测试注入假源（零网络、可造分歧）。
@@ -77,26 +77,27 @@ class NpmRegistryVerifier(
      * 校验 `name@version`（[version] null = latest；非精确范围按 `dist-tags.latest`，见
      * [Verdict.Agreed.viaLatestTag]）。
      *
-     * @param primary 本次的首选注册表（调用方传自己的当前配置；缺省用构造时的）。
+     * @param primary 本次的首选注册表（调用方传自己的当前配置；null = 用构造时的）。
      *   跨校验的另一半恒为 [secondary]，不随首选变——否则用户把首选也改成 npmjs
      *   就变成自己跟自己比。
      * @throws IllegalArgumentException 包名形态非法（含路径/URL 注入企图；调用方按
      *   ERR_INVALID_PARAM 折叠，§7 诚实上报）
      */
-    fun verify(name: String, version: String?, primary: String = this.primary): Verdict {
+    override fun verify(name: String, version: String?, primary: String?): Verdict {
         requireName(name)
+        val main = primary ?: this.primary   // null = 用构造时的首选（调用方「不知道用哪个」的诚实表达）
         val escaped = escapeName(name)
-        val pBase = canonicalRegistry(primary)
-            ?: return Verdict.Unverifiable(name, "首选注册表不是 https 来源：$primary（交叉校验不做明文来源）")
+        val pBase = canonicalRegistry(main)
+            ?: return Verdict.Unverifiable(name, "首选注册表不是 https 来源：$main（交叉校验不做明文来源）")
         val sBase = canonicalRegistry(secondary)
             ?: return Verdict.Unverifiable(name, "第二意见注册表不是 https 来源：$secondary")
         val p = resolve(pBase, escaped, name, version)
         val s = resolve(sBase, escaped, name, version)
         if (p == null && s == null) {
-            return Verdict.Unverifiable(name, "两个注册表都取不到 $name 的 packument（主：$primary 副：$secondary）")
+            return Verdict.Unverifiable(name, "两个注册表都取不到 $name 的 packument（主：$main 副：$secondary）")
         }
         if (p == null) {
-            return Verdict.Unverifiable(name, "首选注册表 $primary 未返回 $name@${version ?: "latest"} 的 packument")
+            return Verdict.Unverifiable(name, "首选注册表 $main 未返回 $name@${version ?: "latest"} 的 packument")
         }
         if (s == null) {
             // 镜像同步有窗口期：副镜像暂无此版本 ≠ 投毒。如实说「没验成」，不报警也不放行。
@@ -106,10 +107,16 @@ class NpmRegistryVerifier(
             return Verdict.Unverifiable(name, "该版本未提供 dist.integrity（npmmirror=${p.integrity != null} npmjs=${s.integrity != null}），无交叉校验锚点")
         }
         if (p.version != s.version) {
-            return Verdict.Disagreed(name, version, p, s, "两注册表 latest 版本漂移：${primary}=${p.version} vs ${secondary}=${s.version}")
+            return Verdict.Disagreed(
+                name, version, p, s,
+                "$name 两注册表 latest 版本漂移：$main=${p.version} vs $secondary=${s.version}",
+            )
         }
         if (p.integrity != s.integrity) {
-            return Verdict.Disagreed(name, version, p, s, "同一版本 $name@${p.version} 的 dist.integrity 不一致：$primary=$p.integrity vs $secondary=$s.integrity")
+            return Verdict.Disagreed(
+                name, version, p, s,
+                "同一版本 $name@${p.version} 的 dist.integrity 不一致：$main=$p.integrity vs $secondary=$s.integrity",
+            )
         }
         return Verdict.Agreed(
             name = name,
@@ -428,4 +435,23 @@ class HttpRegistrySource(
         }
         return out.toByteArray()
     }
+}
+
+/**
+ * 交叉校验裁决接缝（§10.5-1 把「一致/不一致/没验成」交给调用方处置时的最小面）。
+ *
+ * 为什么单独开一个接缝、不让 [InstallCoordinator] 直接依赖 [NpmRegistryVerifier] 类：
+ * install 路径需要的是「裁决」这个词本身，不是 HTTP 源/超时/packument 解析那一整套。
+ * 收成接缝后，协调器在**没有真设备的单测里**能注入各种裁决（含「没验成」这类
+ * 网络上难复现的局面），而 verifier 与 coordinator 仍是两个可独立演化的类。
+ */
+fun interface RegistryVerifier {
+    /**
+     * 同一 spec 的双镜像声明核对。
+     *
+     * @param primary 本次首选注册表；null = 实现自己知道该用哪个（本机配置）。
+     * @throws IllegalArgumentException 包名形态非法（调用方按 ERR_INVALID_PARAM 折叠）。上层
+     *   安装前先自行筛一遍，别让异常从「校验」这一步冒出来。
+     */
+    fun verify(name: String, version: String?, primary: String?): NpmRegistryVerifier.Verdict
 }
