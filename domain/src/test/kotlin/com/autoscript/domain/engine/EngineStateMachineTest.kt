@@ -57,6 +57,13 @@ class EngineStateMachineTest {
         m2.onExecuteRequested(); m2.onBootCompleted()
         m2.onKill(KillCause.WATCHDOG_CPU)
         assertEquals(EngineStatus.CRASHED, m2.status)
+
+        // DRIFT 是仲裁层在宿主可疑时的主动杀（"他杀"），归 CRASHED 而非 STOPPED：
+        // 归档/日志据此区分"管理者主动停"（REQUESTED → STOPPED）与"分歧杀"。
+        val m3 = EngineStateMachine()
+        m3.onExecuteRequested(); m3.onBootCompleted()
+        m3.onKill(KillCause.DRIFT)
+        assertEquals(EngineStatus.CRASHED, m3.status)
     }
 
     @Test

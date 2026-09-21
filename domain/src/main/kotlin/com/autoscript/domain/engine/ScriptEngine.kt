@@ -59,7 +59,23 @@ sealed interface StopResult {
     data class TimedOut(val partial: Boolean) : StopResult  // 超时，仍需 SIGKILL(由调用方决定)
 }
 
-enum class KillCause { REQUESTED, WATCHDOG_HEARTBEAT, WATCHDOG_CPU, OOM, ENGINE_REQUEST }
+enum class KillCause {
+    REQUESTED,
+    WATCHDOG_HEARTBEAT,
+    WATCHDOG_CPU,
+    OOM,
+    ENGINE_REQUEST,
+
+    /**
+     * 宿主自报与池侧投影持续分歧（§8.3 drift 裁决，看门狗调度循环落点）：
+     * 两侧都活着但说的不一样，分不清谁对 —— 杀掉重来比猜一边可审计。
+     * 与 `ENGINE_REQUEST` 的区别：ENGINE_REQUEST 是引擎自己要求退出（宿主可信）；
+     * 本原因是仲裁层在宿主可疑时主动杀（宿主不可信），归档/日志据此区分"自杀"与"他杀"。
+     * 与 REQUESTED 的区别：REQUESTED 是管理者主动停（调度超时/用户停止，归 STOPPED）；
+     * 本原因归 CRASHED（见 `EngineStateMachine.onKill`：非 REQUESTED 一律 CRASHED）。
+     */
+    DRIFT,
+}
 
 data class CrashInfo(
     val cause: KillCause? = null,

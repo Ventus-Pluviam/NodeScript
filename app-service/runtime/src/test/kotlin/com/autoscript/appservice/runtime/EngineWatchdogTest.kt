@@ -80,7 +80,7 @@ class EngineWatchdogTest {
     }
 
     @Test
-    fun `宿主自报与池侧投影分歧时如实记 drift，不改状态也不判死`() = runBlocking {
+    fun `宿主自报与池侧投影分歧时如实记 drift，单轮不杀`() = runBlocking {
         val monitor = ProcessMonitor(100, statReader = { stat(0) }, statusReader = { status() })
         val (controller, watchdog, engine) = rig(monitor)
         val started = assertInstanceOf(
@@ -92,8 +92,64 @@ class EngineWatchdogTest {
         engine.statusToReturn = EngineStatus.STOPPED            // 宿主飞了，池还占着
         val t = watchdog.tick()
         assertEquals(listOf(started.runId), t.drift, "分歧进清单：谁看见谁处理")
-        assertTrue(t.killed.isEmpty(), "报分歧不是判死：不擅自改任何一侧状态")
+        assertTrue(t.killed.isEmpty(), "单轮分歧只是窗口期常态：不杀")
+        assertTrue(t.driftKilled.isEmpty())
         assertEquals(PoolStats(1, free = 0, busy = 1), controller.stats(), "记账不动")
+    }
+
+    @Test
+    fun `drift 连续三轮对不上则 DRIFT 强杀，中间弥合从头数`() = runBlocking {
+        val monitor = ProcessMonitor(100, statReader = { stat(0) }, statusReader = { status() })
+        val (controller, watchdog, engine) = rig(monitor)
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            controller.start(PoolAcquireRequest("p", "a.js")),
+        )
+        engine.statusToReturn = EngineStatus.STOPPED            // 宿主飞了，池还占着
+
+        assertTrue(watchdog.tick().killed.isEmpty(), "第 1 轮：只记账")
+        assertTrue(watchdog.tick().killed.isEmpty(), "第 2 轮：只记账")
+        val third = watchdog.tick()
+        assertEquals(listOf(started.runId), third.killed, "第 3 轮：连续超限 → 杀")
+        assertEquals(listOf(started.runId), third.driftKilled, "分歧杀单独列出")
+        assertEquals(1, engine.killCalls, "裁决经 controller 落到引擎 kill")
+        assertTrue(controller.activeRunIds().isEmpty(), "已结算：在途表收走")
+        assertEquals(PoolStats(1, free = 1, busy = 0), controller.stats(), "杀槽必还证（§8.2）")
+    }
+
+    @Test
+    fun `drift 中间弥合一次就从头数，不误杀窗口期抖动`() = runBlocking {
+        val monitor = ProcessMonitor(100, statReader = { stat(0) }, statusReader = { status() })
+        val (controller, watchdog, engine) = rig(monitor)
+        controller.start(PoolAcquireRequest("p", "a.js"))
+
+        engine.statusToReturn = EngineStatus.STOPPED
+        watchdog.tick()                                          // 连段 1
+        watchdog.tick()                                          // 连段 2
+        engine.statusToReturn = EngineStatus.RUNNING            // 弥合一轮（窗口期过去）
+        val healed = watchdog.tick()
+        assertTrue(healed.drift.isEmpty(), "弥合轮无分歧")
+        assertTrue(healed.killed.isEmpty())
+
+        engine.statusToReturn = EngineStatus.STOPPED            // 又裂了：从头数
+        assertTrue(watchdog.tick().killed.isEmpty(), "重裂第 1 轮：不杀")
+        assertTrue(watchdog.tick().killed.isEmpty(), "重裂第 2 轮：不杀")
+        assertEquals(1, watchdog.tick().killed.size, "重裂第 3 轮：杀")
+    }
+
+    @Test
+    fun `drift 阈值可配：大池容忍更久`() = runBlocking {
+        val monitor = ProcessMonitor(100, statReader = { stat(0) }, statusReader = { status() })
+        val engine = FakeEngine(EngineId(0)).also { it.pid = 4242 }
+        val controller = RuntimeController(FixedEnginePool({ engine }, capacity = 1), WatchdogPolicy())
+        val watchdog = EngineWatchdog(controller = controller, driftKillThreshold = 5)
+            .withMonitor(monitor)
+            .withHeartbeat({ 100L })
+        controller.start(PoolAcquireRequest("p", "a.js"))
+        engine.statusToReturn = EngineStatus.STOPPED
+
+        repeat(4) { assertTrue(watchdog.tick().killed.isEmpty(), "阈值 5：前 4 轮不杀") }
+        assertEquals(1, watchdog.tick().killed.size, "第 5 轮：杀")
     }
 
     @Test

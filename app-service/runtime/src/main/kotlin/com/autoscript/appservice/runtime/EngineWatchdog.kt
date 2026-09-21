@@ -1,6 +1,7 @@
 package com.autoscript.appservice.runtime
 
 import com.autoscript.domain.engine.EngineStatus
+import com.autoscript.domain.engine.KillCause
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -30,6 +31,15 @@ class EngineWatchdog(
     private val clock: Clock = Clock { System.currentTimeMillis() },
     /** 无在途 run 时的轮询间隔：池空不必按采样周期空转。 */
     private val idlePollMillis: Long = DEFAULT_IDLE_POLL_MILLIS,
+    /**
+     * drift 连续出现的裁决阈值（§8.3 裁决方：宿主自报与池侧投影持续分歧时杀掉重来）。
+     *
+     * 为什么是"连续 N 轮"而不是"见一次杀一次"：真机上宿主状态与池侧投影本来就有窗口期
+     * 差距（宿主刚推 STOPPED、池还没 quiesce 完），单轮分歧是常态；连续多轮还对不上，
+     * 说明不是窗口期而是真分裂 —— 此时杀（`KillCause.DRIFT`）比继续猜一边可审计。
+     * 阈值按轮计而非墙钟：看门狗节奏 = `policy.heartbeatIntervalMillis`，缺省 3 轮 ≈ 1.5s。
+     */
+    private val driftKillThreshold: Int = DEFAULT_DRIFT_KILL_THRESHOLD,
 ) {
     /**
      * 心跳来源（runId → 距上次心跳毫秒）；null = 该 run 量不到心跳。
@@ -83,10 +93,17 @@ class EngineWatchdog(
         val forgotten: List<Int> = emptyList(),
         /** 宿主自报与池侧状态机投影**不一致**的在途 runId（§8.3 校准：只报分歧，不擅自改状态）。 */
         val drift: List<Long> = emptyList(),
+        /**
+         * 本轮因 drift 连续超限被杀的 runId（§8.3 裁决，`KillCause.DRIFT`）——
+         * 是 [killed] 的子集，单独列出供诊断区分"病死"（三路判定）与"分歧杀"。
+         */
+        val driftKilled: List<Long> = emptyList(),
     )
 
     private val book = LinkedHashMap<Int, RunBook>()
     private var job: Job? = null
+    /** drift 连续计数（runId → 连续分歧轮数；一致/失踪即清零，§8.3 裁决的"连续"口径）。 */
+    private val driftStreaks = HashMap<Long, Int>()
 
     /** 已在轮转中（幂等：[start] 重复调用只保留第一个 job）。 */
     fun isRunning(): Boolean = job?.isActive == true
@@ -117,9 +134,10 @@ class EngineWatchdog(
         current?.cancelAndJoin()
     }
 
-    /** 丢弃全部 per-pid 记账，实例回到首轮状态（重启用/单测隔离用）。 */
+    /** 丢弃全部 per-pid 记账与 drift 连段，实例回到首轮状态（重启用/单测隔离用）。 */
     fun reset() {
         synchronized(book) { book.clear() }
+        synchronized(driftStreaks) { driftStreaks.clear() }
     }
 
     private suspend fun loop() {
@@ -138,8 +156,10 @@ class EngineWatchdog(
      *   跳过该 run 本轮判定，绝不猜 0% 也绝不判死；
      * - 拿不到引擎状态（[RuntimeController.statusOf] 回 null：已收走或引擎已死）→ 同样
      *   记账跳过。**不拿 RUNNING 兜底**：那不是"乐观"，是伪造一个会被 policy 当真的输入；
-     * - 宿主自报与池侧投影分歧时如实进 [Tick.drift]，但**不改任一侧状态**（§8.3 校准只在
-     *   report 层：挑一侧当真就等于用猜测覆盖另一半真相）。
+     * - 宿主自报与池侧投影分歧时如实进 [Tick.drift]；连续 [driftKillThreshold] 轮对不上
+     *   则按 [KillCause.DRIFT] 强杀（§8.3 裁决，见 [driftStreaks]）—— 单轮分歧是真机的
+     *   窗口期常态（宿主刚推 STOPPED、池还没 quiesce 完），连续多轮才是真分裂。
+     *   裁决只杀分歧的那个 run、不改任一侧状态：杀掉重来，不猜哪一侧对。
      * - pid 复用不背旧账：book 以 pid 为键但带 runId，pid 落到另一个 run 头上就整段清零；
      * - 收尾时对已不在途的 pid 调 [ProcessMonitor.forget]（含刚被 kill 的）——"kill 后立刻
      *   收尾"和"下轮才发现不在了"两条路都走这里，免得调用方漏调，看门狗自己保证。
@@ -152,6 +172,8 @@ class EngineWatchdog(
         val procUnreadable = mutableListOf<Long>()
         val forgotten = mutableListOf<Int>()
         val drift = mutableListOf<Long>()
+        val driftKilled = mutableListOf<Long>()
+        val seenAlive = HashSet<Long>()
 
         for (anchor in anchors) {
             val pid = anchor.pid
@@ -165,9 +187,24 @@ class EngineWatchdog(
                 continue
             }
             val run = controller.statusOf(anchor.runId)
-            // 池侧投影与宿主自报关照（§8.3）：分歧只记账不改状态 —— 谁看见谁处理，
-            // 但绝不让"池说 RUNNING、宿主说 STOPPED"这种分裂无声地过去。
-            if (run != null && run.drift) drift += anchor.runId
+            // 池侧投影与宿主自报关照（§8.3）：分歧先记账 —— 单轮分歧只是窗口期常态，
+            // 连续 [driftKillThreshold] 轮对不上才是真分裂，此时杀掉重来（DRIFT），
+            // 不猜哪一侧对。已在途才计数：失踪/被杀的 run 由下面的收尾清零。
+            if (run != null) seenAlive += anchor.runId
+            val isDrift = run != null && run.drift
+            if (isDrift) drift += anchor.runId
+            if (isDrift && anchor.runId !in killed) {
+                val streak = synchronized(driftStreaks) {
+                    val next = (driftStreaks[anchor.runId] ?: 0) + 1
+                    driftStreaks[anchor.runId] = next
+                    next
+                }
+                if (streak >= driftKillThreshold) {
+                    controller.killRun(anchor.runId, KillCause.DRIFT)   // kill 权威在 controller
+                    killed += anchor.runId
+                    driftKilled += anchor.runId
+                }
+            }
             // 判定输入取**池侧投影**（[RuntimeController.judge] 的 RUNNING 口径本就以它为准），
             // 但宿主读不到时同样如实记 procUnreadable：那不是"没状态"，是"量不到"。
             val status = run?.pool
@@ -203,6 +240,14 @@ class EngineWatchdog(
         stale.forEach { monitor.forget(it) }
         forgotten += stale
 
+        // drift 连段收尾：本轮没分歧（弥合了）或已不在途（结算/被杀）的 run 清零 ——
+        // "连续"只数不间断的分歧轮，中间好一轮就从头数；失踪的不留账（防 runId 复用背旧账）。
+        // killRun 已把被杀 run 摘出在途表：killed 里的 run 同样清零（它的连段已兑现为一次 DRIFT 杀）。
+        synchronized(driftStreaks) {
+            val done = driftStreaks.keys.filter { it !in drift || it !in seenAlive || it in killed }
+            done.forEach { driftStreaks.remove(it) }
+        }
+
         return Tick(
             sampled = anchors.size,
             killed = killed,
@@ -211,6 +256,7 @@ class EngineWatchdog(
             procUnreadable = procUnreadable,
             forgotten = forgotten,
             drift = drift,
+            driftKilled = driftKilled,
         )
     }
 
@@ -250,5 +296,12 @@ class EngineWatchdog(
 
         /** 回喂 policy 的历史长度上限（CPU 窗口 30s / 500ms = 60 段，留一倍余量）。 */
         const val MAX_HISTORY: Int = 128
+
+        /**
+         * drift 连续超限的缺省阈值（§8.3 裁决）：连续 3 轮分歧即杀。
+         * 3 轮 ≈ 1.5s（缺省节奏 500ms）：真机的窗口期差距（宿主刚推 STOPPED、
+         * 池还没 quiesce 完）通常 1 轮内弥合，3 轮还对不上就不是窗口期。
+         */
+        const val DEFAULT_DRIFT_KILL_THRESHOLD: Int = 3
     }
 }
