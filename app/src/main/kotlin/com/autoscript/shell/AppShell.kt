@@ -8,6 +8,7 @@ import com.autoscript.appservice.runtime.HeartbeatLedger
 import com.autoscript.appservice.runtime.RuntimeController
 import com.autoscript.appservice.scheduler.core.InMemoryRunArchive
 import com.autoscript.appservice.scheduler.core.IntentLog
+import com.autoscript.appservice.scheduler.core.RecoveryRecord
 import com.autoscript.appservice.scheduler.core.Scheduler
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.bridge.BridgeRouter
@@ -66,6 +67,20 @@ class AppShell(
 
     /** 停止看门狗轮转（幂等；不夺调用方 scope 的所有权）。 */
     suspend fun stopWatchdog() = watchdog.stop()
+
+    /**
+     * 开机恢复（§8.5 崩溃恢复的装配层接线点）：把意图日志里未 COMMIT 的遗留意向
+     * 重新入队（`Scheduler.recoverUncommitted`：旧行封口 Interrupted + 新 runId 重开、
+     * 保留 runNonce；过期意向封账不重投）。
+     *
+     * 调用时机 = 壳就绪之后（生产由 Application.install 在 IO 域触发），而不是
+     * [assemble] 里：恢复要走 dispatcher 真投递（落引擎 + 写归档），assemble 只做
+     * 纯装配、无副作用。恢复前投递的闹钟走漏投记账（AlarmDispatch.missed），
+     * 不与这里的重投混在一起 —— 两条路各记各的账。
+     *
+     * @return 每条遗留的旧/新 runId 与投递结果（供恢复日志/UI 呈现"开机恢复了 N 条"）。
+     */
+    suspend fun bootRecover(): List<RecoveryRecord> = scheduler.recoverUncommitted()
 
     override fun close() {
         router.close()

@@ -66,6 +66,20 @@ class AppShellApplication : Application() {
         this.shell = shell
         alarmDispatch.install(SchedulerAlarmRoute(shell.scheduler))
         Log.i(TAG, "壳就绪：闹钟路线接通（dispatch.missed=${alarmDispatch.missed().size}）")
+        // 开机恢复（§8.5）：壳就绪后把崩溃遗留意向重新入队。挂后台协程、不阻塞装配；
+        // 恢复走 dispatcher 真投递（落引擎 + 写归档），失败只记日志 —— 绝不让恢复异常
+        // 把刚装好的壳掀翻（装配完成 > 恢复成功，恢复下次启动仍可重试：未 COMMIT 行还在）。
+        @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val recovered = shell.bootRecover()
+                if (recovered.isNotEmpty()) {
+                    Log.i(TAG, "开机恢复：${recovered.size} 条遗留意向已重投")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "开机恢复失败（下次启动重试）", t)
+            }
+        }
     }
 
     /** 壳（null = 未就绪）。UI/能力中心据此如实显示"调度未就绪"，不假装可用。 */
