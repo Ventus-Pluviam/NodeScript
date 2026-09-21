@@ -31,22 +31,22 @@ class NpmSnapshotTest {
     private fun seedProject(projectId: String = "p1") {
         val root = layout.projectRoot(projectId)
         Files.createDirectories(root)
-        Files.writeString(root.resolve("package.json"), """{"name":"p1","version":"1.0.0"}""")
-        Files.writeString(layout.lockfile(projectId), """{"lockfileVersion":3,"packages":{"":{},"node_modules/lodash":{"version":"4.17.21","integrity":"sha512-x"}}}""")
+        Files.write(root.resolve("package.json"), ("""{"name":"p1","version":"1.0.0"}""").toByteArray())
+        Files.write(layout.lockfile(projectId), ("""{"lockfileVersion":3,"packages":{"":{},"node_modules/lodash":{"version":"4.17.21","integrity":"sha512-x"}}}""").toByteArray())
         val signer = LockSigner(ledgerDir, key)
         signer.sign(projectId, layout.lockfile(projectId))
         val nm = layout.nodeModules(projectId)
         Files.createDirectories(nm.resolve("lodash"))
-        Files.writeString(nm.resolve("lodash/package.json"), """{"name":"lodash","version":"4.17.21"}""")
-        Files.writeString(nm.resolve("lodash/index.js"), "module.exports = 1\n")
+        Files.write(nm.resolve("lodash/package.json"), ("""{"name":"lodash","version":"4.17.21"}""").toByteArray())
+        Files.write(nm.resolve("lodash/index.js"), ("module.exports = 1\n").toByteArray())
         Files.createDirectories(nm.resolve("esbuild"))
         // 带 postinstall → 同属包内容；与快照验签无关但让归档内容非平凡
-        Files.writeString(nm.resolve("esbuild/package.json"), """{"name":"esbuild","scripts":{"postinstall":"node install.js"}}""")
-        Files.writeString(nm.resolve("esbuild/bin.js"), "console.log(1)\n")
+        Files.write(nm.resolve("esbuild/package.json"), ("""{"name":"esbuild","scripts":{"postinstall":"node install.js"}}""").toByteArray())
+        Files.write(nm.resolve("esbuild/bin.js"), ("console.log(1)\n").toByteArray())
         // ledger 两份都在：导出须一并带上（§10.5-2 审计可导出）
         Files.createDirectories(ledgerDir)
-        Files.writeString(ledgerDir.resolve("approve-ledger.jsonl"), """{"op":"submit","requestId":"apr-1","projectId":"p1","pkg":"esbuild","versionHash":"h","action":"INSTALL_SCRIPT","at":1}""" + "\n")
-        Files.writeString(ledgerDir.resolve("install-history.jsonl"), """{"op":"install","projectId":"p1","ok":true,"at":2}""" + "\n")
+        Files.write(ledgerDir.resolve("approve-ledger.jsonl"), ("""{"op":"submit","requestId":"apr-1","projectId":"p1","pkg":"esbuild","versionHash":"h","action":"INSTALL_SCRIPT","at":1}""" + "\n").toByteArray())
+        Files.write(ledgerDir.resolve("install-history.jsonl"), ("""{"op":"install","projectId":"p1","ok":true,"at":2}""" + "\n").toByteArray())
     }
 
     @Test
@@ -93,9 +93,9 @@ class NpmSnapshotTest {
     fun `manifest 被改则验签失败（lock 与树不一致）`() = runBlocking {
         seedProject()
         snapshot().export("p1", out)
-        val modified = Files.readString(out).replace("\"lockfileVersion\":3", "\"lockfileVersion\":9")
-        assertFalse(modified == Files.readString(out), "替换应真的发生")
-        Files.write(out, modified.toByteArray())
+        val modified = String(Files.readAllBytes(out), Charsets.UTF_8).replace("\"lockfileVersion\":3", "\"lockfileVersion\":9")
+        assertFalse(modified == String(Files.readAllBytes(out), Charsets.UTF_8), "替换应真的发生")
+        Files.write(out, (modified).toByteArray())
         assertThrows(AutojsException::class.java) { snapshot().verify("p1", out) }
     }
 

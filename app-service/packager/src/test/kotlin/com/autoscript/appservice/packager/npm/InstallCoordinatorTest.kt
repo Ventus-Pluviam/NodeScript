@@ -57,19 +57,13 @@ class InstallCoordinatorTest {
                 for ((name, version) in deps) {
                     val p = op.stageDir.resolve(name)
                     Files.createDirectories(p)
-                    Files.writeString(p.resolve("package.json"), """{"name":"$name","version":"$version"}""")
-                    Files.writeString(p.resolve("index.js"), "module.exports = {}\n")
+                    Files.write(p.resolve("package.json"), ("""{"name":"$name","version":"$version"}""").toByteArray())
+                    Files.write(p.resolve("index.js"), ("module.exports = {}\n").toByteArray())
                 }
                 val depJson = deps.joinToString(",") { (n, v) -> "\"$n\":\"$v\"" }
                 val lockJson = deps.joinToString(",") { (n, v) -> "\"node_modules/$n\":{\"version\":\"$v\",\"integrity\":\"sha512-x\"}" }
-                Files.writeString(
-                    op.projectRoot.resolve("package.json"),
-                    """{"name":"p1","version":"1.0.0","dependencies":{""" + depJson + """}}""",
-                )
-                Files.writeString(
-                    op.projectRoot.resolve("package-lock.json"),
-                    """{"lockfileVersion":3,"packages":{"":{},""" + lockJson + """}}""",
-                )
+                Files.write(op.projectRoot.resolve("package.json"), ("""{"name":"p1","version":"1.0.0","dependencies":{""" + depJson + """}}""").toByteArray())
+                Files.write(op.projectRoot.resolve("package-lock.json"), ("""{"lockfileVersion":3,"packages":{"":{},""" + lockJson + """}}""").toByteArray())
                 return "ok:" + op.args.first()
             }
         }
@@ -205,7 +199,7 @@ class InstallCoordinatorTest {
     @Test
     fun `成功安装：journal begin+commit 成对 且产物原子落位`() = runBlocking {
         val exec = FakeExecutor { op ->
-            Files.write(op.stageDir.resolve("axios.js"), "console.log(1)".toByteArray())
+            Files.write(op.stageDir.resolve("axios.js"), ("console.log(1)").toByteArray())
         }
         val c = coordinator(executor = exec)
         c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
@@ -222,7 +216,7 @@ class InstallCoordinatorTest {
     @Test
     fun `执行失败：journal fail + 暂存残骸清扫 + node_modules 不被污染`() = runBlocking {
         Files.createDirectories(layout.nodeModules("p1"))
-        Files.write(layout.nodeModules("p1").resolve("old.js"), "old".toByteArray())
+        Files.write(layout.nodeModules("p1").resolve("old.js"), ("old").toByteArray())
         val exec = FakeExecutor { throw RuntimeException("registry 502") }
         val c = coordinator(executor = exec)
 
@@ -232,7 +226,7 @@ class InstallCoordinatorTest {
         assertEquals(InstallJournal.State.FAIL, journal.all().last().state)
         assertTrue(journal.unfinished().isEmpty(), "fail 封口后不再是未完成事务")
         // 旧 node_modules 原样保留（墓碑回滚）
-        assertEquals("old", Files.readString(layout.nodeModules("p1").resolve("old.js")))
+        assertEquals("old", String(Files.readAllBytes(layout.nodeModules("p1").resolve("old.js")), Charsets.UTF_8))
         // 暂存目录被清扫
         assertTrue(Files.list(layout.projectRoot("p1")).noneMatch { it.fileName.toString().startsWith("node_modules.part-") })
     }
@@ -270,7 +264,7 @@ class InstallCoordinatorTest {
         val exec = FakeExecutor { op ->
             val pkg = op.stageDir.resolve("esbuild")
             Files.createDirectories(pkg)
-            Files.writeString(pkg.resolve("package.json"), """{"name":"esbuild","version":"0.19.0","scripts":{"postinstall":"node install.js"}}""")
+            Files.write(pkg.resolve("package.json"), ("""{"name":"esbuild","version":"0.19.0","scripts":{"postinstall":"node install.js"}}""").toByteArray())
         }
         val c = coordinator(executor = exec)
         val events = mutableListOf<InstallEvent>()
@@ -292,7 +286,7 @@ class InstallCoordinatorTest {
         val exec = FakeExecutor { op ->
             val pkg = op.stageDir.resolve("lodash")
             Files.createDirectories(pkg)
-            Files.writeString(pkg.resolve("package.json"), """{"name":"lodash","version":"4.17.21","scripts":{"test":"echo x"}}""")
+            Files.write(pkg.resolve("package.json"), ("""{"name":"lodash","version":"4.17.21","scripts":{"test":"echo x"}}""").toByteArray())
         }
         val c = coordinator(executor = exec)
         val events = mutableListOf<InstallEvent>()
@@ -307,7 +301,7 @@ class InstallCoordinatorTest {
     @Test
     fun `成功安装入史：op 名取 npm 子命令`() = runBlocking {
         val exec = FakeExecutor { op ->
-            Files.write(op.stageDir.resolve("axios.js"), "console.log(1)".toByteArray())
+            Files.write(op.stageDir.resolve("axios.js"), ("console.log(1)").toByteArray())
         }
         val h = newHistory()
         coordinator(executor = exec, history = h).install("p1", listOf(PackageSpec("axios", "1.7.0")))
@@ -820,7 +814,7 @@ class InstallCoordinatorTest {
     private fun writeLock(projectId: String, content: String) {
         val f = layout.lockfile(projectId)
         Files.createDirectories(f.parent)
-        Files.writeString(f, content)
+        Files.write(f, (content).toByteArray())
     }
 
     @Suppress("UNCHECKED_CAST")

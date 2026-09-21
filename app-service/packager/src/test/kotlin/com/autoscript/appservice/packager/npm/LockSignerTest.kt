@@ -23,7 +23,7 @@ class LockSignerTest {
     private val lock get() = dir.resolve("package-lock.json")
 
     private fun writeLock(text: String = """{"lockfileVersion":3,"packages":{"node_modules/lodash":{"version":"4.17.21"}}}""") {
-        Files.writeString(lock, text)
+        Files.write(lock, (text).toByteArray())
     }
 
     @Test
@@ -46,7 +46,7 @@ class LockSignerTest {
     fun `lock 被改则验签失败（责任人改不动闭包）`() {
         writeLock()
         LockSigner(dir.resolve(".autojs"), key).sign("p1", lock)
-        Files.writeString(lock, """{"lockfileVersion":3,"packages":{"node_modules/evil":{"version":"9.9.9"}}}""")
+        Files.write(lock, ("""{"lockfileVersion":3,"packages":{"node_modules/evil":{"version":"9.9.9"}}}""").toByteArray())
         val e = assertThrows(AutojsException::class.java) { LockSigner(dir.resolve(".autojs"), key).verifyOrThrow("p1", lock) }
         assertEquals(ErrorCode.ERR_PERMISSION_DENIED.code, e.error.code)
     }

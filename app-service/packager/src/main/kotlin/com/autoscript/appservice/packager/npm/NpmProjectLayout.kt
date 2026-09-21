@@ -43,7 +43,7 @@ object LockfileReader {
 
     fun readLocked(lockFile: Path): List<LockedPkg> {
         if (!Files.exists(lockFile)) return emptyList()
-        val text = Files.readString(lockFile, StandardCharsets.UTF_8)
+        val text = String(Files.readAllBytes(lockFile), StandardCharsets.UTF_8)
         return parse(text)
     }
 

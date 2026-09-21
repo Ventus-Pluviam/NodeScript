@@ -69,7 +69,7 @@ object NpmCliDeployer {
 
         // 幂等闸：锚哈希匹配 → 整目录跳过（开机路径零 IO）
         if (Files.isRegularFile(cli) && Files.exists(manifest) &&
-            Files.readString(manifest, StandardCharsets.UTF_8).trim() == cliHash
+            String(Files.readAllBytes(manifest), StandardCharsets.UTF_8).trim() == cliHash
         ) {
             return Outcome.Ready(cli, deployedFresh = false)
         }

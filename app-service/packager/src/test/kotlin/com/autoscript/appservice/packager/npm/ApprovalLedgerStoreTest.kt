@@ -81,9 +81,7 @@ class ApprovalLedgerStoreTest {
         // 手工追加半行（模拟断电半截写）
         val ledgerFile = dir.resolve(".autojs/approve-ledger.jsonl")
         assertTrue(Files.exists(ledgerFile), "submit 后账本文件必须已落盘")
-        Files.write(ledgerFile,
-            "{\"op\":\"submit\",\"requestI".toByteArray(),
-            java.nio.file.StandardOpenOption.APPEND)
+        Files.write(ledgerFile, ("{\"op\":\"submit\",\"requestI").toByteArray(), java.nio.file.StandardOpenOption.APPEND)
         val entries = s.all()
         assertEquals(1, entries.size, "半行必须被容忍跳过（完整行仍可用）")
     }

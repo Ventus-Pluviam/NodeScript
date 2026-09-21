@@ -84,7 +84,7 @@ class NpmSnapshot(
             throw AutojsException(ErrorCode.ERR_FILE_NOT_FOUND, "快照导出拒绝：项目无 lockfile（$lock）")
         }
         val lockSigText = ledgerDir?.resolve("lock.sig")?.takeIf { Files.isRegularFile(it) }
-            ?.let { Files.readString(it, StandardCharsets.UTF_8).trim() }
+            ?.let { String(Files.readAllBytes(it), StandardCharsets.UTF_8).trim() }
 
         val body = StringBuilder()
         var contentBytes = 0L

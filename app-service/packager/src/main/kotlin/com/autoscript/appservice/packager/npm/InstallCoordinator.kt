@@ -610,7 +610,7 @@ class InstallCoordinator(
     /** 该包的 package.json 是否声明 install-scripts 字段（不解析脚本内容）。 */
     private fun hasLifecycleScript(pkgJson: java.nio.file.Path): Boolean {
         if (!Files.isRegularFile(pkgJson)) return false
-        val text = Files.readString(pkgJson, java.nio.charset.StandardCharsets.UTF_8)
+        val text = String(Files.readAllBytes(pkgJson), java.nio.charset.StandardCharsets.UTF_8)
         return LIFECYCLE_KEYS.any { "\"$it\"" in text }
     }
 

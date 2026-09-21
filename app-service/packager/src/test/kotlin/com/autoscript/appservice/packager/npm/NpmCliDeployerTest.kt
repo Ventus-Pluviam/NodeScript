@@ -48,7 +48,7 @@ class NpmCliDeployerTest {
         val src = sourceOrSkip()
         val r = NpmCliDeployer.deploy(dir, src) as NpmCliDeployer.Outcome.Ready
         assertTrue(Files.isRegularFile(r.cliJs))
-        assertTrue(Files.readString(r.cliJs).contains("cli.js"), "cli-js 内容应 require lib/cli.js")
+        assertTrue(String(Files.readAllBytes(r.cliJs), Charsets.UTF_8).contains("cli.js"), "cli-js 内容应 require lib/cli.js")
         assertTrue(r.deployedFresh)
         assertTrue(Files.exists(dir.resolve("npm/.cli-manifest.sha256")), "manifest 锚必须落盘")
         // 全量树就位（不是只有 bin）
@@ -80,10 +80,10 @@ class NpmCliDeployerTest {
                 Files.write(dest, Files.readAllBytes(f))
             }
         }
-        Files.writeString(fake.resolve("bin/npm-cli.js"), "/* npm-cli.js v-next */")
+        Files.write(fake.resolve("bin/npm-cli.js"), ("/* npm-cli.js v-next */").toByteArray())
         val after = NpmCliDeployer.deploy(dir, DirSource(fake)) as NpmCliDeployer.Outcome.Ready
         assertTrue(after.deployedFresh, "源哈希变化必须重部署")
-        assertEquals("/* npm-cli.js v-next */", Files.readString(after.cliJs))
+        assertEquals("/* npm-cli.js v-next */", String(Files.readAllBytes(after.cliJs), Charsets.UTF_8))
     }
 
     @Test
@@ -109,9 +109,9 @@ class NpmCliDeployerTest {
     fun `stale 残骸被清扫`() {
         val src = sourceOrSkip()
         val stale = Files.createDirectories(dir.resolve(".npm-deploy-stale"))
-        Files.writeString(stale.resolve("junk"), "half-written")
+        Files.write(stale.resolve("junk"), ("half-written").toByteArray())
         val tomb = Files.createDirectories(dir.resolve(".npm-tombstone-x"))
-        Files.writeString(tomb.resolve("junk"), "old")
+        Files.write(tomb.resolve("junk"), ("old").toByteArray())
         NpmCliDeployer.deploy(dir, src)
         assertFalse(Files.exists(stale), "半途 tmp 必须清扫")
         assertFalse(Files.exists(tomb), "旧墓碑必须清扫")

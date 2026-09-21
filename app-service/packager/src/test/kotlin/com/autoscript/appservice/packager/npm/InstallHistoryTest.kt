@@ -46,8 +46,7 @@ class InstallHistoryTest {
         h.record(InstallHistory.Op.PRUNE, "p1", true, null)
         val file = dir.resolve(".autojs/install-history.jsonl")
         assertTrue(Files.exists(file), "record 后文件必须已落盘")
-        Files.write(file, "{\"projectId\":\"p1\"".toByteArray(),
-            java.nio.file.StandardOpenOption.APPEND)
+        Files.write(file, ("{\"projectId\":\"p1\"").toByteArray(), java.nio.file.StandardOpenOption.APPEND)
         assertEquals(1, h.all().size)
     }
 

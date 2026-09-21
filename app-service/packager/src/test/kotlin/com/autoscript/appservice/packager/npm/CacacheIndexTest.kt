@@ -31,7 +31,7 @@ class CacacheIndexTest {
         for (p in payloads) {
             val bytes = p.toByteArray()
             Files.write(src.resolve("$p.tgz"), bytes)
-            Files.writeString(src.resolve("$p.tgz.sha512"), integrityOf(p) + "\n")
+            Files.write(src.resolve("$p.tgz.sha512"), (integrityOf(p) + "\n").toByteArray())
             out += integrityOf(p)
         }
         NpmCacheSeedDeployer.deploy(cacheDir, object : NpmCacheSeedDeployer.SeedSource {

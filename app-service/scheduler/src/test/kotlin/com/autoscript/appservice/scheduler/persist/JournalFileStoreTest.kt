@@ -133,7 +133,7 @@ class JournalFileStoreTest {
         val a = start(log1, "half")
         log1.close()
         // 人为追加半行（模拟崩溃截断）
-        Files.writeString(dir.resolve("intent-log.jsonl"), """{"op":"seal","runId":""", java.nio.file.StandardOpenOption.APPEND)
+        Files.write(dir.resolve("intent-log.jsonl"), ("""{"op":"seal","runId":""").toByteArray(), java.nio.file.StandardOpenOption.APPEND)
 
         val log2 = newLog()
         assertEquals(1, log2.uncommitted().size, "半行必须被丢弃，存活行仍是原样")

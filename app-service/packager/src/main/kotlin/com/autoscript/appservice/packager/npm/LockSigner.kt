@@ -61,7 +61,7 @@ class LockSigner(
                 "lock.sig 缺失：该项目的 lockfile 未经本机签名，npm ci 拒绝执行（§10.5-1 带外信任锚）",
             )
         }
-        val stored = Files.readString(file, StandardCharsets.UTF_8).trim()
+        val stored = String(Files.readAllBytes(file), StandardCharsets.UTF_8).trim()
         val hex = stored.removePrefix("v1").trim()
         val expect = hmac(bodyOf(projectId, lockfile))
         if (hex.isEmpty() || !constantTimeEquals(hex, expect)) {

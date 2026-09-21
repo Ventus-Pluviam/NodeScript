@@ -204,7 +204,7 @@ class NpmBridgeHandlerTest {
 
     private fun writeLock(projectId: String, content: String) {
         Files.createDirectories(layout.projectRoot(projectId))
-        Files.writeString(layout.lockfile(projectId), content)
+        Files.write(layout.lockfile(projectId), (content).toByteArray())
     }
 }
 

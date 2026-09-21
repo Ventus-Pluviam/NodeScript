@@ -59,7 +59,7 @@ class HostNodeNpmE2ETest {
 
         // 项目根需要 package.json（npm install 的前置）
         Files.createDirectories(layout.projectRoot("e2e"))
-        Files.writeString(layout.projectRoot("e2e").resolve("package.json"), """{"name":"e2e","version":"0.0.1"}""")
+        Files.write(layout.projectRoot("e2e").resolve("package.json"), ("""{"name":"e2e","version":"0.0.1"}""").toByteArray())
 
         val handle = c.install("e2e", listOf(PackageSpec("lodash", "4.17.21")))
         // 产物落位
@@ -86,7 +86,7 @@ class HostNodeNpmE2ETest {
         val c = coordinatorAt(root, root.resolve("npm-cache"))
         val layout = NpmProjectLayout(root.resolve("scripts"))
         Files.createDirectories(layout.projectRoot("e2e2"))
-        Files.writeString(layout.projectRoot("e2e2").resolve("package.json"), """{"name":"e2e2","version":"0.0.1"}""")
+        Files.write(layout.projectRoot("e2e2").resolve("package.json"), ("""{"name":"e2e2","version":"0.0.1"}""").toByteArray())
 
         c.install("e2e2", listOf(PackageSpec("lodash", "4.17.21")))
         c.install("e2e2", listOf(PackageSpec("dayjs", "1.11.13")))

@@ -182,7 +182,7 @@ private fun statusFile(pid: Int): String? = readFile(Path.of("/proc/$pid/status"
 
 /** 读 /proc 文本：不存在/不可读/读失败统一回 null（调用方按「不可度量」处理）。 */
 private fun readFile(path: Path): String? = try {
-    if (Files.isReadable(path)) Files.readString(path).ifEmpty { null } else null
+    if (Files.isReadable(path)) String(Files.readAllBytes(path), Charsets.UTF_8).ifEmpty { null } else null
 } catch (_: Exception) {
     null
 }

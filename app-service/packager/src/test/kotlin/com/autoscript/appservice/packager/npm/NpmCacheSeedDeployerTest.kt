@@ -60,7 +60,7 @@ class NpmCacheSeedDeployerTest {
         // sidecar = integrity 原文（`sha512-<base64>`），_hash helper 与主代码同口径（sha512 摘要）
         val b64 = digestBase64(bytes, "SHA-512").removePrefix("sha512-")
         val line = if (corruptSide) "sha512-" + b64.replaceRange(6, 8, "AA") else "sha512-$b64"
-        Files.writeString(src.resolve("$file.sha512"), line + "\n")
+        Files.write(src.resolve("$file.sha512"), (line + "\n").toByteArray())
         return src
     }
 
@@ -111,10 +111,7 @@ class NpmCacheSeedDeployerTest {
         val bytes = tarballBytes("cheerio-1.0.0")
         val src = Files.createDirectories(dir.resolve("seed-src-manifest"))
         Files.write(src.resolve("cheerio-1.0.0.tgz"), bytes)
-        Files.writeString(
-            src.resolve("manifest.json"),
-            """{"entries":[{"file":"cheerio-1.0.0.tgz","integrity":"${base64(bytes)}"}]}""",
-        )
+        Files.write(src.resolve("manifest.json"), ("""{"entries":[{"file":"cheerio-1.0.0.tgz","integrity":"${base64(bytes)}"}]}""").toByteArray())
         val r = NpmCacheSeedDeployer.deploy(cacheDir, TarballSource(src))
         assertEquals(1, r.deployed)
         assertTrue(Files.isRegularFile(NpmCacheSeedDeployer.contentPath(cacheDir, base64(bytes))))
@@ -123,7 +120,7 @@ class NpmCacheSeedDeployerTest {
     @Test
     fun `空素材源 → 如实失败（不可校验内容不播种）`() {
         val src = Files.createDirectories(dir.resolve("seed-src-empty"))
-        Files.writeString(src.resolve("random.txt"), "junk")
+        Files.write(src.resolve("random.txt"), ("junk").toByteArray())
         assertThrows_ISE { NpmCacheSeedDeployer.deploy(cacheDir, TarballSource(src)) }
     }
 
@@ -132,7 +129,7 @@ class NpmCacheSeedDeployerTest {
         val bytes = tarballBytes("weak")
         val src = Files.createDirectories(dir.resolve("seed-src-sha1"))
         Files.write(src.resolve("weak-1.0.0.tgz"), bytes)
-        Files.writeString(src.resolve("weak-1.0.0.tgz.sha512"), digestBase64(bytes, "SHA-1") + "\n")
+        Files.write(src.resolve("weak-1.0.0.tgz.sha512"), (digestBase64(bytes, "SHA-1") + "\n").toByteArray())
         val e = assertThrows_IAE { NpmCacheSeedDeployer.deploy(cacheDir, TarballSource(src)) }
         assertTrue(e.message!!.contains("sha512"), "必须点名只支持 sha512：${e.message}")
     }
@@ -184,26 +181,20 @@ class NpmCacheSeedDeployerTest {
 
         val src = Files.createDirectories(dir.resolve("seed-real"))
         Files.write(src.resolve("real-1.0.0.tgz"), bytes)
-        Files.writeString(src.resolve("real-1.0.0.tgz.sha512"), integ + "\n")
+        Files.write(src.resolve("real-1.0.0.tgz.sha512"), (integ + "\n").toByteArray())
         val seedOut = NpmCacheSeedDeployer.deploy(cacheDir, TarballSource(src))
         assertEquals(1, seedOut.deployed)
 
         val proj = Files.createDirectories(dir.resolve("proj"))
         // package.json 也要声明同一依赖：npm ci 以 lock 为准，但 root 的 dependencies 缺项时
         // 该包会被判为「不在依赖闭包里」而跳过 reify（"up to date" = 什么都没装 = 空过）。
-        Files.writeString(
-            proj.resolve("package.json"),
-            """{"name":"seed-e2e","version":"1.0.0","dependencies":{"real":"1.0.0"}}""",
-        )
+        Files.write(proj.resolve("package.json"), ("""{"name":"seed-e2e","version":"1.0.0","dependencies":{"real":"1.0.0"}}""").toByteArray())
         // lock 按 integrity 引用种子：URL 指向一个**不可达**的注册表路径 —— 离线真义就是
         // 网络解析这条路必须根本不被走（走了就 ENOTCACHED/EAI_AGAIN），npm 只许命中 content-v2
-        Files.writeString(
-            proj.resolve("package-lock.json"),
-            """{"lockfileVersion":3,"packages":""" +
+        Files.write(proj.resolve("package-lock.json"), ("""{"lockfileVersion":3,"packages":""" +
                 """{"":{"name":"seed-e2e","version":"1.0.0","dependencies":{"real":"1.0.0"}},""" +
                 """"node_modules/real":{"version":"1.0.0","resolved":"https://registry.invalid.example/real/-/real-1.0.0.tgz","integrity":""" +
-                """"$integ"}}}""",
-        )
+                """"$integ"}}}""").toByteArray())
         val pb = ProcessBuilder(
             "node", npmCli.toString(), "ci", "--offline", "--ignore-scripts",
             "--no-audit", "--no-fund", "--cache", cacheDir.toString(),
