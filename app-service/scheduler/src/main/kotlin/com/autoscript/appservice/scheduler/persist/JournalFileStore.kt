@@ -191,113 +191,31 @@ class JournalFileStore(private val dir: Path) : IntentStore {
         }
 
         fun parse(line: String): Rec {
-            val m = Parser(line)
-            m.expect('{')
-            var op: String? = null
-            var runId = -1L
-            var outcome: String? = null
-            var detail: String? = null
-            var at = -1L
-            var nFields = 0
-            val fields = HashMap<String, Any?>()
-            while (true) {
-                m.ws()
-                if (m.peek() == '}') { m.pos++; break }
-                if (nFields > 0) {
-                    m.expect(',')
-                    m.ws()
-                }
-                val key = m.string()
-                nFields++
-                m.ws(); m.expect(':'); m.ws()
-                val v: Any? = when {
-                    m.peek() == '"' -> m.string()
-                    m.peek() == 'n' -> { m.expectLit("null"); null }
-                    else -> m.number()
-                }
-                when (key) {
-                    "op" -> op = v as String
-                    "runId" -> runId = (v as Long)
-                    "outcome" -> outcome = v as String?
-                    "detail" -> detail = v as String?
-                    "at" -> at = (v as Long)
-                    else -> fields[key] = v
-                }
-                m.ws()
-            }
-            return when (op) {
+            val fields = JsonLine.parse(line)
+            return when (fields["op"]) {
                 "start" -> Rec.Start(
-                    runId,
+                    fields.long("runId"),
                     IntentStore.StartRow(
-                        projectId = fields["projectId"] as String,
-                        scriptPath = fields["scriptPath"] as String,
-                        runNonce = fields["runNonce"] as String,
-                        trigger = fields["trigger"] as String,
-                        screen = fields["screen"] as String,
-                        scheduledAtMillis = fields["scheduledAt"] as Long,
-                        startedAtMillis = fields["startedAt"] as Long,
-                        deadlineMillis = fields["deadlineAt"] as Long?,
+                        projectId = fields.str("projectId"),
+                        scriptPath = fields.str("scriptPath"),
+                        runNonce = fields.str("runNonce"),
+                        trigger = fields.str("trigger"),
+                        screen = fields.str("screen"),
+                        scheduledAtMillis = fields.long("scheduledAt"),
+                        startedAtMillis = fields.long("startedAt"),
+                        deadlineMillis = fields.optLong("deadlineAt"),
                     ),
                 )
-                "seal" -> Rec.Seal(runId, IntentStore.StoredOutcome(outcome!!, detail), at)
-                else -> throw IOException("journal 行损坏（op=$op）")
+                "seal" -> Rec.Seal(
+                    fields.long("runId"),
+                    IntentStore.StoredOutcome(fields.str("outcome"), fields.optStr("detail")),
+                    fields.long("at"),
+                )
+                else -> throw IOException("journal 行损坏（op=${fields["op"]}）")
             }
         }
 
-        private fun q(s: String): String = buildString(s.length + 2) {
-            append('"')
-            for (c in s) {
-                when (c) {
-                    '"' -> append("\\\"")
-                    '\\' -> append("\\\\")
-                    '\n' -> append("\\n")
-                    '\r' -> append("\\r")
-                    '\t' -> append("\\t")
-                    else -> append(c)
-                }
-            }
-            append('"')
-        }
-
-        /** 极简递归下降解析器（仅服务本冻结行格式）。 */
-        private class Parser(val s: String) {
-            var pos = 0
-            fun peek(): Char = s[pos]
-            fun ws() { while (pos < s.length && s[pos] == ' ') pos++ }
-            fun expect(c: Char) { if (pos >= s.length || s[pos] != c) throw IOException("journal 行损坏 @$pos 期望 $c"); pos++ }
-            fun expectLit(lit: String) { if (!s.startsWith(lit, pos)) throw IOException("journal 行损坏 @$pos 期望 $lit"); pos += lit.length }
-
-            fun string(): String {
-                expect('"')
-                val sb = StringBuilder()
-                while (true) {
-                    if (pos >= s.length) throw IOException("journal 行损坏：串未闭合")
-                    val c = s[pos++]
-                    when (c) {
-                        '"' -> return sb.toString()
-                        '\\' -> {
-                            if (pos >= s.length) throw IOException("journal 行损坏：转义截断")
-                            when (val e = s[pos++]) {
-                                '"' -> sb.append('"')
-                                '\\' -> sb.append('\\')
-                                'n' -> sb.append('\n')
-                                'r' -> sb.append('\r')
-                                't' -> sb.append('\t')
-                                else -> throw IOException("journal 行损坏：未知转义 \\$e")
-                            }
-                        }
-                        else -> sb.append(c)
-                    }
-                }
-            }
-
-            fun number(): Long {
-                val start = pos
-                if (pos < s.length && s[pos] == '-') pos++
-                while (pos < s.length && s[pos].isDigit()) pos++
-                if (start == pos) throw IOException("journal 行损坏 @$pos 期望数字")
-                return s.substring(start, pos).toLong()
-            }
-        }
+        private fun q(s: String): String = JsonLine.quote(s)
+        // 解析器见共享 [JsonLine]（同一冻结行格式，单测与生产同一份解析）。
     }
 }
