@@ -5,13 +5,17 @@ import android.util.Log
 import com.autoscript.shell.AlarmDispatch
 import com.autoscript.shell.AlarmFires
 import com.autoscript.shell.AlarmPort
+import com.autoscript.shell.AlarmReceiver
+import com.autoscript.shell.AlarmSchedulerProvider
 import com.autoscript.shell.AndroidAlarmPort
 import com.autoscript.shell.AndroidScreenGate
 import com.autoscript.shell.AppShell
+import com.autoscript.shell.AppShellKit
 import com.autoscript.shell.SchedulerAlarmRoute
 import com.autoscript.shell.ScreenGateAndroid
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import java.nio.file.Path
 
 /**
  * 启动装配（docs/framework-design.md §4.1 Composition Root，手写 DI，不用 Hilt）。
@@ -23,7 +27,8 @@ import kotlinx.coroutines.launch
  * 1. **装配中/装配前**：[AlarmDispatch] 还没接路线 → 漏投进 [AlarmDispatch.missed]
  *    （UI 据此如实告知"闹钟已响，调度未就绪"），**不静默丢弃**；
  * 2. **装配完成**：`AlarmSchedulerProvider` + `AlarmPort`（真 AlarmManager）+
- *    `AndroidScreenGate`（真 PowerManager）挂上，接收器的 taskId 经
+ *    `AndroidScreenGate`（真 PowerManager）挂上（[onCreate] 经 [installWithFiles] 自装配，
+ *    或由调用方走 [install] 注入带能力 handler 的壳），接收器的 taskId 经
  *    [SchedulerAlarmRoute] 回到 [com.autoscript.appservice.scheduler.core.Scheduler.onTrigger]；
  * 3. **重建/恢复**：接到广播时 application 已 attach，就地走 2 的路线，幂等由
  *    scheduler 的 runNonce 承担（同一个 runNonce 重复投递不会双跑）。
@@ -36,13 +41,20 @@ import kotlinx.coroutines.launch
 class AppShellApplication : Application() {
 
     /**
-     * 壳装配产物。**可能为 null**：装配要 engineFactory 等 Android 侧实现
-     * （a11y/screen 命名空间在 `:platform:capabilities`，`:app` 禁止直连 —— §6），
-     * 那些接线随各模块落地逐步补齐。P0 先接调度与门禁，引擎池在壳就绪时由
-     * [alarmWork] 兜底：没壳 => 漏投记账，**不伪造一次成功投递**。
+     * 壳装配产物。**可能为 null** —— 装配有两条路：
+     * - [install]（注入式）：调用方（Activity/测试）把装好的壳交进来；
+     * - [installWithFiles]（自装配）：本类就地用 [AppShellKit.assemble] 装一个。
+     *
+     * null 只持续到其中一条跑完；在那之前 [alarmWork] 走漏投记账，
+     * **不伪造一次成功投递**。装配失败（磁盘/权限）同样保持 null + 记账，
+     * 绝不让一个坏掉的壳冒充"就绪"。
      */
     @Volatile
     private var shell: AppShell? = null
+
+    /** 自装配产物的持久句柄（关壳时要成对释放；见 [AppShellKit.AssembledShell]）。 */
+    @Volatile
+    private var assembled: AppShellKit.AssembledShell? = null
 
     /** 闹钟回投缝（[AlarmDispatch]）：装配前记账、装配后投递。 */
     private val alarmDispatch = AlarmDispatch()
@@ -54,8 +66,55 @@ class AppShellApplication : Application() {
         super.onCreate()
         instance = this
         Log.i(TAG, "装配启动：壳创建中（引擎/a11y 按 §6 缝注入，未接 = 如实记账）")
-        // 壳装配在 AppShell.assemble 的真实调用点随 :platform 接线推进（见 KDoc 第 1 段）。
-        // 本轮只把闹钟回投与屏幕门禁的 Android 侧接到位：接收器响时 shell 仍可能为 null。
+        // 自装配（§4.1 的真实调用点）：闹钟要有人接、崩溃遗留要有人重投、任务中心要有档案 ——
+        // 这三件事都要求「壳在 Application 起来时就存在」，而不是等某个 Activity 顺手装配。
+        // 屏幕门禁取真 PowerManager（[screenGateOf]）；引擎工厂走 [AppShellKit] 的诚实缺省
+        // （native 宿主未落地 → 每次执行如实 CRASHED + 真原因，见 UnavailableEngine）。
+        //
+        // 放后台线程：`onCreate` 里做文件 IO（replay 两个 jsonl + 建目录）会拖慢冷启动，
+        // 而这几件事没有一件是"必须在 onCreate 返回前完成"的 —— 闹钟在那之前响就走
+        // 漏投记账（[AlarmDispatch]，不丢账），装配完成后再由 [install] 接上路线。
+        @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+        GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            installWithFiles(filesDir.toPath(), cacheDir.toPath())
+        }
+    }
+
+    /**
+     * 自装配装壳（[onCreate] 的落点；§4.1 Composition Root 的生产调用方）。
+     *
+     * 与 [install] 的分工：[install] 是"调用方已经装好了"，本条是"本类就地装" ——
+     * 目录约定与持久句柄的全在这一处（[AppShellKit.assemble]），Application 只负责
+     * 把 Android 侧的两件事喂进去：`filesDir`/`cacheDir` 与真屏幕门禁。
+     *
+     * **不传 a11y/screen 能力 handler**：`:app` 不得直连 `:platform`（§6），而持有真实现的
+     * 只能是本类的调用方（Activity 从 `:platform:capabilities` 拿到 `NamespaceHandler` 后
+     * 走 [install] 注入）。未注入 = 桥对 `a11y.*`/`screen.*` 如实回 `ERR_NOT_IMPLEMENTED`，
+     * 不伪造可用。
+     *
+     * 失败如实降级：装配抛错 → 记日志 + 壳保持 null（[alarmWork] 继续漏投记账），
+     * **绝不让一个半装的壳冒充就绪**（那会让闹钟投给一个没有 scheduler 的路线）。
+     *
+     * @return 装好的壳；null = 装配失败（已记日志，调用方可重试）。
+     */
+    fun installWithFiles(filesDir: Path, cacheDir: Path): AppShell? {
+        return try {
+            // 闹钟出口只建一次（[installAlarmPort] 先装过就用那份：取消/续排路径按同一份撤销）。
+            val port = alarmPort ?: AndroidAlarmPort(applicationContext, AlarmReceiver::class.java)
+                .also { alarmPort = it }
+            val built = AppShellKit.assemble(
+                filesDir = filesDir,
+                cacheDir = cacheDir,
+                schedulerProvider = AlarmSchedulerProvider(port = port),
+                screenGate = screenGateOf(this),
+            )
+            install(built.shell)
+            assembled = built
+            built.shell
+        } catch (t: Throwable) {
+            Log.e(TAG, "壳自装配失败：保持未就绪（闹钟走漏投记账，不伪造投递）", t)
+            null
+        }
     }
 
     /**
