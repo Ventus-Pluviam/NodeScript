@@ -166,6 +166,11 @@ class Scheduler(
     suspend fun recoverUncommitted(): List<RecoveryRecord> {
         val uncommitted = log.uncommitted()
         val recovered = mutableListOf<RecoveryRecord>()
+        // 先做**全档空档结算**（见 settleVoidArchive）：本次恢复要 reopen 的 intent 集合之外，
+        // 还可能有「档案 RUNNING 但意图行早已 COMMIT」的孤儿 —— 例如上一进程在 COMMIT 之后、
+        // 档案结算之前死掉（scheduler 的 recordLink 在 log.commit 之后，见其 KDoc）。
+        // 这类孤儿没有任何未 COMMIT 行可挂靠，逐 intent 的 settleOrphanArchive 永远看不到它。
+        settleVoidArchive(uncommitted.map { it.runId }.toSet())
         for (old in uncommitted) {
             val fresh = log.reopen(old.runId)                      // 单事务：封口 + 分配新 runId
             val pending = fresh.toPendingRun()
@@ -235,6 +240,12 @@ class Scheduler(
      * 顺序：在 [log.commit] **之后**执行 —— 本次执行的对外副作用已发生并已落日志，
      * 归档失败（持久层 IO 异常）只让档案缺失，不得回滚 COMMIT（否则 nonce 幂等集合丢失 →
      * 崩溃恢复会重投同一副作用）。
+     *
+     * **代价（已知并显式化）**：两者不是同一事务，中间崩溃会留下「意图行已终态、档案记录
+     * 不存在或停在非终态」的孤儿。前者的可见形态是档案缺行（记录本就是历史副本，缺失如实
+     * 呈现为"无档案"）；后者由 [recoverUncommitted] 的跨 intent 空档结算补账
+     * （[settleVoidArchive]）。反过来（先写档案）会让崩溃留下「档案有终态、意图未 COMMIT」，
+     * 恢复重投时会撞上档案的终态不可改写纪律 —— 那条路是响亮失败而非补账，更糟。
      */
     private suspend fun recordLink(pending: PendingRun, intentRunId: Long, link: EngineRunLink?, outcome: RunOutcome) {
         val a = archive ?: return
@@ -287,6 +298,36 @@ class Scheduler(
                     a.link(rec.id),
                 )
             }
+        }
+    }
+
+    /**
+     * 跨 intent 的空档结算（§8.5 `unfinished()` 的补集清理方）：
+     * [settleOrphanArchive] 只能看见「本次恢复要 reopen 的那些 intent」的档案，而
+     * 档案里 RUNNING 的记录未必挂在未 COMMIT 的 intent 上 —— 上一进程可能在
+     * `log.commit` **之后**、`recordLink` **之前**死掉（两者不同事务，见 [recordLink] 的 KDoc）：
+     * 意图行已是终态（不在 `uncommitted()` 里），档案记录却永远停在 RUNNING。
+     *
+     * 这类孤儿没有任何未 COMMIT 行可挂靠，逐 intent 的结算永远看不见它，
+     * `unfinished()` 于是只增不减。**恢复是唯一能安全做这件事的时机**：此刻本进程
+     * 才刚起来，引擎池必然空（before 任何 dispatch），档案里所有非终态记录都只能是
+     * 上一进程的遗物。运行期绝不能这么扫 —— 那会把正在跑的执行误判成孤儿。
+     *
+     * 只扫 [RunArchive.unfinished]（档案自报），不反查意图日志：档案是引擎侧的唯一事实源，
+     * 用它的自报做输入才是「谁的状态谁维护」；拿日志去猜档案该是什么状态会造出第二个真值。
+     *
+     * 关联（link）原样保留：link 是历史事实（那次执行确实由那个 intent 投递），
+     * 不因结算而消失 —— 任务中心仍可按 IntentRun 追到这条"失联"记录。
+     */
+    private suspend fun settleVoidArchive(reopeningIntentIds: Set<Long>) {
+        val a = archive ?: return
+        for (rec in a.unfinished()) {
+            val link = a.link(rec.id) ?: continue        // 无关联的记录不属意图日志管辖（独立执行），不结算
+            if (link.intentRunId in reopeningIntentIds) continue   // 本次恢复会经 settleOrphanArchive 处理，不重复写
+            a.put(
+                rec.copy(state = RunState.CRASHED, finishedAtMillis = clock()),
+                link,
+            )
         }
     }
 }

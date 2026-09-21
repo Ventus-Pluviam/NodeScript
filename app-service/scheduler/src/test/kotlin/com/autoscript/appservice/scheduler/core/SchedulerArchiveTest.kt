@@ -172,4 +172,63 @@ class SchedulerArchiveTest {
         assertEquals(RunState.CRASHED, archive.record(9_555L)!!.state, "失联的执行如实 CRASHED")
         assertTrue(archive.unfinished().none { it.id == 9_555L }, "unfinished 不再泄漏")
     }
+
+    @Test
+    fun `空档孤儿：意图行已 COMMIT 但档案停在 RUNNING 同样结算`() = runBlocking {
+        val archive = InMemoryRunArchive()
+        val log = freshLog()
+        val s = scheduler(log, archive, LinkingDispatcher(engineLink))
+
+        // 崩溃形态：commit 之后、recordLink 之前死掉 —— 意图行已是终态（不在 uncommitted 里），
+        // 档案记录却永远停在 RUNNING，没有任何未 COMMIT 行可挂靠
+        val committed = log.appendStart("p", "a.js", "nonce-done", TriggerSource.TIMED, now)
+        log.commit(committed.runId, RunOutcome.Succeeded)
+        archive.put(
+            RunRecord(
+                id = 9_777L, projectId = "p", scriptPath = "a.js",
+                runNonce = "nonce-done", state = RunState.RUNNING, startedAtMillis = now,
+            ),
+            EngineRunLink(intentRunId = committed.runId, engineRunId = 9_777L),
+        )
+
+        val recovered = s.recoverUncommitted()
+
+        assertTrue(recovered.isEmpty(), "无未 COMMIT 行：恢复不重投")
+        assertEquals(RunState.CRASHED, archive.record(9_777L)!!.state, "空档孤儿由全档结算补账")
+        assertEquals(
+            EngineRunLink(committed.runId, 9_777L), archive.link(9_777L),
+            "关联原样保留：仍可按 IntentRun 追到这条失联记录",
+        )
+        assertTrue(archive.unfinished().isEmpty(), "unfinished 不再泄漏")
+    }
+
+    @Test
+    fun `空档结算只认有意图关联的记录，独立执行不误伤`() = runBlocking {
+        val archive = InMemoryRunArchive()
+        val log = freshLog()
+        val s = scheduler(log, archive, LinkingDispatcher(engineLink))
+
+        // 无 link：不属意图日志管辖（独立执行），恢复路径不得替它下结论
+        archive.put(
+            RunRecord(
+                id = 9_888L, projectId = "p", scriptPath = "b.js",
+                runNonce = "nonce-standalone", state = RunState.RUNNING, startedAtMillis = now,
+            ),
+            null,
+        )
+        // 本次恢复要 reopen 的 intent 关联的记录：由逐 intent 的 settleOrphanArchive 处理
+        val reopening = log.appendStart("p", "a.js", "nonce-reopening", TriggerSource.TIMED, now)
+        archive.put(
+            RunRecord(
+                id = 9_999L, projectId = "p", scriptPath = "a.js",
+                runNonce = "nonce-reopening", state = RunState.RUNNING, startedAtMillis = now,
+            ),
+            EngineRunLink(intentRunId = reopening.runId, engineRunId = 9_999L),
+        )
+
+        s.recoverUncommitted()
+
+        assertEquals(RunState.RUNNING, archive.record(9_888L)!!.state, "无关联记录不被空档结算动")
+        assertEquals(RunState.CRASHED, archive.record(9_999L)!!.state, "属本次 reopen 的记录照样结算")
+    }
 }
