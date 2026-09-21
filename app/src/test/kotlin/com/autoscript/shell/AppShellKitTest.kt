@@ -17,6 +17,7 @@ import com.autoscript.domain.scripts.RunState
 import com.autoscript.domain.scripts.isTerminal
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -77,6 +78,38 @@ class AppShellKitTest {
             assertTrue(Files.isDirectory(files.resolve("scripts")), "§10.2：项目根 = files/scripts")
             assertNotNull(assembled.npmHandler, "npm 命名空间由配方自建并挂上")
         }
+    }
+
+    /**
+     * 看门狗开机即转（§8.4）：不转的话三路判据只是"可以转"，在途 run 的出格行为
+     * （心跳停摆/CPU 风暴/状态分歧）没有一个周期性观察者；且关壳必须停掉轮转
+     * —— 否则轮转会继续去问一个已经关掉的池。
+     */
+    @Test
+    fun `看门狗随装配开转，关壳即停`() {
+        val s = kit()
+        assertTrue(s.shell.watchdog.isRunning(), "装壳即开始轮转（无需调用方再记一步）")
+        s.close()
+        assertFalse(s.shell.watchdog.isRunning(), "关壳必须停轮转：池/持久句柄都在它底下")
+    }
+
+    /** 调用方自带域时不夺所有权：关壳不停别人的域（谁给域谁负责停）。 */
+    @Test
+    fun `调用方给域时关壳不动它`() {
+        val mine = kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default,
+        )
+        val s = AppShellKit.assemble(
+            filesDir = files,
+            cacheDir = cache,
+            schedulerProvider = RecordingProvider(),
+            screenGate = ScreenGate.AllowAll,
+            watchdogScope = mine,
+        )
+        assertTrue(s.shell.watchdog.isRunning())
+        s.close()
+        assertTrue(s.shell.watchdog.isRunning(), "壳不取消不属于它的域")
+        (mine.coroutineContext[kotlinx.coroutines.Job])!!.cancel()
     }
 
     @Test

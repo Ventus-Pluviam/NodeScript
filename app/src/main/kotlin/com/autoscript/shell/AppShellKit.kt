@@ -5,6 +5,9 @@ import com.autoscript.appservice.runtime.EngineWatchdog
 import com.autoscript.appservice.runtime.ProcessMonitor
 import com.autoscript.appservice.runtime.UnavailableEngine
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
 import com.autoscript.appservice.scheduler.persist.JournalFileStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
@@ -43,15 +46,32 @@ import java.nio.file.Path
  */
 object AppShellKit {
 
-    /** 装壳产物：壳 + 随壳创建的持久句柄（关壳即成对释放）。 */
-    class AssembledShell(
+    /**
+     * 壳自己的协程域（看门狗轮转住这里）。
+     *
+     * 为什么由配方持有而不是让 Application 传一个：[EngineWatchdog.start] 挂上之后，
+     * 「谁负责停」必须有着落，否则要么泄漏（进程级 GlobalScope）、要么停不掉。这里用
+     * [SupervisorJob] + 壳自己的 close 收口：**子任务失败不牵连壳**（看门狗一轮采样抛错
+     * 不能让调度也停），关壳即停轮转。调用方要换成自己的域（如 UI 生命周期域）时传
+     * [assemble] 的 `watchdogScope`。
+     */
+    internal class ShellScope : CoroutineScope {
+        override val coroutineContext = SupervisorJob() + kotlinx.coroutines.Dispatchers.Default
+        val job get() = coroutineContext[kotlinx.coroutines.Job]!!
+        fun cancel() = job.cancel()
+    }
+
+    /** 装壳产物：壳 + 随壳创建的持久句柄 + 看门狗域（关壳即全部收口）。 */
+    class AssembledShell internal constructor(
         val shell: AppShell,
         private val log: PersistentIntentLog,
         private val archive: RunArchive,
         /** npm 装配产出的 handler（装配测试/诊断用；null 表示本次装配未挂 npm）。 */
         val npmHandler: NamespaceHandler?,
+        private val scope: ShellScope?,
     ) : AutoCloseable {
         override fun close() {
+            scope?.cancel()          // 先停看门狗轮转，再关壳/持久句柄（轮转中不得关底下的池）
             shell.close()
             (archive as? AutoCloseable)?.close()
             log.close()
@@ -90,6 +110,8 @@ object AppShellKit {
      * @param a11yHandler / @param screenHandler `:platform:capabilities` 的真实现（经
      *   `CapabilityNamespaces.{a11y,screen}` 转接）；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param npmHandler npm 命名空间实现；null = 本配方自建（[NpmShellKit]）。
+     * @param watchdogScope 看门狗轮转的协程域；null = 本配方自建一个壳自己的域
+     *   （[AssembledShell.close] 时取消）。传自己的域 = 你自己负责停（见 [EngineWatchdog.start]）。
      */
     fun assemble(
         filesDir: Path,
@@ -103,6 +125,7 @@ object AppShellKit {
         poolCapacity: Int = 1,
         monitor: ProcessMonitor = ProcessMonitor(),
         watchdog: EngineWatchdog? = null,
+        watchdogScope: CoroutineScope? = null,
     ): AssembledShell {
         val autojsDir = filesDir.resolve(".autojs")
         Files.createDirectories(autojsDir)
@@ -127,6 +150,18 @@ object AppShellKit {
             watchdog = watchdog,
             npmHandler = npm,
         )
-        return AssembledShell(shell, log, archive, npm)
+        // 看门狗开机即转（§8.4）：不转的话三路判据就只是"可以转"——在途 run 的出格行为
+        // 没有一个周期性的观察者，`awaitCompletion` 的等待超时是唯一兜底（而它只管
+        // dispatcher 自己发起的那条路）。域要么调用方给，要么壳自己持（close 时取消）。
+        val ownedScope: ShellScope?
+        if (watchdogScope != null) {
+            shell.startWatchdog(watchdogScope)
+            ownedScope = null
+        } else {
+            val fresh = ShellScope()
+            shell.startWatchdog(fresh)
+            ownedScope = fresh
+        }
+        return AssembledShell(shell, log, archive, npm, ownedScope)
     }
 }
