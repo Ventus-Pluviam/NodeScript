@@ -78,11 +78,12 @@ class SchedulerArchiveTest {
                 projectId = "p",
                 scriptPath = "a.js",
                 runNonce = run.runNonce,
-                state = RunState.RUNNING,
+                state = RunState.SUCCEEDED,
                 startedAtMillis = now,
+                finishedAtMillis = now,
             ),
             records.single(),
-            "档案带项目/脚本/nonce/起始时刻，状态起步 RUNNING",
+            "档案带项目/脚本/nonce/起止时刻：dispatcher 返回时执行已终结，落地即终态",
         )
     }
 
@@ -128,5 +129,47 @@ class SchedulerArchiveTest {
         s.onTrigger("t3", scheduledAtMillis = now)
 
         assertEquals(RunOutcome.Succeeded, log.all().single().outcome, "归档缺省不影响投递/COMMIT")
+    }
+
+    @Test
+    fun `归档按 outcome 落终态：失败对偶 FAILED、被杀对偶 CRASHED`() = runBlocking {
+        suspend fun stateOf(outcome: RunOutcome): RunState {
+            val archive = InMemoryRunArchive()
+            val log = freshLog()
+            val s = scheduler(log, archive, LinkingDispatcher(engineLink, outcome))
+            s.schedule(ScheduledTask("t-$outcome", "任务", "p", "a.js", TimedSchedule.Once(0)))
+            s.onTrigger("t-$outcome", scheduledAtMillis = now)
+            return archive.recordsOfIntent(log.all().single().runId).single().state
+        }
+        assertEquals(RunState.FAILED, stateOf(RunOutcome.Failed))
+        assertEquals(RunState.CRASHED, stateOf(RunOutcome.Crashed("看门狗强杀")))
+        assertEquals(RunState.CANCELLED, stateOf(RunOutcome.Cancelled))
+    }
+
+    @Test
+    fun `恢复结算旧档案孤儿：宿主死时没结算的 RUNNING 如实 CRASHED`() = runBlocking {
+        val archive = InMemoryRunArchive()
+        val log = freshLog()
+        val s = scheduler(log, archive, LinkingDispatcher(engineLink))
+
+        // 崩溃前那次执行：档案里 RUNNING，但宿主死了（新进程永远结算不了它）
+        // 遗留意向的旧行恰好就是那次执行的意图行：reopen 会封口它，孤儿结算认它
+        val old = log.appendStart("p", "a.js", "nonce-orphan", TriggerSource.TIMED, now)
+        archive.put(
+            RunRecord(
+                id = 9_555L,
+                projectId = "p",
+                scriptPath = "a.js",
+                runNonce = "nonce-before-crash",
+                state = RunState.RUNNING,
+                startedAtMillis = now,
+            ),
+            EngineRunLink(intentRunId = old.runId, engineRunId = 9_555L),
+        )
+
+        s.recoverUncommitted()
+
+        assertEquals(RunState.CRASHED, archive.record(9_555L)!!.state, "失联的执行如实 CRASHED")
+        assertTrue(archive.unfinished().none { it.id == 9_555L }, "unfinished 不再泄漏")
     }
 }

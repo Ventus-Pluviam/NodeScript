@@ -4,6 +4,7 @@ import com.autoscript.domain.scripts.EngineRunLink
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
+import com.autoscript.domain.scripts.isTerminal
 import java.time.ZoneId
 
 /**
@@ -122,7 +123,7 @@ class Scheduler(
                 // 由归档器把两侧成对写入（RunArchive.put + EngineRunLink）。
                 val report = dispatcher.dispatchToReport(pending.copy(intentRunId = started.runId))
                 log.commit(started.runId, report.outcome)
-                recordLink(pending, started.runId, report.link)
+                recordLink(pending, started.runId, report.link, report.outcome)
             }
         } catch (t: Throwable) {
             // 投递失败如实落地：本轮不 commit（意图日志无 STARTED 或保持未 COMMIT，交由恢复路径裁决），
@@ -183,7 +184,8 @@ class Scheduler(
             }
             val report = dispatcher.dispatchToReport(pending)     // 恢复重投同样归档（§8.5）
             log.commit(fresh.runId, report.outcome)
-            recordLink(pending, fresh.runId, report.link)
+            recordLink(pending, fresh.runId, report.link, report.outcome)
+            settleOrphanArchive(old.runId)   // 旧意向的档案若还有未终态记录：宿主死时没结算，如实 CRASHED
             recovered += RecoveryRecord(
                 oldRunId = old.runId,
                 newRunId = fresh.runId,
@@ -224,8 +226,9 @@ class Scheduler(
      * 归档落点（§8.5）：把「意图日志行 ↔ 引擎执行」成对写入 [RunArchive]。
      *
      * 只在 dispatcher **真的产生了引擎执行**（[DispatchReport.link] != null）时写：
-     * - 登记一条 RUNNING 档案（含 [EngineRunLink]）——任务中心立即可见「引擎在跑」；
-     *   终态结算由任务中心/UI 侧按需前进（[RunState] 状态机不允许改写终态）。
+     * - 按 [outcome] 直接写终态（[RunOutcome] → [RunState] 见 [outcomeState]），附起止时刻。
+     *   dispatcher 返回时执行体已经结束（`awaitCompletion` 在 dispatcher 内部走完），
+     *   先写 RUNNING 再结算只是无意义的两次 `put` —— 档案落地即终态，append-only 纪律不变。
      * - link 为 null（门禁拒绝/排队超时/启动失败）如实不建档案，绝不写「有档案、实际没有
      *   对应执行」的孤儿记录。
      *
@@ -233,18 +236,58 @@ class Scheduler(
      * 归档失败（持久层 IO 异常）只让档案缺失，不得回滚 COMMIT（否则 nonce 幂等集合丢失 →
      * 崩溃恢复会重投同一副作用）。
      */
-    private suspend fun recordLink(pending: PendingRun, intentRunId: Long, link: EngineRunLink?) {
+    private suspend fun recordLink(pending: PendingRun, intentRunId: Long, link: EngineRunLink?, outcome: RunOutcome) {
         val a = archive ?: return
         if (link == null) return
+        val now = clock()
         val record = RunRecord(
             id = link.engineRunId,
             projectId = pending.projectId,
             scriptPath = pending.scriptPath,
             runNonce = pending.runNonce,
-            state = RunState.RUNNING,
-            startedAtMillis = clock(),
+            state = outcomeState(outcome),
+            startedAtMillis = now,
+            finishedAtMillis = now,
         )
         a.put(record, link)
+    }
+
+    /**
+     * [RunOutcome] → [RunState]（归档终态映射，§8.5）：
+     * - Succeeded → SUCCEEDED；Failed → FAILED；
+     * - Crashed → CRASHED（引擎被杀/OOM/看门狗/等待超时强杀）；
+     * - Cancelled → CANCELLED；Interrupted（过期封账/崩溃封口）→ CANCELLED
+     *   （恢复路径不写档案 —— 过期意向从未投递，`recordLink` 调用前已被 `link == null`
+     *   或显式分支过滤；这里只为穷举完备）。
+     */
+    private fun outcomeState(outcome: RunOutcome): RunState = when (outcome) {
+        RunOutcome.Succeeded -> RunState.SUCCEEDED
+        RunOutcome.Failed -> RunState.FAILED
+        is RunOutcome.Crashed -> RunState.CRASHED
+        RunOutcome.Cancelled -> RunState.CANCELLED
+        RunOutcome.Interrupted -> RunState.CANCELLED
+    }
+    /**
+     * 恢复时的档案孤儿结算（§8.5 `unfinished` 的清理方）：旧意向 [oldIntentRunId] 关联的
+     * 档案里还有没终态的记录，说明宿主死时那次执行没结算 —— 而这个新进程永远不可能再
+     * 观察/杀死/等待它（引擎句柄随旧进程一起死了），留 RUNNING 是对任务中心撒谎
+     * （`unfinished()` 只增不减，"在跑"列表越积越长）。
+     *
+     * 如实记 [RunState.CRASHED]：从档案视角看，这次执行确实没跑完就失联了。
+     * 诚实边界：引擎 OS 进程可能还活着（宿主死不等于引擎死），但那已是 native 宿主的
+     * 孤儿进程问题，本层无 pid 无句柄，CRASHED 表达的是"失联"，不是"已杀死"。
+     * 已终态的记录不动（`put` 的终态不可改写纪律会响亮失败，所以先过滤）。
+     */
+    private suspend fun settleOrphanArchive(oldIntentRunId: Long) {
+        val a = archive ?: return
+        for (rec in a.recordsOfIntent(oldIntentRunId)) {
+            if (!rec.state.isTerminal) {
+                a.put(
+                    rec.copy(state = RunState.CRASHED, finishedAtMillis = clock()),
+                    a.link(rec.id),
+                )
+            }
+        }
     }
 }
 
