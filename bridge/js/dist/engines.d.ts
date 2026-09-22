@@ -20,6 +20,14 @@ export interface EngineRunRequest {
     readonly args?: readonly string[];
     readonly runNonce?: string | null;
     readonly timeoutMillis?: number | null;
+    /**
+     * 满池排队上限（毫秒；透传进 exec payload 的 `waitTimeoutMillis`，Kotlin 侧优先于
+     * 桥 TTL 取用 —— 见 handler `exec` 注释）。
+     * 缺省（undefined/null）= 不发该键（JSON.stringify 自动丢弃），宿主按桥 TTL 推导；
+     * 想"桥 TTL 留长、排队等得短"时显式给（如 TTL 120s + 排队 10s → 满池 10s 即诚实
+     * ERR_TIMEOUT，不必把整条调用的 TTL 一起砍短）。
+     */
+    readonly waitTimeoutMillis?: number | null;
 }
 /** 池统计（与 :app-service:runtime EnginePool 统计对齐）。 */
 export interface EnginePoolStats {

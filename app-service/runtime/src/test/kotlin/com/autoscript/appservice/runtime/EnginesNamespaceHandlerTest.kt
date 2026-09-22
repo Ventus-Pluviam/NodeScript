@@ -68,8 +68,8 @@ class EnginesNamespaceHandlerTest {
         )
         val held =
             (EngineBridgeJson.decodeObject(first.payload!!)["runId"] as EngineBridgeJson.Value.N).raw.toLong()
-        // 排队上限只来自桥侧 TTL（payload 不再收 waitTimeoutMillis）：槽位被 held 占着，
-        // 第二个请求等满 300ms TTL → ERR_TIMEOUT，绝不无限挂住（§7.4 每次跨进程操作必有 TTL）。
+        // 排队上限 = payload waitTimeoutMillis 优先，否则桥侧 TTL：槽位被 held 占着，
+        // 第二个请求未带显式上限，等满 300ms TTL → ERR_TIMEOUT，绝不无限挂住（§7.4 每次跨进程操作必有 TTL）。
         val queued = assertInstanceOf(
             EnginesNamespaceHandler.Response.Err::class.java,
             h.handle(
@@ -100,6 +100,51 @@ class EnginesNamespaceHandlerTest {
             (EngineBridgeJson.decodeObject(retry.payload!!)["runId"] as EngineBridgeJson.Value.N).raw.toLong()
         assertTrue(retryId != held, "释放后的槽位应分配给新 run")
         Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `exec 排队上限 payload 显式值优先于桥 TTL`() = runBlocking {
+        val (h, _) = handler()
+        val first = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(EnginesNamespaceHandler.Request(1, "exec", execPayload())),
+        )
+        val held =
+            (EngineBridgeJson.decodeObject(first.payload!!)["runId"] as EngineBridgeJson.Value.N).raw.toLong()
+        val begin = System.currentTimeMillis()
+        val queued = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Err::class.java,
+            h.handle(
+                EnginesNamespaceHandler.Request(
+                    2,
+                    "exec",
+                    execPayload("p2", "b.js", ",\"waitTimeoutMillis\":200"),
+                    ttlMillis = 30_000,
+                ),
+            ),
+        )
+        val elapsed = System.currentTimeMillis() - begin
+        assertEquals("ERR_TIMEOUT", queued.code, "显式排队上限到期 → ERR_TIMEOUT")
+        assertTrue(elapsed < 10_000, "显式上限应先于 TTL 到期（实际 ${elapsed}ms）")
+        h.handle(EnginesNamespaceHandler.Request(3, "stop", "{\"runId\":$held}"))
+        Unit
+    }
+
+    @Test
+    fun `exec 非法 waitTimeoutMillis 回 ERR_INVALID_PARAM`() = runBlocking {
+        val (h, _) = handler()
+        val resp = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Err::class.java,
+            h.handle(
+                EnginesNamespaceHandler.Request(
+                    1,
+                    "exec",
+                    execPayload("p1", "a.js", ",\"waitTimeoutMillis\":\"soon\""),
+                ),
+            ),
+        )
+        assertEquals("ERR_INVALID_PARAM", resp.code, "排队上限非数字 → 参数错误")
+        Unit
     }
 
     @Test

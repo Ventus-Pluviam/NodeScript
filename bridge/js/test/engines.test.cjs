@@ -152,6 +152,16 @@ test('engines.exec → runId + handle:{refId,generation}（Kotlin 形状）', as
   assert.strictEqual(runs.get(s.runId).payload.runNonce, 'n1', 'runNonce 透传（§8.5）')
   assert.deepEqual(runs.get(s.runId).payload.args, ['x'])
 })
+test('engines.exec waitTimeoutMillis 透传 payload（Kotlin 优先口径）', async () => {
+  const runs = installMockEngines()
+  for (const [runId] of runsSnapshot()) await auto.engines.stop(runId).catch(() => {})
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js', waitTimeoutMillis: 200 })
+  assert.strictEqual(runs.get(s.runId).payload.waitTimeoutMillis, 200, '显式排队上限进 payload（Kotlin 侧优先于桥 TTL）')
+  await auto.engines.stop(s.runId)
+  const s2 = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  assert.strictEqual('waitTimeoutMillis' in runs.get(s2.runId).payload, false, '缺省不发该键（JSON.stringify 丢弃 undefined）→ 宿主按桥 TTL 推导')
+  await auto.engines.stop(s2.runId)
+})
 
 /** 跨 test 共享的 mock runs 快照（单例桥：前序 test 的遗留 run 需显式清理）。 */
 function runsSnapshot() {
