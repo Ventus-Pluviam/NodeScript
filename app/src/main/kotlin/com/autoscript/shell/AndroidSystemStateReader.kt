@@ -114,8 +114,9 @@ class AndroidSystemStateReader(
  * 清单随库合并进 :app）——用户在设置里开启后 [accessibilityEnabled] 即为 true；
  * 启用列表与进程内 `onServiceConnected` 之间有极短窗口，此时桥侧如实
  * ERR_SERVICE_DISABLED（探针不冒充连接态）。[screenCaptureActive] 仍如实为
- * false 直到 MediaProjection 会话随 §9.2 落地。门禁说不可用，就不会有脚本
- * 以为自己拿到了无障碍。
+ * false 直到 MediaProjection 会话随 §9.2 落地 —— 无障碍截图通道已可用（§9.2 a11y
+ * 路径）不改本探针语义：探针问的是"投影会话在不在"，不是"能不能截"。门禁说不可用，
+ * 就不会有脚本以为自己拿到了完整屏幕采集。
  */
 class AndroidCapabilityProbes(context: Context) : CapabilityProbes {
 

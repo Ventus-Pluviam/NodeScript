@@ -3,19 +3,28 @@ package com.autoscript.platform.capabilities
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Build
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.autoscript.domain.automation.GestureInput
 import com.autoscript.domain.automation.ScrollDirection
+import com.autoscript.domain.automation.ScreenSnapshot
 import com.autoscript.domain.automation.UiBounds
 import com.autoscript.domain.automation.WindowScope
+import com.autoscript.domain.core.AutojsException
+import com.autoscript.domain.core.ErrorCode
+import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.CompletableDeferred
 
 /**
  * 无障碍服务本体（docs §9.1「服务在 :main」；清单见本模块 AndroidManifest.xml）。
@@ -57,7 +66,10 @@ class AutoScriptAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 }
 
-/** 设备面 [A11yBridge]：窗口根/手势/剪贴板直通系统 API。 */
+/** 帧 JPEG 质量（P0 像素只做存活证明 + 未来像素面的原料，90 兼顾体积与可读）。 */
+private const val JPEG_QUALITY = 90
+
+/** 设备面 [A11yBridge]：窗口根/手势/剪贴板/截图直通系统 API。 */
 @Suppress("DEPRECATION") // AccessibilityWindowInfo.root API33 起弃用（改 activeChild），P0 取根语义不变
 private class ServiceBridge(private val service: AccessibilityService) : A11yBridge {
 
@@ -104,6 +116,114 @@ private class ServiceBridge(private val service: AccessibilityService) : A11yBri
             )
         }
         return service.dispatchGesture(builder.build(), null, null)
+    }
+
+    // ── 屏幕采集（§9.2 a11y 截图路径 / §8.8 分类错误）────────────────
+
+    override suspend fun screenSnapshot(): ScreenSnapshot {
+        val locked = service.getSystemService(KeyguardManager::class.java)?.isDeviceLocked ?: false
+        // secureForeground 恒 false：见 A11yBridge.screenSnapshot KDoc（读不到窗口 flag，
+        // 安全窗由 takeScreenshot 的 ERROR_TAKE_SCREENSHOT_SECURE_WINDOW 分类兜底）。
+        val hasWindows = !service.windows.isNullOrEmpty() || service.rootInActiveWindow != null
+        return ScreenSnapshot(locked = locked, secureForeground = false, hasWindows = hasWindows)
+    }
+
+    /**
+     * a11y 截一帧：API34+ 走窗口级 `takeScreenshotOfWindow`（§9.2 默认），API30–33 走
+     * 显示级 `takeScreenshot`（两法都要配置 `canTakeScreenshot=true`，已进 res/xml），
+     * API<30 如实 ERR_NOT_IMPLEMENTED（不伪造降级通道）。
+     * 回调线程 → CompletableDeferred 回到协程；失败码按下表分类（§8.8 不返回黑图）：
+     * SECURE_WINDOW→BLACK_FRAME · INTERVAL_TIME_SHORT→INVALID_PARAM（退避） ·
+     * NO_ACCESSIBILITY/INVALID_*→SERVICE_DISABLED · INTERNAL→ERR_IO。
+     */
+    override suspend fun takeScreenshot(): ProducedFrame {
+        val sdk = Build.VERSION.SDK_INT
+        if (sdk < Build.VERSION_CODES.R) {
+            throw AutojsException(
+                ErrorCode.ERR_NOT_IMPLEMENTED,
+                "无障碍截图需 API30+（当前 $sdk）；MediaProjection 会话路径待接入",
+            )
+        }
+        val deferred = CompletableDeferred<Result<AccessibilityService.ScreenshotResult>>()
+        // 具名嵌套类而非 object :（匿名类的合成名进不了 ArchUnit 服务面豁免名单）。
+        val callback = ScreenshotCallback(deferred)
+        if (sdk >= 34) {
+            val windowId = activeWindowId()
+                ?: throw AutojsException(ErrorCode.ERR_SERVICE_DISABLED, "无活动窗口，截图通道不可用")
+            service.takeScreenshotOfWindow(windowId, service.mainExecutor, callback)
+        } else {
+            service.takeScreenshot(Display.DEFAULT_DISPLAY, service.mainExecutor, callback)
+        }
+        val result = deferred.await().getOrElse { throw mapScreenshotFailure(it) }
+        return frameOf(result)
+    }
+
+    private class ScreenshotFailed(val code: Int) : Exception("takeScreenshot failed: $code")
+
+    /** 回调 → deferred（具名类：ArchUnit 服务面豁免按简单名匹配，匿名合成名挂不上）。 */
+    private class ScreenshotCallback(
+        private val deferred: CompletableDeferred<Result<AccessibilityService.ScreenshotResult>>,
+    ) : AccessibilityService.TakeScreenshotCallback {
+        override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+            deferred.complete(Result.success(result))
+        }
+
+        override fun onFailure(errorCode: Int) {
+            deferred.complete(Result.failure(ScreenshotFailed(errorCode)))
+        }
+    }
+
+    private fun mapScreenshotFailure(failure: Throwable): AutojsException {
+        val code = (failure as? ScreenshotFailed)?.code
+        val (error, why) = when (code) {
+            AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW ->
+                ErrorCode.ERR_BLACK_FRAME to "前台窗口 FLAG_SECURE，系统拒绝（不返回黑图）"
+            AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT ->
+                ErrorCode.ERR_INVALID_PARAM to "系统截图间隔过短，调用方退避重试"
+            AccessibilityService.ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS ->
+                ErrorCode.ERR_SERVICE_DISABLED to "无障碍截图通道不可用（服务失效/未授予）"
+            AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY,
+            AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_WINDOW ->
+                ErrorCode.ERR_SERVICE_DISABLED to "无有效显示/窗口可截"
+            else -> ErrorCode.ERR_IO to "系统截图内部错误（code=$code）"
+        }
+        return AutojsException(error, "截图失败：$why", failure)
+    }
+
+    private fun activeWindowId(): Int? {
+        val windows = service.windows ?: return null
+        return windows.firstOrNull { it.isActive }?.id
+            ?: windows.firstOrNull { it.isFocused }?.id
+            ?: windows.firstOrNull()?.id
+    }
+
+    /** ScreenshotResult → 实际尺寸 JPEG 字节（HardwareBuffer 用完即关，Bitmap 拷软后压缩）。 */
+    private fun frameOf(result: AccessibilityService.ScreenshotResult): ProducedFrame {
+        val buffer = result.hardwareBuffer
+            ?: throw AutojsException(ErrorCode.ERR_IO, "截图结果无 HardwareBuffer")
+        try {
+            val hardware = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
+                ?: throw AutojsException(ErrorCode.ERR_IO, "HardwareBuffer 包装失败")
+            val width = hardware.width
+            val height = hardware.height
+            val software = try {
+                hardware.copy(Bitmap.Config.ARGB_8888, false)
+                    ?: throw AutojsException(ErrorCode.ERR_IO, "位图软拷贝失败")
+            } finally {
+                hardware.recycle()
+            }
+            val out = ByteArrayOutputStream()
+            try {
+                if (!software.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) {
+                    throw AutojsException(ErrorCode.ERR_IO, "帧压缩失败")
+                }
+            } finally {
+                software.recycle()
+            }
+            return ProducedFrame(out.toByteArray(), width, height)
+        } finally {
+            buffer.close()
+        }
     }
 
     private val clipboard: ClipboardManager

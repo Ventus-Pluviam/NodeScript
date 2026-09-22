@@ -20,11 +20,12 @@ import org.junit.jupiter.api.Test
  */
 class ArchitectureTest {
 
-    /** 设备面唯一触点（同文件私有类独立 class 文件，按名排除）。 */
+    /** 设备面唯一触点（同文件私有类独立 class 文件，按名排除；截图回调同属服务面）。 */
     private val androidExempt = arrayOf(
         "AutoScriptAccessibilityService",
         "ServiceBridge",
         "ServiceNode",
+        "ScreenshotCallback",
     )
 
     @Test
@@ -47,7 +48,7 @@ class ArchitectureTest {
     }
 
     @Test
-    fun `android 只许服务三件碰`() {
+    fun `android 只许服务面名单碰`() {
         val classes: JavaClasses =
             ClassFileImporter().importPackages("com.autoscript.platform.capabilities")
 
@@ -56,6 +57,7 @@ class ArchitectureTest {
             .and().doNotHaveSimpleName("AutoScriptAccessibilityService")
             .and().doNotHaveSimpleName("ServiceBridge")
             .and().doNotHaveSimpleName("ServiceNode")
+            .and().doNotHaveSimpleName("ScreenshotCallback")
             .should().dependOnClassesThat().resideInAnyPackage("android..")
             .check(classes)
     }

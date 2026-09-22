@@ -17,8 +17,9 @@ import java.util.concurrent.atomic.AtomicLong
  * 分类错误（ERR_SCREEN_LOCKED/ERR_BLACK_FRAME/ERR_SERVICE_DISABLED），绝不返回黑图。
  *
  * 本类是 JVM 可测形态：帧内容由 [FrameProducer] 注入（内存假帧）；
- * Android 真实现替换 producer（a11y takeScreenshot 333ms 节流 / MediaProjection
- * ImageReader→libimgnative.so），本类的节流/句柄/会话语义不变。
+ * Android 真实现 [AndroidFrameProducer] 已接（a11y `takeScreenshot`，节流/句柄/
+ * 会话语义在本类不变）；MediaProjection ImageReader→libimgnative.so 是后续升级，
+ * 换 producer 即插。
  *
  * - 333ms 节流（a11y takeScreenshotOfWindow，API34）：同源连续 capture 按
  *   [THROTTLE_MILLIS] 限频，节流命中抛 ERR_INVALID_PARAM（调用方退避重试，
@@ -34,8 +35,13 @@ class ScreenshotSource(
 ) : com.autoscript.domain.automation.FrameSource {
 
     interface FrameProducer : SnapshotAwareProducer {
-        /** 产出一帧像素（内容 opaque，本类只管句柄/尺寸记账；空字节视为无可用帧）。 */
-        suspend fun produce(width: Int, height: Int): ByteArray
+        /**
+         * 产出一帧像素（内容 opaque；空字节视为无可用帧）。
+         * 入参是**请求提示**（生产者可忽略 —— 系统给实际尺寸）；回包尺寸以
+         * [ProducedFrame] 为准 —— ImageFrame 的 width/height 必须是真实帧尺寸，
+         * 曾经固定回 DEFAULT 尺寸就是对 JS 报假尺寸（wire 上的谎一律不留）。
+         */
+        suspend fun produce(width: Int, height: Int): ProducedFrame
     }
 
     private val ids = AtomicLong(1)
@@ -61,11 +67,11 @@ class ScreenshotSource(
             }
             lastCaptureAt = now
         }
-        val bytes = producer.produce(DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        if (bytes.isEmpty()) {
+        val frame = producer.produce(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        if (frame.bytes.isEmpty()) {
             throw AutojsException(ErrorCode.ERR_SERVICE_DISABLED, "帧生产者无可用帧")
         }
-        return track(ImageFrame(HandleRef(ids.getAndIncrement(), 1L), DEFAULT_WIDTH, DEFAULT_HEIGHT))
+        return track(ImageFrame(HandleRef(ids.getAndIncrement(), 1L), frame.width, frame.height))
     }
 
     override suspend fun openSession(): ScreenCaptureSession {
@@ -93,11 +99,11 @@ class ScreenshotSource(
         if (snapshotFirst) {
             ScreenPolicy.requireCapturable(producer.snapshot())
         }
-        val bytes = producer.produce(DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        if (bytes.isEmpty()) {
+        val frame = producer.produce(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        if (frame.bytes.isEmpty()) {
             throw AutojsException(ErrorCode.ERR_SERVICE_DISABLED, "会话无可用帧")
         }
-        return track(ImageFrame(HandleRef(ids.getAndIncrement(), 1L), DEFAULT_WIDTH, DEFAULT_HEIGHT))
+        return track(ImageFrame(HandleRef(ids.getAndIncrement(), 1L), frame.width, frame.height))
     }
 
     private suspend fun track(frame: ImageFrame): ImageFrame {
@@ -124,10 +130,19 @@ class ScreenshotSource(
 
     companion object {
         const val THROTTLE_MILLIS: Long = 333
+
+        /** 请求提示（给生产者的建议尺寸）；**不是**回包尺寸 —— 回包取 [ProducedFrame] 真实值。 */
         const val DEFAULT_WIDTH: Int = 1080
         const val DEFAULT_HEIGHT: Int = 2400
     }
 }
+
+/**
+ * 一帧的产出（bytes 内容 opaque + 实际尺寸）。
+ * 尺寸随帧走：设备面（a11y `ScreenshotResult` 的 HardwareBuffer）知道真值，
+ * 语义面照抄 —— 中间不留"默认尺寸"的谎位。
+ */
+data class ProducedFrame(val bytes: ByteArray, val width: Int, val height: Int)
 
 /** 帧生产者附带屏幕快照（采集前策略判定输入；Android 实现经 KeyguardManager/窗口态组装）。 */
 interface SnapshotAwareProducer {

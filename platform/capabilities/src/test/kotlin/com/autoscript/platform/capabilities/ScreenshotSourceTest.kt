@@ -20,7 +20,8 @@ private fun producerOf(
     override suspend fun snapshot(): ScreenSnapshot =
         if (snapshots != null && snapshots.isNotEmpty()) snapshots.removeFirst() else snapshot
 
-    override suspend fun produce(width: Int, height: Int): ByteArray = bytes
+    override suspend fun produce(width: Int, height: Int): ProducedFrame =
+        ProducedFrame(bytes, 1080, 2400)
 }
 
 private fun assertCode(code: ErrorCode, block: suspend () -> ImageFrame) {

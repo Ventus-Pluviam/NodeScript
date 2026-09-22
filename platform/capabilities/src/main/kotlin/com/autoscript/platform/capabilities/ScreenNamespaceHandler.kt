@@ -13,7 +13,8 @@ import com.autoscript.domain.core.ErrorCode
  * 归属：住 `:platform:capabilities`；构造只收 `:domain` 的 [FrameSource] SPI
  *（含 `recycle` 帧释放）。Android 真实现（a11y takeScreenshot / MediaProjection）
  * 只需实现该 SPI 即可替换内存帧源 —— 本类会话记账/载荷逻辑不变（见
- * `CapabilityNamespaces.screen` 仍以内存实现装配：真实现到位 = 换调用处那一行）。
+ * 生产装配 = `CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer()))`，
+ * 见 [PlatformWiring] 落点 —— handler 只认 SPI，真假实现同一条缝）。
  *
  * `:app` 装配层薄转接挂 BridgeRouter。载荷复用本模块内 [A11yBridgeJson]（同模块 internal 可见）。
  *

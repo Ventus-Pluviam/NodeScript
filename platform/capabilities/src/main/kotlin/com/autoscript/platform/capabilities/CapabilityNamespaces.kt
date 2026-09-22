@@ -61,7 +61,8 @@ object CapabilityNamespaces {
     /**
      * `screen` 命名空间（§9.2 / §8.8）：截图帧源，分类错误而非黑图。
      * 参数即 `FrameSource` SPI 实现 —— 本函数从不构造内存帧源（构造是调用方的事），
-     * 单测传 `ScreenshotSource`、真机传 a11y takeScreenshot / MediaProjection 实现。
+     * 单测传内存 producer、生产传 `ScreenshotSource(AndroidFrameProducer())`
+     * （PlatformWiring 落点；MediaProjection 升级 = 换 producer）。
      */
     fun screen(source: FrameSource): NamespaceHandler {
         val handler = ScreenNamespaceHandler(source)

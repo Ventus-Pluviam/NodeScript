@@ -36,6 +36,21 @@ interface A11yBridge {
     fun clipboardRead(): String?
 
     fun clipboardWrite(text: String)
+
+    /**
+     * 屏幕采集前快照（§8.8 策略输入：锁屏/无窗口）。
+     * `secureForeground` 在 a11y 路径**恒 false**：无障碍读不到窗口 FLAG_SECURE，
+     * 预检也测不到 —— 真撞上安全窗由系统拒（`ERROR_TAKE_SCREENSHOT_SECURE_WINDOW`
+     * → [takeScreenshot] 抛 ERR_BLACK_FRAME），分类结果殊途同归，不伪造预检能力。
+     */
+    suspend fun screenSnapshot(): com.autoscript.domain.automation.ScreenSnapshot
+
+    /**
+     * a11y 截一帧 → 实际尺寸的 JPEG 字节；失败按 §8.8 分类抛
+     * （安全窗 → ERR_BLACK_FRAME、系统限频 → ERR_INVALID_PARAM、服务失效 →
+     * ERR_SERVICE_DISABLED、内部错 → ERR_IO，见设备层映射表）。
+     */
+    suspend fun takeScreenshot(): ProducedFrame
 }
 
 /** 单个活节点的访问面（设备侧 = `AccessibilityNodeInfo` 适配；测试 = 内存图）。 */
@@ -111,4 +126,9 @@ object SystemA11yBridge : A11yBridge {
     override fun clipboardRead(): String? = current().clipboardRead()
 
     override fun clipboardWrite(text: String) = current().clipboardWrite(text)
+
+    override suspend fun screenSnapshot(): com.autoscript.domain.automation.ScreenSnapshot =
+        current().screenSnapshot()
+
+    override suspend fun takeScreenshot(): ProducedFrame = current().takeScreenshot()
 }

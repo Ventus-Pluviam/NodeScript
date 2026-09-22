@@ -2,9 +2,11 @@ package com.autoscript.shell
 
 import android.content.Context
 import com.autoscript.domain.bridge.NamespaceHandler
+import com.autoscript.platform.capabilities.AndroidFrameProducer
 import com.autoscript.platform.capabilities.AndroidGestureInput
 import com.autoscript.platform.capabilities.AndroidUiTree
 import com.autoscript.platform.capabilities.CapabilityNamespaces
+import com.autoscript.platform.capabilities.ScreenshotSource
 import com.autoscript.platform.system.SystemSpis
 
 /**
@@ -20,13 +22,14 @@ import com.autoscript.platform.system.SystemSpis
  * - [inject] 是纯转接（SPI 束 → handler 束，零 Android 触点）→ JVM 可单测，
  *   真假实现共用同一条拼装路径，不给"测试走另一套装配"留门。
  *
- * **a11y 生产已接**：`AndroidUiTree`（树+动作一体，句柄注册表共享）+
- * `AndroidGestureInput` 走 `SystemA11yBridge` —— 装配期即可注入（连接态在调用期判定），
- * 服务未连 = 桥如实 `ERR_SERVICE_DISABLED`（不伪造可用，也不必等 `onServiceConnected`
- * 才装壳）。`screen`/`dialogs` 仍诚实缺位：
- * - `screen` 不在本类接 —— MediaProjection 会话（授权 UI + FGS）尚未落地，接内存
- *   帧源就是伪造可用；未注入 = 桥对 `screen.*` 如实 `ERR_NOT_IMPLEMENTED`；
- * - `dialogs` 恒 null —— `DialogHost` 待 §14 P2，缺位同上。
+ * **a11y/screen 生产已接**（同一座无障碍服务做底）：
+ * - `a11y` = `AndroidUiTree`（树+动作一体，句柄注册表共享）+ `AndroidGestureInput`；
+ * - `screen` = `ScreenshotSource(AndroidFrameProducer())`（§9.2 a11y 截图路径：
+ *   333ms 节流 + §8.8 策略预检/回调分类；MediaProjection 高清会话是后续升级，
+ *   换 producer 即插）；
+ * 二者都走 `SystemA11yBridge` —— 装配期即可注入（连接态在调用期判定），服务未连 =
+ * 桥如实 `ERR_SERVICE_DISABLED`（不伪造可用，也不必等 `onServiceConnected` 才装壳）。
+ * **`dialogs` 仍诚实缺位**：`DialogHost` 待 §14 P2，缺位即桥如实 `ERR_NOT_IMPLEMENTED`。
  */
 object PlatformWiring {
 
@@ -36,6 +39,7 @@ object PlatformWiring {
      */
     data class Injection(
         val a11yHandler: NamespaceHandler,
+        val screenHandler: NamespaceHandler,
         val systemHandlers: SystemHandlers,
         val datastoreHandler: NamespaceHandler,
         val zipHandler: NamespaceHandler,
@@ -48,6 +52,7 @@ object PlatformWiring {
         // 树+动作同一个实例（句柄注册表共享，同 InMemoryUiTree 双身份形态）；
         // 事件流缺省 A11yEventRing.shared（服务 push / 树读同一环）。
         a11yHandler = a11yHandler(),
+        screenHandler = screenHandler(),
         systemHandlers = SystemHandlers(
             dialogs = null,   // DialogHost 待 §14 P2：缺位如实 ERR_NOT_IMPLEMENTED
             shell = CapabilityNamespaces.shell(spis.shell),
@@ -66,6 +71,10 @@ object PlatformWiring {
         val tree = AndroidUiTree()
         return CapabilityNamespaces.a11y(tree = tree, actions = tree, input = AndroidGestureInput())
     }
+
+    /** screen 装配（§9.2 a11y 截图路径：语义节流/策略在 ScreenshotSource，设备面在 producer）。 */
+    private fun screenHandler(): NamespaceHandler =
+        CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer()))
 
     /**
      * 生产入口：`Context` → [SystemSpis.of] 八件 → [inject]。

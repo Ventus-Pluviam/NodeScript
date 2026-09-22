@@ -106,7 +106,8 @@ class CapabilityNamespacesTest {
             object : ScreenshotSource.FrameProducer {
                 override suspend fun snapshot(): ScreenSnapshot =
                     ScreenSnapshot(locked = true, secureForeground = false, hasWindows = true)
-                override suspend fun produce(width: Int, height: Int): ByteArray = byteArrayOf(1)
+                override suspend fun produce(width: Int, height: Int): ProducedFrame =
+                    ProducedFrame(byteArrayOf(1), 1080, 2400)
             },
         )
         val handler = CapabilityNamespaces.screen(locked)
@@ -127,7 +128,8 @@ class CapabilityNamespacesTest {
         val source = ScreenshotSource(
             object : ScreenshotSource.FrameProducer {
                 override suspend fun snapshot(): ScreenSnapshot = ScreenSnapshot(false, false, true)
-                override suspend fun produce(width: Int, height: Int): ByteArray = byteArrayOf(1)
+                override suspend fun produce(width: Int, height: Int): ProducedFrame =
+                    ProducedFrame(byteArrayOf(1), 1080, 2400)
             },
             clock = { now += 1_000; now },
         )

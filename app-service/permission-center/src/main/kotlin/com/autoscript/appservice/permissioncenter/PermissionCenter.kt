@@ -72,7 +72,8 @@ class PermissionCenter(
             Capability.ACCESSIBILITY ->
                 "无障碍服务未开启：请前往「设置 → 无障碍 → AutoScript」开启，开启后能力为 GRANTED"
             Capability.SCREEN_CAPTURE ->
-                "屏幕采集未授权：首次截图时将弹出系统录屏授权，同意后本会话内为 GRANTED"
+                "屏幕采集：无障碍截图通道随无障碍服务可用（无需录屏授权，333ms 节流）；" +
+                    "MediaProjection 高清会话接入后，首次会话将弹系统录屏授权，同意后本会话 GRANTED"
             Capability.OVERLAY ->
                 "悬浮窗权限未授予：请前往「设置 → 应用 → AutoScript → 悬浮窗/显示在其他应用上层」开启；未开启时对话框走通知回调降级路径"
             Capability.NOTIFICATION ->

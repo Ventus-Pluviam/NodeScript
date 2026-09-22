@@ -1,6 +1,7 @@
 package com.autoscript.platform.capabilities
 
 import com.autoscript.domain.automation.GestureInput
+import com.autoscript.domain.automation.ScreenSnapshot
 import com.autoscript.domain.automation.ScrollDirection
 import com.autoscript.domain.automation.WindowScope
 import com.autoscript.domain.core.AutojsException
@@ -60,6 +61,17 @@ internal class FakeA11yBridge : A11yBridge {
     var dispatchResult = true
     var dispatchCount = 0
     var clipboard: String? = null
+    var locked = false
+    var hasWindows = true
+
+    /** 截帧成功回包（改尺寸可测"回包尺寸=系统真值"）。 */
+    var screenshotFrame: ProducedFrame? = ProducedFrame(byteArrayOf(1, 2, 3), 1440, 3200)
+
+    /** 非 null = 下一次 takeScreenshot 抛它（分类错误/失败注入）。 */
+    var screenshotFailure: AutojsException? = null
+
+    /** 真正走到截帧的次数（策略预检拦截时必须是 0）。 */
+    var screenshotCount = 0
     val activeRoots = mutableListOf<Blue>()
     val modalRoots = mutableListOf<Blue>()
     val allRoots = mutableListOf<Blue>()
@@ -111,5 +123,18 @@ internal class FakeA11yBridge : A11yBridge {
     override fun clipboardWrite(text: String) {
         up()
         clipboard = text
+    }
+
+    override suspend fun screenSnapshot(): ScreenSnapshot {
+        up()
+        return ScreenSnapshot(locked = locked, secureForeground = false, hasWindows = hasWindows)
+    }
+
+    override suspend fun takeScreenshot(): ProducedFrame {
+        up()
+        screenshotCount++
+        screenshotFailure?.let { throw it }
+        return screenshotFrame
+            ?: throw AutojsException(ErrorCode.ERR_SERVICE_DISABLED, "假桥无帧（测试桩）")
     }
 }

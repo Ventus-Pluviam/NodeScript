@@ -15,7 +15,8 @@ class ScreenNamespaceHandlerTest {
         return ScreenshotSource(
             object : ScreenshotSource.FrameProducer {
                 override suspend fun snapshot(): ScreenSnapshot = snapshot
-                override suspend fun produce(width: Int, height: Int): ByteArray = byteArrayOf(7, 7, 7)
+                override suspend fun produce(width: Int, height: Int): ProducedFrame =
+                    ProducedFrame(byteArrayOf(7, 7, 7), 1080, 2400)
             },
             clock = { now += 1_000; now },
         )
