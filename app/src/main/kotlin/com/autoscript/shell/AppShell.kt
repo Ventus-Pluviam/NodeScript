@@ -163,7 +163,14 @@ class AppShell(
             if (npmHandler != null) router.register("npm", npmHandler)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
-            val scheduler = Scheduler(schedulerProvider, intentLog, dispatcher, runArchive, taskStore = taskStore)
+            // §8.6 同源接线：deadline（恢复判过期）与排队上限（dispatcher 在途等多久）
+            // 是同一张表（`DEFAULT_QUEUE_TIMEOUTS === DefaultDeadlines`），这里显式喂给两边 ——
+            // 缺省参数恰好相同是巧合，写出来才是契约。
+            val scheduler = Scheduler(
+                schedulerProvider, intentLog, dispatcher, runArchive,
+                deadlineFor = ControllerRunDispatcher.DEFAULT_QUEUE_TIMEOUTS,
+                taskStore = taskStore,
+            )
 
             // 看门狗：采样器 + 心跳来源在此装配；policy 取 controller 自己那份（单一事实来源，
             //  Threshold 改变只改一处）。缺省 new 一个套在真 controller 上的生产实例。

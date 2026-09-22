@@ -2,6 +2,7 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.runtime.PoolAcquireRequest
 import com.autoscript.appservice.runtime.RuntimeController
+import com.autoscript.appservice.scheduler.core.DefaultDeadlines
 import com.autoscript.appservice.scheduler.core.DispatchReport
 import com.autoscript.appservice.scheduler.core.PendingRun
 import com.autoscript.appservice.scheduler.core.RunDispatcher
@@ -121,15 +122,15 @@ class ControllerRunDispatcher(
          *
          * 每个值都必须 > 0：0 等于「永不允许排队」，与「绝不静默丢任务」（§8.6）相反。
          */
-        val DEFAULT_QUEUE_TIMEOUTS: (TriggerSource) -> Long = { trigger ->
-            when (trigger) {
-                TriggerSource.ENGINE_INTERNAL -> 15_000L
-                TriggerSource.USER_CLICK -> 10_000L
-                TriggerSource.INTENT_BROADCAST -> 60_000L
-                TriggerSource.EVENT -> 60_000L
-                TriggerSource.TIMED -> 120_000L
-            }
-        }
+        /**
+         * 满池排队上限的分级表（§8.6「排队上限由投递方给」的落地默认值；铁律 3）。
+         *
+         * 就是 scheduler 侧的 [DefaultDeadlines] 同一引用，不是"另一份相同的数字" ——
+         * 两处各写一份的漂移（恢复按一套、排队按另一套）在编译期不可见、现场极难查，
+         * 故以别名收敛（分级依据的注释见 [DefaultDeadlines]）：ENGINE_INTERNAL 最紧
+         * （嵌套等待先爆）、USER_CLICK 次之（人盯等）、INTENT/EVENT 60s、TIMED 最宽 120s。
+         */
+        val DEFAULT_QUEUE_TIMEOUTS: (TriggerSource) -> Long = DefaultDeadlines
 
         /** 未挂意图日志的直投（PendingRun.intentRunId == null）的哨兵值：关联存在但无日志行可追。 */
         const val NO_INTENT_RUN_ID: Long = 0L
