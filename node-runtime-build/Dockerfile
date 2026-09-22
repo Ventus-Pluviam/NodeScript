@@ -26,8 +26,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# 版本矩阵是构建的单一事实来源：改了它 → 缓存失效 → 全量重跑（符合 RISKS 的升级纪律）
-COPY VERSIONS.env scripts/ /build/
+# 版本矩阵是构建的单一事实来源：改了它 → 缓存失效 → 全量重跑（符合 RISKS 的升级纪律）。
+# 注意 COPY 目录语义：`COPY scripts/ /build/` 会把 scripts 的*内容*平铺进 /build/（fetch-and-build.sh
+# 将落在 /build/ 而非 /build/scripts/，脚本内 ROOT_DIR="$SCRIPT_DIR/.." 随即断裂）——必须显式落两级。
+COPY VERSIONS.env /build/
+COPY scripts/ /build/scripts/
 
 # fetch-and-build.sh 内含：下载校验 → 交叉编译 → strip → 16KB/平台/ABI 门禁 → sha256 基表
 RUN bash /build/scripts/fetch-and-build.sh
