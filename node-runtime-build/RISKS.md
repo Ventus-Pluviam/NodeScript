@@ -33,3 +33,18 @@ Docker 单文件固化（ubuntu:24.04 + 固定依赖集），`VERSIONS.env` 为�
 
 ## 10. 产物可信链
 `fetch-and-build.sh` 对 Node 源校验 **官方 SHASUMS256.txt 逐字 sha256**、对 NDK zip 校验 **repository2-3.xml 的 size+sha1**（sdkmanager 同源），并在产物目录再生成一层 `SHASUMS256` 基表，供发布/审计比对。任何一层校验失败即整链中止（`set -euo pipefail`）。
+## 11. zlib BUILD.gn/gyp 缺口：ndk_compat（v24.21.0 + NDK r28c 实证）
+
+Node 的 `deps/zlib` 源集跟随 Chromium 的 `BUILD.gn`：`cpu_features.c` 在 `ARMV8_OS_ANDROID` 分支调用 `android_getCpuFeatures()`，而 `BUILD.gn` 要求 `//third_party/cpu_features:ndk_compat` 提供该符号实现 —— **Node 源码树里没有这个目录**（Chromium 才有）。gyp 路径下无人编译它，于是 `libzlib.a` 带着未决符号进终链，在 `openssl-cli`/`node`/`libnode.so` 的 `ld.lld` 处确定性断链（`undefined symbol: android_getCpuFeatures`）。
+
+修法（`fetch-and-build.sh` §3b）：把 NDK 自带的 `sources/android/cpufeatures/cpu-features.c/.h`（就是 ndk_compat 的本体，纯 C 只依赖 `sys/*` 头）拷贝进 `deps/zlib/android-ndk-compat/`，随 zlib 主 target 同编同链。两个坑都是实证过的：
+- **gyp 的 `sources` 必须相对 `.gyp` 文件**：`<(android_ndk_path)/...` 绝对写法会在 make 层产生非法 obj 路径（`No rule to make target .../obj.target/zlib//build/ndk/...`）——故先拷贝再相对引用。
+- 补丁锚点是 zlib 主 target 的 `USE_FILE32API` 条件块；`anchor assert` 失败 = 上游 `zlib.gyp` 漂移，需人工跟进。
+
+## 12. V8 gyp 独有：arm64 trap-handler 条件缺 android（v24.21.0 + NDK r28c 实证）
+
+`tools/v8_gypfiles/v8.gyp` 的 arm64 段按 OS 分 trap-handler 实现文件（native-posix / x64-simulator），但两个条件的 OS 列表都没有 `android`；而 host-x64 + target-arm64 + `V8_OS_LINUX`（含 Android）时 `V8_TRAP_HANDLER_SUPPORTED=true`，`handler-outside.cc` 的桩被裁 —— mksnapshot 终链悬空双符号（`v8_internal_simulator_ProbeMemory` + `RegisterDefaultTrapHandler()`）。修法见 `fetch-and-build.sh` §3c（两条件行各加 `android`，行号 assert 防漂移）。上游 GN 路径无此缺口，是 gyp 独有。
+
+## 13. 全量 make 会捎带 cctest（API 26 无 aligned_alloc）
+
+顶层 `make`（含 `make node`）的默认依赖图含 `cctest`，其 `test_crypto_clienthello.cc` 用 `aligned_alloc`（bionic API 28+，`ANDROID_API=26` 头文件不暴露）确定性断链。`node`/`libnode.so` 不依赖它。CI 全链（`fetch-and-build.sh` §5）如命中，应点名编 `libnode` + `node` 目标（`make -C out BUILDTYPE=Release libnode node`）而非裸 `make`；或升 `ANDROID_API>=28`（牵动 minSdk，以升级纪律另议）。

@@ -59,6 +59,78 @@ if [ ! -d "$NDK_DIR" ]; then
     unzip -q "$DL/$NDK_ZIP" -d "$(dirname "$NDK_DIR")"
 fi
 
+# ── 3b) zlib.gyp：把 NDK 的 cpu-features.c 编进 zlib 主 target ──────────────
+# 背景：Node 的 deps/zlib 走 Chromium 的 BUILD.gn 源集（含 cpu_features.c，ARMV8_OS_ANDROID
+# 分支调 android_getCpuFeatures()），而 BUILD.gn 要求 //third_party/cpu_features:ndk_compat
+# 提供该符号实现 —— Node 源码树里没有这个目录（Chromium 才有）。gyp 路径下无人编译它，
+# 于是 libzlib.a 带着未决符号进 openssl-cli/node/libnode.so，在 ld.lld 终链处确定性断链
+# （v24.21.0 + NDK r28c 实证：undefined symbol: android_getCpuFeatures）。
+# 修法：NDK 自带的 sources/android/cpufeatures/cpu-features.c 就是 ndk_compat 的本体
+# （纯 C，只依赖 sys/* 头），随 zlib 主 target 同编同链。幂等：已打过则跳过。
+ZLIB_GYP="$SRC/node-$NODE_VERSION/deps/zlib/zlib.gyp"
+ZLIB_COMPAT_DIR="$SRC/node-$NODE_VERSION/deps/zlib/android-ndk-compat"
+# 拷贝（每次都做：NDK 路径随构建容器变化，拷贝代价可忽略；幂等）。
+mkdir -p "$ZLIB_COMPAT_DIR"
+cp -f "$NDK_DIR/sources/android/cpufeatures/cpu-features.c" \
+      "$NDK_DIR/sources/android/cpufeatures/cpu-features.h" \
+      "$ZLIB_COMPAT_DIR/" \
+    || die "NDK 缺 cpu-features.c/.h: $NDK_DIR/sources/android/cpufeatures/"
+if ! grep -q "android-ndk-compat/cpu-features\.c" "$ZLIB_GYP"; then
+    # 兼容上一版补丁（绝对路径写法，gyp/make 不认）：先清掉再打新补丁。
+    python3 - "$ZLIB_GYP" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("'sources': [ '<(android_ndk_path)/sources/android/cpufeatures/cpu-features.c' ],", "")
+# 锚点：zlib 主 target 的 USE_FILE32API 条件块（mac/ios/freebsd/android 共用，v24.21.0 实测行）。
+anchor = "              'defines': [\n                'USE_FILE32API'\n              ],\n            }],"
+assert anchor in s, "zlib.gyp 锚点漂移（USE_FILE32API 条件块），补丁需人工跟进"
+block = anchor + """
+            ['OS=="android"', {
+              # NDK 的 android_getCpuFeatures 实现（BUILD.gn 要求 //third_party/cpu_features:ndk_compat，
+              # Node 源码树无该目录 —— 见上 3b 注释）。gyp 的 sources 必须相对 .gyp 文件，
+              # 故上面的拷贝步骤先把 NDK 的 cpu-features.c/.h 落进本目录的子目录再引用。
+              'sources': [ 'android-ndk-compat/cpu-features.c' ],
+              'include_dirs': [ 'android-ndk-compat' ],
+            }],"""
+s = s.replace(anchor, block, 1)
+open(p, "w").write(s)
+print("patched")
+PY
+    say "补 zlib.gyp：编入 NDK cpu-features.c（android_getCpuFeatures 实现）"
+fi
+
+# ── 3c) v8.gyp：arm64 段 trap-handler 条件 += android ────────────────────
+# 背景：V8 的 trap-handler 在 gyp 下按 OS 分文件：arm64-native 用
+# handler-outside-posix.cc，host-x64 上的 arm64 simulator（mksnapshot）用
+# handler-outside-simulator.cc。但两个条件的 OS 列表都只写
+# "linux mac ... openharmony"，没有 android —— OS=android 时两个文件都不参编。
+# 而 host=x64 + target=arm64 + V8_OS_LINUX（含 Android，见 v8config.h:84）时
+# V8_TRAP_HANDLER_SUPPORTED=true，handler-outside.cc 的桩（#if !SUPPORTED）被裁，
+# 于是 mksnapshot 终链悬空两个符号（v24.21.0 + NDK r28c 实证）：
+#   undefined reference to v8_internal_simulator_ProbeMemory
+#   undefined reference to RegisterDefaultTrapHandler()
+# 上游 GN 路径（OS=="android" 分支自带该文件）无此问题，是 gyp 独有缺口。
+# 修法：给 arm64 段两个条件行（native-posix / x64-simulator）各加 android，
+# 行号写法（1187+1199，v24.21.0 实测；assert 双行双命中防漂移），不动 x64 段。
+V8_GYP="$SRC/node-$NODE_VERSION/tools/v8_gypfiles/v8.gyp"
+if ! grep -q 'openharmony android' "$V8_GYP"; then
+    python3 - "$V8_GYP" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p).readlines()
+# 1-based 1187 行 = arm64-native posix 条件；1199 行 = x64 simulator 条件
+assert "linux mac ios openharmony" in lines[1186], "v8.gyp:1187 锚点漂移，补丁需人工跟进"
+assert "(OS in \"linux mac win openharmony\")" in lines[1198], "v8.gyp:1199 锚点漂移，补丁需人工跟进"
+lines[1186] = lines[1186].replace("linux mac ios openharmony", "linux mac ios openharmony android", 1)
+lines[1186] = lines[1186].replace("linux mac openharmony", "linux mac openharmony android", 1)
+lines[1198] = lines[1198].replace("linux mac win openharmony", "linux mac win openharmony android", 1)
+open(p, "w").writelines(lines)
+print("patched")
+PY
+    say "补 v8.gyp：arm64 trap-handler 条件 += android（mksnapshot 双符号实现）"
+fi
+
 # ── 4) 交叉工具链 env（NDK r28 时代：直连 clang wrapper，无 make-standalone-toolchain）──
 export ANDROID_NDK_HOME="$NDK_DIR"
 export PATH="$TOOLCHAIN/bin:$PATH"
@@ -98,13 +170,17 @@ say "configure --dest-os=android --dest-cpu=$TARGET_ARCH --shared"
     --cross-compiling \
     --shared
 
-say "make -j$(nproc) ..."
-make -j"$(nproc)"
+# 点名 libnode + node：顶层默认依赖图含 cctest，其 test_crypto_clienthello.cc 用
+# aligned_alloc（bionic API 28+，ANDROID_API=26 不暴露）确定性断链 —— 见 RISKS §13。
+# node/libnode.so 均不依赖 cctest，故直调 out 内 target，不走顶层 all/node 伪目标。
+say "make -j$(nproc) libnode node ..."
+make -C out BUILDTYPE=Release -j"$(nproc)" libnode node
 
 # ── 6) 产物收敛 + strip ──────────────────────────────────────────────────
 say "收敛产物到 $OUT"
 cp -f out/Release/node "$OUT/node"
-# --shared 产出 libnode.so.<ABI>(137) 与未版本化软链；实体文件 strip，软链跳过
+# gyp --shared 在 Linux/Android 下产物就是裸 libnode.so（soname 亦然，无版本后缀；
+# 版本化命名是下游打包步骤）。实体文件 strip，软链（如有）跳过
 for f in out/Release/libnode.so*; do cp -df "$f" "$OUT/"; done
 # 契约审计文件：configure 把 config.gypi（JSON）/ config.mk 写在源码根（工作目录），非 out/Release/
 cp -f config.gypi config.mk "$OUT/"  # --shared 的 config.gypi 必含 node_shared=true，缺则 configure 异常，立即失败
@@ -119,5 +195,5 @@ say "16KB/ELF/平台/ABI 门禁 ..."
 "$SCRIPT_DIR/check-alignment.sh" "$TOOLCHAIN/bin/llvm-objdump" "$OUT"
 
 # ── 8) 产物基表（对照 Node SHASUMS256 语义，供发布审计）──────────────────
-(cd "$OUT" && sha256sum node libnode.so* | tee SHASUMS256)
+(cd "$OUT" && sha256sum node libnode.so* config.gypi config.mk | tee SHASUMS256)
 say "完成。产物：$OUT/node + $OUT/libnode.so.*（垂直切片见设计 §844）"

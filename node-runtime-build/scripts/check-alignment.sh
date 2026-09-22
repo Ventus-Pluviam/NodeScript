@@ -58,12 +58,16 @@ done
 if ! python3 - "$OUT/config.gypi" <<'PY'
 import json, sys
 with open(sys.argv[1]) as f:
-    cfg = json.load(f)
+    # config.gypi 首行是 "# Do not edit..." 注释（configure 的 json.dumps 前缀），
+    # 非严格 JSON，解析前剥掉 # 开头行。
+    text = "\n".join(l for l in f if not l.startswith("#"))
+    cfg = json.loads(text)
 vars_ = cfg.get("variables", {})
 if vars_.get("OS") != "android":
     print(f"   OS = {vars_.get('OS')!r}（期望 android）", file=sys.stderr)
     sys.exit(1)
-if vars_.get("node_shared") is not True:
+# configure 写的是字符串 "true"（gyp 变量经 json.dumps 落盘），非 JSON 布尔。
+if vars_.get("node_shared") not in (True, "true"):
     print(f"   node_shared = {vars_.get('node_shared')!r}（期望 true）", file=sys.stderr)
     sys.exit(1)
 PY
@@ -80,6 +84,18 @@ for f in "${so_files[@]}"; do
         break
     fi
 done
-[ -n "$found_abi" ] || fail "未见 libnode.so.$EXPECTED_ABI（期望 NODE_MODULE_VERSION=$EXPECTED_ABI）"
+# gyp --shared 在 Linux/Android 下产物名就是裸 libnode.so（soname 亦然，
+# 无版本后缀；版本化命名是下游打包步骤）。无版本文件名时回退到
+# config.gypi 的 node_module_version 整数断言，同源同义。
+if [ -z "$found_abi" ]; then
+    abi_json=$(python3 - "$OUT/config.gypi" <<'PY'
+import json, sys
+text = "\n".join(l for l in open(sys.argv[1]) if not l.startswith("#"))
+print(json.loads(text)["variables"].get("node_module_version"))
+PY
+)
+    [ "$abi_json" = "$EXPECTED_ABI" ] || fail "未见 libnode.so.$EXPECTED_ABI 且 config.gypi node_module_version=$abi_json（期望 $EXPECTED_ABI）"
+    echo "[OK] libnode.so 未版本化命名（gyp --shared 惯例），config.gypi node_module_version=$abi_json 与期望一致"
+fi
 
 echo "[OK] 门禁通过：16KB LOAD 对齐 / OS=android+shared / libnode.so.$EXPECTED_ABI"
