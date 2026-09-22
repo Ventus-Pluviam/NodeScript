@@ -78,6 +78,26 @@ class AppShell(
     suspend fun stopWatchdog() = watchdog.stop()
 
     /**
+     * 进程级收口（docs §13 铁律 4：先停调度、再停执行 —— 顺序不可反）。
+     *
+     * 两步都幂等、可重复调用：
+     * 1. `scheduler.quiesceThenStop()` —— 调度侧先 sink（撤销触发器、拒收新投递），
+     *    再停最近一次 run（经 `DispatchReport.stop` 填权的 §4.1 归口）；
+     * 2. `controller.forceStopAll(cause)` —— 执行侧急停：杀全部非 FREE 槽位并复用，
+     *    不重建 guard 请求语义（与 `killAll` 的广播停止区分，见该方法 KDoc）。
+     *
+     * 顺序的理由：先杀执行再停调度，会在"调度不知情"的时间窗里继续投递 ——
+     * 投出去的 run 落到一个正在被清空的池里。先 sink，投递先停，剩下的才是收口。
+     *
+     * @return 调度侧被停止的句柄（供归档/审计；无句柄/无停止入口时为空，不假装停过）。
+     */
+    suspend fun shutdown(cause: com.autoscript.domain.engine.KillCause): List<com.autoscript.appservice.scheduler.core.EngineStopHandle> {
+        val stopped = scheduler.quiesceThenStop()
+        controller.forceStopAll(cause)
+        return stopped
+    }
+
+    /**
      * 开机恢复（§8.5 崩溃恢复的装配层接线点）：把意图日志里未 COMMIT 的遗留意向
      * 重新入队（`Scheduler.recoverUncommitted`：旧行封口 Interrupted + 新 runId 重开、
      * 保留 runNonce；过期意向封账不重投）。

@@ -194,6 +194,49 @@ class AppShellTest {
     }
 
     @Test
+    fun `shutdown 先停调度再急停执行：投递停了，槽位还了`() = runBlocking {
+        val log = InMemoryIntentLog()
+        val (shell, engines, _) = shell(log)
+        shell.use {
+            shell.scheduler.schedule(
+                ScheduledTask(
+                    id = "t1",
+                    name = "demo",
+                    projectId = "p1",
+                    scriptPath = "a.js",
+                    schedule = TimedSchedule.Once(60),
+                ),
+            )
+            shell.scheduler.onTrigger("t1", TriggerSource.USER_CLICK)
+            assertEquals(1, engines.single().executed.size, "先有一次真实投递")
+
+            val stopped = shell.shutdown(KillCause.REQUESTED)
+
+            assertEquals(1, stopped.size, "调度侧停掉最近一次 run，句柄供归档")
+            assertTrue(shell.scheduler.sinking, "调度已 sink：不再接收新投递")
+            assertTrue(shell.controller.activeRunIds().isEmpty(), "执行侧在途清空")
+            val stats = shell.controller.stats()
+            assertEquals(stats.capacity, stats.free, "槽位 + 许可证成对归还")
+        }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `shutdown 无投递时如实空收口但仍清池`() = runBlocking {
+        val (shell, _, _) = shell()
+        shell.use {
+            val stopped = shell.shutdown(KillCause.REQUESTED)
+
+            assertTrue(stopped.isEmpty(), "无句柄：不假装停过")
+            assertTrue(shell.scheduler.sinking, "sink 照常置位")
+            assertTrue(shell.controller.activeRunIds().isEmpty())
+        }
+
+        Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
     fun `mount 薄转接自定义命名空间`() = runBlocking {
         val (s, _, _) = shell()
         s.use {
