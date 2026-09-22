@@ -36,7 +36,7 @@ function installMockEngines() {
           return undefined
         }
         const runId = nextRun++
-        runs.set(runId, p)
+        runs.set(runId, { payload: p, status: 'RUNNING' })
         auto.handleResponse({
           t: 'ok', id: reqId,
           payload: JSON.stringify({ runId, handle: { refId: runId, generation: 1 } }),
@@ -111,6 +111,17 @@ function installMockEngines() {
         }
         return undefined
       }
+      case 'status': {
+        // Kotlin probeStatus 语义：在途 → 状态名；结算/从未存在 → ERR_NOT_FOUND（不伪造 STOPPED）
+        if (!p || typeof p.runId !== 'number') {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '缺 runId' })
+        } else if (!runs.has(p.runId)) {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_NOT_FOUND', detail: `未知 runId: ${p.runId}` })
+        } else {
+          auto.handleResponse({ t: 'ok', id: reqId, payload: JSON.stringify(runs.get(p.runId).status) })
+        }
+        return undefined
+      }
       case 'heartbeat': {
         // Kotlin HeartbeatLedger 语义：缺字段 → ERR_INVALID_PARAM；
         // 采纳与否由 **序号** 判（同/旧 seq 不刷时间戳 → Ok false，不是错误）。
@@ -138,8 +149,8 @@ test('engines.exec → runId + handle:{refId,generation}（Kotlin 形状）', as
   assert.strictEqual(typeof s.runId, 'number')
   assert.strictEqual(s.handle.refId, s.runId, 'handle.refId 与 runId 同源（Kotlin 语义）')
   assert.strictEqual(s.handle.generation, 1)
-  assert.strictEqual(runs.get(s.runId).runNonce, 'n1', 'runNonce 透传（§8.5）')
-  assert.deepEqual(runs.get(s.runId).args, ['x'])
+  assert.strictEqual(runs.get(s.runId).payload.runNonce, 'n1', 'runNonce 透传（§8.5）')
+  assert.deepEqual(runs.get(s.runId).payload.args, ['x'])
 })
 
 /** 跨 test 共享的 mock runs 快照（单例桥：前序 test 的遗留 run 需显式清理）。 */
@@ -231,6 +242,96 @@ test('engines.heartbeat：递增 seq 被采纳，重复 seq 回 false', async ()
   assert.strictEqual(await auto.engines.heartbeat(s.runId, 1), false, '旧 seq 同理')
   assert.ok(runs.has(s.runId))
   await auto.engines.stop(s.runId)
+})
+
+test('exec 回会话句柄：cancel 可用，channel 恒 null（显式开通道）', async () => {
+  installMockEngines()
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  assert.strictEqual(typeof s.cancel, 'function', 'exec 不再是 wire 原样：.cancel 可用')
+  assert.strictEqual(typeof s.onExit, 'function')
+  assert.strictEqual(s.channel, null, '会话不隐式持通道：走 engines.channel(name) 显式开')
+  assert.strictEqual(await s.cancel(), true, 'cancel → engines.stop 归口')
+  await assert.rejects(() => auto.engines.stop(s.runId), (e) => e.code === 'ERR_NOT_FOUND')
+})
+
+test('engines.status：在途回状态名，结算后 NOT_FOUND（不伪造 STOPPED）', async () => {
+  installMockEngines()
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  assert.strictEqual(await auto.engines.status(s.runId), 'RUNNING')
+  await auto.engines.stop(s.runId)
+  await assert.rejects(() => auto.engines.status(s.runId), (e) => e.code === 'ERR_NOT_FOUND')
+})
+
+/** 回调 promise 配 ref 超时 race：onExit/channel.on 的回调只靠轮询 resolve，
+ * loop 里若只剩 unref 轮询定时器会被提前收割（cancelledByParent）—— race 里的
+ * sleep 是 ref，保活 loop；超时未回调则响亮失败而非挂起。 */
+function withTimeout(promise, ms, what) {
+  let timer = null
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`超时 ${ms}ms 未回调: ${what}`)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+test('会话 onExit：STOPPED 报 null（干净结束）', async () => {
+  installMockEngines()
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  await withTimeout(new Promise((resolve) => {
+    const sub = s.onExit((info) => {
+      assert.strictEqual(info, null, 'STOPPED = 干净结束，无 CrashInfo')
+      resolve(undefined)
+    }, { pollMillis: 20 })
+    void sub
+    sharedRuns.get(s.runId).status = 'STOPPED'
+  }), 1000, 'STOPPED onExit')
+  await auto.engines.stop(s.runId).catch(() => {})
+})
+
+test('会话 onExit：CRASHED 报 cause（不吞终态）', async () => {
+  installMockEngines()
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  await withTimeout(new Promise((resolve) => {
+    s.onExit((info) => {
+      assert.strictEqual(info && info.cause, 'CRASHED')
+      resolve(undefined)
+    }, { pollMillis: 20 })
+    sharedRuns.get(s.runId).status = 'CRASHED'
+  }), 1000, 'CRASHED onExit')
+  await auto.engines.stop(s.runId).catch(() => {})
+})
+
+test('会话 onExit：本会话 cancel 后结算报 null，外部结算报 UNKNOWN（不伪装干净）', async () => {
+  installMockEngines()
+  // 本会话亲手停的：结算离表 = 我们停的 = 干净
+  const s1 = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  await withTimeout(new Promise((resolve) => {
+    s1.onExit((info) => {
+      assert.strictEqual(info, null, '经本会话 cancel 的结算 = 干净')
+      resolve(undefined)
+    }, { pollMillis: 20 })
+    void s1.cancel().then(() => {})
+  }), 1000, 'cancel 后 onExit')
+  // 外部结算的（他人 stop/看门狗/跑完离表）：UNKNOWN，绝不报 null
+  const s2 = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  await withTimeout(new Promise((resolve) => {
+    s2.onExit((info) => {
+      assert.strictEqual(info && info.cause, 'UNKNOWN', '外部结算不得伪装成干净结束')
+      resolve(undefined)
+    }, { pollMillis: 20 })
+    void auto.engines.stop(s2.runId).then(() => {})
+  }), 1000, '外部结算 onExit')
+})
+
+test('会话 onExit：取消订阅后不再回调', async () => {
+  installMockEngines()
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js' })
+  let called = false
+  const sub = s.onExit(() => { called = true }, { pollMillis: 20 })
+  sub.cancel()
+  sharedRuns.get(s.runId).status = 'STOPPED'
+  await new Promise((r) => setTimeout(r, 100))
+  assert.strictEqual(called, false, 'cancel 后轮询即停')
+  await auto.engines.stop(s.runId).catch(() => {})
 })
 
 test('engines.heartbeat：缺字段回 ERR_INVALID_PARAM（不伪造成功）', async () => {

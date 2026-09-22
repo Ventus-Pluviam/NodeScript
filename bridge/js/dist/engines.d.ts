@@ -133,13 +133,22 @@ export interface EngineSession {
         timeout?: number;
         signal?: AbortSignal;
     }): Promise<boolean>;
-    onExit(listener: (info: CrashInfo | null) => void): ChannelSubscription;
+    onExit(listener: (info: CrashInfo | null) => void, opts?: {
+        pollMillis?: number;
+    }): ChannelSubscription;
     get channel(): RuntimeChannel | null;
 }
 export declare const engines: {
     /**
      * 启动一次执行（§8 池仲裁；返回会话句柄）。同引擎一次一脚本；运行态由 RuntimeController 仲裁。
      * 超载排队，不做静默丢弃。
+     */
+    /**
+     * 启动一次执行（§8 池仲裁；返回会话句柄）。同引擎一次一脚本；运行态由 RuntimeController 仲裁。
+     * 超载排队，不做静默丢弃。
+     *
+     * 回包包成 [EngineSessionImpl]（此前是 wire 原样 `as EngineSession` —— `.cancel()`
+     * 当场 TypeError 的空壳，已补实；与 `channel()` 包 `EngineChannel` 同一条纪律）。
      */
     exec(request: EngineRunRequest, opts?: {
         timeout?: number;
@@ -153,6 +162,16 @@ export declare const engines: {
     stop(runId: number, opts?: {
         timeout?: number;
     }): Promise<boolean>;
+    /**
+     * 引擎侧状态快照（`onExit` 轮询的地基；Kotlin `probeStatus` 只读在途表）。
+     *
+     * 在途 → 状态名字符串（与 :domain `EngineStatus` 枚举名逐字一致）；
+     * 已结算/从未存在 → 抛 `ERR_NOT_FOUND`（结算后无状态可读，宿主不伪造 `"STOPPED"`，
+     * 见 handler `status` 注释 —— 调用方不得把 NOT_FOUND 翻译成任何终态）。
+     */
+    status(runId: number, opts?: {
+        timeout?: number;
+    }): Promise<EngineStatus>;
     /**
      * 打开（或复用）命名通道（§8：同 host 的通道生命周期由 :app-service:runtime 管理）。
      * 回包包成 [EngineChannel]（此前是 wire 原样 `as RuntimeChannel` —— `.emit()` 当场
@@ -186,6 +205,40 @@ export declare function startHeartbeat(runId: number, opts?: {
     periodMillis?: number;
 }): () => void;
 export declare function installHeartbeatPeriod(millis: number): void;
+/**
+ * `engines.exec()` 的会话实现（`exec` 的返回值）。
+ *
+ * - `cancel` → `engines.stop(runId)`（§4.1 归口 → 池四步 quiesce；已结算后调用落
+ *   `ERR_NOT_FOUND`，幂等语义由宿主保证，本层不吞错）；
+ * - `onExit` → 节流轮询 `engines.status(runId)`：`STOPPED` 报 `null`（干净结束），
+ *   `CRASHED` 报 `{cause:'CRASHED'}`，结算离表（`ERR_NOT_FOUND`）则按"谁停的"诚实回答 ——
+ *   经本会话 `cancel()` 停的报 `null`，外部结算（看门狗/他人 stop/正常跑完离表）的报
+ *   `{cause:'UNKNOWN'}`：结算即离表（见 `probeStatus`），离表后宿主已无终态可读，
+ *   报 `null` 会把 CRASHED 伪装成干净结束。轮询失败（TTL/断链）吞掉等下一轮，
+ *   定时器 unref 不保活事件循环（与 `startHeartbeat` 同一条纪律）；
+ * - `channel` 恒 `null`：命名通道走 `engines.channel(name)` 显式打开，会话不隐式持通道
+ *   （隐式建通道会在宿主侧留一条永远没人 drain 的缓冲，等于漏水）。
+ */
+export declare class EngineSessionImpl implements EngineSession {
+    readonly runId: number;
+    readonly handle: {
+        refId: number;
+        generation: number;
+    };
+    private cancelCalled;
+    constructor(runId: number, handle: {
+        refId: number;
+        generation: number;
+    });
+    get channel(): RuntimeChannel | null;
+    cancel(opts?: {
+        timeout?: number;
+        signal?: AbortSignal;
+    }): Promise<boolean>;
+    onExit(listener: (info: CrashInfo | null) => void, opts?: {
+        pollMillis?: number;
+    }): ChannelSubscription;
+}
 /**
  * 运行句柄代理（§7.4 句柄面）：exec 签发；cancel = 四步 quiesce（§8.3），onExit 绑退出事件。
  * 与 Kotlin :domain EngineSessionHandle 对齐（engine/receipt/channel/exitSink 由运行时实现注入）。

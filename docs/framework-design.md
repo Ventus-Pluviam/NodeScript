@@ -714,7 +714,7 @@ auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], messag
 | 命名空间 | JS facade | Kotlin handler | 挂载状态 |
 |---|---|---|---|
 | `console` | `console.ts` | `ConsoleCollector`（`:bridge:java`） | `AppShell.assemble` 已挂 |
-| `engines` | `engines.ts` | `EnginesNamespaceHandler`（`:app-service:runtime`） | 已挂（含 `heartbeat` 打点，§8.4；命名通道 `channel/channelEmit/channelDrain/channelClose` 双侧对齐：Kotlin 侧缓冲 + 游标、`EngineChannel` 按 `sinceSeq` 节流轮询，`engines.test.cjs` mock 复刻宿主语义） |
+| `engines` | `engines.ts` | `EnginesNamespaceHandler`（`:app-service:runtime`） | 已挂（含 `heartbeat` 打点，§8.4；命名通道 `channel/channelEmit/channelDrain/channelClose` 双侧对齐：Kotlin 侧缓冲 + 游标、`EngineChannel` 按 `sinceSeq` 节流轮询；`status` 只读在途表、结算后 `ERR_NOT_FOUND` 不伪造 `STOPPED`，`exec` 回 `EngineSessionImpl`（`cancel`→`stop` 归口、`onExit`→`status` 轮询：本会话 cancel 后结算报 null、外部结算报 UNKNOWN）） |
 | `a11y` | `a11y.ts` | `A11yNamespaceHandler`（`:platform:capabilities`）+ `CapabilityNamespaces.a11y(tree, actions, input, events)` 装配缝（树/动作/输入/事件四 SPI，缺省内存实现可测） | **已可挂**：`assemble` 的 `a11yHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`） |
 | `screen` | `images.ts` | `ScreenNamespaceHandler`（`:platform:capabilities`） | **已可挂**：同上，`screenHandler` 缝 |
 | `images`（fromFile/matchTemplate/findImage） | `images.ts` | 无 | 待建（`:bridge:image` / native，P1） |

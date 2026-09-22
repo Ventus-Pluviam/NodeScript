@@ -22,6 +22,11 @@ import com.autoscript.domain.core.ErrorCode
  *   StoppedTimeout → Err ERR_TIMEOUT（软停未干净完成，已 kill 兜底，如实报错不伪造成功）；
  *   AlreadyGone → Err ERR_NOT_FOUND（未知 runId 不静默吞掉）；
  * - `poolStats`：无参 → Ok `{capacity,free,busy}`；
+ * - `status`：payload `{runId}` → 在途则 Ok 引擎状态名字符串（`"RUNNING"` 等，
+ *   与 `:domain EngineStatus` 枚举名逐字一致，JS `EngineStatus` 字面量对齐）；
+ *   不在途（已结算/从未存在）→ Err ERR_NOT_FOUND —— 与 `stop` 的 AlreadyGone 同一条
+ *   诚实口径：结算后无状态可读，不得伪造一个 `"STOPPED"`（那会把"查不到"伪装成
+ *   "正常结束"，`onExit` 的终态判断会因此错过 CRASHED）。JS `onExit` 的轮询地基；
  * - `heartbeat`：payload `{runId,seq}` → [RuntimeController.heartbeat]（§8.4 缺口②的
  *   宿主侧收单方；JS 侧定时打点）。同/旧 seq 不刷时间戳 → Ok `false`（如实告知未被采纳，
  *   不是错误）；未知 runId → 仍 Ok `false` —— 账本按 runId 记账，"不知道这个 run"本身
@@ -54,6 +59,7 @@ class EnginesNamespaceHandler(
             "exec" -> exec(request)
             "stop" -> stop(request)
             "poolStats" -> ok(request.id, EngineBridgeJson.encode(poolStatsPayload()))
+            "status" -> status(request)
             "heartbeat" -> heartbeat(request)
             "channel" -> channel(request)
             "channelEmit" -> channelEmit(request)
@@ -105,6 +111,25 @@ class EnginesNamespaceHandler(
             RuntimeController.StopOutcome.AlreadyGone ->
                 err(request.id, ErrorCode.ERR_NOT_FOUND, "未知 runId: $runId")
         }
+    }
+
+    /**
+     * 引擎侧状态快照（JS `onExit` 轮询的地基，见方法表 `status` 条）。
+     *
+     * 只读在途表（[RuntimeController.probeStatus]）：不在途 → null → 如实 NOT_FOUND。
+     * 宿主探针抛错同样落 null（引擎已死/实现未接线）—— 那是"量不到"，与"已结算"
+     * 在本方法不区分：两者都意味着"没有可读的活状态"，调用方按"本次轮询无结果、
+     * 下一轮再问"处理，不得把 null 翻译成任何终态。
+     */
+    private suspend fun status(request: Request): Response {
+        val runId = try {
+            requiredLong(decodePayload(request.payload), "runId")
+        } catch (e: IllegalArgumentException) {
+            return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
+        val st = controller.probeStatus(runId)
+            ?: return err(request.id, ErrorCode.ERR_NOT_FOUND, "未知 runId: $runId")
+        return ok(request.id, EngineBridgeJson.encode(st.name))
     }
 
     private fun poolStatsPayload(): Map<String, Any?> {

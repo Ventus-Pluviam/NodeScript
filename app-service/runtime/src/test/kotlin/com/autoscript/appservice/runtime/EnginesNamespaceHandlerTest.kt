@@ -203,6 +203,44 @@ class EnginesNamespaceHandlerTest {
     }
 
     @Test
+    fun `status 在途回引擎状态名，结算后如实 NOT_FOUND 不伪造 STOPPED`() = runBlocking {
+        val (h, _) = handler()
+        val exec = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(EnginesNamespaceHandler.Request(1, "exec", execPayload())),
+        )
+        val runId = (EngineBridgeJson.decodeObject(exec.payload!!)["runId"] as EngineBridgeJson.Value.N).raw
+
+        val live = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(EnginesNamespaceHandler.Request(2, "status", "{\"runId\":$runId}")),
+        )
+        assertEquals("\"RUNNING\"", live.payload, "FakeEngine execute 后即 RUNNING（枚举名逐字，JS 字面量对齐）")
+
+        h.handle(EnginesNamespaceHandler.Request(3, "stop", "{\"runId\":$runId}"))
+        val gone = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Err::class.java,
+            h.handle(EnginesNamespaceHandler.Request(4, "status", "{\"runId\":$runId}")),
+        )
+        assertEquals("ERR_NOT_FOUND", gone.code, "结算后无状态可读：不得伪造 STOPPED 掩盖 CRASHED")
+    }
+
+    @Test
+    fun `status 未知 runId 与非法载荷`() = runBlocking {
+        val (h, _) = handler()
+        val gone = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Err::class.java,
+            h.handle(EnginesNamespaceHandler.Request(1, "status", "{\"runId\":999}")),
+        )
+        assertEquals("ERR_NOT_FOUND", gone.code)
+        val bad = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Err::class.java,
+            h.handle(EnginesNamespaceHandler.Request(2, "status", "{\"runId\":\"x\"}")),
+        )
+        assertEquals("ERR_INVALID_PARAM", bad.code)
+    }
+
+    @Test
     fun `channel 建查发拉关全链路`() = runBlocking {
         val (h, _) = handler()
         // 建（复用同名）

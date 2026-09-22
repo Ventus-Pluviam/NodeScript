@@ -5,6 +5,7 @@
  */
 
 import { runtimeBridge } from './runtime'
+import { AutojsError, ErrCode } from './errors'
 
 /** 运行簿记收据（与 :domain EngineRunReceipt 对齐：runId + HandleRef）。 */
 export interface EngineRunReceipt {
@@ -204,7 +205,10 @@ export interface EngineSession {
   readonly runId: number
   readonly handle: { refId: number; generation: number }
   cancel(opts?: { timeout?: number; signal?: AbortSignal }): Promise<boolean>
-  onExit(listener: (info: CrashInfo | null) => void): ChannelSubscription
+  onExit(
+    listener: (info: CrashInfo | null) => void,
+    opts?: { pollMillis?: number },
+  ): ChannelSubscription
   get channel(): RuntimeChannel | null
 }
 
@@ -213,11 +217,19 @@ export const engines = {
    * 启动一次执行（§8 池仲裁；返回会话句柄）。同引擎一次一脚本；运行态由 RuntimeController 仲裁。
    * 超载排队，不做静默丢弃。
    */
+  /**
+   * 启动一次执行（§8 池仲裁；返回会话句柄）。同引擎一次一脚本；运行态由 RuntimeController 仲裁。
+   * 超载排队，不做静默丢弃。
+   *
+   * 回包包成 [EngineSessionImpl]（此前是 wire 原样 `as EngineSession` —— `.cancel()`
+   * 当场 TypeError 的空壳，已补实；与 `channel()` 包 `EngineChannel` 同一条纪律）。
+   */
   async exec(request: EngineRunRequest, opts: { timeout?: number; signal?: AbortSignal } = {}): Promise<EngineSession> {
-    return (await runtimeBridge.invoke('engines', 'exec', request, {
+    const wire = (await runtimeBridge.invoke('engines', 'exec', request, {
       ttl: opts.timeout ?? 15_000,
       signal: opts.signal,
-    })) as EngineSession
+    })) as EngineRunReceipt
+    return new EngineSessionImpl(wire.runId, wire.handle)
   },
 
   /** 池容量快照（容量/空闲/占用）。 */
@@ -228,6 +240,19 @@ export const engines = {
   /** 请求侧主动停止（PoolAcquireOutcome 语义）：runId 未发行 → failed；发行后取消是 EngineSession.cancel。 */
   async stop(runId: number, opts: { timeout?: number } = {}): Promise<boolean> {
     return (await runtimeBridge.invoke('engines', 'stop', { runId }, { ttl: opts.timeout ?? 10_000 })) === true
+  },
+
+  /**
+   * 引擎侧状态快照（`onExit` 轮询的地基；Kotlin `probeStatus` 只读在途表）。
+   *
+   * 在途 → 状态名字符串（与 :domain `EngineStatus` 枚举名逐字一致）；
+   * 已结算/从未存在 → 抛 `ERR_NOT_FOUND`（结算后无状态可读，宿主不伪造 `"STOPPED"`，
+   * 见 handler `status` 注释 —— 调用方不得把 NOT_FOUND 翻译成任何终态）。
+   */
+  async status(runId: number, opts: { timeout?: number } = {}): Promise<EngineStatus> {
+    return (await runtimeBridge.invoke('engines', 'status', { runId }, {
+      ttl: opts.timeout ?? 5_000,
+    })) as EngineStatus
   },
 
   /**
@@ -295,6 +320,112 @@ export function installHeartbeatPeriod(millis: number): void {
     throw new Error(`heartbeatPeriodMillis 必须 > 0: ${millis}`)
   }
   heartbeatPeriodMillis = millis
+}
+
+/**
+ * `engines.exec()` 的会话实现（`exec` 的返回值）。
+ *
+ * - `cancel` → `engines.stop(runId)`（§4.1 归口 → 池四步 quiesce；已结算后调用落
+ *   `ERR_NOT_FOUND`，幂等语义由宿主保证，本层不吞错）；
+ * - `onExit` → 节流轮询 `engines.status(runId)`：`STOPPED` 报 `null`（干净结束），
+ *   `CRASHED` 报 `{cause:'CRASHED'}`，结算离表（`ERR_NOT_FOUND`）则按"谁停的"诚实回答 ——
+ *   经本会话 `cancel()` 停的报 `null`，外部结算（看门狗/他人 stop/正常跑完离表）的报
+ *   `{cause:'UNKNOWN'}`：结算即离表（见 `probeStatus`），离表后宿主已无终态可读，
+ *   报 `null` 会把 CRASHED 伪装成干净结束。轮询失败（TTL/断链）吞掉等下一轮，
+ *   定时器 unref 不保活事件循环（与 `startHeartbeat` 同一条纪律）；
+ * - `channel` 恒 `null`：命名通道走 `engines.channel(name)` 显式打开，会话不隐式持通道
+ *   （隐式建通道会在宿主侧留一条永远没人 drain 的缓冲，等于漏水）。
+ */
+export class EngineSessionImpl implements EngineSession {
+  readonly runId: number
+  readonly handle: { refId: number; generation: number }
+  private cancelCalled = false
+
+  constructor(runId: number, handle: { refId: number; generation: number }) {
+    this.runId = runId
+    this.handle = handle
+  }
+
+  get channel(): RuntimeChannel | null {
+    return null
+  }
+
+  async cancel(opts: { timeout?: number; signal?: AbortSignal } = {}): Promise<boolean> {
+    this.cancelCalled = true
+    return engines.stop(this.runId, opts)
+  }
+
+  onExit(
+    listener: (info: CrashInfo | null) => void,
+    opts: { pollMillis?: number } = {},
+  ): ChannelSubscription {
+    const period = opts.pollMillis ?? 500
+    if (!Number.isFinite(period) || period <= 0) {
+      throw new Error(`pollMillis 必须 > 0: ${period}`)
+    }
+    let settled = false
+    let timer: NodeJS.Timeout | null = null
+    const finish = (info: CrashInfo | null): void => {
+      if (settled) return
+      settled = true
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      listener(info)
+    }
+    const schedule = (): void => {
+      if (settled) return
+      timer = setTimeout(() => {
+        timer = null
+        void poll()
+      }, period)
+      unrefTimer(timer) // 只保"下一轮"：首轮的存活由它自己的 await 承担（见 poll 注释）
+    }
+    const poll = async (): Promise<void> => {
+      if (settled) return
+      let st: EngineStatus
+      try {
+        st = await engines.status(this.runId)
+      } catch (e) {
+        if (e instanceof AutojsError && e.code === ErrCode.NOT_FOUND) {
+          // 结算离表：宿主已无终态可读。经本会话 cancel 的 = 我们亲手停的（干净）；
+          // 外部结算的一律 UNKNOWN —— 绝不把"查不到"翻译成"正常结束"。
+          finish(
+            this.cancelCalled
+              ? null
+              : { cause: 'UNKNOWN', message: 'run 已结算离表，终态未知（结算后无状态可读）' },
+          )
+          return
+        }
+        schedule() // TTL/断链等：吞掉等下一轮，真死了结算路径会表达
+        return
+      }
+      if (st === 'STOPPED') {
+        finish(null)
+        return
+      }
+      if (st === 'CRASHED') {
+        finish({ cause: 'CRASHED', message: null })
+        return
+      }
+      schedule() // RUNNING/BOOTING/QUIESCING/IDLE：还没终态，下一轮再问
+    }
+    // 首轮立即问（终态查询不等一个周期）：首轮的存活锚是 invoke 内部的 TTL 定时器
+    // （ref，事件循环因它存活）+ 同步结算时同 tick 落定的 microtask —— 不另挂 ref 定时器。
+    // 若首轮是"真异步未决"（宿主稍后才 handleResponse），事件循环靠那个 TTL 定时器活着，
+    // resolve 后要么 finish（清定时器调回调），要么 schedule（挂 unref 的下一轮）。
+    void poll()
+    return {
+      cancel: () => {
+        settled = true
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+      },
+    }
+  }
 }
 
 /**
