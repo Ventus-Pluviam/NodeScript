@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
+import com.autoscript.appservice.scheduler.persist.FileTaskStore
 import com.autoscript.appservice.scheduler.persist.JournalFileStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
@@ -67,6 +68,7 @@ object AppShellKit {
         val shell: AppShell,
         private val log: PersistentIntentLog,
         private val archive: RunArchive,
+        private val tasks: FileTaskStore?,
         /** npm 装配产出的 handler（装配测试/诊断用；null 表示本次装配未挂 npm）。 */
         val npmHandler: NamespaceHandler?,
         private val scope: ShellScope?,
@@ -83,6 +85,7 @@ object AppShellKit {
             scope?.cancel()          // 先停看门狗轮转，再关壳/持久句柄（轮转中不得关底下的池）
             shell.close()
             (archive as? AutoCloseable)?.close()
+            tasks?.close()           // 注册表 channel：与意图日志同一目录、同一追加纪律
             log.close()
         }
 
@@ -156,6 +159,10 @@ object AppShellKit {
         // 只写一侧的孤儿因此可被审计。两个都持久：重启后任务中心与 bootRecover 才有据可依。
         val log = PersistentIntentLog(JournalFileStore(autojsDir))
         val archive = FileRunArchive(autojsDir)
+        // 注册表第三持久（§8.6）：意图日志管"已投递的意向"，这里管"还没到点的排期"。
+        // 同一 `.autojs` 目录（`tasks.jsonl`），同一追加+tombstone 纪律；Scheduler 经
+        // [AppShell][com.autoscript.shell.AppShell] 的 `taskStore` 缝拿到它。
+        val tasks = FileTaskStore(autojsDir)
 
         val npm = npmHandler ?: NpmShellKit.assembleHandler(filesDir = filesDir, cacheDir = cacheDir)
 
@@ -164,6 +171,7 @@ object AppShellKit {
             schedulerProvider = schedulerProvider,
             intentLog = log,
             runArchive = archive,
+            taskStore = tasks,
             screenGate = screenGate,
             poolCapacity = poolCapacity,
             a11yHandler = a11yHandler,
@@ -184,6 +192,6 @@ object AppShellKit {
             shell.startWatchdog(fresh)
             ownedScope = fresh
         }
-        return AssembledShell(shell, log, archive, npm, ownedScope, deployReport)
+        return AssembledShell(shell, log, archive, tasks, npm, ownedScope, deployReport)
     }
 }

@@ -8,6 +8,7 @@ import com.autoscript.appservice.runtime.HeartbeatLedger
 import com.autoscript.appservice.runtime.RuntimeController
 import com.autoscript.appservice.scheduler.core.InMemoryRunArchive
 import com.autoscript.appservice.scheduler.core.IntentLog
+import com.autoscript.appservice.scheduler.core.TaskStore
 import com.autoscript.appservice.scheduler.core.RecoveryRecord
 import com.autoscript.appservice.scheduler.core.Scheduler
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
@@ -80,7 +81,16 @@ class AppShell(
      *
      * @return 每条遗留的旧/新 runId 与投递结果（供恢复日志/UI 呈现"开机恢复了 N 条"）。
      */
-    suspend fun bootRecover(): List<RecoveryRecord> = scheduler.recoverUncommitted()
+    /**
+     * 启动双恢复（§8.6 先排期、§8.5 后意向）：先 [Scheduler.restoreTasks] 把注册表续上
+     * （AlarmManager 里还响的闹钟才有人接），再 `recoverUncommitted` 重投遗留意向。
+     * 顺序反了不丢数据，但恢复重投的 Once 任务会被续排又注册一次 —— 故在此写死顺序，
+     * 调用方（Application.install）只需调这一处。
+     */
+    suspend fun bootRecover(): List<RecoveryRecord> {
+        scheduler.restoreTasks()
+        return scheduler.recoverUncommitted()
+    }
 
     override fun close() {
         router.close()
@@ -92,6 +102,12 @@ class AppShell(
             schedulerProvider: SchedulerProvider,
             intentLog: IntentLog,
             runArchive: RunArchive = InMemoryRunArchive(),
+            /**
+             * 任务注册表持久缝（§8.6 调度持久性）。null = 未接存储：Scheduler 纯内存行为
+             * （骨架/单测）。生产由 [AppShellKit][com.autoscript.shell.AppShellKit] 传
+             * `FileTaskStore`（与意图日志同一 `.autojs` 目录，同一追加纪律）。
+             */
+            taskStore: TaskStore? = null,
             screenGate: ScreenGate = ScreenGate.AllowAll,
             poolCapacity: Int = 1,
             /**
@@ -147,7 +163,7 @@ class AppShell(
             if (npmHandler != null) router.register("npm", npmHandler)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
-            val scheduler = Scheduler(schedulerProvider, intentLog, dispatcher, runArchive)
+            val scheduler = Scheduler(schedulerProvider, intentLog, dispatcher, runArchive, taskStore = taskStore)
 
             // 看门狗：采样器 + 心跳来源在此装配；policy 取 controller 自己那份（单一事实来源，
             //  Threshold 改变只改一处）。缺省 new 一个套在真 controller 上的生产实例。

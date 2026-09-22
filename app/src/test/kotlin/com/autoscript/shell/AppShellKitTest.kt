@@ -311,6 +311,45 @@ class AppShellKitTest {
         Unit
     }
 
+    /**
+     * 注册表持久（§8.6 调度持久性）：schedule 落 `tasks.jsonl`，重启后新壳
+     * `bootRecover` 先续排（闹钟重新注册）—— AlarmManager 里还响的闹钟有人接，
+     * Daily 任务不会因进程一退就永久停排。
+     */
+    @Test
+    fun `重启后注册表恢复：任务仍在且闹钟续排`() = runBlocking {
+        val first = RecordingProvider()
+        kit(provider = first).use { assembled ->
+            assembled.shell.scheduler.schedule(
+                ScheduledTask("t7", "每日", "p7", "a.js", TimedSchedule.Daily(9, 30)),
+            )
+            assertTrue("t7" in first.registered, "首次登记注册闹钟")
+        }
+
+        val second = RecordingProvider()
+        kit(provider = second).use { assembled ->
+            assertTrue(assembled.shell.scheduler.tasks().isEmpty(), "新壳内存是空的（恢复前）")
+            assembled.shell.bootRecover()
+            assertEquals(
+                listOf("t7"),
+                assembled.shell.scheduler.tasks().map { it.id },
+                "bootRecover 先续排：注册表从 tasks.jsonl 重建",
+            )
+            assertTrue("t7" in second.registered, "闹钟续排到新 provider（旧句柄随关壳失效）")
+            // 投递仍可用：续排不是摆设
+            assembled.shell.scheduler.onTrigger("t7", TriggerSource.TIMED, System.currentTimeMillis())
+        }
+
+        val log = PersistentIntentLog(JournalFileStore(files.resolve(".autojs")))
+        try {
+            assertTrue(log.all().any { it.projectId == "p7" }, "续排后的任务可正常投递落日志")
+        } finally {
+            log.close()
+        }
+
+        Unit
+    }
+
     @Test
     fun `无来源时补部署报告如实为空，不粉饰恢复成功`() {
         kit().use { assembled ->

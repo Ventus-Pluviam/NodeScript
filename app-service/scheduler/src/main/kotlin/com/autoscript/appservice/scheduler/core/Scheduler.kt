@@ -59,6 +59,15 @@ class Scheduler(
      * TIMED 120s 最宽）。**不要在两处各写一份数字**：漂移了现场极难查。
      */
     private val deadlineFor: (TriggerSource) -> Long = DefaultDeadlines,
+    /**
+     * 任务注册表持久缝（§8.6 调度持久性）。
+     *
+     * null = 未接存储（骨架/单测）：纯内存行为。非 null 时 [schedule]/[cancel] 直写、
+     * [restoreTasks] 从它重建 —— 顺序都是"先落盘后动内存/闹钟"：IO 抛错时内存与
+     * AlarmManager 保持原样，绝不出现"内存有、盘上无"的幽灵登记（反过来"盘上有、
+     * 内存无"下次 restore 还能收敛，是安全的失败方向）。
+     */
+    private val taskStore: TaskStore? = null,
 ) {
     private val stateLock = Any()
     private val running = hashMapOf<String, ScheduledTask>()
@@ -69,16 +78,37 @@ class Scheduler(
      * [task.schedule] 为 Once 时即单次投递；Daily/Cron 由 [onTrigger] 尾部自推进到下一轮。
      */
     suspend fun schedule(task: ScheduledTask) {
+        taskStore?.put(task)                                  // 先落盘：失败即抛，内存/闹钟不动
         synchronized(stateLock) { running[task.id] = task }
         rearmFor(task)
     }
 
     /** 取消任务：撤销已注册触发并移出注册表（已投递的 runs 不追回）。 */
     suspend fun cancel(taskId: String) {
+        taskStore?.remove(taskId)                             // 先落 tombstone：失败即抛，原登记保留
         synchronized(stateLock) {
             running.remove(taskId)
             handles.remove(taskId)
         }?.cancel()
+    }
+
+    /**
+     * 启动恢复（§8.6 注册表重建）：从 [taskStore] 重建内存注册表并为每个任务续排闹钟。
+     *
+     * 调用顺序必须在 [recoverUncommitted] **之前**（装配层保证）：恢复重投的意向属于
+     * "已投递"的账，而这里重建的是"还没到点"的排期 —— 顺序反了不丢数据，但重投的
+     * Once 任务会被这里的续排又注册一次（Once 触发后才终态化，恢复时它还在注册表里）。
+     * 幂等：重复调用只是重新 `put` 同一批任务并替换闹钟句柄（旧句柄取消），不叠加。
+     *
+     * @return 重建的任务（按 id 排序；store 为 null 或空时为空表）。
+     */
+    suspend fun restoreTasks(): List<ScheduledTask> {
+        val stored = taskStore?.loadAll() ?: return emptyList()
+        for (task in stored) {
+            synchronized(stateLock) { running[task.id] = task }
+            rearmFor(task)        // disabled/Cron-null 内部直接返回：留名不续排（见 rearmFor）
+        }
+        return stored
     }
 
     suspend fun tasks(): List<ScheduledTask> =
