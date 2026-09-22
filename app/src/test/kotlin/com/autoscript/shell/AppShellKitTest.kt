@@ -63,6 +63,8 @@ class AppShellKitTest {
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
         scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
+        scriptProjects: List<String> = emptyList(),
+        assetReader: ((String) -> Map<String, ByteArray>)? = null,
     ): AppShellKit.AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
@@ -71,6 +73,8 @@ class AppShellKitTest {
         a11yHandler = a11yHandler,
         screenHandler = screenHandler,
         scriptSources = scriptSources,
+        scriptProjects = scriptProjects,
+        assetReader = assetReader,
     )
 
     @Test
@@ -345,6 +349,44 @@ class AppShellKitTest {
             assertTrue(log.all().any { it.projectId == "p7" }, "续排后的任务可正常投递落日志")
         } finally {
             log.close()
+        }
+
+        Unit
+    }
+
+    /**
+     * 资产来源合并（§9.6 `assets/scripts/<projectId>/` 生产接线）：
+     * 显式 scriptSources 优先，assets 按 projectId 补缺的项目；单项目读失败不带走整批。
+     */
+    @Test
+    fun `资产来源按项目补缺：显式优先、读失败跳过不炸`() {
+        val requested = mutableListOf<String>()
+        kit(
+            scriptSources = mapOf("p1" to mapOf("main.js" to "// 显式".toByteArray())),
+            scriptProjects = listOf("p1", "p2", "p3"),
+            assetReader = { projectId ->
+                requested += projectId
+                when (projectId) {
+                    "p1" -> mapOf("main.js" to "// 资产（必须被显式盖住不读都行）".toByteArray())
+                    "p2" -> mapOf("a.js" to "// 资产补".toByteArray())
+                    else -> throw java.io.IOException("p3 资产损坏")
+                }
+            },
+        ).use { assembled ->
+            assertTrue("p1" !in requested, "显式有的项目不读资产：$requested")
+            assertEquals(
+                "// 显式",
+                Files.readAllBytes(files.resolve("scripts").resolve("p1").resolve("main.js"))
+                    .toString(Charsets.UTF_8),
+                "同项目以显式为准（资产不覆盖）",
+            )
+            assertEquals(
+                "// 资产补",
+                Files.readAllBytes(files.resolve("scripts").resolve("p2").resolve("a.js"))
+                    .toString(Charsets.UTF_8),
+                "缺的项目从资产补",
+            )
+            assertTrue(assembled.deployFailures().isEmpty(), "p3 读失败跳过，不进失败账（无此项目可补）")
         }
 
         Unit

@@ -102,11 +102,24 @@ class AppShellApplication : Application() {
             // 闹钟出口只建一次（[installAlarmPort] 先装过就用那份：取消/续排路径按同一份撤销）。
             val port = alarmPort ?: AndroidAlarmPort(applicationContext, AlarmReceiver::class.java)
                 .also { alarmPort = it }
+            val appContext = applicationContext
             val built = AppShellKit.assemble(
                 filesDir = filesDir,
                 cacheDir = cacheDir,
                 schedulerProvider = AlarmSchedulerProvider(port = port),
                 screenGate = screenGateOf(this),
+                // 首批内置脚本（§9.6 `assets/scripts/<projectId>/`）：枚举 + 按需读，
+                // 补部署只补缺不覆盖 —— 用户"清除数据"后重装配时缺的脚本从这里回来。
+                scriptProjects = try {
+                    appContext.assets.list("scripts")?.toList() ?: emptyList()
+                } catch (_: Exception) {
+                    emptyList()      // 枚举失败 = 无资产来源（不炸装配，deployReport 如实为空）
+                },
+                assetReader = { projectId ->
+                    com.autoscript.appservice.scriptrepo.assets.AndroidAssetsSource(
+                        appContext.assets, projectId,
+                    ).readScripts()
+                },
             )
             install(built.shell)
             assembled = built

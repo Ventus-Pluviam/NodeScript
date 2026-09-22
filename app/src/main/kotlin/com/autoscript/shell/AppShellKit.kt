@@ -141,6 +141,21 @@ object AppShellKit {
          * 但补部署的判据与来源无关 —— 只补缺、绝不覆盖已有文件。
          */
         scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
+        /**
+         * 装配期脚本补部署的来源清单（`assets/scripts/` 下的 projectId 枚举；§9.6）。
+         * 缺省空表 = 不枚举（`scriptSources` 有货照样补）。生产由 Application 传
+         * `AssetLister` 的枚举结果 —— 本配方不直连 AssetManager（`:app` 测试源集
+         * 无 android 桩之外的资产能力，且配方保持纯 JVM 可测）。
+         */
+        scriptProjects: List<String> = emptyList(),
+        /**
+         * 按 projectId 读资产（`assets/scripts/<projectId>/` → 相对路径 → 字节；§9.6）。
+         * 缺省 null = 无资产来源（只用 [scriptSources]）。生产实现两行：
+         * `{ id -> AndroidAssetsSource(applicationContext.assets, id).readScripts() }`
+         * —— 不能写进本文件（`:app-service:script-repo` 的 assets 包直连
+         * `android.content.res.AssetManager`，配方保持纯 JVM 可测），故由 Application 喂。
+         */
+        assetReader: ((String) -> Map<String, ByteArray>)? = null,
         poolCapacity: Int = 1,
         monitor: ProcessMonitor = ProcessMonitor(),
         watchdog: EngineWatchdog? = null,
@@ -153,7 +168,25 @@ object AppShellKit {
         // （用户"清除数据"、系统回收空间、预装包升级），先补缺再装配 —— 否则装配出的壳
         // 每次执行都以"脚本文件不存在"告终，而任务中心只看到 CRASHED、说不出为什么。
         // 只补缺不覆盖：用户手改过的脚本原样留着（见 ScriptDeployRecovery KDoc 三条诚实边界）。
-        val deployReport = ScriptDeployRecovery(filesDir, scriptSources).run()
+        // 资产来源合并（§9.6）：显式传入的 scriptSources 优先，assets 按 projectId 补齐缺的
+        // 项目 —— 合并只做"缺项目补"，同项目同文件以调用方显式传入为准（不覆盖、不合并文件级）。
+        val mergedSources: Map<String, Map<String, ByteArray>> =
+            if (assetReader == null || scriptProjects.isEmpty()) scriptSources
+            else {
+                val merged = HashMap(scriptSources)
+                for (projectId in scriptProjects) {
+                    if (merged.containsKey(projectId)) continue
+                    merged[projectId] = try {
+                        assetReader(projectId)
+                    } catch (_: Exception) {
+                        // 单项目资产读失败不带走整批（与 ScriptDeployRecovery 单文件诚实边界同理）——
+                        // 该项目本次不补，deployReport 如实无此项目（不是"已恢复"）。
+                        continue
+                    }
+                }
+                merged
+            }
+        val deployReport = ScriptDeployRecovery(filesDir, mergedSources).run()
 
         // 意图日志与运行档案分文件（§8.5）：键不同（intentRunId vs engineRunId），
         // 只写一侧的孤儿因此可被审计。两个都持久：重启后任务中心与 bootRecover 才有据可依。
