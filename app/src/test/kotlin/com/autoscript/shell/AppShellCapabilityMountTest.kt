@@ -54,6 +54,7 @@ class AppShellCapabilityMountTest {
             a11yHandler = map["a11y"],
             screenHandler = map["screen"],
             npmHandler = map["npm"],
+            datastoreHandler = map["datastore"],
         )
     }
 
@@ -77,6 +78,14 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 datastore：get 恒回 found:false 信封（可达性替身；真语义在 capabilities 侧测）。 */
+    private val fakeDatastore = NamespaceHandler { request ->
+        when (request.method) {
+            "get" -> BridgeResponse.Ok(request.id, """{"found":false}""")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeDatastore only implements get")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -87,7 +96,7 @@ class AppShellCapabilityMountTest {
 
     @Test
     fun `注入能力缝后 a11y screen 可达`() = runBlocking {
-        val s = shell("a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm)
+        val s = shell("a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm, "datastore" to fakeDatastore)
         s.use {
             val a11yResp = s.router.dispatch(
                 BridgeRequest(1, "a11y", "findOne", """{"conditions":{"text":"启动"}}""", 5_000),
@@ -106,6 +115,11 @@ class AppShellCapabilityMountTest {
             )
             assertEquals("""[{"name":"axios","version":"1.7.0"}]""",
                 (npmResp as BridgeResponse.Ok).payload)
+
+            val dsResp = s.router.dispatch(
+                BridgeRequest(6, "datastore", "get", """{"key":"k"}""", 5_000),
+            )
+            assertEquals("""{"found":false}""", (dsResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -136,6 +150,9 @@ class AppShellCapabilityMountTest {
 
             val npmResp = s.router.dispatch(BridgeRequest(3, "npm", "list", null, 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (npmResp as BridgeResponse.Err).errorCode)
+
+            val dsResp = s.router.dispatch(BridgeRequest(4, "datastore", "get", """{"key":"k"}""", 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (dsResp as BridgeResponse.Err).errorCode, "datastore 独立缝缺省同样不伪造")
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试

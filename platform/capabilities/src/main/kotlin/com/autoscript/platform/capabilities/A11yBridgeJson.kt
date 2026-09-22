@@ -40,6 +40,43 @@ internal object A11yBridgeJson {
 
     fun encode(v: Any?): String = buildString { appendValue(v) }
 
+    /**
+     * 把已解析的 [Value] 树编回 JSON 文本（datastore `put` 的 value 子树专用）。
+     * 与 [encode] 的分工：这里处理的是**已解析树** —— 数字走 [Value.N.raw] 原文
+     * 透传（`1.50` 不被 Double 化掉尾零）、对象保持解析序（解码侧 LinkedHashMap）。
+     * 字符串经「解码→再转义」是规范化而非逐字节透传（结构等价；空白/转义形态不作承诺）。
+     */
+    fun encodeParsed(v: Value): String = buildString { appendParsed(v) }
+
+    private fun StringBuilder.appendParsed(v: Value) {
+        when (v) {
+            is Value.S -> appendQuoted(v.v)
+            is Value.N -> append(v.raw)
+            is Value.B -> append(if (v.v) "true" else "false")
+            is Value.Null -> append("null")
+            is Value.Obj -> {
+                append('{')
+                var first = true
+                for ((k, item) in v.fields) {
+                    if (!first) append(',')
+                    first = false
+                    appendQuoted(k)
+                    append(':')
+                    appendParsed(item)
+                }
+                append('}')
+            }
+            is Value.Arr -> {
+                append('[')
+                v.items.forEachIndexed { i, item ->
+                    if (i > 0) append(',')
+                    appendParsed(item)
+                }
+                append(']')
+            }
+        }
+    }
+
     private fun StringBuilder.appendValue(v: Any?) {
         when (v) {
             null -> append("null")

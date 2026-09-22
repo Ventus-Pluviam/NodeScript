@@ -173,6 +173,14 @@ class AppShell(
              */
             npmHandler: NamespaceHandler? = null,
             /**
+             * `datastore` 命名空间实现（§9.6 KV 面）：与 a11y/screen/npm 同一形态的
+             * **独立**注入缝 —— 存储面不与五命名空间共担门禁（应用私有 KV 无需授权），
+             * 故不入 [SystemHandlers] 束。实现经 `:platform:capabilities` 的
+             * `CapabilityNamespaces.datastore(store)` 转接；null = 未接线，桥如实
+             * `ERR_NOT_IMPLEMENTED`（不伪造可用）。
+             */
+            datastoreHandler: NamespaceHandler? = null,
+            /**
              * `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6）。
              * 与 [a11yHandler] 同一注入缝，但合成一个参数而非五个：五个命名空间在 §12.2
              * 的 JS facade（`extras.ts`）里是一个整体，且共一批能力门禁（OVERLAY /
@@ -200,6 +208,7 @@ class AppShell(
             if (a11yHandler != null) router.register("a11y", a11yHandler)
             if (screenHandler != null) router.register("screen", screenHandler)
             if (npmHandler != null) router.register("npm", npmHandler)
+            if (datastoreHandler != null) router.register("datastore", datastoreHandler)
             systemHandlers?.registerAll(router::register)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)

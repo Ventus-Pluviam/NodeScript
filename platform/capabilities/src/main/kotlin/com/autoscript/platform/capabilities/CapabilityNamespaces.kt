@@ -11,6 +11,7 @@ import com.autoscript.domain.system.AppLauncher
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DialogHost
 import com.autoscript.domain.system.FloatingWindowHost
+import com.autoscript.domain.storage.DataStore
 import com.autoscript.domain.system.ShellExecutor
 
 /**
@@ -105,6 +106,18 @@ object CapabilityNamespaces {
     /** `floatingWindow` 命名空间：`create`/`close`（§9.4）。 */
     fun floatingWindow(host: FloatingWindowHost): NamespaceHandler {
         val handler = FloatingWindowNamespaceHandler(host)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /**
+     * `datastore` 命名空间（§9.6）：KV 六方法（`get`/`put`/`remove`/`contains`/
+     * `keys`/`clear`）。参数即 [com.autoscript.domain.storage.DataStore] SPI 实现
+     * （测试传 `InMemoryDataStore`，真机传 `:platform:system` 的 SQLite 实现）。
+     * 存储面不共担五命名空间的门禁（应用私有 KV 无需授权）→ 独立注入缝
+     * `AppShell.assemble` 的 `datastoreHandler`，不入 `systemHandlers` 束。
+     */
+    fun datastore(store: DataStore): NamespaceHandler {
+        val handler = DatastoreNamespaceHandler(store)
         return lite { request -> handler.handle(request) }
     }
 }

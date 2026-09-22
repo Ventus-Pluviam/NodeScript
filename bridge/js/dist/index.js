@@ -24,6 +24,7 @@ const images_1 = require("./images");
 const npm_1 = require("./npm");
 const console_1 = require("./console");
 const extras_1 = require("./extras");
+const datastore_1 = require("./datastore");
 /** workManager 命名空间（scheduler 面：P0 每日/一次性排期工具函数，运行态挂全局任务表）。 */
 exports.workManagerNS = { daily: workManager_1.daily, once: workManager_1.once, fromInput: workManager_1.fromInput, nextFireAfter: workManager_1.nextFireAfter, createTimedTask: workManager_1.createTimedTask, cancelTask: workManager_1.cancelTask, listTasks: workManager_1.listTasks };
 /** 命名空间根对象：挂各类能力；`install` 由 bootstrap/宿主在引擎就绪时注入桥 handler。 */
@@ -41,6 +42,7 @@ exports.auto = {
     get device() { return extras_1.device; },
     get app() { return extras_1.app; },
     get floatingWindow() { return extras_1.floatingWindow; },
+    get datastore() { return datastore_1.datastore; },
     get envelope() { return bridge_1.BridgeEnvelope; },
     /** 安装桥宿主（单例；重复安装抛错）。 */
     install(handler) {
