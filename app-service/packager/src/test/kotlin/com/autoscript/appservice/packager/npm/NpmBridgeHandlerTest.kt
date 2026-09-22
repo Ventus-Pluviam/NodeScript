@@ -64,7 +64,16 @@ class NpmBridgeHandlerTest {
         val h = handler()
         val r = h.handle(req("install", json("spec" to "lodash@4.17.21")))
         assertTrue(r is com.autoscript.domain.bridge.BridgeResponse.Ok, "install 必须 Ok（实为 $r）")
-        assertEquals("true", (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload)
+        // 回包 = :domain InstallHandle 原样上桥（handleId/projectId/enqueuedAtMillis）。
+        // 刻意**不是**包体：门面此刻还不知道会装出什么版本，回一个猜的版本号就是伪造
+        // （§10.8 文档里 install → {name,version,integrity} 的示例在门面形状下产不出来）。
+        // JS facade 侧断言同一份形状（npm-contract.test.cjs 的 mock 逐字复刻这里）。
+        val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
+        assertTrue(payload.contains("\"handleId\":\"inst-1\""), "回包须带句柄：$payload")
+        assertTrue(payload.contains("\"projectId\":\"main\""), payload)
+        assertTrue(payload.contains("\"enqueuedAtMillis\":"), payload)
+        assertTrue(!payload.contains("integrity"), "不得在回包里伪造 integrity：$payload")
+        assertTrue(!payload.contains("\"version\""), "不得在回包里伪造 version：$payload")
         assertEquals(1, installed.size)
         assertEquals("main", installed[0].first, "缺省项目须为 main（诚实默认）")
         assertEquals(PackageSpec("lodash", "4.17.21"), installed[0].second.single())
@@ -124,7 +133,9 @@ class NpmBridgeHandlerTest {
         val r = handler().handle(req("offlineGap", json("projectId" to "p1")))
         val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
         assertTrue(payload.contains("\"a\""), "缺口须含 a：$payload")
-        assertTrue(payload.contains("\"version\":\"1.0.0\""))
+        // version 是 JS MissingPkg 的字段（宿主一直发、facade 曾漏声明）：脚本要能
+        // 提示「缺 a@1.0.0」而不是只拿到一个名字。
+        assertTrue(payload.contains("\"version\":\"1.0.0\""), "缺口须带版本：$payload")
     }
 
     @Test
@@ -133,7 +144,10 @@ class NpmBridgeHandlerTest {
         val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
         assertTrue(payload.contains("\"offline\":true"), payload)
         assertTrue(payload.contains("\"level\":\"none\""), payload)
-        assertTrue(payload.contains("\"vulnerabilities\":[]"), payload)
+        // 键名是 vulns（§10.8 文档 + JS AuditReport.vulns 都读它）。曾真实漂移成
+        // vulnerabilities：两侧各自的测试都没抓到，因为 JS mock 自己回的 vulns。
+        assertTrue(payload.contains("\"vulns\":[]"), "键名须为 vulns：$payload")
+        assertTrue(!payload.contains("vulnerabilities"), "不得再发旧键名：$payload")
     }
 
     @Test
@@ -176,6 +190,8 @@ class NpmBridgeHandlerTest {
         val r = h.handle(req("requestApprove", json("projectId" to "p1", "pkg" to "esbuild", "versionHash" to "sha512-a")))
         val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
         assertTrue(payload.contains("\"status\":\"pending\""), payload)
+        // scripts 回显：调用方没声明 → 空表（不是 null/缺键，JS 侧 scripts: readonly string[]）
+        assertTrue(payload.contains("\"scripts\":[]"), "未声明 scripts 须回显空表：$payload")
         // 方法表里根本没有 resolve：未知方法 → ERR_NOT_IMPLEMENTED（人机分离铁律）
         val resolveTry = h.handle(req("resolveApproval", json("requestId" to "x")))
         assertEquals(
@@ -200,6 +216,48 @@ class NpmBridgeHandlerTest {
         assertEquals(
             ErrorCode.ERR_NOT_SUPPORTED.code,
             (r as com.autoscript.domain.bridge.BridgeResponse.Err).errorCode,
+        )
+    }
+
+    @Test
+    fun `requestApprove 回显 scripts 并校验形态（不静默丢弃用户声明）`() = runBlocking {
+        val h = handler()
+        val r = h.handle(
+            req(
+                "requestApprove",
+                json("projectId" to "p1", "pkg" to "esbuild", "versionHash" to "sha512-a", "scripts" to listOf("postinstall")),
+            ),
+        )
+        val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
+        assertTrue(payload.contains("\"requestId\":\"apr-1\""), payload)
+        assertTrue(payload.contains("\"scripts\":[\"postinstall\"]"), "声明过的脚本须原样回显：$payload")
+
+        // 形态不对即 ERR_INVALID_PARAM —— 与 setRegistry 的 scope 同一条纪律：
+        // 宿主不认的字段被静默丢弃，比报错更糟。
+        val bad = h.handle(req("requestApprove", json("projectId" to "p1", "pkg" to "esbuild", "scripts" to "postinstall")))
+        assertEquals(
+            ErrorCode.ERR_INVALID_PARAM.code,
+            (bad as com.autoscript.domain.bridge.BridgeResponse.Err).errorCode,
+            "scripts 必须是数组（字符串不是）",
+        )
+    }
+
+    @Test
+    fun `list 不发 sizeBytes（lockfile 量不到，恒 0 等于声称该包 0 字节）`() = runBlocking {
+        writeLock(
+            "p1",
+            """{"lockfileVersion":3,"packages":{"":{},"node_modules/a":{"version":"1.0.0","integrity":"sha512-x"}}}""",
+        )
+        val r = handler().handle(req("list", json("projectId" to "p1")))
+        val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
+        assertTrue(payload.contains("\"name\":\"a\""), payload)
+        assertTrue(payload.contains("\"version\":\"1.0.0\""), payload)
+        assertTrue(!payload.contains("sizeBytes"), "尺寸不在 list 面（JS PkgNode 无此字段）：$payload")
+        // 尺寸的两条真来源仍在：offlineGap（缺失清单，带 size）与 storage（目录实测）
+        val gap = handler().handle(req("offlineGap", json("projectId" to "p1")))
+        assertTrue(
+            (gap as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!.contains("\"size\":"),
+            "offlineGap 仍带 size（尺寸的真来源）",
         )
     }
 

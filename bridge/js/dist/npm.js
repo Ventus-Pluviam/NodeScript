@@ -27,7 +27,7 @@ const progress = new EventHub();
 const approvals = new EventHub();
 const warnings = new EventHub();
 exports.npm = {
-    /** 安装（排队→门禁→起会话→执行→post-check→归档；P0）。 */
+    /** 安装（排队→门禁→起会话→执行→post-check→归档；P0）。回包 = 排队结果，非装完。 */
     async install(spec, opts = {}) {
         return (await runtime_1.runtimeBridge.invoke('npm', 'install', { spec, save: opts.save ?? true, offline: opts.offline ?? false }, {
             ttl: opts.timeout ?? 60_000,
@@ -69,10 +69,18 @@ exports.npm = {
     async importTarball(path, opts = {}) {
         await runtime_1.runtimeBridge.invoke('npm', 'importTarball', { path }, { ttl: opts.timeout ?? 120_000 });
     },
-    /** 审批：只提交请求，绝不脚本直调（人机分离，UI 人工确认）。 */
+    /**
+     * 审批：只提交请求，绝不脚本直调（人机分离，UI 人工确认）。
+     *
+     * 回包 `{requestId, status, scripts}`：前两个是宿主票号与状态（`pending`），
+     * [ApprovalRequest.scripts] 是**入参回显** —— 宿主校验了数组形态并原样带回，
+     * 让脚本能确认「我声明的脚本清单宿主收到了」。不回显的话，宿主与脚本各持一份
+     * scripts，改了哪一侧都看不出来（与 setRegistry 的 scope 同一条纪律）。
+     *
+     * 若宿主拒绝提交，会抛 ERR_PERMISSION_DENIED/ERR_NPM_* —— 如实上抛。
+     */
     async requestApprove(pkg, opts = {}) {
-        // 若宿主拒绝提交，会抛 ERR_PERMISSION_DENIED/ERR_NPM_* —— 如实上抛
-        await runtime_1.runtimeBridge.invoke('npm', 'requestApprove', { pkg, scripts: opts.scripts ?? [] }, { ttl: opts.timeout ?? 10_000 });
+        return (await runtime_1.runtimeBridge.invoke('npm', 'requestApprove', { pkg, scripts: opts.scripts ?? [], versionHash: opts.versionHash ?? null }, { ttl: opts.timeout ?? 10_000 }));
     },
     /** 进度事件（数据面，可丢包）。返回退订函数。 */
     onProgress(listener) {

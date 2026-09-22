@@ -50,6 +50,20 @@ internal object NpmBridgeJson {
         else -> throw IllegalArgumentException("字段 $key 必须是字符串")
     }
 
+    /**
+     * 可选字符串数组（缺省/显式 null → 空表）。
+     *
+     * 为什么不是「丢了就当没有」：宿主不认的字段会被静默丢弃，而调用方已经显式声明过它
+     * （如 `requestApprove` 的 `scripts`）——静默丢比报错更糟。故数组形态不对即抛。
+     */
+    fun optStrList(o: Map<String, Value>, key: String): List<String> = when (val v = o[key]) {
+        null, is Value.Null -> emptyList()
+        is Value.Arr -> v.items.map {
+            (it as? Value.S)?.v ?: throw IllegalArgumentException("字段 $key 数组元素必须是字符串")
+        }
+        else -> throw IllegalArgumentException("字段 $key 必须是数组")
+    }
+
     fun optBool(o: Map<String, Value>, key: String): Boolean? = when (val v = o[key]) {
         null, is Value.Null -> null
         is Value.B -> v.v

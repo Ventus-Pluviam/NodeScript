@@ -17,18 +17,27 @@ import com.autoscript.domain.core.ErrorCode
  * 绝不静默套默认（把包装进别人项目比报错更糟）。
  *
  * 方法表（与 `bridge/js` npm.ts 一一对应，§10.8）：
- * - `install`：`{spec,save?,offline?,timeout?}` → `true`（InstallHandle 语义：排队即返回；
- *   进度走 events 流，脚本用 onProgress 收）——返回体故意不含 result 明细：
- *   InstallCoordinator 的 install 是 enqueue+inline 执行，真实结果经 Finished 事件给；
+ * - `install`：`{spec,save?,offline?,timeout?}` → `{handleId,projectId,enqueuedAtMillis}`
+ *   （`:domain` 的 [InstallHandle] 原样上桥）。返回体**故意不含**装了什么：门面只交回句柄，
+ *   `name/version/integrity` 要等 npm 解析完才有，此刻回一个猜的版本号就是伪造。
+ *   想知道装了什么：`list()` 直读 lockfile（权威），或订阅 progress 流的 Finished 事件。
+ *   （§10.8 文档里 `install → {name,version,integrity}` 的示例在门面形状下产不出来——
+ *   `InstallResult`/`ResolvedPkg` 两个 DTO 至今没有任何实现方产出，别照文档当真）。
  * - `remove`：`{spec}` → 无参；
  * - `ci`：`{offline?}` → 无参；
- * - `list`：`{depth?}` → `[PkgNodeJson...]`（轻操作直读 lockfile）；
+ * - `list`：`{depth?}` → `[{name,version}]`（轻操作直读 lockfile；**不含** sizeBytes，
+ *   lockfile 量不到尺寸，发一个恒 0 的字节数等于声称「该包 0 字节」——尺寸走
+ *   `offlineGap`（缺失清单）/ `storage`（目录实测），两条路都真有数）；
  * - `prune`/`dedupe`：无参；
  * - `offlineGap`：无参 → `[{name,version,size}]`；
- * - `audit`：`{offline?}` → `{vulnerabilities:[],level,offline}`（P0 诚实空报告）；
+ * - `audit`：`{offline?}` → `{vulns:[],level,offline}`（P0 诚实空报告；键名是 **vulns**
+ *   不是 vulnerabilities——§10.8 文档与 JS facade 的 `AuditReport.vulns` 都读这个键，
+ *   回旧键名会让 `report.vulns` 恒 undefined）；
  * - `setRegistry`：`{registry,scope?}` → 无参（scope→npmrc `<scope>:registry`，§10.2 三层注册表配置；经 :main 可配列表 + 审计）；
  * - `importOfflineBundle`/`importTarball`：`{uri}`/`{path}`；
- * - `requestApprove`：`{pkg,versionHash?,action?}` → 票 JSON（**只入队**；脚本绝无 resolve 权）。
+ * - `requestApprove`：`{pkg,versionHash?,action?,scripts?}` → `{requestId,status,scripts}`
+ *   （**只入队**；脚本绝无 resolve 权。`scripts` 回显：JS facade 一直带着这个字段，
+ *   宿主不校验也不回就是静默丢用户显式声明——与 `setRegistry` 的 scope 同一类问题）。
  */
 class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageManagerFacade) {
 
@@ -64,12 +73,21 @@ class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageMana
                 val offline = NpmBridgeJson.optBool(f, "offline") ?: false
                 val timeout = NpmBridgeJson.optLong(f, "timeout") ?: 60_000L
                 val (name, version) = parseSpec(spec)
-                facade.install(
+                val handle = facade.install(
                     projectId,
                     listOf(com.autoscript.domain.npm.PackageSpec(name, version)),
                     com.autoscript.domain.npm.InstallFlags(offline = offline, save = save, timeoutMillis = timeout),
                 )
-                "true"
+                // 上桥的是 :domain 的 InstallHandle 本身，不是 `true` 也不是包体：
+                // 门面此刻只知道「这个句柄已入队」，装出什么要等解析。handleId 同时是
+                // progress 流事件的关联键（脚本靠它把事件对回自己这次调用）。
+                NpmBridgeJson.encode(
+                    mapOf(
+                        "handleId" to handle.id,
+                        "projectId" to handle.projectId,
+                        "enqueuedAtMillis" to handle.enqueuedAtMillis,
+                    ),
+                )
             }
             "remove" -> {
                 val spec = NpmBridgeJson.reqStr(f, "spec")
@@ -84,8 +102,12 @@ class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageMana
             }
             "list" -> {
                 val depth = (NpmBridgeJson.optLong(f, "depth") ?: 0L).toInt()
+                // 不发 sizeBytes：list 直读 lockfile，量不到尺寸（恒 0）。发一个永远是 0
+                // 的字节数 = 声称「这个包占 0 字节」，比不给这个字段更糟——脚本会拿它算
+                // 「还要下多少」然后得到 0。尺寸的两条真来源：offlineGap（缺失清单）、
+                // storage（node_modules 目录实测）。
                 NpmBridgeJson.encode(facade.list(projectId, depth).map {
-                    mapOf("name" to it.name, "version" to it.version, "sizeBytes" to it.sizeBytes)
+                    mapOf("name" to it.name, "version" to it.version)
                 })
             }
             "prune" -> { facade.prune(projectId); null }
@@ -98,7 +120,10 @@ class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageMana
                 val r = facade.audit(projectId, offline)
                 NpmBridgeJson.encode(
                     mapOf(
-                        "vulnerabilities" to r.vulnerabilities.map {
+                        // 键名 vulns：JS facade 的 AuditReport.vulns 直接读它，§10.8 文档同形。
+                        // 回 vulnerabilities 会让 report.vulns 恒 undefined（与 a11y.waitFor
+                        // 那次同一类事故：facade 读一个宿主从不发的键）。
+                        "vulns" to r.vulnerabilities.map {
                             mapOf("id" to it.id, "severity" to it.severity.name.lowercase(), "name" to it.pkgName)
                         },
                         "level" to r.level.name.lowercase(),
@@ -126,13 +151,23 @@ class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageMana
             "requestApprove" -> {
                 val pkg = NpmBridgeJson.reqStr(f, "pkg")
                 val versionHash = NpmBridgeJson.optStr(f, "versionHash") ?: ""
+                // scripts：JS facade 的 requestApprove(pkg, {scripts}) 一直带着它（§10.8）。
+                // 宿主既不校验也不回 = 静默丢弃用户显式声明，与 setRegistry 的 scope 同罪；
+                // 形态不对就 ERR_INVALID_PARAM（响亮失败），对得上才回显「宿主收到了」。
+                val scripts = NpmBridgeJson.optStrList(f, "scripts")
                 val action = when (NpmBridgeJson.optStr(f, "action")?.lowercase()) {
                     "run_script", "runscript" -> com.autoscript.domain.npm.ApprovalAction.RUN_SCRIPT
                     "exec" -> com.autoscript.domain.npm.ApprovalAction.EXEC
                     else -> com.autoscript.domain.npm.ApprovalAction.INSTALL_SCRIPT
                 }
                 val t = facade.requestApprove(projectId, pkg, versionHash, action)
-                NpmBridgeJson.encode(mapOf("requestId" to t.requestId, "status" to t.status.name.lowercase()))
+                NpmBridgeJson.encode(
+                    mapOf(
+                        "requestId" to t.requestId,
+                        "status" to t.status.name.lowercase(),
+                        "scripts" to scripts,
+                    ),
+                )
             }
             else -> throw com.autoscript.domain.core.AutojsException(
                 ErrorCode.ERR_NOT_IMPLEMENTED,

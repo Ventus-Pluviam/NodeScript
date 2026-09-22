@@ -36,12 +36,23 @@ data class InstallHandle(
     val enqueuedAtMillis: Long,
 )
 
+/**
+ * 安装**结果**（装了哪些包、什么版本、什么摘要）。
+ *
+ * ⚠ 今天没有任何实现方产出它：[PackageManagerFacade] 的重操作入口返回的是
+ * [InstallHandle]（排队即返回），产物详情要走 progress 流的 `Finished` 事件或
+ * `list()` 直读 lockfile。保留这个 DTO 是因为它描述的是「一次安装的结果」这个真实概念，
+ * 不是摆设——但**别把它当成 `install()` 的回包形状**：
+ * `bridge/js` 曾据此把 `npm.install` 声明成 `Promise<InstallResult>`，而宿主回的是句柄，
+ * 于是 `pkg.version` 恒 undefined（§10.8 文档同批改正）。谁先接上产物回传，谁再填它。
+ */
 data class InstallResult(
     val handleId: String,
     val installed: List<ResolvedPkg>,
     val warnings: List<String> = emptyList(),   // scripts-skipped 等（§10.5-3 禁止静默）
 )
 
+/** 单个已解析包（[InstallResult] 的条目；`linkedBins` = 该包声明的 bin 链接名）。 */
 data class ResolvedPkg(
     val name: String,
     val version: String,
