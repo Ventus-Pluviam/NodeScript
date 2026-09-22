@@ -7,6 +7,7 @@ import com.autoscript.domain.storage.ZipArchiver
 import com.autoscript.domain.system.AppLauncher
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.FloatingWindowHost
+import com.autoscript.domain.system.NotificationPoster
 import com.autoscript.domain.system.ShellExecutor
 
 /**
@@ -29,7 +30,7 @@ import com.autoscript.domain.system.ShellExecutor
 object SystemSpis {
 
     /**
-     * 本模块当前能提供的七件（见 [Bundle] 字段注释）。
+     * 本模块当前能提供的八件（见 [Bundle] 字段注释）。
      * `overlayAvailable` 缺省恒假 —— 悬浮窗走 `TYPE_APPLICATION_OVERLAY`；
      * a11y 服务在跑时由上层传 `{ true }` 换成 `TYPE_ACCESSIBILITY_OVERLAY`。
      */
@@ -49,11 +50,12 @@ object SystemSpis {
             datastore = AndroidDataStore(SqliteKvOps(app)),
             zip = JdkZipArchiver(),
             settings = AndroidSystemSettings(SettingsSystemOps(app)),
+            notification = AndroidNotificationPoster(NotificationOps(app)),
         )
     }
 
     /**
-     * 七个 SPI 实现（`dialogs` 缺位，见 [SystemSpis] 的 KDoc）。
+     * 八个 SPI 实现（`dialogs` 缺位，见 [SystemSpis] 的 KDoc）。
      * 字段声明成 SPI 类型而非具体类：上层只该看见 `:domain` 的契约。
      *
      * `datastore` 是 SPI 束的成员、**不是** `systemHandlers` 束的成员：
@@ -68,5 +70,6 @@ object SystemSpis {
         val datastore: DataStore,
         val zip: ZipArchiver,
         val settings: SystemSettings,
+        val notification: NotificationPoster,
     )
 }

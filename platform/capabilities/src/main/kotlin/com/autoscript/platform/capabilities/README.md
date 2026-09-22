@@ -20,7 +20,7 @@ Android 真实现 ── :platform:system（SystemSpis.of）或 §9.1 的无障�
 ```
 
 挂载发生在装配层：`CapabilityNamespaces.*` 把 handler 折成 `:domain` 的
-`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，存储面另有 `datastoreHandler`/`zipHandler`/`settingsHandler` 三条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
+`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，系统/存储面另有 `datastoreHandler`/`zipHandler`/`settingsHandler`/`notificationHandler` 四条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
 
 ## 铁律在本模块的落点
 
@@ -49,6 +49,7 @@ Android 真实现 ── :platform:system（SystemSpis.of）或 §9.1 的无障�
 | screen | `ScreenNamespaceHandler` + `ScreenshotSource`（333ms 节流/会话/分类错误已就绪） | MediaProjection 会话 + `SnapshotAwareProducer` 的 Android 实现，**待落地**（§9.2） |
 | 系统五个 | `SystemNamespaces`（五个 handler） | `SystemSpis.of(context)` 已给四件（`shell`/`device`/`app`/`floatingWindow`）；`dialogs` 待 §14 P2 |
 | 存储三个（§9.6） | `DatastoreNamespaceHandler` / `ZipNamespaceHandler` / `SettingsNamespaceHandler`（三个独立注入缝，不入 `systemHandlers` 束） | `SystemSpis.of(context)` 三件齐（`AndroidDataStore`/`JdkZipArchiver`/`AndroidSystemSettings`）；**生产拼装待装配层拓扑决策** |
+| 通知 | `NotificationNamespaceHandler`（独立注入缝 `notificationHandler`；参数口径在本层，`POST_NOTIFICATIONS` 门禁在 SPI） | `SystemSpis.Bundle.notification` = `AndroidNotificationPoster`+`NotificationOps`（默认 channel 归实现，契约不暴露 `channelId`） |
 
 ## 尚未实现（别在文档里写成「差不多能用」）
 

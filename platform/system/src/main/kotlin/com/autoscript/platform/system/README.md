@@ -35,6 +35,7 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 | `AndroidDataStore` | `KvOps`（真机 `SqliteKvOps`） | 空白键拒写不碰 ops、事务暂存→**恰好一次** `applyAll`、block 抛错 → ops **零调用**（零调用即回滚）、行编解码 `KvRowCodec`（kind 显式裁定 + 访问器按 kind 惰性） |
 | `JdkZipArchiver` | **无**（`java.util.zip` 纯 JVM，整类真 IO 进单测） | zip-slip 先验后写（全包校验完才落字节）、目录/空目录往返、压缩 tmp+rename 原子落位、垃圾包如实 ERR_IO |
 | `AndroidSystemSettings` | `SettingsSystemOps`（`android.provider.Settings`） | 写前 canWrite 门（未授 → ERR_PERMISSION_DENIED 非 false）、已授权仍拒 → ERR_IO、读侧缺失 null 不拿 0/空串冒充、空白键拒 |
+| `AndroidNotificationPoster` | `NotificationOps`（`android.app.NotificationManager`） | 发前 canPost 门（未授 → ERR_PERMISSION_DENIED **非 false** —— 系统被拒时不抛异常直接丢弃，门禁必须在它前面）、空白正文拒、cancel 无回执（契约回 Unit 不编 Boolean）、默认 channel 懒建 |
 
 真机 ops 实现分别住 `WindowManagerOps.kt` / `PackageManagerOps.kt`（这两个文件里有真
 `WindowManager`/`PackageManager` 调用，本机 JVM 只编译、不执行）。
@@ -51,7 +52,7 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 
 ## 尚未实现（别在文档里写成"差不多能用"）
 
-`dialogs`（`DialogHost`，overlay 真弹窗 + 通知回调，§14 P2）、通知。
+`dialogs`（`DialogHost`，overlay 真弹窗 + 通知回调，§14 P2）。
 （datastore：`AndroidDataStore` + `SqliteKvOps`；zip：`JdkZipArchiver`；
 settings：`AndroidSystemSettings` + `SettingsSystemOps` —— 入口
 `SystemSpis.Bundle.{datastore,zip,settings}`；生产拼装仍待装配层拓扑决策 ——

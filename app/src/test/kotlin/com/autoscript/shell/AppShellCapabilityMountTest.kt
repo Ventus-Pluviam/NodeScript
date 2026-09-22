@@ -57,6 +57,7 @@ class AppShellCapabilityMountTest {
             datastoreHandler = map["datastore"],
             zipHandler = map["zip"],
             settingsHandler = map["settings"],
+            notificationHandler = map["notification"],
         )
     }
 
@@ -106,6 +107,15 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 notification：只实现本测试派发的两方法，回包形状与真 handler 同构。 */
+    private val fakeNotification = NamespaceHandler { request ->
+        when (request.method) {
+            "canPost" -> BridgeResponse.Ok(request.id, "true")
+            "post" -> BridgeResponse.Ok(request.id, "true")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeNotification only implements canPost/post")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -119,6 +129,7 @@ class AppShellCapabilityMountTest {
         val s = shell(
             "a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm,
             "datastore" to fakeDatastore, "zip" to fakeZip, "settings" to fakeSettings,
+            "notification" to fakeNotification,
         )
         s.use {
             val a11yResp = s.router.dispatch(
@@ -153,6 +164,11 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(8, "settings", "canWrite", null, 5_000),
             )
             assertEquals("true", (settingsResp as BridgeResponse.Ok).payload)
+
+            val notifResp = s.router.dispatch(
+                BridgeRequest(9, "notification", "post", """{"id":1,"text":"跑完了"}""", 5_000),
+            )
+            assertEquals("true", (notifResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -192,6 +208,11 @@ class AppShellCapabilityMountTest {
 
             val settingsResp = s.router.dispatch(BridgeRequest(6, "settings", "canWrite", null, 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (settingsResp as BridgeResponse.Err).errorCode, "settings 独立缝缺省同样不伪造")
+
+            val notifResp = s.router.dispatch(
+                BridgeRequest(7, "notification", "post", """{"id":1,"text":"跑完了"}""", 5_000),
+            )
+            assertEquals("ERR_NOT_IMPLEMENTED", (notifResp as BridgeResponse.Err).errorCode, "notification 独立缝缺省同样不伪造")
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试

@@ -11,6 +11,7 @@ import com.autoscript.domain.system.AppLauncher
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DialogHost
 import com.autoscript.domain.system.FloatingWindowHost
+import com.autoscript.domain.system.NotificationPoster
 import com.autoscript.domain.storage.DataStore
 import com.autoscript.domain.storage.SystemSettings
 import com.autoscript.domain.storage.ZipArchiver
@@ -146,11 +147,23 @@ object CapabilityNamespaces {
         val handler = SettingsNamespaceHandler(systemSettings)
         return lite { request -> handler.handle(request) }
     }
+
+    /**
+     * `notification` 命名空间（§12.2）：`canPost`/`post`/`cancel` 三方法。参数即
+     * [NotificationPoster] SPI 实现（测试传真读假写的替身，真机传 `:platform:system`
+     * 的 `AndroidNotificationPoster`）。同 datastore/zip/settings：**独立注入缝**
+     * `AppShell.assemble` 的 `notificationHandler`，不入 `systemHandlers` 束 ——
+     * 通知的门禁是 `POST_NOTIFICATIONS`，判据在 SPI（与那五个不共担）。
+     */
+    fun notification(poster: NotificationPoster): NamespaceHandler {
+        val handler = NotificationNamespaceHandler(poster)
+        return lite { request -> handler.handle(request) }
+    }
 }
 
 /**
  * [BridgeRequestLite] 形状的 handler → 桥信封的字段级转接（本文件私有）。
- * 系统侧五个与存储面三个（§9.4/§9.6）共用；同 [NamespaceHandler] 缝，无逻辑。
+ * 系统侧五个与存储/通知面四个（§9.6/§12.2）共用；同 [NamespaceHandler] 缝，无逻辑。
  */
 private inline fun lite(crossinline handle: suspend (BridgeRequestLite) -> ResponseLite): NamespaceHandler =
     NamespaceHandler { request ->

@@ -196,6 +196,14 @@ class AppShell(
              */
             settingsHandler: NamespaceHandler? = null,
             /**
+             * `notification` 命名空间实现（§12.2 通知面）：同 [datastoreHandler] 的**独立**缝 ——
+             * 通知的门禁是 `POST_NOTIFICATIONS`，判定在 SPI 自己身上（未授抛 `ERR_PERMISSION_DENIED`），
+             * 与五命名空间的 OVERLAY/ROOT/ADB_INPUT 不共担，故也不入 [SystemHandlers]。实现经
+             * `:platform:capabilities` 的 `CapabilityNamespaces.notification(poster)` 转接；
+             * null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`（不伪造可用）。
+             */
+            notificationHandler: NamespaceHandler? = null,
+            /**
              * `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6）。
              * 与 [a11yHandler] 同一注入缝，但合成一个参数而非五个：五个命名空间在 §12.2
              * 的 JS facade（`extras.ts`）里是一个整体，且共一批能力门禁（OVERLAY /
@@ -226,6 +234,7 @@ class AppShell(
             if (datastoreHandler != null) router.register("datastore", datastoreHandler)
             if (zipHandler != null) router.register("zip", zipHandler)
             if (settingsHandler != null) router.register("settings", settingsHandler)
+            if (notificationHandler != null) router.register("notification", notificationHandler)
             systemHandlers?.registerAll(router::register)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
