@@ -46,3 +46,12 @@
 3. **外科手术式读写**：Grep/Glob 定位，Read 带 offset/limit，Edit 用最小唯一匹配，不整库读代码。
 4. **git 提交**：每个逻辑完成点提交，信息 `type(scope): 摘要` + 结尾 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`；不提交无关文件；不 init 仓库（已是仓库）。
 5. **契约先行**：接口/DTO 以 `:domain` 骨架为准；别自行发明跨模块类型。
+## NDK（本机）
+
+- 本机 NDK：`/root/ndk/android-ndk-r28c`（r28c，与 `node-runtime-build/VERSIONS.env`
+  的 `NDK_VERSION` 同源；zip 校验见该管线 §2）。
+- 用法：`export ANDROID_NDK_HOME=/root/ndk/android-ndk-r28c` +
+  `PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH`，
+  直接调 `aarch64-linux-android26-clang(++)`（API 26 = minSdk 冻结值）。
+- 本机只做 **C++ 交叉编译验证**（`bridge/native` 的 addon `.so` 能编出 arm64 ELF）；
+  APK/AGP assemble 仍走 CI（无 Android SDK）。
