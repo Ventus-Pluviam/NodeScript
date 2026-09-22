@@ -23,8 +23,16 @@ run() {   # run <模块名> <是否要 android.jar: 0|1> <main-src-roots> <test-
   local flag=""; [ "$android" = 1 ] && flag="--android-jar"
   local out
   out=$(timeout 1200 "$T" $flag "$main_roots" "$test_root" 2>&1)
-  echo "$out" | grep -E "tests (successful|failed)|containers failed|error:|FAILED|Exception in" | head -20
-  echo "$out" | grep -q "0 tests failed" || FAILED+=("$name")
+  echo "$out" | grep -E "tests (successful|failed|aborted)|containers failed|error:|FAILED|Exception in" | head -20
+  # aborted（Assumptions.assume* 前置未满足 = 这条压根没跑）**不算过**：只认
+  # "0 tests failed" 会让环境性静默跳过冒充绿 —— SocketE2EHostTest 曾把仓库根锚死在
+  # worktree 名上，除该名外全部 abort，门却一路放行。计数用 grep -o 抽数字，
+  # 不写死结论行的列宽（那列宽随位数变，写死就是换个地方假绿）。
+  if ! echo "$out" | grep -q "0 tests failed"; then
+    FAILED+=("$name")
+  elif [ "$(echo "$out" | grep -oE '^[^0-9]*[0-9]+ tests aborted' | grep -oE '[0-9]+' | head -1)" != "0" ]; then
+    FAILED+=("$name:aborted")
+  fi
 }
 
 ONLY="$*"

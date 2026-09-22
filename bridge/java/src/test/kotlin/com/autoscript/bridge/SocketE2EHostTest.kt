@@ -37,9 +37,19 @@ import org.junit.jupiter.api.Test
  */
 class SocketE2EHostTest {
 
+    /**
+     * 仓库根 = 上溯首个含 `settings.gradle.kts` 的目录（与 `ModuleGraphTest` 同一惯例）。
+     *
+     * **不锚 worktree/分支目录名**：本仓多 worktree 并行（目录名即分支名，且 CI 的
+     * checkout 目录名 = 仓库名），锚死任一名字都会让其余 worktree/CI 解析到 `/`，
+     * `dist` 落空 → [org.junit.jupiter.api.Assumptions.assumeTrue] abort 成"静默跳过"。
+     * 这里曾锚 `spiky-hamster`，在 `meek-bat` 等 worktree 与 CI 上该 E2E 一次都没跑过，
+     * 而 `tools/jvm-test-all.sh` 只认 `0 tests failed`，aborted 照样放行 —— 双重假绿。
+     */
     private val repoRoot: String = run {
-        var d = java.io.File(System.getProperty("user.dir"))
-        while (d.name != "spiky-hamster" && d.parentFile != null) d = d.parentFile
+        var d: java.io.File? = java.io.File(System.getProperty("user.dir")).absoluteFile
+        while (d != null && !java.io.File(d, "settings.gradle.kts").isFile) d = d.parentFile
+        requireNotNull(d) { "未找到仓库根（上溯 ${System.getProperty("user.dir")} 未见 settings.gradle.kts）" }
         d.absolutePath
     }
     private val dist = "$repoRoot/bridge/js/dist"
