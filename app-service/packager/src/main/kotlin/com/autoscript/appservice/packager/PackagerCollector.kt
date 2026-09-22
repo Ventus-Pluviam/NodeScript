@@ -34,12 +34,31 @@ class PackagerCollector {
         projectRoot: Path,
         identity: ApkIdentity,
         template: TemplateInfo,
-    ): TemplateApkPlan = TemplateApkPlans.build(
-        identity = identity,
-        template = template,
-        manifest = collect(spec, projectRoot),
-        offlineVariant = spec.offlineVariant,
-    )
+    ): TemplateApkPlan = planWithManifest(spec, projectRoot, identity, template).plan
+
+    /**
+     * [plan] 的全量版：计划与它所依据的清单**一并**交出。
+     * 签名（[SignPlans]）与资产注入都要同一份清单 —— 二次 [collect] 会在两跑之间
+     * 留出"文件被改、摘要对不上"的漂移窗口，全量版把那次窗口关掉。
+     */
+    fun planWithManifest(
+        spec: PackSpec,
+        projectRoot: Path,
+        identity: ApkIdentity,
+        template: TemplateInfo,
+    ): Planned {
+        val manifest = collect(spec, projectRoot)
+        val plan = TemplateApkPlans.build(
+            identity = identity,
+            template = template,
+            manifest = manifest,
+            offlineVariant = spec.offlineVariant,
+        )
+        return Planned(plan, manifest)
+    }
+
+    /** 一次产出的（改写计划，它所依据的资产清单）—— 同源同跑，供签名/注入复用。 */
+    data class Planned(val plan: TemplateApkPlan, val manifest: PackManifest)
 
     fun collect(spec: PackSpec, projectRoot: Path): PackManifest {
         require(Files.isDirectory(projectRoot)) { "项目目录不存在: $projectRoot" }

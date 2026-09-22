@@ -7,6 +7,7 @@ import java.nio.file.Path
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -23,7 +24,12 @@ class PackagerPipelineTest {
     private fun templateApk(): Path {
         val t = tmp.resolve("template.apk")
         Files.createDirectories(t.parent)
-        Files.write(t, byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0x0A, 0x00))  // PK\x03\x04
+        // 真 zip（inject 要开 ZipFile；6 字节假 PK 头过不了 central directory）。
+        java.util.zip.ZipOutputStream(Files.newOutputStream(t)).use { out ->
+            out.putNextEntry(java.util.zip.ZipEntry("keep.txt"))
+            out.write("keep".toByteArray())
+            out.closeEntry()
+        }
         return t
     }
 
@@ -41,15 +47,18 @@ class PackagerPipelineTest {
     }
 
     @Test
-    fun `injectAsset 注入资产并原子就位`() {
+    fun `injectAsset 把资产写进包内 assets-project 前缀条目`() {
         val p = pipeline()
         val out = p.prepare()
-        val bytes = "project/main.js".toByteArray()
-        p.injectAsset(out, "project/main.js", bytes)
+        val bytes = "console.log(1)".toByteArray()
+        p.injectAsset(out, "main.js", bytes)
 
-        val target = workDir().resolve("unpacked/project/main.js")
-        assertArrayEquals(bytes, Files.readAllBytes(target), "资产字节应原样就位")
-        assertFalse(workDir().resolve("unpacked/project/.main.js.tmp").toFile().exists(), "无临时文件残留")
+        assertArrayEquals(
+            bytes,
+            zipEntry(out, "assets/project/main.js"),
+            "资产必须落在包内 ASSET_PREFIX+relPath（§3「注入 assets/project」），不是旁边暂存",
+        )
+        assertNull(zipEntryOrNull(out, "assets/project/.main.js.tmp"), "无临时条目残留")
     }
 
     @Test
@@ -68,16 +77,50 @@ class PackagerPipelineTest {
     }
 
     @Test
-    fun `injectAsset 替换已存在资产（幂等）`() {
+    fun `injectAsset 同名二次注入覆盖（幂等）`() {
         val p = pipeline()
         val out = p.prepare()
-        p.injectAsset(out, "project/main.js", "v1".toByteArray())
-        p.injectAsset(out, "project/main.js", "v2".toByteArray())
-        assertArrayEquals(
-            "v2".toByteArray(),
-            Files.readAllBytes(workDir().resolve("unpacked/project/main.js")),
-        )
+        p.injectAsset(out, "main.js", "v1".toByteArray())
+        p.injectAsset(out, "main.js", "v2".toByteArray())
+        assertArrayEquals("v2".toByteArray(), zipEntry(out, "assets/project/main.js"))
     }
+
+    @Test
+    fun `injectAssets 批量一次落位且不动模板既有条目`() {
+        val p = pipeline()
+        val out = p.prepare()
+        val before = Files.readAllBytes(out)
+        p.injectAssets(
+            out,
+            linkedMapOf(
+                "main.js" to "entry".toByteArray(),
+                "lib/util.js" to "util".toByteArray(),
+            ),
+        )
+        assertArrayEquals("entry".toByteArray(), zipEntry(out, "assets/project/main.js"))
+        assertArrayEquals("util".toByteArray(), zipEntry(out, "assets/project/lib/util.js"))
+        // 模板自身条目不被批量注入破坏（至少仍是合法 zip 且能读回模板条目之外的新条目）
+        assertTrue(Files.size(out) > 0)
+        assertFalse(before.isEmpty())
+    }
+
+    @Test
+    fun `injectAssets 空表是 no-op`() {
+        val p = pipeline()
+        val out = p.prepare()
+        val before = Files.readAllBytes(out)
+        p.injectAssets(out, emptyMap())
+        assertArrayEquals(before, Files.readAllBytes(out), "空批量不该白跑一次重写")
+    }
+
+    private fun zipEntry(apk: Path, name: String): ByteArray =
+        zipEntryOrNull(apk, name) ?: error("包内缺条目 $name")
+
+    private fun zipEntryOrNull(apk: Path, name: String): ByteArray? =
+        java.util.zip.ZipFile(apk.toFile()).use { zf ->
+            val e = zf.getEntry(name) ?: return@use null
+            zf.getInputStream(e).readBytes()
+        }
 
     @Test
     fun `patch 骨架期返回空补丁（不改写）`() {

@@ -27,17 +27,43 @@ internal class ApkRepacker {
     /**
      * 读 [apk]，把 [replacements] 里给出的条目换成新字节，剔除旧签名，写回 [target]。
      * 未在 [replacements] 中出现的条目名照抄原字节（含压缩方式）。
+     * **替换项必须都真的存在于模板里**：打错包名/路径早失败，不产出"少一个条目"的坏包。
      */
-    fun rewrite(apk: Path, replacements: Map<String, ByteArray>, target: Path) {
+    fun rewrite(apk: Path, replacements: Map<String, ByteArray>, target: Path) =
+        rewriteInternal(apk, replacements, target, allowNew = false)
+
+    /**
+     * 往 [apk] 追加/覆盖 [additions] 条目并写回 [target] —— 与 [rewrite] 的分工：
+     * 这里的名字**可以是模板没有的新条目**（资产注入 `assets/project/…` 走这条），
+     * 已存在的则替换字节。条目名做路径校验（禁 `..` / 绝对路径），防御性双保险
+     * （调用方 [PackagerPipeline.injectAssets] 已先校验相对路径）。
+     * 新条目一律 DEFLATED（项目资产没有"必须 STORED"的约束；对齐交 zipalign）。
+     */
+    fun addEntries(apk: Path, additions: Map<String, ByteArray>, target: Path) {
+        for (name in additions.keys) {
+            require(!name.startsWith("/") && ".." !in name.split('/', '\\')) {
+                "包内条目名不得是绝对路径或含 ..：$name"
+            }
+        }
+        rewriteInternal(apk, additions, target, allowNew = true)
+    }
+
+    private fun rewriteInternal(
+        apk: Path,
+        replacements: Map<String, ByteArray>,
+        target: Path,
+        allowNew: Boolean,
+    ) {
         Files.createDirectories(target.parent)
         val tmp = target.resolveSibling(".${target.fileName}.tmp")
         try {
             ZipFile(apk.toFile()).use { zf ->
-                val names = zf.entries().asSequence().map { it.name }.toSet()
-                // 替换项必须都真的存在于模板里：打错包名/路径早失败，不产出"少一个条目"的坏包。
-                val missing = replacements.keys - names
-                if (missing.isNotEmpty()) {
-                    throw AutojsException(ErrorCode.ERR_NOT_FOUND, "模板 APK 缺条目：${missing.sorted()}")
+                if (!allowNew) {
+                    val names = zf.entries().asSequence().map { it.name }.toSet()
+                    val missing = replacements.keys - names
+                    if (missing.isNotEmpty()) {
+                        throw AutojsException(ErrorCode.ERR_NOT_FOUND, "模板 APK 缺条目：${missing.sorted()}")
+                    }
                 }
                 ZipOutputStream(Files.newOutputStream(tmp)).use { out ->
                     val written = HashSet<String>()
@@ -47,10 +73,22 @@ internal class ApkRepacker {
                         val name = entry.name
                         if (isV1SignatureEntry(name)) continue // 旧签名必须剔除（内容已变，留着验签必炸）
                         if (!written.add(name)) continue        // 重复条目：只留第一个
-                        val bytes = replacements[name] ?: zf.getInputStream(entry).readBytes()
-                        writeEntry(out, name, entry.method, bytes)
+                        val replacement = replacements[name]
+                        if (replacement != null) {
+                            // 覆盖既有条目：新字节按原条目的压缩方式写回（目录仍 STORED）。
+                            writeEntry(out, name, entry.method, replacement)
+                        } else {
+                            writeEntry(out, name, entry.method, zf.getInputStream(entry).readBytes())
+                        }
                     }
-                    // replacements 里模板没有的已在上面报错；此处只兜底"模板有但顺序异常"。
+                    // allowNew 时把模板没有的新条目补在表尾（顺序 = 调用方 map 迭代序）。
+                    if (allowNew) {
+                        for ((name, bytes) in replacements) {
+                            if (name in written) continue
+                            writeEntry(out, name, ZipEntry.DEFLATED, bytes)
+                            written.add(name)
+                        }
+                    }
                 }
             }
             Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
