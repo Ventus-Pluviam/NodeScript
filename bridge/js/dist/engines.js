@@ -1,7 +1,9 @@
 "use strict";
 /**
  * 引擎进程池模型（docs/framework-design.md §8.1/§8.2）：并发上限 = 池容量，超载排队（绝不静默丢）。
- * 对应 :app-service:runtime EnginePool 语义 + :domain:engine ScriptEngine / RuntimeChannel / EngineSessionHandle。
+ * 对应 :app-service:runtime EnginePool 语义 + :domain:engine ScriptEngine（会话面无 :domain 句柄类型：
+ * Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，JS 侧是本文件的
+ * `EngineSessionImpl`/`EngineChannel` —— 已删无消费者的 `EngineSessionHandle` 死层，见 stale-jaguar 提交）。
  * 面：exec → 会话句柄（cancel = 四步 quiesce；onExit；命名通道）。
  */
 Object.defineProperty(exports, "__esModule", { value: true });

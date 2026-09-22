@@ -1,6 +1,8 @@
 /**
  * 引擎进程池模型（docs/framework-design.md §8.1/§8.2）：并发上限 = 池容量，超载排队（绝不静默丢）。
- * 对应 :app-service:runtime EnginePool 语义 + :domain:engine ScriptEngine / RuntimeChannel / EngineSessionHandle。
+ * 对应 :app-service:runtime EnginePool 语义 + :domain:engine ScriptEngine（会话面无 :domain 句柄类型：
+ * Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，JS 侧是本文件的
+ * `EngineSessionImpl`/`EngineChannel` —— 已删无消费者的 `EngineSessionHandle` 死层，见 stale-jaguar 提交）。
  * 面：exec → 会话句柄（cancel = 四步 quiesce；onExit；命名通道）。
  */
 /** 运行簿记收据（与 :domain EngineRunReceipt 对齐：runId + HandleRef）。 */
@@ -121,7 +123,7 @@ export interface CrashInfo {
 }
 /**
  * engines.exec() 会话句柄：cancel（优雅四步 quiesce）+ onExit（STOPPED/CRASHED 回调）
- * + 命名通道。对应 :domain EngineSessionHandle。
+ * + 命名通道。实现见本文件 `EngineSessionImpl`（无 :domain 句柄类型）。
  */
 export interface EngineSession {
     readonly runId: number;
@@ -238,15 +240,4 @@ export declare class EngineSessionImpl implements EngineSession {
     onExit(listener: (info: CrashInfo | null) => void, opts?: {
         pollMillis?: number;
     }): ChannelSubscription;
-}
-/**
- * 运行句柄代理（§7.4 句柄面）：exec 签发；cancel = 四步 quiesce（§8.3），onExit 绑退出事件。
- * 与 Kotlin :domain EngineSessionHandle 对齐（engine/receipt/channel/exitSink 由运行时实现注入）。
- */
-export interface EngineSessionHandle {
-    readonly runId: number;
-    readonly handle: {
-        refId: number;
-        generation: number;
-    };
 }

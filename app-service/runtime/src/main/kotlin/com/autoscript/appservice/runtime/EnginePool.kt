@@ -47,7 +47,7 @@ sealed interface PoolAcquireOutcome {
     data class Failed(val message: String) : PoolAcquireOutcome     // 引擎启动失败（槽位已收回）
 }
 
-/** 已获槽位的执行句柄；scheduler 侧再包 :domain 的 EngineSessionHandle（含 RuntimeChannel）。 */
+/** 已获槽位的执行句柄（池内身份：请求 + 槽位 + 收据 + 代次；无跨层包装——会话面在桥两侧各一边：Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，JS 侧是 `EngineSessionImpl`/`EngineChannel`）。 */
 class PoolHandle internal constructor(
     val request: PoolAcquireRequest,
     val slot: PoolSlot,
