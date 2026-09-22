@@ -7,7 +7,9 @@ package com.autoscript.domain.engine
  * IDLE → BOOTING → RUNNING → QUIESCING → STOPPED → IDLE（回收复用）
  *    ↘           ↘ → CRASHED（启动失败）  ↗ → CRASHED（异常）
  * 任意非 IDLE 状态可入 CRASHED（看门狗：心跳缺失/CPU 风暴/OOM/引擎自毁）。
- * kill() 按原因归类：REQUESTED → STOPPED；异常原因 → CRASHED。
+ * kill() 按原因归类：REQUESTED + RUNNING|QUIESCING → STOPPED；其余（含 BOOTING 启动
+ * 失败收归、心跳/CPU/OOM/引擎请求/DRIFT）→ CRASHED。经 [transition] 校验，非法转移抛
+ * [IllegalStateTransition]（不再直写 status 绕过合法转移表）。
  */
 class EngineStateMachine(private val initial: EngineStatus = EngineStatus.IDLE) {
 
@@ -38,13 +40,8 @@ class EngineStateMachine(private val initial: EngineStatus = EngineStatus.IDLE) 
     fun onBootCompleted() = transition(EngineStatus.RUNNING)
     fun onBootFailed() = transition(EngineStatus.CRASHED)
 
-    /** 优雅停止开始：RUNNING|BOOTING → QUIESCING。 */
-    fun onQuiesceStart() {
-        check(status == EngineStatus.RUNNING || status == EngineStatus.BOOTING) {
-            "仅 RUNNING|BOOTING 可进入 QUIESCING（当前 $status）"
-        }
-        status = EngineStatus.QUIESCING
-    }
+    /** 优雅停止开始：RUNNING|BOOTING → QUIESCING（走正规 [transition] 校验）。 */
+    fun onQuiesceStart() = transition(EngineStatus.QUIESCING)
 
     /** 四步 quiesce 干净完成：QUIESCING → STOPPED。 */
     fun onQuiesceCompleted() = transition(EngineStatus.STOPPED)
@@ -56,15 +53,20 @@ class EngineStateMachine(private val initial: EngineStatus = EngineStatus.IDLE) 
     }
 
     /**
-     * 强制 kill：按原因归类。
-     * REQUESTED（管理者主动）→ STOPPED；其余（心跳/CPU/OOM/引擎请求）→ CRASHED。
+     * 强制 kill：按原因归类，目标经 [transition] 校验（非法转移抛 [IllegalStateTransition]）。
+     * - REQUESTED：RUNNING/QUIESCING → STOPPED（合法干净停）；其余状态（BOOTING/STOPPED/
+     *   CRASHED/IDLE）→ CRASHED —— 非存活期的「主动停」视同异常终止，不伪造干净停；
+     * - 非 REQUESTED（心跳/CPU/OOM/引擎请求/DRIFT）→ CRASHED。
      */
     fun onKill(cause: KillCause) {
-        if (cause == KillCause.REQUESTED) {
-            status = EngineStatus.STOPPED
-        } else {
-            status = EngineStatus.CRASHED
+        val target = when (cause) {
+            KillCause.REQUESTED -> when (status) {
+                EngineStatus.RUNNING, EngineStatus.QUIESCING -> EngineStatus.STOPPED
+                else -> EngineStatus.CRASHED   // BOOTING/STOPPED/CRASHED kill 视为异常终止
+            }
+            else -> EngineStatus.CRASHED
         }
+        transition(target)
     }
 
     /** 回收复用：STOPPED|CRASHED → IDLE。 */

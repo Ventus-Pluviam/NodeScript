@@ -118,12 +118,14 @@ class FixedEnginePool(
      * 收归同时推进占位代次：旧句柄在此之后一律过期，放不进 [release]。
      *
      * @param cause 收归原因（§8.3 状态机归类）：watchdog/OOM 原因 → CRASHED；null 或
-     *   [KillCause.REQUESTED] → STOPPED。调用方不关心终态归因时可省。
+     *   [KillCause.REQUESTED] 在 RUNNING/QUIESCING 收归 → STOPPED，BOOTING（启动失败
+     *   走本方法收口）→ CRASHED —— 没跑起来的「主动收」不伪造干净停。
+     *   调用方不关心终态归因时可省。
      */
     override fun recycle(slot: PoolSlot, cause: KillCause?) {
         synchronized(stateLock) {
             if (slot.state != SlotState.FREE) {
-                slot.reuse(cause ?: KillCause.REQUESTED)   // 无原因=调用方主动收归 → STOPPED 而非 CRASHED
+                slot.reuse(cause ?: KillCause.REQUESTED)   // RUNNING→STOPPED；BOOTING 启动失败→CRASHED
                 slot.occupy()          // 收归也推进代次：旧句柄此后一律过期
                 permits.release()
             }

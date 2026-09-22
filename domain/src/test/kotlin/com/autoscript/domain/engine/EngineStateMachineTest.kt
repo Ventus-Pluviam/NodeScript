@@ -40,7 +40,7 @@ class EngineStateMachineTest {
     @Test
     fun `quiesce only allowed from RUNNING or BOOTING`() {
         val m = EngineStateMachine()
-        assertThrows(IllegalStateException::class.java) { m.onQuiesceStart() }   // IDLE
+        assertThrows(IllegalStateTransition::class.java) { m.onQuiesceStart() }  // IDLE → QUIESCING 越表
         m.onExecuteRequested()
         m.onQuiesceStart()   // BOOTING → QUIESCING allowed
         assertEquals(EngineStatus.QUIESCING, m.status)
@@ -64,6 +64,18 @@ class EngineStateMachineTest {
         m3.onExecuteRequested(); m3.onBootCompleted()
         m3.onKill(KillCause.DRIFT)
         assertEquals(EngineStatus.CRASHED, m3.status)
+
+        // BOOTING 期 REQUESTED（启动失败收归/未跑起来就停）不伪造干净停 → CRASHED
+        val m4 = EngineStateMachine()
+        m4.onExecuteRequested()
+        m4.onKill(KillCause.REQUESTED)
+        assertEquals(EngineStatus.CRASHED, m4.status)
+
+        // 已 CRASHED 再 kill：绕过转移表的直写已删除，必须抛非法转移（c6cf32c 反证点）
+        val m5 = EngineStateMachine()
+        m5.onExecuteRequested(); m5.onBootCompleted()
+        m5.onKill(KillCause.WATCHDOG_CPU)
+        assertThrows(IllegalStateTransition::class.java) { m5.onKill(KillCause.REQUESTED) }
     }
 
     @Test

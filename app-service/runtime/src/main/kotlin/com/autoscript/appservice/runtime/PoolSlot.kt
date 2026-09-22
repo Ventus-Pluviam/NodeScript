@@ -69,7 +69,7 @@ class PoolSlot internal constructor(
         val result = engine.stop()
         if (result is StopResult.TimedOut) {
             engine.kill()
-            statusMachine.onKill(KillCause.REQUESTED)   // 兜底杀也归类：不是干净的 STOPPED
+            statusMachine.onKill(KillCause.REQUESTED)   // QUIESCING 超时兜底 → STOPPED（quiesce 未干净完成，StopResult 已携 TimedOut）
         } else {
             statusMachine.onQuiesceCompleted()  // QUIESCING → STOPPED
         }
@@ -83,7 +83,7 @@ class PoolSlot internal constructor(
     /** 强杀后强制复位（仅 killAll 用）；调用方保证与 release 串行。 */
     fun forceFree(cause: KillCause = KillCause.REQUESTED) {
         if (state != SlotState.FREE) {
-            statusMachine.onKill(cause)          // 按原因归类 REQUESTED→STOPPED / 其余→CRASHED
+            statusMachine.onKill(cause)          // REQUESTED+RUNNING|QUIESCING→STOPPED；其余→CRASHED
             statusMachine.onRecycle()            // CRASHED|STOPPED → IDLE，槽位可再次夺用
         }
         state = SlotState.FREE
@@ -93,7 +93,7 @@ class PoolSlot internal constructor(
     /** kill 收归复用（仅 [FixedEnginePool.recycle] 用，调用方持 stateLock）：状态复位，不触碰许可证。 */
     fun reuse(cause: KillCause = KillCause.REQUESTED) {
         if (state != SlotState.FREE) {
-            statusMachine.onKill(cause)          // watchdog/OOM 杀 → CRASHED；REQUESTED → STOPPED
+            statusMachine.onKill(cause)          // watchdog/OOM → CRASHED；REQUESTED 活着才 STOPPED
             statusMachine.onRecycle()            // → IDLE：槽位可再次夺用（容量不缩水）
         }
         state = SlotState.FREE
