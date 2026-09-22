@@ -202,6 +202,9 @@
 | `:node-runtime-build` | **构建管线（不打包进 APK）**：Node 源码 recipe、NDK 编译、16KB 对齐门禁、产物 hash | CI 脚本 | — |
 
 架构测试（archUnit）进 CI：验证「领域层零 Android import」「`:app` 不直连平台」「依赖方向无环」。
+前者由各模块内 `ArchitectureTest` 按字节码校验（`ClassFileImporter().importPackages(...)`）；后两者由
+`:domain` 的 `ModuleGraphTest` 按 build.gradle.kts 依赖边校验 —— 空模块（尚无源码）同样被覆盖，
+且能拦住 Gradle 层反向依赖与依赖成环。
 
 **例外不是开后门**：`:app` 碰 `:bridge:java` 只发生在 `com.autoscript.shell` 一个包；`:platform:capabilities` 挂 Router 只碰 `:domain` 的 `NamespaceHandler`。两侧的越界都由各自的 `ArchitectureTest` 量化执行，不是口头约定。
 
