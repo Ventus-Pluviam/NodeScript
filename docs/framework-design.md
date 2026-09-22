@@ -205,6 +205,10 @@
 
 **例外不是开后门**：`:app` 碰 `:bridge:java` 只发生在 `com.autoscript.shell` 一个包；`:platform:capabilities` 挂 Router 只碰 `:domain` 的 `NamespaceHandler`。两侧的越界都由各自的 `ArchitectureTest` 量化执行，不是口头约定。
 
+**本机自测（无 Android SDK 时的等价通道）**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 直接用 Gradle 缓存里的 `kotlin-compiler-embeddable` + JUnit Platform Launcher 编译并跑任意模块的 main+test 源码树；`tools/jvm-test-all.sh [模块名...]` 是逐模块最小依赖的全量驱动（纯 JVM 模块**故意不给** android.jar——`:domain` 里误加 `import android.*` 要能在本机直接编译失败，不被掩盖）。
+
+`--android-jar` 只是**编译期桩**（取自 AGP transforms 缓存的 android-library `android.jar`）：`android.*` 方法体在运行期一律抛 `RuntimeException`，所以含 Android 源码的模块要做到「本机可测」，必须把 Android 接触面挡在可注入的 ops 缝后面（模式与落地清单见 `platform/system/README.md`）。这份脚手架是**本机提速用的旁路**，不替代 CI：`./gradlew` 仍是唯一权威（AGP/资源合并/Manifest 合并只有它能验），改动仍以 CI 绿为准。
+
 ---
 
 ## 7. 桥接层设计（JS ↔ Native ↔ Android）
@@ -821,7 +825,7 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 - 定时：单 alarm 定时任务 + 意图日志 + runNonce 幂等。
 - 权限三态中心 UI + 引导页；specialUse FGS 骨架。
 - 打包：模板 APK 改装（assets 注入、签名向导）——闭环验证。
-- 单测/archUnit CI；Docker 构建镜像。
+- 单测/archUnit CI；Docker 构建镜像。**已落地**：`.github/workflows/ci.yml`（JVM 单测 + archUnit）；本机无 Android SDK 时用 `tools/jvm-test.sh [--android-jar]`（+ 全模块驱动 `tools/jvm-test-all.sh`）跑同一批单测，见 §6 末。
 - npm P0（§10.11）：vendored npm CLI + 专用安装会话进程 + 零 spawn 主路径 + 事务化安装/journal 自愈 + 精选缓存种子离线首装 + 带外信任锚/lock 验签/审批卡 UI + 依赖面板 + 打包 node_modules 入包。
 
 ### P1 — 并发、沙箱、图像、生态关键件
