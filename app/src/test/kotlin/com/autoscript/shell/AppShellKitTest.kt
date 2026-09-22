@@ -62,6 +62,7 @@ class AppShellKitTest {
         screenGate: ScreenGate = ScreenGate.AllowAll,
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
+        systemHandlers: SystemHandlers? = null,
         scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
         scriptProjects: List<String> = emptyList(),
         assetReader: ((String) -> Map<String, ByteArray>)? = null,
@@ -72,6 +73,7 @@ class AppShellKitTest {
         screenGate = screenGate,
         a11yHandler = a11yHandler,
         screenHandler = screenHandler,
+        systemHandlers = systemHandlers,
         scriptSources = scriptSources,
         scriptProjects = scriptProjects,
         assetReader = assetReader,
@@ -387,6 +389,39 @@ class AppShellKitTest {
                 "缺的项目从资产补",
             )
             assertTrue(assembled.deployFailures().isEmpty(), "p3 读失败跳过，不进失败账（无此项目可补）")
+        }
+
+        Unit
+    }
+
+    /**
+     * systemHandlers 透传缝（§9.4/§9.6）：配方只搬运不 new 实现——注入则桥面可达，缺省则如实 ERR_NOT_IMPLEMENTED。
+     *
+     * 为什么这条需要单独验配方而不是只验 AppShell：AppShellSystemMountTest 验的是“给了就挂上”，
+     * 这条验的是“给了配方也真得递到”——配方若漏传这个束，生产调用处传了也白传（静默丢缺）。
+     * 用同形状替身证明“缝是通的”（§6，:test 源集看不到 :platform）。
+     */
+    @Test
+    fun `systemHandlers 缺省不挂桥面如实未实现，注入则透传到位`() = runBlocking {
+        kit().use { bare ->
+            val resp = bare.shell.router.dispatch(BridgeRequest(1, "device", "model", null, 5_000))
+            val err = assertInstanceOf(BridgeResponse.Err::class.java, resp)
+            assertEquals("ERR_NOT_IMPLEMENTED", err.errorCode, "配方缺省不挂：不伪造可用")
+        }
+
+        val device = NamespaceHandler { request ->
+            BridgeResponse.Ok(request.id, "\"Pixel 8\"")
+        }
+        kit(systemHandlers = SystemHandlers(device = device)).use { wired ->
+            val ok = assertInstanceOf(
+                BridgeResponse.Ok::class.java,
+                wired.shell.router.dispatch(BridgeRequest(2, "device", "model", null, 5_000)),
+            )
+            assertEquals("\"Pixel 8\"", ok.payload, "配方透传的 handler 直达桥面")
+
+            // 束里没给的命名空间仍如实未实现——透传不拉上整束伪装。
+            val missing = wired.shell.router.dispatch(BridgeRequest(3, "shell", "exec", "{}", 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (missing as BridgeResponse.Err).errorCode)
         }
 
         Unit

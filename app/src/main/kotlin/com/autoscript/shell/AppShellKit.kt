@@ -122,6 +122,7 @@ object AppShellKit {
      * @param a11yHandler / @param screenHandler `:platform:capabilities` 的真实现（经
      *   `CapabilityNamespaces.{a11y,screen}` 转接）；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param npmHandler npm 命名空间实现；null = 本配方自建（[NpmShellKit]）。
+     * @param systemHandlers `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6，经 `:platform:capabilities` 的 `CapabilityNamespaces.{shell,device,app,dialogs,floatingWindow}` 转接）；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。与 [a11yHandler]/[screenHandler] 同一注入缝，合成一个束（见 [SystemHandlers]）——本配方只透传，不 new 实现。
      * @param watchdogScope 看门狗轮转的协程域；null = 本配方自建一个壳自己的域
      *   （[AssembledShell.close] 时取消）。传自己的域 = 你自己负责停（见 [EngineWatchdog.start]）。
      */
@@ -134,6 +135,7 @@ object AppShellKit {
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
         npmHandler: NamespaceHandler? = null,
+        systemHandlers: SystemHandlers? = null,
         /**
          * 装配期脚本补部署的来源（projectId → 项目内相对路径 → 字节；§9.6）。
          * 缺省空映射 = 本次没补任何东西（`deployReport.changed == false`），**不粉饰成"已恢复"**。
@@ -212,6 +214,7 @@ object AppShellKit {
             monitor = monitor,
             watchdog = watchdog,
             npmHandler = npm,
+            systemHandlers = systemHandlers,
         )
         // 看门狗开机即转（§8.4）：不转的话三路判据就只是"可以转"——在途 run 的出格行为
         // 没有一个周期性的观察者，`awaitCompletion` 的等待超时是唯一兜底（而它只管
