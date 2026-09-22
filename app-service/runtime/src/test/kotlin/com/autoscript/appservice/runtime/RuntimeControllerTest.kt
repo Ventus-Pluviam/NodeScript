@@ -311,6 +311,22 @@ class RuntimeControllerTest {
     }
 
     @Test
+    fun `heartbeat 打到不在途 runId 不记账`() = runBlocking {
+        val (c, _) = controller()
+        assertFalse(c.heartbeat(999L, seq = 1), "从未存在的 runId → false")
+        assertTrue(c.heartbeats().trackedRuns().isEmpty(), "无主心跳不得建账")
+
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        assertTrue(c.heartbeat(started.runId, seq = 1))
+        c.stop(started.runId)
+        assertFalse(c.heartbeat(started.runId, seq = 2), "已结算的 run → false")
+        assertTrue(c.heartbeats().trackedRuns().isEmpty(), "结算后打来的心跳不得复活旧账")
+    }
+
+    @Test
     fun `killRun 强杀也遗忘心跳`() = runBlocking {
         val (c, _) = controller()
         val started = assertInstanceOf(

@@ -147,9 +147,17 @@ class RuntimeController(
      * 幂等由序号保证（[HeartbeatLedger.beat]）：同 seq 或更旧不回刷时间戳，
      * 所以重发/乱序帧不会把一个死掉的 run 假装成活的。
      *
-     * @return false = 该 seq 过期/重复（未被采纳）；true = 已刷新时间戳。
+     * 不在途 runId（已结算/从未存在）→ false 且**不记账**：已终结的 run 不得再收心跳，
+     * 否则无主条目会堆积并把活 run 的账顶出记账上限（[HeartbeatLedger.maxRuns] 淘汰
+     * 最旧条目），且调用方会把"已结算"误读成"一次有效心跳"。
+     *
+     * @return false = 不在途 / 该 seq 过期或重复（未被采纳）；true = 已刷新时间戳。
      */
-    fun heartbeat(runId: Long, seq: Long): Boolean = heartbeats.beat(runId, seq)
+    suspend fun heartbeat(runId: Long, seq: Long): Boolean {
+        val live = guard.withLock { active.containsKey(runId) }
+        if (!live) return false
+        return heartbeats.beat(runId, seq)
+    }
 
     /** 距上次心跳毫秒（从未打过点 → null，看门狗据此记 [EngineWatchdog.Tick.noHeartbeat]）。 */
     fun heartbeatMillis(runId: Long): Long? = heartbeats.sinceLastBeat(runId)

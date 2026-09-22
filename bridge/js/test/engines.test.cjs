@@ -129,6 +129,11 @@ function installMockEngines() {
           auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '缺 runId/seq' })
           return undefined
         }
+        // Kotlin RuntimeController.heartbeat 先验在途：未知 runId → false 且不记账。
+        if (!runs.has(p.runId)) {
+          auto.handleResponse({ t: 'ok', id: reqId, payload: 'false' })
+          return undefined
+        }
         const prev = sharedSeq.get(p.runId) ?? 0
         const accepted = p.seq > prev
         if (accepted) sharedSeq.set(p.runId, p.seq)
@@ -252,6 +257,10 @@ test('engines.heartbeat：递增 seq 被采纳，重复 seq 回 false', async ()
   assert.strictEqual(await auto.engines.heartbeat(s.runId, 1), false, '旧 seq 同理')
   assert.ok(runs.has(s.runId))
   await auto.engines.stop(s.runId)
+})
+test('engines.heartbeat：未知 runId 回 false（结算后打点不伪装成有效心跳）', async () => {
+  installMockEngines()
+  assert.strictEqual(await auto.engines.heartbeat(987_654_321, 1), false, '从未存在的 runId → false')
 })
 
 test('exec 回会话句柄：cancel 可用，channel 恒 null（显式开通道）', async () => {

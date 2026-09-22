@@ -210,6 +210,19 @@ class EnginesNamespaceHandlerTest {
     }
 
     @Test
+    fun `heartbeat 打到未知 runId 回 false 且不建账`() = runBlocking {
+        val engines = MutableList(1) { FakeEngine(EngineId(it)) }
+        val controller = RuntimeController(FixedEnginePool({ id -> engines[id.poolIndex] }, 1))
+        val h = EnginesNamespaceHandler(controller)
+        val resp = assertInstanceOf(
+            EnginesNamespaceHandler.Response.Ok::class.java,
+            h.handle(EnginesNamespaceHandler.Request(1, "heartbeat", """{"runId":999,"seq":1}""")),
+        )
+        assertEquals("false", resp.payload, "未知 runId → Ok false（不是调用方错误，不 4xx）")
+        assertTrue(controller.heartbeats().trackedRuns().isEmpty(), "无主心跳不得建账")
+    }
+
+    @Test
     fun `heartbeat 记账到宿主账本，重复 seq 不被采纳`() = runBlocking {
         val (h, _) = handler()
         val exec = assertInstanceOf(
