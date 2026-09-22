@@ -135,4 +135,18 @@ class InMemoryIntentLogTest {
         assertEquals(ScreenGuarantee.SCREEN_OFF, log.all().single().screen)
         assertEquals(ScreenGuarantee.SCREEN_OFF, log.uncommitted().single().screen)
     }
+
+    @Test
+    fun `reopen 保留 args 与 timeoutMillis（恢复不丢执行载荷）`() = runBlocking {
+        val log = log()
+        val payload = listOf("--fast", "带 空格\"引号")
+        val old = log.appendStart(
+            "p", "a.js", "nonce-payload", TriggerSource.TIMED, 5000,
+            args = payload, timeoutMillis = 30_000,
+        )
+        val fresh = log.reopen(old.runId)
+        assertEquals(payload, fresh.args, "恢复重投不得丢脚本参数（§8.5）")
+        assertEquals(30_000L, fresh.timeoutMillis, "恢复重投不得丢脚本超时（§8.5）")
+        assertEquals(payload, log.uncommitted().single().args, "新存活行携带执行载荷")
+    }
 }

@@ -62,6 +62,8 @@ interface IntentStore : AutoCloseable {
         val scheduledAtMillis: Long,
         val startedAtMillis: Long,
         val deadlineMillis: Long?,
+        val args: List<String> = emptyList(),   // 脚本参数（恢复重投不得丢失，§8.5）
+        val timeoutMillis: Long? = null,        // 脚本自身超时（恢复重投不得丢失，§8.5）
     )
 
     data class StoredRow(
@@ -104,6 +106,8 @@ internal fun IntentStore.StoredRow.toIntentRun(): IntentRun = IntentRun(
     },
     startedAtMillis = start.startedAtMillis,
     deadlineMillis = start.deadlineMillis,
+    args = start.args,
+    timeoutMillis = start.timeoutMillis,
     committedAtMillis = committedAtMillis,
 )
 

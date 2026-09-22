@@ -5,13 +5,13 @@ import java.io.IOException
 /**
  * jsonl 行级极简解析/转义（persist 包内共享）。
  *
- * 服务的是"冻结行格式"：键为字符串，值为字符串/整数/null 三种。不引入 JSON 库
+ * 服务的是"冻结行格式"：键为字符串，值为字符串/整数/null/字符串数组四种。不引入 JSON 库
  * 是刻意的 —— persist 层零第三方依赖（只有 :domain + JDK），单测与生产同一份解析，
  * 格式漂移在编译期可见而非运行时爆炸。
  */
 internal object JsonLine {
 
-    /** 解析一行 `{...}` 为字段表（值仅为 String/Long/null 三种）。 */
+    /** 解析一行 `{...}` 为字段表（值仅为 String/Long/null/字符串数组 四种）。 */
     fun parse(line: String): Map<String, Any?> {
         val m = Parser(line)
         m.expect('{')
@@ -29,6 +29,7 @@ internal object JsonLine {
             m.ws(); m.expect(':'); m.ws()
             val v: Any? = when {
                 m.peek() == '"' -> m.string()
+                m.peek() == '[' -> m.stringArray()
                 m.peek() == 'n' -> { m.expectLit("null"); null }
                 else -> m.number()
             }
@@ -37,6 +38,9 @@ internal object JsonLine {
         }
         return fields
     }
+
+    /** 字符串数组编码（args 等列表字段；空列表 = `[]`）。 */
+    fun quoteAll(items: List<String>): String = items.joinToString(",", "[", "]") { quote(it) }
 
     fun quote(s: String): String = buildString(s.length + 2) {
         append('"')
@@ -88,6 +92,23 @@ internal object JsonLine {
             }
         }
 
+        fun stringArray(): List<String> {
+            expect('[')
+            ws()
+            if (peek() == ']') { pos++; return emptyList() }
+            val out = ArrayList<String>()
+            while (true) {
+                ws()
+                out += string()
+                ws()
+                when (peek()) {
+                    ',' -> { pos++; }
+                    ']' -> { pos++; return out }
+                    else -> throw IOException("journal 行损坏 @$pos 期望 , 或 ]")
+                }
+            }
+        }
+
         fun number(): Long {
             val start = pos
             if (pos < s.length && s[pos] == '-') pos++
@@ -117,4 +138,12 @@ internal fun Map<String, Any?>.optStr(key: String): String? =
         null -> null
         is String -> v
         else -> throw IOException("journal 行损坏：字段 $key 非字符串")
+    }
+
+/** 缺键（老 journal 行）= 空列表；类型错 = 行损坏响亮失败。 */
+internal fun Map<String, Any?>.optStrList(key: String): List<String> =
+    when (val v = this[key]) {
+        null -> emptyList()
+        is List<*> -> v.map { it as? String ?: throw IOException("journal 行损坏：字段 $key 数组含非字符串") }
+        else -> throw IOException("journal 行损坏：字段 $key 非字符串数组")
     }

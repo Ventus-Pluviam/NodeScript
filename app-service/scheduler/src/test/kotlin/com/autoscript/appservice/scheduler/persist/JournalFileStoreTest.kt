@@ -172,4 +172,41 @@ class JournalFileStoreTest {
         assertEquals(RunOutcome.Crashed("boom \"\\\n"), row.outcome)
         log2.close()
     }
+
+    @Test
+    fun `reopen 保留 args 与 timeoutMillis 且 journal 重放不丢`() = runBlocking {
+        val payload = listOf("--fast", "值,含逗号", "带 \"引号\"")
+        val log = newLog()
+        val a = log.appendStart(
+            "p", "a.js", "rn-payload", TriggerSource.TIMED, 5000, ScreenGuarantee.ANY, null,
+            args = payload, timeoutMillis = 7_000,
+        )
+        assertEquals(payload, a.args, "落行即回读（jsonl 编解码往返）")
+        assertEquals(7_000L, a.timeoutMillis)
+
+        val b = log.reopen(a.runId)
+        assertEquals(payload, b.args, "sealAndReopen 复制 StartRow：恢复不丢载荷")
+        assertEquals(7_000L, b.timeoutMillis)
+        log.close()
+
+        // 重启（replay 自 journal 文件）字段仍在 —— 持久化面同样不丢
+        val log2 = newLog()
+        val reloaded = log2.all().first { it.runId == b.runId }
+        assertEquals(payload, reloaded.args, "journal 重放后 args 仍在")
+        assertEquals(7_000L, reloaded.timeoutMillis, "journal 重放后 timeoutMillis 仍在")
+        log2.close()
+    }
+
+    @Test
+    fun `老 journal 行缺 args 与 timeout 键按默认解析（升级兼容）`() = runBlocking {
+        // 升级前落盘的 start 行：无 args / timeoutMillis 两键
+        val legacy = """{"op":"start","runId":1,"projectId":"p","scriptPath":"a.js","runNonce":"old","trigger":"TIMED","screen":"ANY","scheduledAt":1,"startedAt":2,"deadlineAt":null}"""
+        Files.write(dir.resolve("intent-log.jsonl"), (legacy + "\n").toByteArray())
+        val log = newLog()
+        val row = log.uncommitted().single()
+        assertEquals(emptyList<String>(), row.args, "缺键 = 空参数（老任务没有参数）")
+        assertEquals(null, row.timeoutMillis, "缺键 = 无超时")
+        log.close()
+    }
 }
+

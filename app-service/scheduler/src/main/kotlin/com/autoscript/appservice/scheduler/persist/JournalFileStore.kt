@@ -178,6 +178,9 @@ class JournalFileStore(private val dir: Path) : IntentStore {
             append(""","startedAt":""").append(r.startedAtMillis)
             append(""","deadlineAt":""")
             if (r.deadlineMillis == null) append("null") else append(r.deadlineMillis)
+            append(""","args":""").append(JsonLine.quoteAll(r.args))
+            append(""","timeoutMillis":""")
+            if (r.timeoutMillis == null) append("null") else append(r.timeoutMillis)
             append("}\n")
         }
 
@@ -204,6 +207,8 @@ class JournalFileStore(private val dir: Path) : IntentStore {
                         scheduledAtMillis = fields.long("scheduledAt"),
                         startedAtMillis = fields.long("startedAt"),
                         deadlineMillis = fields.optLong("deadlineAt"),
+                        args = fields.optStrList("args"),
+                        timeoutMillis = fields.optLong("timeoutMillis"),
                     ),
                 )
                 "seal" -> Rec.Seal(

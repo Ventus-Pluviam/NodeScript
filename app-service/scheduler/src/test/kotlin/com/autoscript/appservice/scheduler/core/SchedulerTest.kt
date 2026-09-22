@@ -291,4 +291,23 @@ class SchedulerTest {
         assertFalse(scheduler.canStopLastRun())
         assertFalse(scheduler.stopLastRun())
     }
+
+    @Test
+    fun `recoverUncommitted 重投带 args 与 timeoutMillis（恢复不丢执行载荷）`() = runBlocking {
+        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val scheduler = testScheduler(log = log)
+
+        // 崩溃遗留：RUN_START 已落行（含执行载荷）、未 COMMIT
+        log.appendStart(
+            "p", "a.js", "nonce-payload", TriggerSource.TIMED, now,
+            args = listOf("--fast"), timeoutMillis = 45_000,
+        )
+
+        scheduler.recoverUncommitted()
+
+        val pending = dispatched.single()
+        assertEquals(listOf("--fast"), pending.args, "§8.5 重投不得丢脚本参数（toPendingRun 从 IntentRun 带出）")
+        assertEquals(45_000L, pending.timeoutMillis, "§8.5 重投不得丢脚本超时")
+    }
 }
+

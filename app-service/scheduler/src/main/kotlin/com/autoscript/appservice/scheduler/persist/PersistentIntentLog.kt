@@ -26,6 +26,8 @@ class PersistentIntentLog(
         scheduledAtMillis: Long,
         screen: ScreenGuarantee,
         deadlineMillis: Long?,
+        args: List<String>,
+        timeoutMillis: Long?,
     ): IntentRun {
         val runId = store.insertStart(
             IntentStore.StartRow(
@@ -37,6 +39,8 @@ class PersistentIntentLog(
                 scheduledAtMillis = scheduledAtMillis,
                 startedAtMillis = now(),
                 deadlineMillis = deadlineMillis,
+                args = args,
+                timeoutMillis = timeoutMillis,
             ),
         )
         return store.allRows().first { it.runId == runId }.toIntentRun()

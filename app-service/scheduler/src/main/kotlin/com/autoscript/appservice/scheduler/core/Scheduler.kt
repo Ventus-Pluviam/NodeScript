@@ -207,6 +207,10 @@ class Scheduler(
                     scheduledAtMillis = scheduledAtMillis,
                     screen = task.screen,           // 恢复重投不得丢失屏幕契约（reopen 保留）
                     deadlineMillis = pending.deadlineMillis,
+                    // 落行带上执行载荷：崩溃恢复的 toPendingRun 只认 IntentRun，
+                    // 不落行 = 重投丢 args/timeout（§8.5「恢复不丢字段」）
+                    args = pending.args,
+                    timeoutMillis = pending.timeoutMillis,
                 )
                 // 归档入口（§8.5）：把日志已落行的 runId 交给 dispatcher，收回引擎侧身份，
                 // 由归档器把两侧成对写入（RunArchive.put + EngineRunLink）。
@@ -368,6 +372,8 @@ class Scheduler(
         trigger = trigger,
         scheduledAtMillis = scheduledAtMillis,
         screen = screen,
+        args = args,                       // §8.5：恢复重投不得丢脚本参数
+        timeoutMillis = timeoutMillis,     // §8.5：恢复重投不得丢脚本超时
         intentRunId = runId,               // 恢复重投的新行身份（§8.5）
         deadlineMillis = deadlineMillis,   // §8.6：期限从旧行原样带到重投行（见 reopen）
     )
