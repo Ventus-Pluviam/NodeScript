@@ -20,7 +20,13 @@ class EventBus(
 
     sealed interface PublishResult {
         data class Accepted(val seq: Long) : PublishResult
-        data object Dropped : PublishResult
+
+        /**
+         * 背压生效、本次发布被丢（仅 [OverflowPolicy.DROP_OLDEST] 可能）。
+         * 注意 DROP_OLDEST 语义是「丢最老、收最新」，事件本身仍入列；此结果表示
+         * 「为使本次能入列而丢弃了更早事件」——消费者可据此感知有事件被挤压丢失。
+         */
+        data class Dropped(val evictedSeq: Long) : PublishResult
         data object Rejected : PublishResult
     }
 
@@ -36,7 +42,14 @@ class EventBus(
             if (state.events.size >= capacityPerTopic) {
                 when (overflow) {
                     OverflowPolicy.REJECT -> return@synchronized PublishResult.Rejected
-                    OverflowPolicy.DROP_OLDEST -> state.events.removeAt(0)
+                    OverflowPolicy.DROP_OLDEST -> {
+                        // 丢最老、收最新：新事件仍入列，但如实回报被挤压那条的 seq
+                        // （原直落 Accepted 的路径让 Dropped 成了不可达分支 = 契约撒谎）
+                        val evicted = state.events.removeAt(0)
+                        val seq = state.nextSeq++
+                        state.events.add(Event(seq, topic, payload))
+                        return@synchronized PublishResult.Dropped(evicted.seq)
+                    }
                 }
             }
             val seq = state.nextSeq++

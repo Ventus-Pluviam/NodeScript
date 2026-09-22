@@ -40,7 +40,8 @@ class EventBusTest {
         bus.publish("t", "a")
         bus.publish("t", "b")
         val r = bus.publish("t", "c")
-        assertTrue(r is PublishResult.Accepted)
+        assertTrue(r is PublishResult.Dropped, "队列满 + DROP_OLDEST 必须如实回报 Dropped（不可再静默 Accepted）")
+        assertEquals(1L, (r as PublishResult.Dropped).evictedSeq, "被挤压的是最老的 seq=1")
 
         val (_, events) = bus.drain("t", 0)
         // 只保留最近 2 个；老的 a 被丢
