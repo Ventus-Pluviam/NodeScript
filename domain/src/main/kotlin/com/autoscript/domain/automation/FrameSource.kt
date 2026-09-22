@@ -12,6 +12,13 @@ interface FrameSource {
 
     /** 会话式（MediaProjection）一次性授权；reconnect 不自动重试授权。 */
     suspend fun openSession(): ScreenCaptureSession
+
+    /**
+     * 显式释放帧句柄（JS `Image.recycle` 对偶；幂等）。
+     * 未知/跨代句柄抛 ERR_STALE_HANDLE（与 §7.4 dispose 语义同）—— 调用方可区分
+     * "已释放"与"从未存在"，绝不把野句柄当成功回收。
+     */
+    suspend fun recycle(handle: HandleRef)
 }
 
 /** JS `Image` 句柄 ↔ native 帧句柄；recycle() 显式 + finalize 兜底；dispose tombstone 同 §7.4。 */

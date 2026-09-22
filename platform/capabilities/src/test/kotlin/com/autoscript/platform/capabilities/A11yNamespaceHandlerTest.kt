@@ -15,7 +15,7 @@ class A11yNamespaceHandlerTest {
     @BeforeEach
     fun setup() {
         tree = InMemoryUiTree()
-        handler = A11yNamespaceHandler(tree)
+        handler = A11yNamespaceHandler(tree, tree)
     }
 
     private suspend fun seedButton(): String {
@@ -321,7 +321,7 @@ class A11yNamespaceHandlerTest {
 
     @Test
     fun `gesture 关门回 false 不抛错`() = runBlocking {
-        val closed = A11yNamespaceHandler(tree, InMemoryInputProvider(canPerformGestures = false))
+        val closed = A11yNamespaceHandler(tree, tree, InMemoryInputProvider(canPerformGestures = false))
         val resp = assertInstanceOf(
             A11yNamespaceHandler.Response.Ok::class.java,
             closed.handle(

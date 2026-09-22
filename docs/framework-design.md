@@ -428,7 +428,7 @@ interface EnginePool {                                // 实现在 :app-service:
 - **句柄代理**：JS 侧 `UiObject` = 代理对象（§7.4），操作带 generation，控件已离开窗口树 → `ERR_STALE_HANDLE`。
 - 窗口树：`window('modal/active/…)`、`UiObject.window`、event 监听（`EventEmitter`）。
 - 全链路如实时树可能加速：惰性属性化已内建在索引树设计中。
-- **已落地（Kotlin 侧）**：`A11yNamespaceHandler`（方法表与 payload 见该类 KDoc）+ 内存窗口树/输入替身，共 53 项 JVM 单测；**Kotlin 侧 `waitFor` 读的载荷键是 `conditions`**（与 `findOne` 同构；轮询等待是宿主责任，内存树是单次快照，`timeout/interval` 只透传回显，不伪造等待）。JS facade `a11y.ts` 的 `waitFor` 已对齐：发 `conditions`（曾发 `selector`，会在白名单外字段上回 `ERR_INVALID_PARAM`——已修，两侧同构），其余方法键早已对齐。
+- **已落地（Kotlin 侧）**：`A11yNamespaceHandler`（方法表与 payload 见该类 KDoc；构造只收 `:domain` SPI `UiNodeTreeReader`/`UiActionExecutor`/`InputProvider`，Android 真实现替换内存树/输入即插——handler 逻辑不变）+ 内存窗口树/输入替身，共 53 项 JVM 单测；**Kotlin 侧 `waitFor` 读的载荷键是 `conditions`**（与 `findOne` 同构；轮询等待是宿主责任，内存树是单次快照，`timeout/interval` 只透传回显，不伪造等待）。JS facade `a11y.ts` 的 `waitFor` 已对齐：发 `conditions`（曾发 `selector`，会在白名单外字段上回 `ERR_INVALID_PARAM`——已修，两侧同构），其余方法键早已对齐。
 
 ### 9.2 截图与图像管线（`media_projection` / `image` / `@autojs/opencv`）
 ```
@@ -440,7 +440,7 @@ FrameSource (SPI)
 ```
 - 截图对象生命周期：JS `Image` 句柄 → native 帧句柄；`recycle()` 显式 + finalize 兜底；`dispose` tombstone 协议同 §7.4。
 - `FLAG_SECURE` → 分类错误（§7.6），不返回黑图（让脚本可判断）。
-- **已落地（Kotlin 侧）**：`ScreenshotSource`（333ms 节流 / generation=1 单帧句柄 / 会话 open-close）+ `ScreenNamespaceHandler`（`capture/recycle/startCapturer/nextFrame/closeSession`）。
+- **已落地（Kotlin 侧）**：`ScreenshotSource`（333ms 节流 / generation=1 单帧句柄 / 会话 open-close；`recycle` 已升为 `:domain` `FrameSource` SPI 方法）+ `ScreenNamespaceHandler`（构造只收 `FrameSource` SPI，`capture/recycle/startCapturer/nextFrame/closeSession`；Android 真实现替换帧源即插）。
 - MediaProjection **会话语义**：`capture()` 一次性授权会话（API34 每会话确认）；`reconnect` 不自动重试授权，由 PermissionCenter 引导用户重授权。
 
 ### 9.3 输入通道（`root_automator` / 手势）

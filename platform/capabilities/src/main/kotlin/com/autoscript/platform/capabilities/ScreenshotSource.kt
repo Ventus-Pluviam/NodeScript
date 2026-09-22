@@ -75,7 +75,7 @@ class ScreenshotSource(
     }
 
     /** 显式释放（幂等；JS Image.recycle 对偶）。未知句柄 → ERR_STALE_HANDLE。 */
-    suspend fun recycle(handle: HandleRef) {
+    override suspend fun recycle(handle: HandleRef) {
         guard.withLock {
             val e = liveFrames[handle.refId]
                 ?: throw AutojsException(ErrorCode.ERR_STALE_HANDLE, "未知帧句柄 ${handle.refId}")

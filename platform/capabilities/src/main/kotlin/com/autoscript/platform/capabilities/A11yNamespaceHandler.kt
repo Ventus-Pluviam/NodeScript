@@ -3,8 +3,12 @@ package com.autoscript.platform.capabilities
 import com.autoscript.domain.automation.GestureInput
 import com.autoscript.domain.automation.GesturePoint
 import com.autoscript.domain.automation.GestureStroke
+import com.autoscript.domain.automation.InputProvider
 import com.autoscript.domain.automation.ScrollDirection
+import com.autoscript.domain.automation.UiActionExecutor
 import com.autoscript.domain.automation.UiBounds
+import com.autoscript.domain.automation.UiEventStream
+import com.autoscript.domain.automation.UiNodeTreeReader
 import com.autoscript.domain.automation.UiSelectorDsl
 import com.autoscript.domain.bridge.HandleRef
 import com.autoscript.domain.core.AutojsException
@@ -13,8 +17,13 @@ import com.autoscript.domain.core.ErrorCode
 /**
  * `a11y` namespace 桥处理器（docs §9.1 / §12.3）：JS `a11y.*` 面的 Kotlin 对偶。
  *
- * 归属：住 `:platform:capabilities`（直接驱动 UiNodeTreeReader/UiActionExecutor；
- * `:app` 装配层薄转接挂 BridgeRouter）。载荷用本模块内 [A11yBridgeJson]
+ * 归属：住 `:platform:capabilities`；构造只收 `:domain` SPI
+ *（[UiNodeTreeReader]/[UiActionExecutor]/[InputProvider]，事件流可选 [UiEventStream]，
+ * 缺省走 `tree.events()`）。Android 真实现（AccessibilityNodeInfo 遍历 / dispatchGesture）
+ * 只需实现这三块 SPI 即可替换内存树/输入 —— 本类逐行逻辑不变（见 `CapabilityNamespaces.a11y`
+ * 仍以内存实现装配：真实现到位 = 换调用处那一行）。
+ *
+ * `:app` 装配层薄转接挂 BridgeRouter。载荷用本模块内 [A11yBridgeJson]
  *（:bridge:java 的 TinyJson 是 internal，跨模块不可见；见 runtime 的 EngineBridgeJson 同例）。
  *
  * 方法表（与 `bridge/js` a11y.ts 一一对应）：
@@ -39,8 +48,14 @@ import com.autoscript.domain.core.ErrorCode
  * - `canPerformGestures`：无参 → Ok `"true"/"false"`。
  */
 class A11yNamespaceHandler(
-    private val tree: InMemoryUiTree,
-    private val input: InMemoryInputProvider = InMemoryInputProvider(),
+    private val tree: UiNodeTreeReader,
+    private val actions: UiActionExecutor,
+    private val input: InputProvider = InMemoryInputProvider(),
+    /**
+     * 事件流覆写（缺省 null = 走 `tree.events()`）。内存树自带流；Android 真实现若把
+     * 事件监听做在树之外，可显式注入 —— handler 不关心事件从哪来，只认游标契约。
+     */
+    private val events: UiEventStream? = null,
 ) {
     data class Request(val id: Long, val method: String, val payload: String?)
     sealed interface Response {
@@ -53,11 +68,11 @@ class A11yNamespaceHandler(
         "findOneOrNull" -> findOne(request, single = true)
         "findAll" -> findAll(request)
         "waitFor" -> findOne(request, single = true)
-        "click" -> boolAction(request) { ref -> tree.click(ref) }
-        "longClick" -> boolAction(request) { ref -> tree.longClick(ref) }
+        "click" -> boolAction(request) { ref -> actions.click(ref) }
+        "longClick" -> boolAction(request) { ref -> actions.longClick(ref) }
         "scroll" -> scroll(request)
-        "copy" -> boolAction(request) { ref -> tree.copy(ref) }
-        "paste" -> boolAction(request) { ref -> tree.paste(ref) }
+        "copy" -> boolAction(request) { ref -> actions.copy(ref) }
+        "paste" -> boolAction(request) { ref -> actions.paste(ref) }
         "setText" -> setText(request)
         "bounds" -> bounds(request)
         "text" -> attr(request, "text")
@@ -154,7 +169,7 @@ class A11yNamespaceHandler(
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
         return try {
-            ok(request.id, if (tree.setText(ref, text)) "true" else "false")
+            ok(request.id, if (actions.setText(ref, text)) "true" else "false")
         } catch (e: AutojsException) {
             err(request.id, e.error, e.message)
         }
@@ -179,7 +194,7 @@ class A11yNamespaceHandler(
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
         return try {
-            ok(request.id, if (tree.scroll(ref, direction)) "true" else "false")
+            ok(request.id, if (actions.scroll(ref, direction)) "true" else "false")
         } catch (e: AutojsException) {
             err(request.id, e.error, e.message)
         }
@@ -192,7 +207,7 @@ class A11yNamespaceHandler(
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
         val b: UiBounds? = try {
-            tree.bounds(ref)
+            actions.bounds(ref)
         } catch (e: AutojsException) {
             return err(request.id, e.error, e.message)
         }
@@ -210,7 +225,7 @@ class A11yNamespaceHandler(
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
         val v = try {
-            tree.attribute(ref, name)
+            actions.attribute(ref, name)
         } catch (e: AutojsException) {
             return err(request.id, e.error, e.message)
         }
@@ -224,7 +239,7 @@ class A11yNamespaceHandler(
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
         val kids = try {
-            tree.children(ref)
+            actions.children(ref)
         } catch (e: AutojsException) {
             return err(request.id, e.error, e.message)
         }
@@ -238,7 +253,7 @@ class A11yNamespaceHandler(
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
         val p = try {
-            tree.parent(ref)
+            actions.parent(ref)
         } catch (e: AutojsException) {
             return err(request.id, e.error, e.message)
         }
@@ -252,7 +267,7 @@ class A11yNamespaceHandler(
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
         return try {
-            tree.dispose(ref)
+            actions.dispose(ref)
             ok(request.id, "true")
         } catch (e: AutojsException) {
             err(request.id, e.error, e.message)
@@ -279,7 +294,7 @@ class A11yNamespaceHandler(
         } catch (e: IllegalArgumentException) {
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
-        val got = tree.nextEvents(sinceSeq, batch)
+        val got = (events ?: tree.events()).next(sinceSeq, batch)
         return ok(
             request.id,
             A11yBridgeJson.encode(

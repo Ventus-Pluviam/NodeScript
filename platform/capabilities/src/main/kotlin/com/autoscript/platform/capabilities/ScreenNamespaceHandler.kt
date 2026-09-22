@@ -1,5 +1,6 @@
 package com.autoscript.platform.capabilities
 
+import com.autoscript.domain.automation.FrameSource
 import com.autoscript.domain.automation.ImageFrame
 import com.autoscript.domain.automation.ScreenCaptureSession
 import com.autoscript.domain.bridge.HandleRef
@@ -9,8 +10,12 @@ import com.autoscript.domain.core.ErrorCode
 /**
  * `screen` namespace 桥处理器（docs §9.2 / §8.8 / §12.3）：JS `screen.*` 面的 Kotlin 对偶。
  *
- * 归属：住 `:platform:capabilities`（直接驱动 [ScreenshotSource]；`:app` 装配层薄转接
- * 挂 BridgeRouter）。载荷复用本模块内 [A11yBridgeJson]（同模块 internal 可见）。
+ * 归属：住 `:platform:capabilities`；构造只收 `:domain` 的 [FrameSource] SPI
+ *（含 `recycle` 帧释放）。Android 真实现（a11y takeScreenshot / MediaProjection）
+ * 只需实现该 SPI 即可替换内存帧源 —— 本类会话记账/载荷逻辑不变（见
+ * `CapabilityNamespaces.screen` 仍以内存实现装配：真实现到位 = 换调用处那一行）。
+ *
+ * `:app` 装配层薄转接挂 BridgeRouter。载荷复用本模块内 [A11yBridgeJson]（同模块 internal 可见）。
  *
  * 方法表（与 `bridge/js` images.ts `screen` 对应）：
  * - `capture`：无参 → Ok `{ref:{refId,generation},width,height}`；
@@ -23,7 +28,7 @@ import com.autoscript.domain.core.ErrorCode
  * - 未知方法 → ERR_NOT_IMPLEMENTED；非法载荷 → ERR_INVALID_PARAM。
  */
 class ScreenNamespaceHandler(
-    private val source: ScreenshotSource,
+    private val source: FrameSource,
 ) {
     data class Request(val id: Long, val method: String, val payload: String?)
     sealed interface Response {

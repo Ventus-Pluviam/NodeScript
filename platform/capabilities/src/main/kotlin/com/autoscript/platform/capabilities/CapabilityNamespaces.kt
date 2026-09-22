@@ -1,5 +1,6 @@
 package com.autoscript.platform.capabilities
 
+import com.autoscript.domain.automation.FrameSource
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.NamespaceHandler
 
@@ -19,12 +20,16 @@ import com.autoscript.domain.bridge.NamespaceHandler
  */
 object CapabilityNamespaces {
 
-    /** `a11y` 命名空间（§9.1）：窗口树 + 输入通道的 JVM 可测形态。 */
+    /**
+     * `a11y` 命名空间（§9.1）：窗口树 + 输入通道的 JVM 可测形态。
+     * 真实现到位 = 用 SPI 实现调 `A11yNamespaceHandler(tree, actions, input, events)` 再转接 ——
+     * 本函数只装配内存实现，不解释 payload（见上）。
+     */
     fun a11y(
         tree: InMemoryUiTree,
         input: InMemoryInputProvider = InMemoryInputProvider(),
     ): NamespaceHandler {
-        val handler = A11yNamespaceHandler(tree, input)
+        val handler = A11yNamespaceHandler(tree, tree, input)
         return NamespaceHandler { request ->
             when (
                 val r = handler.handle(
@@ -37,8 +42,12 @@ object CapabilityNamespaces {
         }
     }
 
-    /** `screen` 命名空间（§9.2 / §8.8）：截图帧源，分类错误而非黑图。 */
-    fun screen(source: ScreenshotSource): NamespaceHandler {
+    /**
+     * `screen` 命名空间（§9.2 / §8.8）：截图帧源，分类错误而非黑图。
+     * 真实现到位 = 用 `FrameSource` 实现调 `ScreenNamespaceHandler(source)` 再转接 ——
+     * 本函数只装配内存实现。
+     */
+    fun screen(source: FrameSource): NamespaceHandler {
         val handler = ScreenNamespaceHandler(source)
         return NamespaceHandler { request ->
             when (
