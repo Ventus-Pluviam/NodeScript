@@ -88,16 +88,26 @@ class NpmSnapshotTest {
         // 在归档里追加一个不在清单上的文件（模拟导入侧或投递途中被塞东西）
         tamperAppend(out, "evil/lib.js", "module.exports = 'evil'\n")
         assertThrows(AutojsException::class.java) { snapshot().verify("p1", out) }
+        Unit
     }
 
     @Test
     fun `manifest 被改则验签失败（lock 与树不一致）`() = runBlocking {
         seedProject()
         snapshot().export("p1", out)
-        val modified = String(Files.readAllBytes(out), Charsets.UTF_8).replace("\"lockfileVersion\":3", "\"lockfileVersion\":9")
-        assertFalse(modified == String(Files.readAllBytes(out), Charsets.UTF_8), "替换应真的发生")
-        Files.write(out, (modified).toByteArray())
+        // zip 默认 DEFLATE：整文件当文本 replace 打不中条目内容（改了也没改到）。
+        // 必须拆开条目、改 package-lock.json 原文、再合回去 —— 内容清单哈希变 → 签必失配。
+        val lockText = String(
+            java.util.zip.ZipFile(out.toFile()).use { zf ->
+                zf.getInputStream(zf.getEntry("package-lock.json")).readBytes()
+            },
+            Charsets.UTF_8,
+        )
+        val modified = lockText.replace("\"lockfileVersion\":3", "\"lockfileVersion\":9")
+        assertFalse(modified == lockText, "替换应真的发生")
+        replaceEntry(out, "package-lock.json", modified)
         assertThrows(AutojsException::class.java) { snapshot().verify("p1", out) }
+        Unit
     }
 
     @Test
@@ -125,6 +135,7 @@ class NpmSnapshotTest {
         assertThrows(AutojsException::class.java) { other.verify("p1", out) }
         other.export("p1", out)
         other.verify("p1", out)
+        Unit
     }
 
     @Test
@@ -148,6 +159,7 @@ class NpmSnapshotTest {
     fun `非法 projectId 拒绝（防路径逃逸）`() = runBlocking {
         seedProject()
         assertThrows(IllegalArgumentException::class.java) { snapshot().export("../escape", out) }
+        Unit
     }
 
     // —— helpers：改 zip 的临时垫脚（内存 zip，不用系统 unzip）———
@@ -160,6 +172,24 @@ class NpmSnapshotTest {
             z.closeEntry()
         }
         appendBytes(f, Files.readAllBytes(tmp))
+    }
+
+    /** 重写 zip 里一个条目的内容（其余条目原样搬；解压后再压，够测试用）。 */
+    private fun replaceEntry(f: Path, name: String, content: String) {
+        val tmp = dir.resolve("tamper-replaced.zip")
+        java.util.zip.ZipInputStream(Files.newInputStream(f)).use { zin ->
+            java.util.zip.ZipOutputStream(Files.newOutputStream(tmp)).use { zout ->
+                while (true) {
+                    val e = zin.nextEntry ?: break
+                    if (e.isDirectory) continue
+                    zout.putNextEntry(java.util.zip.ZipEntry(e.name))
+                    if (e.name == name) zout.write(content.toByteArray(Charsets.UTF_8))
+                    else zin.copyTo(zout)
+                    zout.closeEntry()
+                }
+            }
+        }
+        Files.move(tmp, f, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
     }
 
     private fun stripEntry(f: Path, name: String) {

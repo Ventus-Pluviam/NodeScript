@@ -182,6 +182,7 @@ class ControllerRunDispatcherArchiveTest {
         assertNull(cancelled.link)
         assertNull(cancelled.stop, "排队取消：未产生引擎执行，无可停的东西")
         controller.stop(held.runId)
+        Unit
     }
 
     @Test

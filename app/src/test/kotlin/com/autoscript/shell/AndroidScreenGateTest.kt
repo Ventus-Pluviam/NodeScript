@@ -51,6 +51,7 @@ class AndroidScreenGateTest {
     fun `SCREEN_ON 拿不到 wakelock 时同样拒绝`() = runBlocking {
         val g = gate(screen = true, wake = false)
         assertInstanceOf(ScreenGateDecision.Deny::class.java, g.pass(ScreenGuarantee.SCREEN_ON))
+        Unit
     }
 
     @Test

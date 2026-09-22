@@ -248,6 +248,7 @@ class EnginesNamespaceHandlerTest {
         )
         assertEquals("ERR_INVALID_PARAM", bad.code)
         h.handle(EnginesNamespaceHandler.Request(5, "stop", """{"runId":$runId}"""))
+        Unit
     }
 
     @Test
