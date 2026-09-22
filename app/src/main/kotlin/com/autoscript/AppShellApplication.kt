@@ -12,6 +12,8 @@ import com.autoscript.shell.AndroidPermissionGates
 import com.autoscript.shell.AndroidScreenGate
 import com.autoscript.shell.AppShell
 import com.autoscript.shell.AppShellKit
+import com.autoscript.shell.BootRecovery
+import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
 import com.autoscript.shell.ScreenGateAndroid
 import kotlinx.coroutines.GlobalScope
@@ -59,6 +61,9 @@ class AppShellApplication : Application() {
 
     /** 闹钟回投缝（[AlarmDispatch]）：装配前记账、装配后投递。 */
     private val alarmDispatch = AlarmDispatch()
+
+    /** 开机恢复（§8.5）：同壳幂等 + 失败记账 + 快照供能力中心读（见 [recoverySnapshot]）。 */
+    private val bootRecovery = BootRecovery()
 
     /** 闹钟出口（真 AlarmManager）：本类持有引用，供取消/续排路径按 taskId 撤销。 */
     private var alarmPort: AlarmPort? = null
@@ -146,18 +151,44 @@ class AppShellApplication : Application() {
         // 开机恢复（§8.5）：壳就绪后把崩溃遗留意向重新入队。挂后台协程、不阻塞装配；
         // 恢复走 dispatcher 真投递（落引擎 + 写归档），失败只记日志 —— 绝不让恢复异常
         // 把刚装好的壳掀翻（装配完成 > 恢复成功，恢复下次启动仍可重试：未 COMMIT 行还在）。
+        recover(shell)
+    }
+
+    /**
+     * 崩溃恢复（§8.5）：壳就绪后把未 COMMIT 的意图重新入队。
+     *
+     * 在 [install] 里同步起协程而不是在挂起函数里 await：`install` 的签名是同步的
+     * （调用方是 Activity/引导页的装配路径，不是协程），而恢复是挂起的
+     * （读意图日志 + dispatch）。壳已经**先**装上了 —— 这一步失败也只是恢复没跑，
+     * 闹钟路线/壳都还在，不会出现"恢复异常把 install 打断、壳装了一半"的形态。
+     *
+     * 幂等由 [BootRecovery] 保证（同一个壳只恢复一次）；异常不外抛（记进快照，
+     * 由 [recoverySnapshot] 让 UI 如实呈现）。这里只负责把结果写进日志 ——
+     * 开机日志是排查"重启后任务没跑"的唯一现场，宁可在 logcat 里多一行。
+     */
+    private fun recover(shell: AppShell) {
         @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
         kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val recovered = shell.bootRecover()
-                if (recovered.isNotEmpty()) {
-                    Log.i(TAG, "开机恢复：${recovered.size} 条遗留意向已重投")
-                }
+            val snapshot = try {
+                bootRecovery.recoverOnce(shell)
             } catch (t: Throwable) {
-                Log.e(TAG, "开机恢复失败（下次启动重试）", t)
+                // BootRecovery 自己兜住异常，这里是双保险：调度器抛出的任何东西
+                // 都不该把开机流程变成崩溃。
+                Log.e(TAG, "开机恢复抛出异常（已吞，见 recoverySnapshot）", t)
+                return@launch
             }
+            Log.i(TAG, "开机恢复：${snapshot.describe()}")
         }
     }
+
+    /**
+     * 恢复账（§8.5）：重投了几条、几条过期未投、是否失败。
+     *
+     * 能力中心据此显示"重启后恢复了 N 条任务"，而不是让用户以为重启把任务吃掉了。
+     * 失败时 [RecoverySnapshot.ok] 为 false、[RecoverySnapshot.describe] 给出原因
+     * —— **不**因为恢复失败就假装无事发生。
+     */
+    fun recoverySnapshot(): RecoverySnapshot = bootRecovery.snapshot()
 
     /**
      * 权限门禁（§9.5 唯一权限入口的生产实例）。
