@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.core.Clock
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -28,7 +29,7 @@ class SchedulerRestoreTest {
     private fun scheduler(
         provider: RecordingProvider,
         store: TaskStore?,
-        log: IntentLog = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now }),
+        log: IntentLog = InMemoryIntentLog(Clock { now }),
     ) = Scheduler(
         provider = provider,
         log = log,
@@ -95,7 +96,7 @@ class SchedulerRestoreTest {
     @Test
     fun `Once 触发后落 tombstone：重启不再复活`() = runBlocking {
         val store = InMemoryTaskStore()
-        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val log = InMemoryIntentLog(Clock { now })
         val mk: (IntentLog) -> Scheduler = { l ->
             Scheduler(
                 provider = RecordingProvider(), log = l,
@@ -120,7 +121,7 @@ class SchedulerRestoreTest {
     fun `恢复后闹钟仍响：onTrigger 可投递`() = runBlocking {
         var dispatched = 0
         val store = InMemoryTaskStore()
-        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val log = InMemoryIntentLog(Clock { now })
         val s1 = Scheduler(
             provider = RecordingProvider(), log = log,
             dispatcher = RunDispatcher { dispatched++; RunOutcome.Succeeded },

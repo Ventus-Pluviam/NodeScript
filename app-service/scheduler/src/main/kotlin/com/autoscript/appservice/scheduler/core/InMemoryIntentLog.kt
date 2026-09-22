@@ -1,5 +1,7 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.core.Clock
+import com.autoscript.domain.core.SystemClock
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -8,16 +10,7 @@ import java.util.concurrent.atomic.AtomicLong
  * append-only、按 runId 单调、COMMIT 不可逆、**线程安全**（五类触发源都收敛到同一路径，
  * 无单线程收敛声明——实现自身必须提供互斥）。
  */
-class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) : IntentLog {
-
-    /** 对齐接口可见性：RuntimeClock 的内部时钟（测试可注入）。 */
-    fun interface RuntimeClock {
-        fun millis(): Long
-
-        companion object {
-            fun system(): RuntimeClock = RuntimeClock { System.currentTimeMillis() }
-        }
-    }
+class InMemoryIntentLog(private val now: Clock = SystemClock) : IntentLog {
 
     private val lock = Any()                               // 全局互斥：所有读写都在单事务内
     private val counter = AtomicLong(0)                    // runId 单调源（仅锁内递增）
@@ -55,7 +48,7 @@ class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) :
             args = args,
             timeoutMillis = timeoutMillis,
             outcome = null,
-            startedAtMillis = now.millis(),
+            startedAtMillis = now.nowMillis(),
             deadlineMillis = deadlineMillis,
         )
         store += run
@@ -67,7 +60,7 @@ class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) :
         if (idx < 0) return null
         val prev = store[idx]
         if (prev.outcome != null) return prev                               // 重复 COMMIT 幂等
-        val done = prev.copy(outcome = outcome, committedAtMillis = now.millis())
+        val done = prev.copy(outcome = outcome, committedAtMillis = now.nowMillis())
         store[idx] = done
         // 只有真实完成（非恢复封口）才计入幂等集合；Interrupted 正是要重投的那一次（见 reopen）
         if (outcome != RunOutcome.Interrupted) committedNonces += prev.runNonce
@@ -82,7 +75,7 @@ class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) :
         // 封口（Interrupted 不计入 committedNonces——同一 nonce 要重新入队）
         val sealed = old.copy(
             outcome = RunOutcome.Interrupted,
-            committedAtMillis = now.millis(),
+            committedAtMillis = now.nowMillis(),
         )
         store[idx] = sealed
         // 重开：新 runId + 保留原 runNonce（§8.5 幂等锚点，恢复重投不丢失 screen 契约）
@@ -97,7 +90,7 @@ class InMemoryIntentLog(private val now: RuntimeClock = RuntimeClock.system()) :
             args = old.args,                       // 恢复重投不得丢脚本参数（§8.5）
             timeoutMillis = old.timeoutMillis,     // 恢复重投不得丢脚本超时（§8.5）
             outcome = null,
-            startedAtMillis = now.millis(),
+            startedAtMillis = now.nowMillis(),
             deadlineMillis = old.deadlineMillis,   // 恢复重投不得变期限：否则同一意向两套到期口径
         )
         store += fresh

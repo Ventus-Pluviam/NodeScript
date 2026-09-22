@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.core.Clock
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -26,7 +27,7 @@ class SchedulerTest {
 
     private fun testScheduler(
         provider: RecordingProvider = RecordingProvider(),
-        log: IntentLog = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now }),
+        log: IntentLog = InMemoryIntentLog(Clock { now }),
     ) = Scheduler(
         provider = provider,
         log = log,
@@ -83,7 +84,7 @@ class SchedulerTest {
 
     @Test
     fun `recoverUncommitted：旧意向封口 Interrupted 并保留 nonce 重投`() = runBlocking {
-        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val log = InMemoryIntentLog(Clock { now })
         val scheduler = testScheduler(log = log)
 
         // 模拟崩溃遗留：RUN_START 已写但未 COMMIT
@@ -124,7 +125,7 @@ class SchedulerTest {
 
     @Test
     fun `过期意向不重投：封口 Cancelled 且不投给 dispatcher`() = runBlocking {
-        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val log = InMemoryIntentLog(Clock { now })
         val scheduler = testScheduler(log = log)
 
         // 崩溃遗留：RUN_START 已写、期限只有 1s；宿主重启拖了 10 分钟才走到恢复路径
@@ -154,7 +155,7 @@ class SchedulerTest {
 
     @Test
     fun `未到期意向照常重投，到期与否由期限而非成败决定`() = runBlocking {
-        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val log = InMemoryIntentLog(Clock { now })
         val scheduler = testScheduler(log = log)
         log.appendStart(
             projectId = "p",
@@ -174,7 +175,7 @@ class SchedulerTest {
 
     @Test
     fun `无期限的遗留意向（老路径）永不被判过期`() = runBlocking {
-        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val log = InMemoryIntentLog(Clock { now })
         val scheduler = testScheduler(log = log)
         log.appendStart("p", "a.js", "nonce-nodl", TriggerSource.TIMED, now)   // 不传 deadline
 
@@ -230,7 +231,7 @@ class SchedulerTest {
         // dispatcher 本轮抛错（引擎池满/IO 失败）——异常不得逃逸、排期必须推进
         val failing = Scheduler(
             provider = provider,
-            log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now }),
+            log = InMemoryIntentLog(Clock { now }),
             dispatcher = RunDispatcher { throw IllegalStateException("池满拒收") },
             nonceFactory = { "nonce-${++nonceSeq}" },
             clock = { now },
@@ -294,7 +295,7 @@ class SchedulerTest {
 
     @Test
     fun `recoverUncommitted 重投带 args 与 timeoutMillis（恢复不丢执行载荷）`() = runBlocking {
-        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val log = InMemoryIntentLog(Clock { now })
         val scheduler = testScheduler(log = log)
 
         // 崩溃遗留：RUN_START 已落行（含执行载荷）、未 COMMIT

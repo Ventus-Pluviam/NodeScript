@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.core.Clock
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -10,7 +11,7 @@ import org.junit.jupiter.api.Test
 class InMemoryIntentLogTest {
 
     private fun log(now: () -> Long = { 1000L }) =
-        InMemoryIntentLog(InMemoryIntentLog.RuntimeClock(now))
+        InMemoryIntentLog(Clock(now))
 
     @Test
     fun `appendStart 分配单调 runId 且状态未 COMMIT`() = runBlocking {

@@ -1,5 +1,6 @@
 package com.autoscript.appservice.runtime
 
+import com.autoscript.domain.core.Clock
 import com.autoscript.domain.engine.EngineStateMachine
 import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.domain.engine.KillCause
@@ -9,19 +10,10 @@ import com.autoscript.domain.engine.StopResult
 /** 池槽位（docs §8.3 每执行单元状态机在池侧的最小投影：FREE/BUSY/QUIESCING）。 */
 enum class SlotState { FREE, BUSY, QUIESCING }
 
-/** 池侧时钟：为避免 :runtime → :bridge 反向依赖，本地定义；多处需要时上移 :domain。 */
-fun interface RuntimeClock {
-    fun nowMillis(): Long
-
-    companion object {
-        val system = RuntimeClock { System.currentTimeMillis() }
-    }
-}
-
 class PoolSlot internal constructor(
     val index: Int,
     val engine: ScriptEngine,
-    private val clock: RuntimeClock,
+    private val clock: Clock,
 ) {
     var state: SlotState = SlotState.FREE
         private set

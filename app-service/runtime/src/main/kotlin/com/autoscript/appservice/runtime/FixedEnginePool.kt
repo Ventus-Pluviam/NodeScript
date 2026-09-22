@@ -1,5 +1,7 @@
 package com.autoscript.appservice.runtime
 
+import com.autoscript.domain.core.Clock
+import com.autoscript.domain.core.SystemClock
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineRunRequest
 import com.autoscript.domain.engine.KillCause
@@ -22,7 +24,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class FixedEnginePool(
     engineFactory: (EngineId) -> ScriptEngine,
     override val capacity: Int,
-    private val clock: RuntimeClock = RuntimeClock.system,
+    private val clock: Clock = SystemClock,
 ) : EnginePool {
 
     init {

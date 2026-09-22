@@ -1,5 +1,6 @@
 package com.autoscript.appservice.runtime
 
+import com.autoscript.domain.core.Clock
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.KillCause
 import com.autoscript.domain.engine.StopResult
@@ -13,9 +14,9 @@ import org.junit.jupiter.api.Test
 
 class FixedEnginePoolTest {
 
-    private fun fixedClock(): RuntimeClock {
+    private fun fixedClock(): Clock {
         var t = 0L
-        return RuntimeClock { t++ }
+        return Clock { t++ }
     }
 
     @Test

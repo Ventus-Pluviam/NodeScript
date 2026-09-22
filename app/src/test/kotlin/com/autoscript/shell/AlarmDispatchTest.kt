@@ -1,5 +1,6 @@
 package com.autoscript.shell
 
+import com.autoscript.domain.core.Clock
 import com.autoscript.appservice.scheduler.core.IntentLog
 import com.autoscript.appservice.scheduler.core.InMemoryIntentLog
 import com.autoscript.appservice.scheduler.core.RunDispatcher
@@ -48,7 +49,7 @@ class AlarmDispatchTest {
 
     private var now = 10_000L
 
-    private fun setup(log: IntentLog = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })) =
+    private fun setup(log: IntentLog = InMemoryIntentLog(Clock { now })) =
         Triple(FakeProvider(), RecordingDispatcher(), log)
 
     private fun scheduler(

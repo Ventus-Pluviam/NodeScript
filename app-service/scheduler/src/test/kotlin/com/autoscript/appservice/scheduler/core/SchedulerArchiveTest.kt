@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.core.Clock
 import com.autoscript.domain.scripts.EngineRunLink
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
@@ -67,7 +68,7 @@ class SchedulerArchiveTest {
         clock = { now },
     )
 
-    private fun freshLog() = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+    private fun freshLog() = InMemoryIntentLog(Clock { now })
 
     @Test
     fun `appendStart 后 dispatch 带日志 runId，归档成对写入`() = runBlocking {

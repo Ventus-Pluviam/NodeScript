@@ -2,7 +2,9 @@ package com.autoscript.bridge
 
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
+import com.autoscript.domain.core.Clock
 import com.autoscript.domain.core.ErrorCode
+import com.autoscript.domain.core.SystemClock
 import java.util.concurrent.ConcurrentHashMap
 
 /**
