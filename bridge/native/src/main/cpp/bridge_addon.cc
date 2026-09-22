@@ -1,4 +1,4 @@
-// :bridge:native —— N-API addon 控制面（docs/design/03-bridge.md §7.8）。
+// :bridge:native —— N-API addon 控制面（docs/framework-design.md §7.8）。
 //
 // 职责（只做三件事）：
 //  1. `invoke(ns, method, payloadJson, reqId, ttl)`：JS → socket（newline frame，

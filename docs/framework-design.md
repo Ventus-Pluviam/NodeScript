@@ -281,6 +281,62 @@ class AutojsError extends Error {
 | `matchTemplate` 1080p | < 40ms | OpenCV TM_CCORR_NORMED + 降采样 |
 | 紧凑树构建/传输 | < 15ms / 数十 KB | 预聚合属性，代价解析放"取用即取" |
 
+### 7.8 :bridge:native 落地契约（v24.21.0 + NDK r28c 实证，CI 构建前置）
+
+> 本节是 `:bridge:native`（N-API addon 控制面）与 `:engine:node-process`
+> （:nodeN 宿主）的**契约先行**文档：C++/CMake 落地前先把符号面、线程铁律、
+> 传输对接钉死。符号面全部经 `llvm-nm -D /tmp/nrb-out7/libnode.so` 实证，
+> 非臆造。addon 控制面初版已落 `bridge/native/src/main/cpp/bridge_addon.cc`
+> （本机 NDK r28c 交叉编译：AArch64 ELF + `napi_register_module_v1` 导出）；
+> 宿主 `main.cpp` 起线程/TSF 接线与真机全链仍待 CI。
+
+**符号面（动态 T，稳定 ABI）：**
+
+| 符号 | 来源 | 用途 |
+|---|---|---|
+| `_ZN4node5StartEiPPc`（`node::Start(int, char**)`） | libnode.so | :nodeN 单进程单 isolate 入口（§5.1 一进程一 Start） |
+| `_ZN4node4StopEPNS_11EnvironmentENS_9StopFlags5Flags` | libnode.so | quiesce 第④步后收尾（§5 推论 A：kill 必须归还槽位，Stop 即"正常死"的路径） |
+| `napi_create_threadsafe_function` / `napi_call_threadsafe_function` | libnode.so | TSF 双队列的创建/投递（§7.3，见下） |
+| `napi_module_register` / `napi_module_register_by_symbol` | libnode.so | addon 模块注册（`@autojs/bridge-native` 即一个 N-API 模块） |
+| 20562 个动态 T 符号（含 `napi_create_external_arraybuffer` 系） | libnode.so | §7.4 大二进制 0 拷贝（`allocateDirect` → external arraybuffer）的符号依据 |
+
+`NAPI_VERSION=10`（§67 选型表冻结）：addon 编译期 `-DNAPI_VERSION=10`，
+头文件取自建 Node 树 `src/node_api.h + js_native_api.h + node_api_types.h`
+（三文件自足，实证存在；`node_api_types.h:16` 有 `#if NAPI_VERSION >= 3` 门，
+版本宏由编译命令行注入）。
+
+**TSF 双队列 → 线程铁律映射（§5.3/§7.3）：**
+
+- `tsf_control`（stop/ack/evaluate/错误上报）：`napi_tsfn_nonblocking` 投递，
+  **绝不丢弃、绝不降级**；其队列满 = 背压信号向上游（看门狗/调度）报告，不静默吞。
+- `tsf_data`（console/事件流/传感器）：同为 nonblocking，**可丢包**（丢包计数 →
+  JS 层 `queueError`，`consoleSink.onQueueError` 对偶）；闲置 `napi_unref_threadsafe_function`
+  不保活事件循环（脚本跑完即退出，不靠 TSF 吊命）。
+- `async_work` 线程**不碰 JS**（N-API 约束）；需回 JS 的一律经 TSF。
+- 持有 Java lock 时**禁止**回调用 JS（死锁铁律）；回调在释锁后投递。
+- 原生入口只 `GetEnv` + 局部 attach，**绝不缓存 `JNIEnv*` 跨函数**（§5.2）。
+
+**addon ↔ Kotlin Router 对接（§7.5 信封，JsonTransport 已实证）：**
+
+- addon 内嵌 socket 客户端（与 `SocketBootstrap` 同语义）：请求
+  `{"t":"req","id","ns","m","ttl","payload","side"}\n` → 回复 `ok/err` 按 id 结算；
+  addon 不解释 payload（§7 只透传，CapabilityNamespaces 注释同纪律）。
+- JS→Java：addon 的 `invoke(ns, method, payloadJson, reqId, ttl)` 即
+  `RuntimeBridgeImpl.install` 的 handler 形（`bridge/js` 已用此形跑通 E2E）。
+- Java→JS：Kotlin 侧事件经 JNI 进 addon → 按 context 的 TSF 投递 → JS 事件循环；
+  TSF 每 context 一对（control+data），context 销毁时 pair 同生共死（§7.4 句柄
+  generation 语义在 native 侧的对偶：跨代 TSF 投递直接丢弃）。
+
+**宿主进程（:nodeN）最小启动序：**
+
+1. `dlopen libnode.so`（16KB 门禁已过，PRODUCT 哈希 `3cadbcdf…` 见 `/tmp/nrb-out7/SHASUMS256`）；
+2. `node::Start` 单 isolate/context；注册 `@autojs/bridge-native` addon；
+3. addon 连回 `:main` 的 unix socket（`AUTOSCRIPT_HOST_SOCKET` 同名 env，`SocketBootstrap`
+   语义）；`console.log` 经 tsf_data → socket → `ConsoleCollector`（E2E 已在
+   JVM+Node 双侧验证语义，待真机跑通即 §19 垂直切片闭环）；
+4. 停机走四步 quiesce（SINKING → generation 排空/超时斩杀 → 释 TSF/句柄 →
+   `node::Stop` + 回调归档），禁直接 kill（§5 推论 A）。
+
 ---
 
 ## 8. 执行层设计
