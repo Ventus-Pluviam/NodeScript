@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AutoScript 无障碍服务配置（§9.1）。
+     canRetrieveWindowContent + flagRetrieveInteractiveWindows：root(scope) 的
+     MODAL/ALL 要读窗口列表；flagReportViewIds：选择器 id 谓词（viewIdResourceName）。
+     notificationTimeout=100ms：内容变化事件节流（§9.1 事件面背压的第一道闸）。 -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/autoscript_a11y_description"
+    android:notificationTimeout="100" />

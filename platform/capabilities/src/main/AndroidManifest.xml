@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- §9.1 无障碍服务声明（库清单，AGP 合并进 :app）。
+     服务实现与配置见 AutoScriptAccessibilityService / res/xml/autoscript_a11y_service.xml。
+     BIND_ACCESSIBILITY_SERVICE 是系统绑定专用权限（signature 级），第三方拿不到。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+
+    <application>
+        <service
+            android:name="com.autoscript.platform.capabilities.AutoScriptAccessibilityService"
+            android:exported="true"
+            android:label="@string/autoscript_a11y_description"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/autoscript_a11y_service" />
+        </service>
+    </application>
+</manifest>

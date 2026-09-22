@@ -44,7 +44,7 @@ run scheduler         0 "app-service/scheduler/src/main/kotlin $D"              
 run script-repo       1 "app-service/script-repo/src/main/kotlin $D"                              app-service/script-repo/src/test/kotlin
 run permission-center 0 "app-service/permission-center/src/main/kotlin $D"                        app-service/permission-center/src/test/kotlin
 run packager          0 "app-service/packager/src/main/kotlin $D"                                 app-service/packager/src/test/kotlin
-run capabilities      0 "platform/capabilities/src/main/kotlin $D"                                platform/capabilities/src/test/kotlin
+run capabilities      1 "platform/capabilities/src/main/kotlin $D"                                platform/capabilities/src/test/kotlin
 run platform-system   1 "platform/system/src/main/kotlin $D"                                      platform/system/src/test/kotlin
 run app               1 "app/src/main/kotlin app-service/runtime/src/main/kotlin app-service/scheduler/src/main/kotlin app-service/script-repo/src/main/kotlin app-service/permission-center/src/main/kotlin app-service/packager/src/main/kotlin bridge/java/src/main/kotlin platform/capabilities/src/main/kotlin platform/system/src/main/kotlin $D" app/src/test/kotlin
 

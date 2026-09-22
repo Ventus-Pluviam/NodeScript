@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 无障碍设置页里展示给用户的服务说明（清单 android:description 指向这里）。 -->
+    <string name="autoscript_a11y_description">AutoScript 自动化需要读取界面控件并派发点击/手势，以执行你的脚本。仅在脚本运行期间使用。</string>
+</resources>

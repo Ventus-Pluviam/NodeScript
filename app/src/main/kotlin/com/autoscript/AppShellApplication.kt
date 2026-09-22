@@ -99,10 +99,12 @@ class AppShellApplication : Application() {
      * 把 Android 侧的两件事喂进去：`filesDir`/`cacheDir` 与真屏幕门禁。
      *
      * 系统/存储/通知面经 [PlatformWiring]（shell 装配包，§6 包级例外二）接上
-     * `SystemSpis` + `CapabilityNamespaces` 的真实现；**a11y/screen 仍不传**——它们的
-     * Android 真实现（AccessibilityService/MediaProjection 的服务实例）尚未落地，
-     * 硬凑内存实现就是伪造可用；未注入 = 桥对 `a11y.*`/`screen.*` 如实回
-     * `ERR_NOT_IMPLEMENTED`（走 [install] 的调用方仍可自行注入）。
+     * `SystemSpis` + `CapabilityNamespaces` 的真实现；**a11y 同批传**——
+     * `AndroidUiTree`/`AndroidGestureInput` 经 `SystemA11yBridge` 走无障碍服务
+     * （清单在 :platform:capabilities），服务未连 = 桥如实 `ERR_SERVICE_DISABLED`；
+     * **screen 仍不传**——MediaProjection 会话（授权 UI）未落地，硬凑内存帧源就是
+     * 伪造可用；未注入 = 桥对 `screen.*` 如实回 `ERR_NOT_IMPLEMENTED`
+     * （走 [install] 的调用方仍可自行注入）。
      *
      * 失败如实降级：装配抛错 → 记日志 + 壳保持 null（[alarmWork] 继续漏投记账），
      * **绝不让一个半装的壳冒充就绪**（那会让闹钟投给一个没有 scheduler 的路线）。
@@ -136,6 +138,7 @@ class AppShellApplication : Application() {
                 // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
                 // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，
                 // 不 import 任何 com.autoscript.platform..（ArchitectureTest 看住）。
+                a11yHandler = wiring.a11yHandler,
                 datastoreHandler = wiring.datastoreHandler,
                 zipHandler = wiring.zipHandler,
                 settingsHandler = wiring.settingsHandler,

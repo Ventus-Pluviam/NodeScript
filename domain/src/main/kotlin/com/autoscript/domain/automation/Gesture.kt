@@ -36,8 +36,9 @@ data class GestureInput(val strokes: List<GestureStroke>) {
 
 /**
  * 输入通道 SPI（§9.3）：无障碍手势（默认）/ root / Shizuku-ADB 三实现统一入口。
- * - [canPerformGestures] 即系统 `canPerformGestures()`：false 时调用方不得发手势，
- *   由能力中心引导用户启用（API 31+ 需启用手势）；
+ * - [canPerformGestures] 即无障碍服务能力位 `CAPABILITY_CAN_PERFORM_GESTURES`
+ *   （系统没有 `AccessibilityManager.canPerformGestures()` 方法，AOSP 实证；运行期
+ *   读服务 capability 位）：false 时调用方不得发手势，由能力中心引导用户启用；
  * - [dispatchGesture] 回 false = 系统拒绝执行（非能力问题，不抛错，与 click 同口径）。
  */
 interface InputProvider {

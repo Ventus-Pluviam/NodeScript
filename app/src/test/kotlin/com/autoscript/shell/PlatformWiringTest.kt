@@ -43,7 +43,9 @@ import org.junit.jupiter.api.Test
  * 1. 四条独立缝（datastore/zip/settings/notification）+ 五命名空间束接通，
  *    handler 是 `CapabilityNamespaces` 的真转接（协议解释权在平台侧，装配只挂载）；
  * 2. `dialogs` 恒 null（`DialogHost` 待 §14 P2）→ 如实 `ERR_NOT_IMPLEMENTED`，不伪造；
- * 3. `a11y`/`screen` 不在本装配里（真实现未落地）→ 同样如实未实现。
+ * 3. `a11y` 生产已接（AndroidUiTree/SystemA11yBridge）：测试进程无无障碍服务 →
+ *    如实 `ERR_SERVICE_DISABLED`（不是 NOT_IMPLEMENTED —— namespace 已挂，差的是服务连接）；
+ * 4. `screen` 仍未注入（MediaProjection 会话未落地）→ 如实 `ERR_NOT_IMPLEMENTED`。
  *
  * 真机路径的差异只有 `of(context)` 那一步（`SystemSpis.of` 造 Android 实现），
  * 由 platform/system 的契约测试覆盖；两条路径共用 [PlatformWiring.inject]，
@@ -133,6 +135,7 @@ class PlatformWiringTest {
         zipHandler = wiring.zipHandler,
         settingsHandler = wiring.settingsHandler,
         notificationHandler = wiring.notificationHandler,
+        a11yHandler = wiring.a11yHandler,
     )
 
     private suspend fun dispatch(
@@ -224,16 +227,19 @@ class PlatformWiringTest {
     }
 
     @Test
-    fun `a11y 与 screen 不在本装配里——如实 ERR_NOT_IMPLEMENTED`() = runBlocking {
+    fun `a11y 生产已接但服务未连——如实 ERR_SERVICE_DISABLED；screen 仍未注入`() = runBlocking {
         shell(PlatformWiring.inject(bundle())).use { s ->
             assertEquals(
-                "ERR_NOT_IMPLEMENTED",
-                errCode(dispatch(s, "a11y", "tree", null)),
-                "真实现未落地：不接内存实现冒充可用",
+                "ERR_SERVICE_DISABLED",
+                errCode(
+                    dispatch(s, "a11y", "findOne", """{"conditions":{}}"""),
+                ),
+                "namespace 已挂（AndroidUiTree 真转接）；测试进程无无障碍服务 → 差的是连接不是实现",
             )
             assertEquals(
                 "ERR_NOT_IMPLEMENTED",
                 errCode(dispatch(s, "screen", "capture", null)),
+                "MediaProjection 会话未落地：不接内存帧源冒充可用",
             )
         }
         Unit

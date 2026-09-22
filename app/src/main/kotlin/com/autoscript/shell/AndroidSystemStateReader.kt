@@ -110,10 +110,12 @@ class AndroidSystemStateReader(
  * （唯一的例外是 `su`，由 reader 负责切到 IO）。
  *
  * **诚实口径（重要）**：本类只报"系统现在怎么说"，不报"我们希望它怎样"。
- * 无障碍服务本体（§9.1 的 Android 真实现）尚未落地，所以 [accessibilityEnabled]
- * 今天必然为 false（系统里没有这个服务可启用）；[screenCaptureActive] 同理
- * （MediaProjection 会话随 §9.2 落地）。这不是敷衍，是**如实**：门禁说不可用，
- * 就不会有脚本以为自己拿到了无障碍。
+ * 无障碍服务本体已落地（:platform:capabilities 的 AutoScriptAccessibilityService，
+ * 清单随库合并进 :app）——用户在设置里开启后 [accessibilityEnabled] 即为 true；
+ * 启用列表与进程内 `onServiceConnected` 之间有极短窗口，此时桥侧如实
+ * ERR_SERVICE_DISABLED（探针不冒充连接态）。[screenCaptureActive] 仍如实为
+ * false 直到 MediaProjection 会话随 §9.2 落地。门禁说不可用，就不会有脚本
+ * 以为自己拿到了无障碍。
  */
 class AndroidCapabilityProbes(context: Context) : CapabilityProbes {
 

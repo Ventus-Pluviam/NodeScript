@@ -2,6 +2,8 @@ package com.autoscript.shell
 
 import android.content.Context
 import com.autoscript.domain.bridge.NamespaceHandler
+import com.autoscript.platform.capabilities.AndroidGestureInput
+import com.autoscript.platform.capabilities.AndroidUiTree
 import com.autoscript.platform.capabilities.CapabilityNamespaces
 import com.autoscript.platform.system.SystemSpis
 
@@ -18,12 +20,13 @@ import com.autoscript.platform.system.SystemSpis
  * - [inject] 是纯转接（SPI 束 → handler 束，零 Android 触点）→ JVM 可单测，
  *   真假实现共用同一条拼装路径，不给"测试走另一套装配"留门。
  *
- * **诚实缺位**：
- * - `dialogs` 恒 null —— `DialogHost` 待 §14 P2，缺位即桥如实 `ERR_NOT_IMPLEMENTED`，
- *   不拿假弹窗凑；
- * - `a11y`/`screen` 不在本类接 —— 它们的 Android 真实现（AccessibilityService /
- *   MediaProjection 的服务实例）尚未落地，接内存实现就是伪造可用；落地后走
- *   `AppShellKit.assemble` 的同一条缝（调用方也可经 `install` 自行注入）。
+ * **a11y 生产已接**：`AndroidUiTree`（树+动作一体，句柄注册表共享）+
+ * `AndroidGestureInput` 走 `SystemA11yBridge` —— 装配期即可注入（连接态在调用期判定），
+ * 服务未连 = 桥如实 `ERR_SERVICE_DISABLED`（不伪造可用，也不必等 `onServiceConnected`
+ * 才装壳）。`screen`/`dialogs` 仍诚实缺位：
+ * - `screen` 不在本类接 —— MediaProjection 会话（授权 UI + FGS）尚未落地，接内存
+ *   帧源就是伪造可用；未注入 = 桥对 `screen.*` 如实 `ERR_NOT_IMPLEMENTED`；
+ * - `dialogs` 恒 null —— `DialogHost` 待 §14 P2，缺位同上。
  */
 object PlatformWiring {
 
@@ -32,6 +35,7 @@ object PlatformWiring {
      * + 五命名空间束（共担门禁的系统面）。形状与 assemble 的参数一一对应，少一层猜。
      */
     data class Injection(
+        val a11yHandler: NamespaceHandler,
         val systemHandlers: SystemHandlers,
         val datastoreHandler: NamespaceHandler,
         val zipHandler: NamespaceHandler,
@@ -41,6 +45,9 @@ object PlatformWiring {
 
     /** SPI 束 → 注入束（纯转接：不解释 payload、不吞错误、不做权限判断）。 */
     fun inject(spis: SystemSpis.Bundle): Injection = Injection(
+        // 树+动作同一个实例（句柄注册表共享，同 InMemoryUiTree 双身份形态）；
+        // 事件流缺省 A11yEventRing.shared（服务 push / 树读同一环）。
+        a11yHandler = a11yHandler(),
         systemHandlers = SystemHandlers(
             dialogs = null,   // DialogHost 待 §14 P2：缺位如实 ERR_NOT_IMPLEMENTED
             shell = CapabilityNamespaces.shell(spis.shell),
@@ -53,6 +60,12 @@ object PlatformWiring {
         settingsHandler = CapabilityNamespaces.settings(spis.settings),
         notificationHandler = CapabilityNamespaces.notification(spis.notification),
     )
+
+    /** a11y 装配（[CapabilityNamespaces.a11y] 形状转接；实现在 :platform:capabilities）。 */
+    private fun a11yHandler(): NamespaceHandler {
+        val tree = AndroidUiTree()
+        return CapabilityNamespaces.a11y(tree = tree, actions = tree, input = AndroidGestureInput())
+    }
 
     /**
      * 生产入口：`Context` → [SystemSpis.of] 八件 → [inject]。

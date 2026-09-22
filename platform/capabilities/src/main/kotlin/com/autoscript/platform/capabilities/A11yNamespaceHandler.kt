@@ -46,6 +46,7 @@ import com.autoscript.domain.core.ErrorCode
  *   batch 缺省 32，必须 > 0，否则 ERR_INVALID_PARAM）；
  * - `gesture`：payload `{strokes:[{points:[{x,y}],startDelayMillis?,durationMillis?}]}`
  *   → Ok `"true"/"false"`（关门 canPerformGestures=false → false，调用方走能力中心引导；
+ *   服务未连 → Err ERR_SERVICE_DISABLED 原码，不折 false）；
  *   非法手势 → ERR_INVALID_PARAM，绝不发往系统服务）；
  * - `canPerformGestures`：无参 → Ok `"true"/"false"`。
  */
@@ -84,7 +85,13 @@ class A11yNamespaceHandler(
         "dispose" -> dispose(request)
         "events" -> events(request)
         "gesture" -> gesture(request)
-        "canPerformGestures" -> ok(request.id, if (input.canPerformGestures) "true" else "false")
+        // 服务未连时 AndroidGestureInput 抛 ERR_SERVICE_DISABLED：原码回桥（不折 false ——
+        // "没服务"与"手势关门"是两回事，后者才走能力中心引导）。
+        "canPerformGestures" -> try {
+            ok(request.id, if (input.canPerformGestures) "true" else "false")
+        } catch (e: AutojsException) {
+            err(request.id, e.error, e.message)
+        }
         else -> err(request.id, ErrorCode.ERR_NOT_IMPLEMENTED, "未知 a11y 方法: ${request.method}")
     }
 
@@ -351,7 +358,8 @@ class A11yNamespaceHandler(
     /**
      * 手势派发：payload `{strokes:[{points:[{x,y}],startDelayMillis?,durationMillis?}]}`。
      * 构造器校验非法（空笔画/负坐标/非正 duration）→ ERR_INVALID_PARAM；
-     * 关门（canPerformGestures=false）→ `"false"`（不抛错，走能力中心引导）。
+     * 关门（canPerformGestures=false）→ `"false"`（不抛错，走能力中心引导）；
+     * 服务未连 → ERR_SERVICE_DISABLED 原码（不折 false，与"关门"区分）。
      */
     private suspend fun gesture(request: Request): Response {
         val o = try {
@@ -364,7 +372,12 @@ class A11yNamespaceHandler(
         } catch (e: IllegalArgumentException) {
             return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
-        return ok(request.id, if (input.dispatchGesture(gesture)) "true" else "false")
+        return try {
+            ok(request.id, if (input.dispatchGesture(gesture)) "true" else "false")
+        } catch (e: AutojsException) {
+            // 服务未连 → ERR_SERVICE_DISABLED 原码（与其余动作路径同折叠纪律）。
+            err(request.id, e.error, e.message)
+        }
     }
 
     private fun gestureOf(v: A11yBridgeJson.Value?): GestureInput {

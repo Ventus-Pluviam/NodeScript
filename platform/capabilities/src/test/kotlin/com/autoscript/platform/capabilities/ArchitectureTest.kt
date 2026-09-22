@@ -12,8 +12,20 @@ import org.junit.jupiter.api.Test
  * `a11y`/`screen` 命名空间挂 Router 所需的接缝类型（`com.autoscript.domain.bridge.
  * NamespaceHandler`）住 `:domain`，本模块只见 `:domain`（见 [CapabilityNamespaces]）；
  * `com.autoscript.bridge..` 仍整体在黑名单里 —— 依赖 `:domain` 的挂载缝不等于依赖桥实现层。
+ *
+ * `android..` 有**一条包内例外**：无障碍服务三件（[AutoScriptAccessibilityService] +
+ * 设备面私有类 ServiceBridge/ServiceNode —— §9.1 设备面唯一触点）。语义层
+ * （[AndroidUiTree]/[AndroidGestureInput]/A11yBridge 接缝/handler）必须保持纯 JVM：
+ * 它们的可测性（假桥注入、本机无 SDK 跑测）全押在这条线上，Android 只许活在服务文件里。
  */
 class ArchitectureTest {
+
+    /** 设备面唯一触点（同文件私有类独立 class 文件，按名排除）。 */
+    private val androidExempt = arrayOf(
+        "AutoScriptAccessibilityService",
+        "ServiceBridge",
+        "ServiceNode",
+    )
 
     @Test
     fun `capabilities 包零跨层泄漏`() {
@@ -23,7 +35,6 @@ class ArchitectureTest {
         ArchRuleDefinition.noClasses()
             .that().resideInAPackage("..capabilities..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                "android..",
                 "androidx..",
                 "com.autoscript.bridge..",
                 "com.autoscript.engine..",
@@ -32,6 +43,20 @@ class ArchitectureTest {
                 "java.awt..",
                 "javax.swing..",
             )
+            .check(classes)
+    }
+
+    @Test
+    fun `android 只许服务三件碰`() {
+        val classes: JavaClasses =
+            ClassFileImporter().importPackages("com.autoscript.platform.capabilities")
+
+        ArchRuleDefinition.noClasses()
+            .that().resideInAPackage("..capabilities..")
+            .and().doNotHaveSimpleName("AutoScriptAccessibilityService")
+            .and().doNotHaveSimpleName("ServiceBridge")
+            .and().doNotHaveSimpleName("ServiceNode")
+            .should().dependOnClassesThat().resideInAnyPackage("android..")
             .check(classes)
     }
 }
