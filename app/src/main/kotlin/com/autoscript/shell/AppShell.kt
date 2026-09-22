@@ -188,6 +188,14 @@ class AppShell(
              */
             zipHandler: NamespaceHandler? = null,
             /**
+             * `settings` 命名空间实现（§9.6 系统设置面）：同 [datastoreHandler] 的**独立**缝 ——
+             * `WRITE_SETTINGS` 的授权判定在 SPI 自己身上（未授抛 `ERR_PERMISSION_DENIED`），
+             * 不与五命名空间共担门禁束，故也不入 [SystemHandlers]。实现经
+             * `:platform:capabilities` 的 `CapabilityNamespaces.settings(systemSettings)` 转接；
+             * null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`（不伪造可用）。
+             */
+            settingsHandler: NamespaceHandler? = null,
+            /**
              * `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6）。
              * 与 [a11yHandler] 同一注入缝，但合成一个参数而非五个：五个命名空间在 §12.2
              * 的 JS facade（`extras.ts`）里是一个整体，且共一批能力门禁（OVERLAY /
@@ -217,6 +225,7 @@ class AppShell(
             if (npmHandler != null) router.register("npm", npmHandler)
             if (datastoreHandler != null) router.register("datastore", datastoreHandler)
             if (zipHandler != null) router.register("zip", zipHandler)
+            if (settingsHandler != null) router.register("settings", settingsHandler)
             systemHandlers?.registerAll(router::register)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)

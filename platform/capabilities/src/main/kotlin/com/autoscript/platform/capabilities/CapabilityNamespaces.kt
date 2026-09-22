@@ -12,6 +12,7 @@ import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DialogHost
 import com.autoscript.domain.system.FloatingWindowHost
 import com.autoscript.domain.storage.DataStore
+import com.autoscript.domain.storage.SystemSettings
 import com.autoscript.domain.storage.ZipArchiver
 import com.autoscript.domain.system.ShellExecutor
 
@@ -132,11 +133,24 @@ object CapabilityNamespaces {
         val handler = ZipNamespaceHandler(archiver)
         return lite { request -> handler.handle(request) }
     }
+
+    /**
+     * `settings` 命名空间（§9.6 系统设置面）：`canWrite`/`getString`/`getInt`/
+     * `putString`/`putInt` 五方法（照抄 [SystemSettings] 的两型，不提供猜型的 `get`/`put`
+     * 别名 —— 串与数是两套系统 API，推断就是发明策略）。参数即 [SystemSettings] SPI 实现
+     * （测试传真读假写的替身，真机传 `:platform:system` 的 `AndroidSystemSettings`）。
+     * 同 datastore/zip：三者同属 §9.6 存储面、与五命名空间无共担门禁 → 独立注入缝
+     * `AppShell.assemble` 的 `settingsHandler`。
+     */
+    fun settings(systemSettings: SystemSettings): NamespaceHandler {
+        val handler = SettingsNamespaceHandler(systemSettings)
+        return lite { request -> handler.handle(request) }
+    }
 }
 
 /**
  * [BridgeRequestLite] 形状的 handler → 桥信封的字段级转接（本文件私有）。
- * 五个系统侧命名空间共用（§9.4/§9.6）；同 [NamespaceHandler] 缝，无逻辑。
+ * 系统侧五个与存储面三个（§9.4/§9.6）共用；同 [NamespaceHandler] 缝，无逻辑。
  */
 private inline fun lite(crossinline handle: suspend (BridgeRequestLite) -> ResponseLite): NamespaceHandler =
     NamespaceHandler { request ->

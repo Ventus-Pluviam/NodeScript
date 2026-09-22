@@ -19,6 +19,7 @@ import { consoleSink } from './console';
 import { dialogs, shell, device, app, floatingWindow } from './extras';
 import { datastore } from './datastore';
 import { zip } from './zip';
+import { settings } from './settings';
 import { InvokeHandler } from './bridge';
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload };
 export type { ErrPayload, TimedSchedule, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee };
@@ -49,6 +50,7 @@ export declare const auto: {
     readonly floatingWindow: typeof floatingWindow;
     readonly datastore: typeof datastore;
     readonly zip: typeof zip;
+    readonly settings: typeof settings;
     readonly envelope: typeof BridgeEnvelope;
     /** 安装桥宿主（单例；重复安装抛错）。 */
     install(handler: InvokeHandler): void;

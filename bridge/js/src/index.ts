@@ -20,6 +20,7 @@ import { consoleSink } from './console'
 import { dialogs, shell, device, app, floatingWindow } from './extras'
 import { datastore } from './datastore'
 import { zip } from './zip'
+import { settings } from './settings'
 import { InvokeHandler } from './bridge'
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload }
 export type { ErrPayload, TimedSchedule, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee }
@@ -44,6 +45,7 @@ export const auto = {
   get floatingWindow(): typeof floatingWindow { return floatingWindow },
   get datastore(): typeof datastore { return datastore },
   get zip(): typeof zip { return zip },
+  get settings(): typeof settings { return settings },
   get envelope(): typeof BridgeEnvelope { return BridgeEnvelope },
 
   /** 安装桥宿主（单例；重复安装抛错）。 */

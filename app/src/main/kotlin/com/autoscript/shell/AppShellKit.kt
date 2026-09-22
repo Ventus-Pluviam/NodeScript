@@ -126,6 +126,9 @@ object AppShellKit {
      *   独立缝（不入 [SystemHandlers] 束 —— 存储面无共担门禁）；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param zipHandler `zip` 命名空间实现（§9.6，经 `CapabilityNamespaces.zip` 转接）；
      *   同 datastore 独立缝；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
+     * @param settingsHandler `settings` 命名空间实现（§9.6，经 `CapabilityNamespaces.settings` 转接）；
+     *   同 datastore 独立缝（WRITE_SETTINGS 判据在 SPI，不入 [SystemHandlers]）；
+     *   null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param systemHandlers `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6，经 `:platform:capabilities` 的 `CapabilityNamespaces.{shell,device,app,dialogs,floatingWindow}` 转接）；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。与 [a11yHandler]/[screenHandler] 同一注入缝，合成一个束（见 [SystemHandlers]）——本配方只透传，不 new 实现。
      * @param watchdogScope 看门狗轮转的协程域；null = 本配方自建一个壳自己的域
      *   （[AssembledShell.close] 时取消）。传自己的域 = 你自己负责停（见 [EngineWatchdog.start]）。
@@ -141,6 +144,7 @@ object AppShellKit {
         npmHandler: NamespaceHandler? = null,
         datastoreHandler: NamespaceHandler? = null,
         zipHandler: NamespaceHandler? = null,
+        settingsHandler: NamespaceHandler? = null,
         systemHandlers: SystemHandlers? = null,
         /**
          * 装配期脚本补部署的来源（projectId → 项目内相对路径 → 字节；§9.6）。
@@ -222,6 +226,7 @@ object AppShellKit {
             npmHandler = npm,
             datastoreHandler = datastoreHandler,
             zipHandler = zipHandler,
+            settingsHandler = settingsHandler,
             systemHandlers = systemHandlers,
         )
         // 看门狗开机即转（§8.4）：不转的话三路判据就只是"可以转"——在途 run 的出格行为

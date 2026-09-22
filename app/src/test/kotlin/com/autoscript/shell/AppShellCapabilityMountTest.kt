@@ -56,6 +56,7 @@ class AppShellCapabilityMountTest {
             npmHandler = map["npm"],
             datastoreHandler = map["datastore"],
             zipHandler = map["zip"],
+            settingsHandler = map["settings"],
         )
     }
 
@@ -95,6 +96,16 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 settings：只实现本测试真正派发的两方法，回包形状与真 handler 同构
+     *  （canWrite 裸 boolean、getString 缺键裸 null）。可达性替身；门禁语义归 platform:system 侧测。 */
+    private val fakeSettings = NamespaceHandler { request ->
+        when (request.method) {
+            "canWrite" -> BridgeResponse.Ok(request.id, "true")
+            "getString" -> BridgeResponse.Ok(request.id, "null")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeSettings only implements canWrite/getString")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -107,7 +118,7 @@ class AppShellCapabilityMountTest {
     fun `注入能力缝后 a11y screen 可达`() = runBlocking {
         val s = shell(
             "a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm,
-            "datastore" to fakeDatastore, "zip" to fakeZip,
+            "datastore" to fakeDatastore, "zip" to fakeZip, "settings" to fakeSettings,
         )
         s.use {
             val a11yResp = s.router.dispatch(
@@ -137,6 +148,11 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(7, "zip", "compress", """{"source":"/a","archive":"/b.zip"}""", 5_000),
             )
             assertEquals("true", (zipResp as BridgeResponse.Ok).payload)
+
+            val settingsResp = s.router.dispatch(
+                BridgeRequest(8, "settings", "canWrite", null, 5_000),
+            )
+            assertEquals("true", (settingsResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -173,6 +189,9 @@ class AppShellCapabilityMountTest {
 
             val zipResp = s.router.dispatch(BridgeRequest(5, "zip", "compress", """{"source":"/a","archive":"/b.zip"}""", 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (zipResp as BridgeResponse.Err).errorCode, "zip 独立缝缺省同样不伪造")
+
+            val settingsResp = s.router.dispatch(BridgeRequest(6, "settings", "canWrite", null, 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (settingsResp as BridgeResponse.Err).errorCode, "settings 独立缝缺省同样不伪造")
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
