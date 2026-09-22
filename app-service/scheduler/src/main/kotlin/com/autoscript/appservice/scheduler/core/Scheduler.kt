@@ -164,13 +164,24 @@ class Scheduler(
             }
         } finally {
             when {
-                // Once：一次性任务，触发完成即终态化（取消已注册句柄并移出注册表），不接受重复触发
+                // Once：一次性任务，触发完成即终态化（取消已注册句柄并移出内存注册表 +
+                // 落 tombstone：重启后 `restoreTasks` 不再把它续回来 —— 否则已执行过的
+                // Once 每次重启复活一次，同一任务被重复执行（幂等 nonce 只挡"同一次投递"
+                // 的重复，不挡"新 runNonce 的第二次执行"）。
+                // 写盘失败（IO 抛错）只记内存终态：下次重启多续排一次是安全的失败方向
+                // （onTrigger 查无任务直接 return / nonce 幂等兜底），反过来"盘上已删、
+                // 内存还在"会让本次进程继续投递已终态任务，更糟。
                 task.schedule is TimedSchedule.Once -> {
                     val stale = synchronized(stateLock) {
                         running.remove(task.id)
                         handles.remove(task.id)
                     }
                     stale?.cancel()
+                    try {
+                        taskStore?.remove(task.id)
+                    } catch (_: Exception) {
+                        Unit    // 终态化本身已完成；tombstone 下次 restore 重建时由触发幂等兜住
+                    }
                 }
                 // 周期定时任务：仅 TIMED 闹钟触发后推进到下一轮；非 TIMED 来源是一次独立投递，
                 // 不触碰已有排期（否则事件触发 → 下一闹钟点再投 = 双路径重复执行）。

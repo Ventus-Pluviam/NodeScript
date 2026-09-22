@@ -93,6 +93,30 @@ class SchedulerRestoreTest {
     }
 
     @Test
+    fun `Once 触发后落 tombstone：重启不再复活`() = runBlocking {
+        val store = InMemoryTaskStore()
+        val log = InMemoryIntentLog(InMemoryIntentLog.RuntimeClock { now })
+        val mk: (IntentLog) -> Scheduler = { l ->
+            Scheduler(
+                provider = RecordingProvider(), log = l,
+                dispatcher = RunDispatcher { RunOutcome.Succeeded },
+                nonceFactory = { "nonce-${++nonceSeq}" }, clock = { now }, taskStore = store,
+            )
+        }
+        val s1 = mk(log)
+        s1.schedule(ScheduledTask("t1", "一", "p", "a.js", TimedSchedule.Once(60)))
+        s1.onTrigger("t1", scheduledAtMillis = now)   // 触发 → 终态化 + tombstone
+        assertTrue(store.loadAll().isEmpty(), "Once 终态即删注册表（落 tombstone）")
+
+        // 新进程：同 store —— restore 不得把它续回来
+        val s2 = mk(log)
+        assertTrue(s2.restoreTasks().isEmpty())
+        assertTrue(s2.tasks().isEmpty(), "已执行的 Once 重启不复活")
+        s2.onTrigger("t1", scheduledAtMillis = now)
+        assertEquals(1, log.all().size, "复活触发无任务可投（不双跑）")
+    }
+
+    @Test
     fun `恢复后闹钟仍响：onTrigger 可投递`() = runBlocking {
         var dispatched = 0
         val store = InMemoryTaskStore()
