@@ -1,6 +1,11 @@
 /**
  * 命名空间根（docs/framework-design.md §12.1 唯一入口）：脚本 `require('auto')` 返回
  * 结构化命名空间对象；模块层各自走 runtimeBridge 到 :main Router。
+ *
+ * 导入形态（实测契约，勿"顺手统一"）：
+ * - CJS（:nodeN 内脚本/E2E/全部测试）：`const { auto } = require('auto')` —— 具名解构；
+ * - ESM `import auto from` 拿的是 CJS 整包（Node16 互操作不认 `export default`），
+ *   `default.a11y` 为 undefined —— ESM 脚本请用 `import { auto } from` 具名导入。
  */
 import { ErrCode, ErrPayload, AutojsError, NotFoundError, ERROR_CODES, errFromPayload } from './errors';
 import { runtimeBridge } from './runtime';
