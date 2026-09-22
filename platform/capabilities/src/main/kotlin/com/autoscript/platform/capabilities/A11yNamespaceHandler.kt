@@ -32,9 +32,11 @@ import com.autoscript.domain.core.ErrorCode
  *   无匹配 → Err ERR_NOT_FOUND（JS findOne 抛 NotFoundError，findOneOrNull 收 null——
  *   JS 侧按"Err NOT_FOUND → null"折叠，见 facade 注释）；
  * - `findAll`：payload `{conditions,max?}` → Ok `[{ref,...},...]`（max 截断，缺省全量）；
- * - `waitFor`：payload `{selector:{...条件},timeout?,interval?}` → 同 findOne 语义
- *   （轮询是宿主责任：Android 侧监听事件流；内存树是单次快照——timeout/interval
- *   透传回显，不伪造等待）；
+ * - `waitFor`：payload `{conditions:{...条件},timeout?,interval?}` → Ok `"true"`/`"false"`
+ *   （命中/无匹配；**不回 `{ref}`** —— JS facade 的 `waitFor` 是 `Promise<boolean>`，
+ *   见 §12.3 `const ok = await auto.a11y.waitFor(...)`。轮询是宿主责任：Android 侧
+ *   监听事件流；这里是单次快照判定，timeout/interval 透传不生效，不伪造等待。
+ *   参数错误仍是 Err ERR_INVALID_PARAM，不折成 false）；
  * - `click/longClick/scroll/copy/paste/setText/bounds/text/desc/children/parent/dispose`：
  *   payload `{ref:{refId,generation},...}` → 句柄动作；跨代/已释放 →
  *   Err ERR_STALE_HANDLE；非法载荷 → Err ERR_INVALID_PARAM；未知方法 →
@@ -67,7 +69,7 @@ class A11yNamespaceHandler(
         "findOne" -> findOne(request, single = true)
         "findOneOrNull" -> findOne(request, single = true)
         "findAll" -> findAll(request)
-        "waitFor" -> findOne(request, single = true)
+        "waitFor" -> waitFor(request)
         "click" -> boolAction(request) { ref -> actions.click(ref) }
         "longClick" -> boolAction(request) { ref -> actions.longClick(ref) }
         "scroll" -> scroll(request)
@@ -112,6 +114,36 @@ class A11yNamespaceHandler(
         }
         val first = matched.first()
         return ok(request.id, A11yBridgeJson.encode(nodePayload(first.handle, null)))
+    }
+
+    /**
+     * 等待条件出现（§9.1「轮询是宿主责任」）：与 [findOne] 共用选择器解析与树读路径，
+     * 但**返回形状不同** —— JS facade `a11y.ts` 的 `waitFor` 是 `Promise<boolean>`
+     * （§12.3 `const ok = await auto.a11y.waitFor(...)`），所以命中回 `Ok "true"`、
+     * 无匹配回 `Ok "false"`（与 click/gesture 的 boolean 口径一致），**不回** `{ref}`。
+     *
+     * 仍不伪造等待：本方法是单次快照判定，`timeout`/`interval` 只透传不生效 ——
+     * 真正的轮询在宿主（Android 侧监听事件流后重发）。把「没等到」折成 `false`
+     * 而不是 `Err NOT_FOUND`，是因为调用方拿它做分支判断（`if (await waitFor(...))`），
+     * 不是当异常处理；**参数错误仍是 Err**（ERR_INVALID_PARAM），不一并折成 false。
+     */
+    private suspend fun waitFor(request: Request): Response {
+        val o = try {
+            decodePayload(request.payload)
+        } catch (e: IllegalArgumentException) {
+            return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
+        val selector = try {
+            selectorOf(o["conditions"])
+        } catch (e: IllegalArgumentException) {
+            return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
+        val matched = try {
+            tree.findBySelector(selector)
+        } catch (e: AutojsException) {
+            return err(request.id, e.error, e.message)
+        }
+        return ok(request.id, if (matched.isEmpty()) "false" else "true")
     }
 
     private suspend fun findAll(request: Request): Response {

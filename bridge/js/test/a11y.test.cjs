@@ -22,6 +22,10 @@ function installMockA11y() {
     [1, { text: '启动', desc: '启动按钮', className: 'Button', clickable: true }],
     [2, { text: '取消', className: 'Button', clickable: true }],
   ])
+  // 选择器白名单：Kotlin A11yNamespaceHandler.SELECTOR_KEYS。未知键 = ERR_INVALID_PARAM
+  // （防拼写错误静默变全量匹配）。findOne/findAll/waitFor 共用 —— mock 之间别走偏。
+  const SELECTOR_KEYS = ['text', 'desc', 'id', 'className', 'packageName', 'clickable']
+  const badKeys = (cond) => Object.keys(cond ?? {}).filter((k) => !SELECTOR_KEYS.includes(k))
   const matches = (cond) => {
     const out = []
     for (const [refId, a] of nodes) {
@@ -41,14 +45,19 @@ function installMockA11y() {
     const err = (code, detail) => auto.handleResponse({ t: 'err', id: reqId, code, detail })
     switch (method) {
       case 'findOne': {
-        const m = matches(p.conditions)
-        if (m.length === 0) err('ERR_NOT_FOUND', '选择器无匹配')
-        else ok(JSON.stringify(m[0]))
+        const bad = badKeys(p.conditions)
+        if (bad.length > 0) err('ERR_INVALID_PARAM', `未知选择器条件 ${bad[0]}`)
+        else {
+          const m = matches(p.conditions)
+          if (m.length === 0) err('ERR_NOT_FOUND', '选择器无匹配')
+          else ok(JSON.stringify(m[0]))
+        }
         return undefined
       }
       case 'findAll': {
-        const m = matches(p.conditions)
-        ok(JSON.stringify(p.max != null ? m.slice(0, p.max) : m))
+        const bad = badKeys(p.conditions)
+        if (bad.length > 0) err('ERR_INVALID_PARAM', `未知选择器条件 ${bad[0]}`)
+        else ok(JSON.stringify((p.max != null ? matches(p.conditions).slice(0, p.max) : matches(p.conditions))))
         return undefined
       }
       case 'click': {
@@ -64,13 +73,16 @@ function installMockA11y() {
         return undefined
       }
       case 'waitFor': {
-        // Kotlin 侧 waitFor 复用 findOne 的选择器解析路径：载荷键是 conditions，
-        // 与 findOne 同构（JS facade 曾发 selector，会因白名单外字段被拒）。
-        const m = matches(p.conditions)
+        // Kotlin A11yNamespaceHandler.waitFor：载荷键是 conditions（与 findOne 同构，
+        // JS facade 曾发 selector，会因白名单外字段被拒）；**返回 boolean**（命中 'true' /
+        // 无匹配 'false'），不回 {ref} —— 否则 JS 的 `result === true` 恒 false。
+        // 参数错误（未知条件键）仍是 ERR_INVALID_PARAM，不折成 false。
+        const bad = badKeys(p.conditions)
         if (Object.prototype.hasOwnProperty.call(p, 'selector')) {
           err('ERR_INVALID_PARAM', '未知选择器条件 selector')
-        } else if (m.length === 0) err('ERR_NOT_FOUND', '选择器无匹配')
-        else ok('true')
+        } else if (bad.length > 0) {
+          err('ERR_INVALID_PARAM', `未知选择器条件 ${bad[0]}`)
+        } else ok(matches(p.conditions).length === 0 ? 'false' : 'true')
         return undefined
       }
       case 'copy': {
@@ -176,6 +188,22 @@ test('a11y.waitFor 发 conditions 键（对偶 Kotlin waitFor 解析路径）', 
   // 发错键（selector）被如实拒绝，不静默变全量匹配
   await assert.rejects(
     () => auto.bridge.invoke('a11y', 'waitFor', { selector: { text: '启动' } }),
+    (e) => e.code === 'ERR_INVALID_PARAM',
+  )
+})
+
+test('a11y.waitFor 返回 boolean：命中 true / 无匹配 false（不是 NotFoundError）', async () => {
+  installMockA11y()
+  // 命中 → true
+  assert.strictEqual(await auto.a11y.waitFor(auto.a11y.selector().text('启动')), true)
+  // 无匹配 → false（Kotlin 回 Ok "false"）：调用方拿它做分支判断，不是当异常处理。
+  // 这里钉的是**返回形状**：Kotlin 若退回复用 findOne 的回包路径（回 {ref} 或无匹配回
+  // Err NOT_FOUND），本断言立刻红 —— 那正是历史上真实存在过的两侧漂移。
+  assert.strictEqual(await auto.a11y.waitFor(auto.a11y.selector().text('不存在')), false)
+  // 参数错误仍是异常，不折成 false（与「没等到」区分）：未知条件键被 Kotlin 白名单拒绝。
+  // 走底层 invoke 是因为 facade 的 selector 只暴露合法键，拼写错误只能从载荷层构造。
+  await assert.rejects(
+    () => auto.bridge.invoke('a11y', 'waitFor', { conditions: { txt: '启动' } }),
     (e) => e.code === 'ERR_INVALID_PARAM',
   )
 })
