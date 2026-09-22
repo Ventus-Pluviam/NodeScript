@@ -15,11 +15,16 @@ const auto = autoModule.default
 /** mock engines 宿主：按 Kotlin EnginesNamespaceHandler 的响应形状回包。 */
 let sharedRuns = null
 let sharedSeq = null
+/** mock 通道缓冲：emit 写入、drain 按 sinceSeq 游标拉取（复刻 Kotlin ChannelState 语义）。 */
+let emitted = null
+let closedChannels = null
 function installMockEngines() {
   if (sharedRuns) return sharedRuns
   const runs = new Map()
   sharedRuns = runs
   sharedSeq = new Map()
+  emitted = []
+  closedChannels = new Set()
   let nextRun = 100
   auto.install((ns, method, payloadJson, reqId) => {
     if (ns !== 'engines') return undefined
@@ -59,6 +64,50 @@ function installMockEngines() {
           auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '缺 name' })
         } else {
           auto.handleResponse({ t: 'ok', id: reqId, payload: JSON.stringify({ name: p.name, channelId: 7 }) })
+        }
+        return undefined
+      }
+      case 'channelEmit': {
+        // Kotlin channelEmit 语义：未知 channelId → ERR_NOT_FOUND；空事件名 → ERR_INVALID_PARAM
+        if (!p || typeof p.channelId !== 'number' || typeof p.event !== 'string') {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '缺 channelId/event' })
+        } else if (p.channelId !== 7) {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_NOT_FOUND', detail: `未知 channelId: ${p.channelId}` })
+        } else if (p.event.length === 0) {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '事件名不得为空' })
+        } else {
+          emitted.push({ event: p.event, payload: p.payload ?? null })
+          auto.handleResponse({ t: 'ok', id: reqId, payload: null })
+        }
+        return undefined
+      }
+      case 'channelDrain': {
+        if (!p || typeof p.channelId !== 'number') {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '缺 channelId' })
+        } else if (p.channelId !== 7) {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_NOT_FOUND', detail: `未知 channelId: ${p.channelId}` })
+        } else {
+          const since = typeof p.sinceSeq === 'number' ? p.sinceSeq : 0
+          const max = typeof p.max === 'number' ? p.max : 128
+          const events = emitted
+            .map((e, i) => ({ seq: i + 1, event: e.event, payload: e.payload }))
+            .filter((e) => e.seq > since)
+            .slice(0, max)
+          auto.handleResponse({
+            t: 'ok', id: reqId,
+            payload: JSON.stringify({ last: events.length > 0 ? events[events.length - 1].seq : since, events }),
+          })
+        }
+        return undefined
+      }
+      case 'channelClose': {
+        if (!p || typeof p.channelId !== 'number') {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_INVALID_PARAM', detail: '缺 channelId' })
+        } else if (p.channelId !== 7) {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_NOT_FOUND', detail: `未知 channelId: ${p.channelId}` })
+        } else {
+          closedChannels.add(p.channelId)
+          auto.handleResponse({ t: 'ok', id: reqId, payload: 'true' })
         }
         return undefined
       }
@@ -117,10 +166,55 @@ test('engines.poolStats：capacity/free/busy 快照', async () => {
   await auto.engines.stop(s.runId)
 })
 
-test('engines.channel：命名通道回 {name,channelId}', async () => {
+test('engines.channel：命名通道回 {name,channelId} 且包成可用通道', async () => {
   const ch = await auto.engines.channel('progress')
   assert.strictEqual(ch.name, 'progress')
   assert.strictEqual(ch.channelId, 7)
+  assert.strictEqual(typeof ch.emit, 'function', 'channel() 不再是 wire 原样：.emit 可用')
+  assert.strictEqual(typeof ch.on, 'function')
+  assert.strictEqual(typeof ch.close, 'function')
+})
+
+test('通道 emit→on：发出去的事件经 drain 游标送到订阅者', async () => {
+  installMockEngines()
+  emitted.length = 0
+  const ch = await auto.engines.channel('progress')
+  await ch.emit('done', '3')
+  await ch.emit('other', null)
+  const got = []
+  const sub = ch.on('done', (payload) => got.push(payload), { pollMillis: 20 })
+  await new Promise((r) => setTimeout(r, 150))
+  sub.cancel()
+  assert.deepEqual(got, ['3'], '只收到订阅的事件名，游标只进不退不重放')
+})
+
+test('通道 on 取消后不再回调', async () => {
+  installMockEngines()
+  emitted.length = 0
+  const ch = await auto.engines.channel('progress')
+  const got = []
+  const sub = ch.on('done', (payload) => got.push(payload), { pollMillis: 20 })
+  sub.cancel()
+  await ch.emit('done', 'late')
+  await new Promise((r) => setTimeout(r, 100))
+  assert.deepEqual(got, [], 'cancel 后轮询即停')
+})
+
+test('通道 emit 空事件名回 ERR_INVALID_PARAM（宿主判，不预检）', async () => {
+  installMockEngines()
+  const ch = await auto.engines.channel('progress')
+  await assert.rejects(() => ch.emit(''), (e) => e.code === 'ERR_INVALID_PARAM')
+})
+
+test('通道 close 幂等：重复 close 不再发桥调用', async () => {
+  installMockEngines()
+  emitted.length = 0
+  const ch = await auto.engines.channel('progress')
+  await ch.close()
+  assert.ok(closedChannels.has(7), '第一次 close 发 channelClose')
+  closedChannels.delete(7)
+  await ch.close()
+  assert.ok(!closedChannels.has(7), '第二次 close 本地 no-op，不再发桥调用')
 })
 
 /**

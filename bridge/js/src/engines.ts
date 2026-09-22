@@ -50,10 +50,144 @@ export interface ChannelSubscription {
 export interface RuntimeChannel {
   readonly name: string
   /** 脚本 → 宿主：发事件（JSON 字符串载荷）。 */
-  emit(event: string, payload?: string | null): Promise<void>
-  /** 宿主 → 脚本：订阅事件；返回取消句柄。 */
-  on(event: string, listener: (payload: string | null) => void): ChannelSubscription
-  close(): Promise<void>
+  emit(event: string, payload?: string | null, opts?: { timeout?: number }): Promise<void>
+  /**
+   * 宿主 → 脚本：订阅事件；返回取消句柄。
+   *
+   * 拉取实现（节流轮询 `channelDrain`，游标 `sinceSeq`）：与 Kotlin 侧"缓冲 + 游标，
+   * 不做回调推送"语义一致（见 EnginesNamespaceHandler 注释）。轮询失败吞掉等下一轮
+   * （宿主消失/通道关闭由 close/stop 路径表达，不在这里炸订阅）；定时器 unref，
+   * 不保活脚本事件循环（与 startHeartbeat 同一条纪律）。
+   */
+  on(
+    event: string,
+    listener: (payload: string | null) => void,
+    opts?: { pollMillis?: number },
+  ): ChannelSubscription
+  /** 关闭并丢弃缓冲（幂等：重复 close 不再发桥调用）。 */
+  close(opts?: { timeout?: number }): Promise<void>
+}
+
+/** 通道事件帧（与 Kotlin ChannelEvent 对齐：seq/event/payload）。 */
+export interface ChannelEvent {
+  readonly seq: number
+  readonly event: string
+  readonly payload: string | null
+}
+
+/** `channel` wire 回包（Kotlin `{name,channelId}`），`channel()` 包成 [EngineChannel]。 */
+export interface ChannelWire {
+  readonly name: string
+  readonly channelId: number
+}
+
+/** drain 回包（Kotlin `{last,events}`）。 */
+export interface ChannelDrain {
+  readonly last: number
+  readonly events: readonly ChannelEvent[]
+}
+
+/**
+ * 命名通道的 JS 实现（`engines.channel()` 的返回值）。
+ *
+ * - `emit` → `channelEmit {channelId,event,payload}`（空事件名由宿主判
+ *   ERR_INVALID_PARAM，本层不预检 —— 预检会制造"两处校验口径"漂移）；
+ * - `on` → 节流轮询 `channelDrain {channelId,sinceSeq,max}`，本地游标只进不退，
+ *   按事件名过滤后回调；
+ * - `close` → `channelClose {channelId}`，本地先置位（轮询即停），重复调用 no-op。
+ */
+export class EngineChannel implements RuntimeChannel {
+  readonly name: string
+  readonly channelId: number
+  private closed = false
+
+  constructor(name: string, channelId: number) {
+    this.name = name
+    this.channelId = channelId
+  }
+
+  get isClosed(): boolean {
+    return this.closed
+  }
+
+  async emit(event: string, payload: string | null = null, opts: { timeout?: number } = {}): Promise<void> {
+    await runtimeBridge.invoke(
+      'engines',
+      'channelEmit',
+      { channelId: this.channelId, event, payload },
+      { ttl: opts.timeout ?? 10_000 },
+    )
+  }
+
+  on(
+    event: string,
+    listener: (payload: string | null) => void,
+    opts: { pollMillis?: number } = {},
+  ): ChannelSubscription {
+    const period = opts.pollMillis ?? 500
+    if (!Number.isFinite(period) || period <= 0) {
+      throw new Error(`pollMillis 必须 > 0: ${period}`)
+    }
+    let cursor = 0
+    let cancelled = false
+    let timer: NodeJS.Timeout | null = null
+    const tick = async (): Promise<void> => {
+      timer = null
+      if (cancelled || this.closed) return
+      try {
+        const out = (await runtimeBridge.invoke(
+          'engines',
+          'channelDrain',
+          { channelId: this.channelId, sinceSeq: cursor, max: DEFAULT_DRAIN_MAX },
+          { ttl: Math.max(period * 2, 2_000) },
+        )) as ChannelDrain
+        cursor = out.last ?? cursor
+        for (const e of out.events ?? []) {
+          if (e.event === event) listener(e.payload ?? null)
+        }
+      } catch {
+        /* 轮询失败吞掉等下一轮：宿主抖动不该炸掉订阅；真死了 close/stop 会表达 */
+      }
+      if (!cancelled && !this.closed) {
+        timer = setTimeout(() => {
+          void tick()
+        }, period)
+        unrefTimer(timer)
+      }
+    }
+    timer = setTimeout(() => {
+      void tick()
+    }, period)
+    unrefTimer(timer)
+    return {
+      cancel: () => {
+        cancelled = true
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+      },
+    }
+  }
+
+  async close(opts: { timeout?: number } = {}): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    await runtimeBridge.invoke(
+      'engines',
+      'channelClose',
+      { channelId: this.channelId },
+      { ttl: opts.timeout ?? 10_000 },
+    )
+  }
+}
+
+/** drain 单批上限（与 Kotlin 缺省 max=128 同口径）。 */
+export const DEFAULT_DRAIN_MAX = 128
+
+function unrefTimer(t: NodeJS.Timeout): void {
+  const u = (t as unknown as { unref?: () => void }).unref
+  if (typeof u === 'function') u.call(t)
 }
 
 /** 退出信息（与 :domain CrashInfo 对齐）。 */
@@ -96,9 +230,16 @@ export const engines = {
     return (await runtimeBridge.invoke('engines', 'stop', { runId }, { ttl: opts.timeout ?? 10_000 })) === true
   },
 
-  /** 打开（或复用）命名通道（§8：同 host 的通道生命周期由 :app-service:runtime 管理）。 */
+  /**
+   * 打开（或复用）命名通道（§8：同 host 的通道生命周期由 :app-service:runtime 管理）。
+   * 回包包成 [EngineChannel]（此前是 wire 原样 `as RuntimeChannel` —— `.emit()` 当场
+   * TypeError 的空壳，已补实）。
+   */
   async channel(name: string, opts: { timeout?: number } = {}): Promise<RuntimeChannel> {
-    return (await runtimeBridge.invoke('engines', 'channel', { name }, { ttl: opts.timeout ?? 10_000 })) as RuntimeChannel
+    const wire = (await runtimeBridge.invoke('engines', 'channel', { name }, {
+      ttl: opts.timeout ?? 10_000,
+    })) as ChannelWire
+    return new EngineChannel(wire.name, wire.channelId)
   },
 
   /**
