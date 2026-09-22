@@ -50,6 +50,13 @@ class AppShell(
     val enginesHandler: EnginesNamespaceHandler,
     val dispatcher: ControllerRunDispatcher,
     val scheduler: Scheduler,
+    /**
+     * 闹钟触发源（与 [scheduler] 是同一份引用）。
+     * 留住它是因为能力中心要读生产 provider 的账本（如 `AlarmSchedulerProvider.degradedTasks`
+     * 的「可能偏差」标注）—— [Scheduler.provider][com.autoscript.appservice.scheduler.core.Scheduler]
+     * 是 private，跨模块加访问器不如在装配层（本类就是装配根）保留同一份。
+     */
+    val schedulerProvider: SchedulerProvider,
     val intentLog: IntentLog,
     val runArchive: RunArchive,
     /**
@@ -182,6 +189,7 @@ class AppShell(
             dog.withMonitor(monitor).withHeartbeat(heartbeatMillis ?: { runId -> controller.heartbeatMillis(runId) })
 
             return AppShell(
+                schedulerProvider = schedulerProvider,
                 router = router,
                 console = console,
                 events = events,

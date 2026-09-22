@@ -8,6 +8,7 @@ import com.autoscript.shell.AlarmPort
 import com.autoscript.shell.AlarmReceiver
 import com.autoscript.shell.AlarmSchedulerProvider
 import com.autoscript.shell.AndroidAlarmPort
+import com.autoscript.shell.AndroidPermissionGates
 import com.autoscript.shell.AndroidScreenGate
 import com.autoscript.shell.AppShell
 import com.autoscript.shell.AppShellKit
@@ -61,6 +62,10 @@ class AppShellApplication : Application() {
 
     /** 闹钟出口（真 AlarmManager）：本类持有引用，供取消/续排路径按 taskId 撤销。 */
     private var alarmPort: AlarmPort? = null
+
+    /** 门禁生产实例缓存（见 [permissionCenter]；查询本身不缓存）。 */
+    @Volatile
+    private var gates: com.autoscript.appservice.permissioncenter.PermissionCenter? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -153,6 +158,19 @@ class AppShellApplication : Application() {
             }
         }
     }
+
+    /**
+     * 权限门禁（§9.5 唯一权限入口的生产实例）。
+     *
+     * 懒建 + 缓存：查询表是 lambda 直读（结论不缓存，每次 `state()` 重新问系统），
+     * 建一次复用即可。能力中心 UI / 脚本桥的门禁查询都走这里 —— 不再各自拼查询。
+     */
+    fun permissionCenter(): com.autoscript.appservice.permissioncenter.PermissionCenter =
+        gates ?: AndroidPermissionGates.permissionCenterOf(applicationContext).also { gates = it }
+
+    /** 降级中的定时任务（`AlarmSchedulerProvider.degradedTasks` 的只读视图；能力中心标「可能偏差」用）。 */
+    fun degradedAlarmTasks(): Map<String, Long> =
+        (shell?.schedulerProvider as? AlarmSchedulerProvider)?.degradedTasks() ?: emptyMap()
 
     /** 壳（null = 未就绪）。UI/能力中心据此如实显示"调度未就绪"，不假装可用。 */
     fun shell(): AppShell? = shell
