@@ -33,6 +33,7 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 | `AndroidAppLauncher` | `AppOps` + `ForegroundEvents` | false/null 语义、前台事件选择 |
 | `AndroidFloatingWindowHost` | `FloatingWindowOps` | 发号、close 幂等、未知/跨代句柄分辨 |
 | `AndroidDataStore` | `KvOps`（真机 `SqliteKvOps`） | 空白键拒写不碰 ops、事务暂存→**恰好一次** `applyAll`、block 抛错 → ops **零调用**（零调用即回滚）、行编解码 `KvRowCodec`（kind 显式裁定 + 访问器按 kind 惰性） |
+| `JdkZipArchiver` | **无**（`java.util.zip` 纯 JVM，整类真 IO 进单测） | zip-slip 先验后写（全包校验完才落字节）、目录/空目录往返、压缩 tmp+rename 原子落位、垃圾包如实 ERR_IO |
 
 真机 ops 实现分别住 `WindowManagerOps.kt` / `PackageManagerOps.kt`（这两个文件里有真
 `WindowManager`/`PackageManager` 调用，本机 JVM 只编译、不执行）。
@@ -49,6 +50,7 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 
 ## 尚未实现（别在文档里写成"差不多能用"）
 
-`dialogs`（`DialogHost`，overlay 真弹窗 + 通知回调，§14 P2）、settings/zip/通知。
-（datastore 已落地：`AndroidDataStore` + `SqliteKvOps`，入口 `SystemSpis.Bundle.datastore`；
-生产拼装仍待装配层拓扑决策 —— 实现备好 ≠ 已接线，别在文档里写成"能用了"。）
+`dialogs`（`DialogHost`，overlay 真弹窗 + 通知回调，§14 P2）、settings/通知。
+（datastore 已落地：`AndroidDataStore` + `SqliteKvOps`；zip 已落地：`JdkZipArchiver`，
+入口 `SystemSpis.Bundle.{datastore,zip}`；生产拼装仍待装配层拓扑决策 ——
+实现备好 ≠ 已接线，别在文档里写成"能用了"。）
