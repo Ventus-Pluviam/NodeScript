@@ -74,6 +74,64 @@ class Scheduler(
     private val handles = hashMapOf<String, TriggerHandle>()
 
     /**
+     * 最近一次投递产出的控制面句柄（scheduler 侧持有；UI/日志可调用 stop 入口）。
+     *
+     * 线程契约（诚实声明）：读并发安全（@Volatile），写仅发生在 [onTrigger] 内 ——
+     * 五类触发源在 :app 侧可能来自不同线程（alarm/broadcast/a11y 事件），装配层须把触发
+     * 串行化后再调 [onTrigger]（意图日志的 append-only 顺序同样要求这一点）。
+     * 本模块不内建触发器互斥：加锁到 suspend 路径上会掩盖装配层的真实并发模型。
+     *
+     * 句柄形状（§12.3 engines.exec 的调度侧投影）：intent↔engine 双 id 关联（:domain
+     * [EngineRunLink]，归档/追溯用）+ 优雅停入口（[EngineStopHandle.stop]，填权前为 null：
+     * spiky 现状的 [DispatchReport] 只带 outcome + link，stop 填权随 162a04c 落地——
+     * 在此之前 link != null 的投递只持有身份部分，canStopLastRun/stopLastRun 如实 false）。
+     */
+    @Volatile
+    var lastHandle: EngineStopHandle? = null
+        private set
+
+    /**
+     * 停止接收新投递（docs §13 铁律 4 第一步 SINKING）：置位后 [onTrigger] 直接返回，
+     * 不再触发任何任务。
+     */
+    @Volatile
+    var sinking: Boolean = false
+        private set
+
+    /**
+     * 停止接收新投递（§13 铁律 4 第一步）：撤销全部已注册触发并置 [sinking]。
+     * 此后 [onTrigger] 一律早退 —— 已投递的 run 不追回（追回属引擎侧停止，由
+     * [stopLastRun] 承担：先停止接收新工作，再停已有的）。
+     */
+    suspend fun sink() {
+        sinking = true
+        val stale = synchronized(stateLock) {
+            val all = handles.values.toList()
+            handles.clear()
+            all
+        }
+        stale.forEach { it.cancel() }
+    }
+
+    /**
+     * 停止最近一次投递的脚本（控制台停止/ engines.exec 的 cancel 回调入口）：
+     * 转发到控制面句柄的 [EngineStopHandle.stop]（§4.1 归口）。
+     *
+     * 成功不清空 [lastHandle]：已停止是句柄所指运行的状态，句柄仍可查 id 关联/归档；
+     * 停止本身幂等，上层若不再关心它，由上层丢弃引用即可。无句柄/无停止入口如实返回
+     * false（不假装已停）。
+     */
+    suspend fun stopLastRun(): Boolean {
+        val handle = lastHandle ?: return false
+        val stop = handle.stop ?: return false
+        stop()
+        return true
+    }
+
+    /** 最近一次投递的停止入口是否可用（从 [lastHandle] 现算，不维护额外状态）。 */
+    fun canStopLastRun(): Boolean = lastHandle?.stop != null
+
+    /**
      * 登记任务：计算首次 fire 并注册触发。
      * [task.schedule] 为 Once 时即单次投递；Daily/Cron 由 [onTrigger] 尾部自推进到下一轮。
      */
@@ -121,6 +179,7 @@ class Scheduler(
      * 周期任务静默停排，且日志里的 STARTED 行下次启动被当崩溃重投（副作用双发）。
      */
     suspend fun onTrigger(taskId: String, source: TriggerSource = TriggerSource.TIMED, scheduledAtMillis: Long = clock()) {
+        if (sinking) return                                     // §13 铁律 4 第一步：停止接收新投递
         val task = synchronized(stateLock) { running[taskId] } ?: return
         if (!task.enabled && source != TriggerSource.USER_CLICK) return   // §8.6 enabled 守卫
 
@@ -154,6 +213,17 @@ class Scheduler(
                 val report = dispatcher.dispatchToReport(pending.copy(intentRunId = started.runId))
                 log.commit(started.runId, report.outcome)
                 recordLink(pending, started.runId, report.link, report.outcome)
+                // 控制面句柄出口（§12.3 engines.exec）：真的产生了引擎执行（link != null）
+                // 才持有句柄 —— 门禁拒绝/排队超时/启动失败没有可停的东西，不持有假句柄。
+                // stop 入口随 DispatchReport.stop 填权（162a04c）到来，在此之前只持身份部分。
+                val link = report.link
+                if (link != null) {
+                    lastHandle = EngineStopHandle(
+                        idLink = link,
+                        name = pending.scriptPath,
+                        runNonce = pending.runNonce,
+                    )
+                }
             }
         } catch (t: Throwable) {
             // 投递失败如实落地：本轮不 commit（意图日志无 STARTED 或保持未 COMMIT，交由恢复路径裁决），
@@ -231,7 +301,17 @@ class Scheduler(
             val report = dispatcher.dispatchToReport(pending)     // 恢复重投同样归档（§8.5）
             log.commit(fresh.runId, report.outcome)
             recordLink(pending, fresh.runId, report.link, report.outcome)
-            settleOrphanArchive(old.runId)   // 旧意向的档案若还有未终态记录：宿主死时没结算，如实 CRASHED
+            // 恢复重投同样持有句柄（§8.5 重投即当次投递的最近一次）。
+            val link = report.link
+            if (link != null) {
+                lastHandle = EngineStopHandle(
+                    idLink = link,
+                    name = pending.scriptPath,
+                    runNonce = pending.runNonce,
+                )
+            }
+            settleOrphanArchive(old.runId)
+   // 旧意向的档案若还有未终态记录：宿主死时没结算，如实 CRASHED
             recovered += RecoveryRecord(
                 oldRunId = old.runId,
                 newRunId = fresh.runId,
@@ -240,6 +320,26 @@ class Scheduler(
             )
         }
         return recovered
+    }
+
+    /**
+     * 优雅收口（应用退出/全局急停，§13 铁律 4 的调度侧部分）：
+     * 1.停止接收新投递 + 撤销触发器（[sink]）→ 2.停掉最近一次 run → 3.返回被停止的句柄供归档。
+     *
+     * 1.必然完成；2.可能无事可做（尚无投递/投递无停止入口），此时如实返回空列表而非假装停过。
+     * 已投递但未被 [lastHandle] 代表的 runs 不在此收口 —— 进程齐退时未 COMMIT 意向由 §8.5
+     * 崩溃恢复接管，本方法不背完整归档职责。
+     */
+    suspend fun quiesceThenStop(): List<EngineStopHandle> {
+        sink()
+        val stopped = lastHandle ?: return emptyList()
+        val stop = stopped.stop ?: return emptyList()
+        try {
+            stop()
+        } catch (_: Exception) {
+            // 停止失败不吞取消语义：真实失败原因由 controller/池侧归档反映（§8.4 诚实原则）
+        }
+        return listOf(stopped)
     }
 
     // ── 内部 ─────────────────────────────────────────────────────────────

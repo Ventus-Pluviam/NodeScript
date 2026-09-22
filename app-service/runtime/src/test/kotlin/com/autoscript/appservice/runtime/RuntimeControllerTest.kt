@@ -150,6 +150,33 @@ class RuntimeControllerTest {
         assertEquals(2, engines[0].killCalls + engines[1].killCalls, "两个忙槽各杀一次")
     }
 
+
+    @Test
+    fun `forceStopAll 急停清空在途并释放槽位`() = runBlocking {
+        val (c, engines) = controller(capacity = 2)
+        val a = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        val b = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p2", "b.js")),
+        )
+        c.forceStopAll(KillCause.REQUESTED)
+        assertTrue(c.activeRunIds().isEmpty())
+        assertEquals(PoolStats(2, free = 2, busy = 0), c.stats())
+        assertEquals(RuntimeController.StopOutcome.AlreadyGone, c.stop(a.runId))
+        assertEquals(RuntimeController.StopOutcome.AlreadyGone, c.stop(b.runId))
+        assertEquals(2, engines[0].killCalls + engines[1].killCalls, "两个忙槽各杀一次")
+    }
+
+    @Test
+    fun `forceStopAll 空池幂等`() = runBlocking {
+        val (c, _) = controller(capacity = 1)
+        c.forceStopAll(KillCause.REQUESTED)
+        assertEquals(PoolStats(1, free = 1, busy = 0), c.stats())
+    }
+
     @Test
     fun `judge 纯判断不执行`() = runBlocking {
         val (c, _) = controller()

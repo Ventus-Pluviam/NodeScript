@@ -109,6 +109,22 @@ class RuntimeController(
         pool.killAll(reason)
     }
 
+    /**
+     * 收口的**强制兜底**（docs §13 铁律 4 的执行侧部分）：绕开请求语义，直接强杀全部非 FREE
+     * 槽位并复用。
+     *
+     * 与 [killAll] 的分工：[killAll] 是请求驱动的停止语义（看门狗裁决/用户停全部的落点，
+     * 在途表经 guard 串行收走）；本方法是**进程级急停**（应用被杀/系统回收/测试收口）——
+     * 不重建 guard 语义，只做「杀全部 + 清在途表 + 忘心跳」，事件面也不发 stopAll 那条流
+     * （调用方按急停路径记账，不污染正常停止的审计）。
+     */
+    suspend fun forceStopAll(cause: KillCause) = guard.withLock {
+        val gone = active.keys.toList()
+        active.clear()
+        gone.forEach { heartbeats.forget(it) }
+        pool.killAll(cause)
+    }
+
     /** 看门狗裁决（纯判断，不执行；执行走 [killRun]/[killAll]）。 */
     fun judge(sample: WatchdogSample, history: List<WatchdogSample> = emptyList()): WatchdogVerdict =
         watchdog.evaluate(sample, history)

@@ -261,4 +261,34 @@ class SchedulerTest {
         assertEquals(16, remaining.size, "奇数号任务留存：并发登记/取消串行化后注册表与句柄表一一对应")
         assertTrue(remaining.all { it.id.removePrefix("t").toInt() % 2 == 1 })
     }
+
+    @Test
+    fun `sink 后 onTrigger 早退且撤销触发器`() = runBlocking {
+        val provider = RecordingProvider()
+        val scheduler = testScheduler(provider)
+        scheduler.schedule(ScheduledTask("t1", "定时", "p", "a.js", TimedSchedule.Daily(9, 30)))
+        scheduler.sink()
+        assertTrue(scheduler.sinking)
+        val before = dispatched.size
+        scheduler.onTrigger("t1", scheduledAtMillis = now)
+        assertEquals(before, dispatched.size, "收口后不再投递")
+    }
+
+    @Test
+    fun `无投递时 stopLastRun 如实 false`() = runBlocking {
+        val scheduler = testScheduler()
+        assertFalse(scheduler.stopLastRun(), "骨架期无引擎实现，不假装已停")
+        assertFalse(scheduler.canStopLastRun())
+        assertTrue(scheduler.quiesceThenStop().isEmpty())
+    }
+
+    @Test
+    fun `link 为 null 的投递不产假句柄`() = runBlocking {
+        val scheduler = testScheduler()
+        scheduler.schedule(ScheduledTask("t1", "定时", "p", "a.js", TimedSchedule.Once(60)))
+        scheduler.onTrigger("t1", scheduledAtMillis = now)
+        // 默认 dispatcher 只回 outcome 不带 link：没有可停的东西，不持有句柄
+        assertFalse(scheduler.canStopLastRun())
+        assertFalse(scheduler.stopLastRun())
+    }
 }
