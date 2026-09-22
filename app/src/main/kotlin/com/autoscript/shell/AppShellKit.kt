@@ -33,9 +33,10 @@ import java.nio.file.Path
  * 三条纪律：
  * - **engineFactory 是参数**：`UnavailableEngine` 只是"native 宿主尚未落地"时的诚实缺省
  *   （见其 KDoc），真实现到位 = 改调用处那一行，不在本文件里留分支；
- * - **能力 handler 由调用方给**：[AppShellApplication] 持有 `:platform:capabilities` 的真实现
- *   （依赖方向见 §6：`:app` 不得直连 `:platform`，缝的类型住 `:domain`），本文件只负责把它
- *   转交给 [AppShell.assemble]；null = 未接线，桥如实回 `ERR_NOT_IMPLEMENTED`；
+ * - **能力 handler 由调用方给**：生产由 [PlatformWiring]（同在 shell 装配包，§6 包级例外二）
+ *   把 `SystemSpis` + `CapabilityNamespaces` 拼成注入束喂进来，本文件只转交给
+ *   [AppShell.assemble]、不 new 实现（缝的类型住 `:domain`，本文件保持纯 JVM 可测）；
+ *   null = 未接线，桥如实回 `ERR_NOT_IMPLEMENTED`；
  * - **本文件不 new 任何能力实现**，也不碰 `:bridge:java`（只有 `com.autoscript.shell.AppShell`
  *   一个类可以，见 `ArchitectureTest`；本文件只用 `:domain` 的 [NamespaceHandler] 接口）。
  *

@@ -13,6 +13,7 @@ import com.autoscript.shell.AndroidScreenGate
 import com.autoscript.shell.AppShell
 import com.autoscript.shell.AppShellKit
 import com.autoscript.shell.BootRecovery
+import com.autoscript.shell.PlatformWiring
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
 import com.autoscript.shell.ScreenGateAndroid
@@ -97,10 +98,11 @@ class AppShellApplication : Application() {
      * 目录约定与持久句柄的全在这一处（[AppShellKit.assemble]），Application 只负责
      * 把 Android 侧的两件事喂进去：`filesDir`/`cacheDir` 与真屏幕门禁。
      *
-     * **不传 a11y/screen 能力 handler**：`:app` 不得直连 `:platform`（§6），而持有真实现的
-     * 只能是本类的调用方（Activity 从 `:platform:capabilities` 拿到 `NamespaceHandler` 后
-     * 走 [install] 注入）。未注入 = 桥对 `a11y.*`/`screen.*` 如实回 `ERR_NOT_IMPLEMENTED`，
-     * 不伪造可用。
+     * 系统/存储/通知面经 [PlatformWiring]（shell 装配包，§6 包级例外二）接上
+     * `SystemSpis` + `CapabilityNamespaces` 的真实现；**a11y/screen 仍不传**——它们的
+     * Android 真实现（AccessibilityService/MediaProjection 的服务实例）尚未落地，
+     * 硬凑内存实现就是伪造可用；未注入 = 桥对 `a11y.*`/`screen.*` 如实回
+     * `ERR_NOT_IMPLEMENTED`（走 [install] 的调用方仍可自行注入）。
      *
      * 失败如实降级：装配抛错 → 记日志 + 壳保持 null（[alarmWork] 继续漏投记账），
      * **绝不让一个半装的壳冒充就绪**（那会让闹钟投给一个没有 scheduler 的路线）。
@@ -113,6 +115,7 @@ class AppShellApplication : Application() {
             val port = alarmPort ?: AndroidAlarmPort(applicationContext, AlarmReceiver::class.java)
                 .also { alarmPort = it }
             val appContext = applicationContext
+            val wiring = PlatformWiring.of(appContext)
             val built = AppShellKit.assemble(
                 filesDir = filesDir,
                 cacheDir = cacheDir,
@@ -130,6 +133,14 @@ class AppShellApplication : Application() {
                         appContext.assets, projectId,
                     ).readScripts()
                 },
+                // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
+                // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，
+                // 不 import 任何 com.autoscript.platform..（ArchitectureTest 看住）。
+                datastoreHandler = wiring.datastoreHandler,
+                zipHandler = wiring.zipHandler,
+                settingsHandler = wiring.settingsHandler,
+                notificationHandler = wiring.notificationHandler,
+                systemHandlers = wiring.systemHandlers,
             )
             install(built.shell)
             assembled = built

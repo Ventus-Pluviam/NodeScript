@@ -299,7 +299,8 @@ private suspend fun EnginesNamespaceHandler.handleLike(request: BridgeRequest): 
  * 处理；[registerAll] 逐个 null 检查，缺哪个就哪个如实 ERR_NOT_IMPLEMENTED（§7.5）。
  *
  * 字段由 `:platform:capabilities` 的 [com.autoscript.platform.capabilities.CapabilityNamespaces]
- * 工厂产出后填入；`:app` 只搬运，不 new 具体实现、不直连 `:platform`（§6）。
+ * 工厂产出、经同包 [PlatformWiring] 填入（§6 包级例外二：只有 shell 装配包可直连
+ * `:platform`）；装配包之外的 `:app` 类只搬运，一律不 new 具体实现。
  */
 data class SystemHandlers(
     val dialogs: NamespaceHandler? = null,

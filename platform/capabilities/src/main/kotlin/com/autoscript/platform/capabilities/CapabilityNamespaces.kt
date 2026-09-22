@@ -23,10 +23,10 @@ import com.autoscript.domain.system.ShellExecutor
  * 为什么转接层住本模块：`BridgeRouter` 的 `RequestHandler` 是 `:domain` 的
  * [NamespaceHandler]（`typealias`），而本模块只允许依赖 `:domain`
  * （§6 + ArchitectureTest 把 `com.autoscript.bridge..` 列进黑名单），
- * `:app` 又禁止直连 `:platform`。于是「自有 Request/Response 形状 → 桥信封」的
- * 字段级转接只能落在两端都合法的位置 = 本模块；`:app` 装配层
- * （`AppShell.assemble` 的 `a11yHandler`/`screenHandler` 缝）只拿现成的
- * [NamespaceHandler] 挂 Router —— 既不 new 具体实现，也不直连 `:platform`。
+ * `:app` 除 `com.autoscript.shell` 装配包（§6 包级例外二，落点 `PlatformWiring` 的
+ * 生产装配）外禁止直连 `:platform`。于是「自有 Request/Response 形状 → 桥信封」的
+ * 字段级转接只能落在本模块（唯一同时看得到两边形状又不碰 bridge 的位置）；装配层
+ * 拿到的始终是现成的 [NamespaceHandler] —— 协议解释权在本模块，装配只挂载。
  *
  * 本文件无逻辑：逐字段搬运，不解释 payload、不吞错误、不改错误码（§7 桥侧只透传）。
  * handler 自己的方法表/错误分类在 [A11yNamespaceHandler] / [ScreenNamespaceHandler]。

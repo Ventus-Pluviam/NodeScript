@@ -46,7 +46,7 @@ run permission-center 0 "app-service/permission-center/src/main/kotlin $D"      
 run packager          0 "app-service/packager/src/main/kotlin $D"                                 app-service/packager/src/test/kotlin
 run capabilities      0 "platform/capabilities/src/main/kotlin $D"                                platform/capabilities/src/test/kotlin
 run platform-system   1 "platform/system/src/main/kotlin $D"                                      platform/system/src/test/kotlin
-run app               1 "app/src/main/kotlin app-service/runtime/src/main/kotlin app-service/scheduler/src/main/kotlin app-service/script-repo/src/main/kotlin app-service/permission-center/src/main/kotlin app-service/packager/src/main/kotlin bridge/java/src/main/kotlin $D" app/src/test/kotlin
+run app               1 "app/src/main/kotlin app-service/runtime/src/main/kotlin app-service/scheduler/src/main/kotlin app-service/script-repo/src/main/kotlin app-service/permission-center/src/main/kotlin app-service/packager/src/main/kotlin bridge/java/src/main/kotlin platform/capabilities/src/main/kotlin platform/system/src/main/kotlin $D" app/src/test/kotlin
 
 if [ ${#FAILED[@]} -gt 0 ]; then
   echo "##### 失败模块: ${FAILED[*]}"

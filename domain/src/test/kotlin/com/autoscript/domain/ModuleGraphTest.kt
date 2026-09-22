@@ -46,11 +46,13 @@ class ModuleGraphTest {
      * §6 模块表「允许依赖」列的机器可读副本。
      * 依赖边必须是本表的**子集**：少声明不报错（尚未用到），多声明即违反铁律。
      *
-     * - `:app` 含 `:bridge:java`：§6 唯一例外——仅 `com.autoscript.shell` 装配包把 handler
-     *   挂上 `BridgeRouter` 时可用（字段级转接，见 §6「例外不是开后门」+ :app ArchitectureTest）；
+     * - `:app` 含 `:bridge:java` 与 `:platform:capabilities`/`:platform:system`：§6 的
+     *   **两则包级例外**——都仅 `com.autoscript.shell` 装配包可用（前者挂 handler 上
+     *   `BridgeRouter` 字段级转接；后者 `SystemSpis` + `CapabilityNamespaces` 生产装配，
+     *   落点 `PlatformWiring`；见 §6「例外不是开后门」+ :app ArchitectureTest）；
      * - `:bridge:native` / `:bridge:image` 的「被引擎宿主 / :main 引用」是**运行期 .so 装载**
      *   （`System.loadLibrary` / JNI），不是 Gradle 依赖边，故此处允许集为空 ——
-     *   §6 明令 `:app` 禁直连 `:platform`，:main 侧的分析器经 `:platform:capabilities`
+     *   §6 禁 `:app` 非装配包直连 `:platform`，:main 侧的分析器经 `:platform:capabilities`
      *   实现 `ImageAnalyzer` SPI 间接使用。
      */
     private val allowed: Map<String, Set<String>> = mapOf(
@@ -61,7 +63,9 @@ class ModuleGraphTest {
             ":app-service:permission-center",
             ":app-service:packager",
             ":domain",
-            ":bridge:java",          // §6 唯一例外（shell 装配包）
+            ":bridge:java",          // §6 包级例外一（shell 装配包挂 handler）
+            ":platform:capabilities",// §6 包级例外二（shell 装配包生产装配，PlatformWiring）
+            ":platform:system",      // §6 包级例外二（同上，SystemSpis 入口）
         ),
         ":app-service:runtime" to setOf(":domain"),
         ":app-service:scheduler" to setOf(":domain"),
