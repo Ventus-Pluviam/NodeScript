@@ -2,6 +2,7 @@ package com.autoscript.appservice.packager.npm
 
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
+import com.autoscript.domain.scripts.ScriptPaths
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -20,7 +21,7 @@ class NpmSnapshotTest {
     @TempDir
     lateinit var dir: Path
 
-    private val layout get() = NpmProjectLayout(dir.resolve("scripts"))
+    private val layout get() = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
     private val ledgerDir get() = dir.resolve(".autojs")
     private val key = LockSigner.KeyProvider { "snapshot-key-32bytesaaaaaaaaaaaa".toByteArray() }
     private val out get() = dir.resolve("snap.zip")

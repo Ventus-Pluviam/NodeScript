@@ -1,5 +1,6 @@
 package com.autoscript.appservice.packager.npm
 
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.npm.PackageSpec
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -38,7 +39,7 @@ class HostNodeNpmE2ETest {
     }
 
     private fun coordinatorAt(root: Path, cacheDir: Path): InstallCoordinator {
-        val layout = NpmProjectLayout(root.resolve("scripts"))
+        val layout = NpmProjectLayout(ScriptPaths.projectsRoot(root))
         return InstallCoordinator(
             services = NpmServices(
                 layout = layout,
@@ -55,7 +56,7 @@ class HostNodeNpmE2ETest {
     fun `真实安装 lodash 进事务化 node_modules`() = runBlocking {
         val root = dir
         val c = coordinatorAt(root, root.resolve("npm-cache"))
-        val layout = NpmProjectLayout(root.resolve("scripts"))
+        val layout = NpmProjectLayout(ScriptPaths.projectsRoot(root))
 
         // 项目根需要 package.json（npm install 的前置）
         Files.createDirectories(layout.projectRoot("e2e"))
@@ -84,7 +85,7 @@ class HostNodeNpmE2ETest {
     fun `两次安装同事务链互不污染（第二包安装不丢第一包）`() = runBlocking {
         val root = dir
         val c = coordinatorAt(root, root.resolve("npm-cache"))
-        val layout = NpmProjectLayout(root.resolve("scripts"))
+        val layout = NpmProjectLayout(ScriptPaths.projectsRoot(root))
         Files.createDirectories(layout.projectRoot("e2e2"))
         Files.write(layout.projectRoot("e2e2").resolve("package.json"), ("""{"name":"e2e2","version":"0.0.1"}""").toByteArray())
 

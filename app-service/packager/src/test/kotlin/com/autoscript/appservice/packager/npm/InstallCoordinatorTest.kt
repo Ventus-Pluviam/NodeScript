@@ -2,6 +2,7 @@ package com.autoscript.appservice.packager.npm
 
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalStatus
@@ -29,7 +30,7 @@ class InstallCoordinatorTest {
     /** 交叉校验断言里用的占位 integrity（真形状由 NpmRegistryVerifierTest 管）。 */
     private val I = "sha512-" + "a".repeat(24)
 
-    private val layout get() = NpmProjectLayout(dir.resolve("scripts"))
+    private val layout get() = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
     private val journal get() = InstallJournal(dir.resolve(".autojs"))
     private val staging get() = InstallStaging(layout)
     private val ledger get() = ApprovalLedger()

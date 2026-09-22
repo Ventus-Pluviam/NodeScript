@@ -14,6 +14,7 @@ import com.autoscript.appservice.packager.npm.NpmRegistryVerifier
 import com.autoscript.appservice.packager.npm.NpmServices
 import com.autoscript.appservice.packager.npm.NpmSnapshot
 import com.autoscript.domain.bridge.NamespaceHandler
+import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -47,7 +48,9 @@ object NpmShellKit {
         lockKey: LockSigner.KeyProvider? = null,
         snapshots: Boolean = true,
     ): NamespaceHandler {
-        val layout = NpmProjectLayout(filesDir.resolve("scripts"))
+        // 项目根来自契约层（§9.6 单一事实来源）：与 script-repo/调度恢复/装配层同一个函数，
+        // 拼错目录名不再可能（曾经这里与 AppShellKit 各写一份字面量）。
+        val layout = NpmProjectLayout(ScriptPaths.projectsRoot(filesDir))
         val autojsDir = filesDir.resolve(".autojs")
         // 装配即建目录（生产 filesDir 本来就要落盘；探针/部署读不存在的路径只会炸，
         // 建空目录不伪造任何"已安装"事实 —— 项目内容仍以 lockfile/node_modules 为准）。

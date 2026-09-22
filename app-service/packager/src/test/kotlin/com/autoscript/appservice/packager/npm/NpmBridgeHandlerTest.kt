@@ -1,5 +1,6 @@
 package com.autoscript.appservice.packager.npm
 
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.npm.PackageSpec
@@ -22,7 +23,7 @@ class NpmBridgeHandlerTest {
     @TempDir
     lateinit var dir: Path
 
-    private val layout get() = NpmProjectLayout(dir.resolve("scripts"))
+    private val layout get() = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
     private val installed = mutableListOf<Pair<String, List<PackageSpec>>>()
 
     private class RecordingExecutor(val sink: (String, List<PackageSpec>) -> Unit) : InstallCoordinator.HeavyOpExecutor {

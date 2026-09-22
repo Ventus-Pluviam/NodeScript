@@ -11,6 +11,7 @@ import kotlinx.coroutines.cancel
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
 import com.autoscript.appservice.scheduler.persist.JournalFileStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
+import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
 import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.ScriptEngine
@@ -69,7 +70,15 @@ object AppShellKit {
         /** npm 装配产出的 handler（装配测试/诊断用；null 表示本次装配未挂 npm）。 */
         val npmHandler: NamespaceHandler?,
         private val scope: ShellScope?,
+        /**
+         * 装配期脚本补部署报告（§9.6 `files/scripts/<projectId>/` 标准化）。
+         * 空报告（`deployed` 与 `failures` 皆空）= 没有来源可补，不是"恢复成功"
+         * —— 装配层日志/能力中心不得把它说成"脚本已恢复"。
+         */
+        val deployReport: ScriptDeployRecovery.Report = ScriptDeployRecovery.Report(),
     ) : AutoCloseable {
+        /** 没补上的脚本（路径 + 原因；能力中心呈现"有脚本没补上"，不吞成一切正常）。 */
+        fun deployFailures(): List<ScriptDeployRecovery.Failure> = deployReport.failures
         override fun close() {
             scope?.cancel()          // 先停看门狗轮转，再关壳/持久句柄（轮转中不得关底下的池）
             shell.close()
@@ -122,6 +131,13 @@ object AppShellKit {
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
         npmHandler: NamespaceHandler? = null,
+        /**
+         * 装配期脚本补部署的来源（projectId → 项目内相对路径 → 字节；§9.6）。
+         * 缺省空映射 = 本次没补任何东西（`deployReport.changed == false`），**不粉饰成"已恢复"**。
+         * 生产提供方之一是 `script-repo` 的 `AndroidAssetsSource`（首批内置脚本），
+         * 但补部署的判据与来源无关 —— 只补缺、绝不覆盖已有文件。
+         */
+        scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
         poolCapacity: Int = 1,
         monitor: ProcessMonitor = ProcessMonitor(),
         watchdog: EngineWatchdog? = null,
@@ -129,6 +145,12 @@ object AppShellKit {
     ): AssembledShell {
         val autojsDir = filesDir.resolve(".autojs")
         Files.createDirectories(autojsDir)
+
+        // 装配期脚本补部署（§9.6）：排期/意向持久了但脚本内容可能已被清掉
+        // （用户"清除数据"、系统回收空间、预装包升级），先补缺再装配 —— 否则装配出的壳
+        // 每次执行都以"脚本文件不存在"告终，而任务中心只看到 CRASHED、说不出为什么。
+        // 只补缺不覆盖：用户手改过的脚本原样留着（见 ScriptDeployRecovery KDoc 三条诚实边界）。
+        val deployReport = ScriptDeployRecovery(filesDir, scriptSources).run()
 
         // 意图日志与运行档案分文件（§8.5）：键不同（intentRunId vs engineRunId），
         // 只写一侧的孤儿因此可被审计。两个都持久：重启后任务中心与 bootRecover 才有据可依。
@@ -162,6 +184,6 @@ object AppShellKit {
             shell.startWatchdog(fresh)
             ownedScope = fresh
         }
-        return AssembledShell(shell, log, archive, npm, ownedScope)
+        return AssembledShell(shell, log, archive, npm, ownedScope, deployReport)
     }
 }

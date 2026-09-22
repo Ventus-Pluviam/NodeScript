@@ -62,6 +62,7 @@ class AppShellKitTest {
         screenGate: ScreenGate = ScreenGate.AllowAll,
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
+        scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
     ): AppShellKit.AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
@@ -69,6 +70,7 @@ class AppShellKitTest {
         screenGate = screenGate,
         a11yHandler = a11yHandler,
         screenHandler = screenHandler,
+        scriptSources = scriptSources,
     )
 
     @Test
@@ -265,6 +267,55 @@ class AppShellKitTest {
                 recovered.single().outcome,
                 "重投仍走诚实引擎：CRASHED（真原因在 message 里）",
             )
+        }
+
+        Unit
+    }
+
+    /**
+     * 装配期脚本补部署（§9.6）：`files/scripts` 被清掉但装配来源还在时，
+     * 缺的脚本在装配时补上 —— 否则投递出去的 run 只会以"文件不存在"告终。
+     */
+    @Test
+    fun `装配时缺的脚本被补上，已有文件不覆盖`() {
+        // 先手写一个用户改过的脚本：补部署不得盖掉它
+        val edited = files.resolve("scripts").resolve("p1").resolve("main.js")
+        val sources = mapOf(
+            "p1" to mapOf("main.js" to "console.log(2)".toByteArray()),
+            "p2" to mapOf("a.js" to "console.log(9)".toByteArray()),
+        )
+        AppShellKit.assemble(
+            filesDir = files,
+            cacheDir = cache,
+            schedulerProvider = RecordingProvider(),
+            scriptSources = mapOf("p1" to mapOf("main.js" to "// 用户手改".toByteArray())),
+        ).use { first ->
+            assertEquals(
+                listOf("p1/main.js"),
+                first.deployReport.deployed.map { "${it.projectId}/${it.relPath}" },
+                "第一次装配：缺 main.js 即补上（这是它的唯一职责）",
+            )
+        }
+        kit(scriptSources = sources).use { assembled ->
+            val filled = assembled.deployReport.deployed.map { "${it.projectId}/${it.relPath}" }
+            assertTrue("p2/a.js" in filled, "缺的脚本被补上：$filled")
+            assertTrue("p1/main.js" !in filled, "已有的不覆盖")
+            assertTrue(assembled.deployFailures().isEmpty(), "本批无失败")
+            assertEquals(
+                "// 用户手改",
+                Files.readAllBytes(edited).toString(Charsets.UTF_8),
+                "用户手改的内容原样留着",
+            )
+        }
+
+        Unit
+    }
+
+    @Test
+    fun `无来源时补部署报告如实为空，不粉饰恢复成功`() {
+        kit().use { assembled ->
+            assertFalse(assembled.deployReport.changed, "没有来源 = 什么都没补，不得报成恢复成功")
+            assertTrue(assembled.deployFailures().isEmpty(), "空清单不是失败，是没得补")
         }
 
         Unit
