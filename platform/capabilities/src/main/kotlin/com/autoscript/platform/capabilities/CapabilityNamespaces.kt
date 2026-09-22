@@ -12,6 +12,7 @@ import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DialogHost
 import com.autoscript.domain.system.FloatingWindowHost
 import com.autoscript.domain.storage.DataStore
+import com.autoscript.domain.storage.ZipArchiver
 import com.autoscript.domain.system.ShellExecutor
 
 /**
@@ -118,6 +119,17 @@ object CapabilityNamespaces {
      */
     fun datastore(store: DataStore): NamespaceHandler {
         val handler = DatastoreNamespaceHandler(store)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /**
+     * `zip` 命名空间（§9.6）：`compress`/`extract` 两方法。参数即
+     * [com.autoscript.domain.storage.ZipArchiver] SPI 实现（测试传假归档器，
+     * 真机传 `:platform:system` 的 `JdkZipArchiver`）。同 datastore：
+     * 无共担门禁 → 独立注入缝 `AppShell.assemble` 的 `zipHandler`。
+     */
+    fun zip(archiver: ZipArchiver): NamespaceHandler {
+        val handler = ZipNamespaceHandler(archiver)
         return lite { request -> handler.handle(request) }
     }
 }

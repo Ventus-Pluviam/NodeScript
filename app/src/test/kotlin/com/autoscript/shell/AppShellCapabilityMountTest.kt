@@ -55,6 +55,7 @@ class AppShellCapabilityMountTest {
             screenHandler = map["screen"],
             npmHandler = map["npm"],
             datastoreHandler = map["datastore"],
+            zipHandler = map["zip"],
         )
     }
 
@@ -86,6 +87,14 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 zip：compress/extract 回 true（可达性替身；归档语义在 platform:system 侧测）。 */
+    private val fakeZip = NamespaceHandler { request ->
+        when (request.method) {
+            "compress", "extract" -> BridgeResponse.Ok(request.id, "true")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeZip only compress/extract")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -96,7 +105,10 @@ class AppShellCapabilityMountTest {
 
     @Test
     fun `注入能力缝后 a11y screen 可达`() = runBlocking {
-        val s = shell("a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm, "datastore" to fakeDatastore)
+        val s = shell(
+            "a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm,
+            "datastore" to fakeDatastore, "zip" to fakeZip,
+        )
         s.use {
             val a11yResp = s.router.dispatch(
                 BridgeRequest(1, "a11y", "findOne", """{"conditions":{"text":"启动"}}""", 5_000),
@@ -120,6 +132,11 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(6, "datastore", "get", """{"key":"k"}""", 5_000),
             )
             assertEquals("""{"found":false}""", (dsResp as BridgeResponse.Ok).payload)
+
+            val zipResp = s.router.dispatch(
+                BridgeRequest(7, "zip", "compress", """{"source":"/a","archive":"/b.zip"}""", 5_000),
+            )
+            assertEquals("true", (zipResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -153,6 +170,9 @@ class AppShellCapabilityMountTest {
 
             val dsResp = s.router.dispatch(BridgeRequest(4, "datastore", "get", """{"key":"k"}""", 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (dsResp as BridgeResponse.Err).errorCode, "datastore 独立缝缺省同样不伪造")
+
+            val zipResp = s.router.dispatch(BridgeRequest(5, "zip", "compress", """{"source":"/a","archive":"/b.zip"}""", 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (zipResp as BridgeResponse.Err).errorCode, "zip 独立缝缺省同样不伪造")
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试

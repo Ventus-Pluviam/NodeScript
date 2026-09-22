@@ -181,6 +181,13 @@ class AppShell(
              */
             datastoreHandler: NamespaceHandler? = null,
             /**
+             * `zip` 命名空间实现（§9.6 归档面）：同 [datastoreHandler] 的独立缝 ——
+             * 归档无需能力门禁，不入 [SystemHandlers] 束。实现经
+             * `:platform:capabilities` 的 `CapabilityNamespaces.zip(archiver)` 转接；
+             * null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
+             */
+            zipHandler: NamespaceHandler? = null,
+            /**
              * `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6）。
              * 与 [a11yHandler] 同一注入缝，但合成一个参数而非五个：五个命名空间在 §12.2
              * 的 JS facade（`extras.ts`）里是一个整体，且共一批能力门禁（OVERLAY /
@@ -209,6 +216,7 @@ class AppShell(
             if (screenHandler != null) router.register("screen", screenHandler)
             if (npmHandler != null) router.register("npm", npmHandler)
             if (datastoreHandler != null) router.register("datastore", datastoreHandler)
+            if (zipHandler != null) router.register("zip", zipHandler)
             systemHandlers?.registerAll(router::register)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
