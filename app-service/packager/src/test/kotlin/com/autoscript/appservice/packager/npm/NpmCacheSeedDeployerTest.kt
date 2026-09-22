@@ -165,12 +165,48 @@ class NpmCacheSeedDeployerTest {
         val roots = sequenceOf(dir.resolve("real-cache"), Path.of("/root/.npm/_cacache/content-v2"))
         for (root in roots) {
             if (!Files.isDirectory(root)) continue
-            val found = Files.walk(root).use { s -> s.filter { Files.isRegularFile(it) }.toList() }
-                .map { it to Files.readAllBytes(it) }
-                .firstOrNull { (_, b) -> b.size > 2 && b[0] == 0x1f.toByte() && b[1] == 0x8b.toByte() }
-            if (found != null) return found.second
+            // 懒扫：walk 惰性 + findFirst 命中即停，每文件只读头两字节判魔数，
+            // 命中单个文件才全量读 —— 本机 ~/.npm/_cacache 可达 GB 级，旧写法
+            // （toList + 全读全文件再 firstOrNull）把整个缓存搬进堆，
+            // 测试 worker 默认堆直接 OOM（Files.read → readAllBytes 栈顶见真章）。
+            val hit: Path? = Files.walk(root).use { s ->
+                s.filter { p ->
+                    try {
+                        Files.isRegularFile(p) && isGzip(p)
+                    } catch (_: Exception) {
+                        false   // 扫描中途文件被删/无权限：跳过，不炸测试
+                    }
+                }.findFirst().orElse(null)
+            }
+            if (hit == null) continue
+            try {
+                return Files.readAllBytes(hit)
+            } catch (_: Exception) {
+                continue   // 命中与读取之间文件消失：换下一个根（无则整体跳过）
+            }
         }
         return null
+    }
+
+    /**
+     * 只读头两字节判 gzip 魔数（`0x1f 0x8b`），不把整文件搬进堆 ——
+     * 大缓存下全量读即 OOM（见 [realTarball]）。
+     */
+    private fun isGzip(p: Path): Boolean {
+        return try {
+            Files.newInputStream(p).use { ins ->
+                val head = ByteArray(2)
+                var off = 0
+                while (off < 2) {
+                    val n = ins.read(head, off, 2 - off)
+                    if (n < 0) break
+                    off += n
+                }
+                off == 2 && head[0] == 0x1f.toByte() && head[1] == 0x8b.toByte()
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     @Test
