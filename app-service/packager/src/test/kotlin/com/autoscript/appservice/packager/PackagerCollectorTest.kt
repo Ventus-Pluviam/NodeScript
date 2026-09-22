@@ -1,7 +1,10 @@
 package com.autoscript.appservice.packager
 
+import com.autoscript.domain.packager.ApkIdentity
 import com.autoscript.domain.packager.PackManifests
 import com.autoscript.domain.packager.PackSpec
+import com.autoscript.domain.packager.TemplateApkPlans
+import com.autoscript.domain.packager.TemplateInfo
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -58,5 +61,19 @@ class PackagerCollectorTest {
         assertThrows<IllegalArgumentException> {
             PackagerCollector().collect(PackSpec(projectId = "p", appName = "P"), dir)
         }
+    }
+
+    @Test
+    fun `plan 一次产出改写计划且复验通过`() {
+        write("main.js", "run()")
+        val spec = PackSpec(projectId = "p", appName = "P")
+        val plan = PackagerCollector().plan(
+            spec, dir,
+            ApkIdentity("com.example.demo", "Demo"),
+            TemplateInfo("24.21.0"),
+        )
+        val manifest = PackagerCollector().collect(spec, dir)
+        assertTrue(TemplateApkPlans.verify(plan, manifest))
+        assertEquals(manifest.digest, plan.manifestDigest)
     }
 }

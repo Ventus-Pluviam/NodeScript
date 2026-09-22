@@ -825,6 +825,8 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 - 定时：单 alarm 定时任务 + 意图日志 + runNonce 幂等。
 - 权限三态中心 UI + 引导页；specialUse FGS 骨架。
 - 打包：模板 APK 改装（assets 注入、签名向导）——闭环验证。
+  **P0 领域+收集侧已落地**：`ApkIdentity`（包名/aapt2 关键字校验）+ `TemplateInfo`（引擎版本锚定）+ `TemplateApkPlans`（planDigest 组装/改写前复验，防清单错配；`offlineVariant` 参与摘要）+ `PackagerCollector.plan()`（规格+清单+身份一次产出计划），均 JVM 可测；AXML/ARSC 真改写与 apksigner 调用仍是 Android 侧实现。
+  **P0 签名向导领域侧已落地**：`SigningKey`（Debug 临时/ECDSA 发布密钥库描述）+ `SignPlans`（请求组装绑定计划摘要，签名前复验）+ `ApkSignerArgs`（apksigner 参数表纯构造，口令只走 `:env` 不进参数表），均 JVM 可测；起进程与 Keystore 取密钥仍是 Android 侧实现。
 - 单测/archUnit CI；Docker 构建镜像。**已落地**：`.github/workflows/ci.yml`（JVM 单测 + archUnit）；本机无 Android SDK 时用 `tools/jvm-test.sh [--android-jar]`（+ 全模块驱动 `tools/jvm-test-all.sh`）跑同一批单测，见 §6 末。
 - npm P0（§10.11）：vendored npm CLI + 专用安装会话进程 + 零 spawn 主路径 + 事务化安装/journal 自愈 + 精选缓存种子离线首装 + 带外信任锚/lock 验签/审批卡 UI + 依赖面板 + 打包 node_modules 入包。
 
