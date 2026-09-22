@@ -18,21 +18,24 @@ import org.junit.jupiter.api.Test
  *
  * `Settings.ACTION_*` 全是编译期字符串常量，JVM 单测引用不碰框架
  * （与 `BootEventsTest` 引 `Intent.ACTION_BOOT_COMPLETED` 同理）。
- * `specFor` 的 `sdkInt` 显式参数让高低两分支都可测：无参调在 JVM 上
- * （`Build.VERSION.SDK_INT` 未 mock 恒 0）走 S-以下分支。
+ * `specFor` 的 `sdkInt` **一律显式传值**：缺省参数在调用点求值 `Build.VERSION.SDK_INT`，
+ * 那是运行期字段读——本机旁路（tools/jvm-test.sh）的 android.jar 只上编译期，
+ * 缺省一求值就 `NoClassDefFoundError: android/os/Build$VERSION`。显式传参既绕开
+ * 缺省求值，又是钉分支本来就该做的事（`VERSION_CODES.S/R` 是编译期常量，内联不碰框架）。
+ * 生产路径（`AndroidSettingsPageOpener`）继续用缺省读真 SDK——真机运行时才有该字段。
  */
 class AndroidPermissionGatesTest {
 
     @Test
     fun `跳转规格锁字面量：页到action与extra配列`() {
-        val access = AndroidGrantLauncher.specFor(GrantPage.ACCESSIBILITY)
+        val access = AndroidGrantLauncher.specFor(GrantPage.ACCESSIBILITY, Build.VERSION_CODES.S)
         assertEquals(Settings.ACTION_ACCESSIBILITY_SETTINGS, access.action)
 
-        val overlay = AndroidGrantLauncher.specFor(GrantPage.OVERLAY)
+        val overlay = AndroidGrantLauncher.specFor(GrantPage.OVERLAY, Build.VERSION_CODES.S)
         assertEquals(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, overlay.action)
         assertTrue(overlay.withPackageData, "overlay 页需 data=package: 定位本应用")
 
-        val notif = AndroidGrantLauncher.specFor(GrantPage.NOTIFICATIONS)
+        val notif = AndroidGrantLauncher.specFor(GrantPage.NOTIFICATIONS, Build.VERSION_CODES.S)
         assertEquals(Settings.ACTION_APP_NOTIFICATION_SETTINGS, notif.action)
         assertTrue(notif.withAppPackageExtra, "通知页需 EXTRA_APP_PACKAGE 定位本应用")
 
@@ -40,7 +43,7 @@ class AndroidPermissionGatesTest {
         for (ability in listOf(Capability.SCREEN_CAPTURE, Capability.ROOT, Capability.ADB_INPUT)) {
             assertEquals(GrantPage.APP_DETAILS, AndroidGrantLauncher.pageFor(ability), "$ability 无专页")
         }
-        val details = AndroidGrantLauncher.specFor(GrantPage.APP_DETAILS)
+        val details = AndroidGrantLauncher.specFor(GrantPage.APP_DETAILS, Build.VERSION_CODES.S)
         assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, details.action)
         assertTrue(details.withPackageData, "详情页需 data=package:")
 
