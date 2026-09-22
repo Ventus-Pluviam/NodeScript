@@ -1,6 +1,7 @@
 package com.autoscript.platform.system
 
 import android.content.Context
+import com.autoscript.domain.storage.DataStore
 import com.autoscript.domain.system.AppLauncher
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.FloatingWindowHost
@@ -26,7 +27,7 @@ import com.autoscript.domain.system.ShellExecutor
 object SystemSpis {
 
     /**
-     * 本模块当前能提供的四件（见 [Bundle] 字段注释）。
+     * 本模块当前能提供的五件（见 [Bundle] 字段注释）。
      * `overlayAvailable` 缺省恒假 —— 悬浮窗走 `TYPE_APPLICATION_OVERLAY`；
      * a11y 服务在跑时由上层传 `{ true }` 换成 `TYPE_ACCESSIBILITY_OVERLAY`。
      */
@@ -43,17 +44,23 @@ object SystemSpis {
                 ops = WindowManagerOps(app),
                 overlayTypeAvailable = overlayAvailable,
             ),
+            datastore = AndroidDataStore(SqliteKvOps(app)),
         )
     }
 
     /**
-     * 四个 SPI 实现（`dialogs` 缺位，见 [SystemSpis] 的 KDoc）。
+     * 五个 SPI 实现（`dialogs` 缺位，见 [SystemSpis] 的 KDoc）。
      * 字段声明成 SPI 类型而非具体类：上层只该看见 `:domain` 的契约。
+     *
+     * `datastore` 是 SPI 束的成员、**不是** `systemHandlers` 束的成员：
+     * handler 侧它是独立注入缝（存储面无共担门禁，§12.2 接线表）——
+     * 两束形状不同是有意的，别对齐。
      */
     data class Bundle(
         val shell: ShellExecutor,
         val device: DeviceInfoProvider,
         val app: AppLauncher,
         val floatingWindow: FloatingWindowHost,
+        val datastore: DataStore,
     )
 }

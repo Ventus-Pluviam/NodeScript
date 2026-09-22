@@ -1,6 +1,8 @@
 package com.autoscript.platform.system
 
 import com.autoscript.domain.bridge.HandleRef
+import com.autoscript.domain.storage.DataStore
+import com.autoscript.domain.storage.StoredEntry
 import com.autoscript.domain.system.AppLauncher
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DeviceProfile
@@ -14,34 +16,37 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 实现入口的形状测试（docs §12.2）：[SystemSpis.Bundle] 的四件都**声明成 `:domain` 契约类型**。
+ * 实现入口的形状测试（docs §12.2）：[SystemSpis.Bundle] 的五件都**声明成 `:domain` 契约类型**。
  *
  * 这里不验 Android 行为（各自的契约测试覆盖），守的是两件事：
  * 1. 别把具体实现类漏进字段类型 —— 那会逼上层依赖本模块的具体类，分层就白做了；
  * 2. 别偷偷补一个"凑数的 dialogs" —— 缺位是**如实缺位**（注入侧留 null → 桥回
- *    `ERR_NOT_IMPLEMENTED`），补个假的比缺着更坏。所以字段数被钉死在 4。
+ *    `ERR_NOT_IMPLEMENTED`），补个假的比缺着更坏。字段集合被钉死在**已落地的 SPI 名单**上
+ *    （datastore 2026-09-22 落地后从四件变五件；dialogs 仍不许出现在名单里）。
  */
 class SystemSpisTest {
 
     @Test
-    fun `Bundle 四件都是 domain 契约类型（具体类不外泄）`() {
+    fun `Bundle 五件都是 domain 契约类型（具体类不外泄）`() {
         val bundle = SystemSpis.Bundle(
             shell = FakeShell,
             device = FakeDevice,
             app = FakeApp,
             floatingWindow = FakeFloating,
+            datastore = FakeDatastore,
         )
         // 静态类型即断言：能赋进这些字段就说明字段类型是契约而非实现类。
         assertTrue(bundle.shell is ShellExecutor)
         assertTrue(bundle.device is DeviceInfoProvider)
         assertTrue(bundle.app is AppLauncher)
         assertTrue(bundle.floatingWindow is FloatingWindowHost)
+        assertTrue(bundle.datastore is DataStore)
     }
 
     @Test
     fun `dialogs 不在束里：缺位就是缺位，不拿假实现凑`() {
         val names = SystemSpis.Bundle::class.java.declaredFields.map { it.name }.toSet()
-        assertEquals(setOf("shell", "device", "app", "floatingWindow"), names)
+        assertEquals(setOf("shell", "device", "app", "floatingWindow", "datastore"), names)
     }
 
     private object FakeShell : ShellExecutor {
@@ -61,5 +66,15 @@ class SystemSpisTest {
     private object FakeFloating : FloatingWindowHost {
         override suspend fun create(spec: FloatingWindowSpec) = HandleRef(1, 1)
         override suspend fun close(ref: HandleRef) = Unit
+    }
+
+    private object FakeDatastore : DataStore {
+        override suspend fun get(key: String): StoredEntry? = null
+        override suspend fun put(key: String, value: StoredEntry) = Unit
+        override suspend fun remove(key: String): StoredEntry? = null
+        override suspend fun contains(key: String): Boolean = false
+        override suspend fun keys(): List<String> = emptyList()
+        override suspend fun clear() = Unit
+        override suspend fun transaction(block: com.autoscript.domain.storage.DataStoreTxn.() -> Unit) = Unit
     }
 }
