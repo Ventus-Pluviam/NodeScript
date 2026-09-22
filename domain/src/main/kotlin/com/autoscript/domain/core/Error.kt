@@ -17,6 +17,7 @@ enum class ErrorCode(val code: String, val summary: String) {
     ERR_NOT_IMPLEMENTED("ERR_NOT_IMPLEMENTED", "本平台不支持该能力"),
     ERR_INVALID_PARAM("ERR_INVALID_PARAM", "参数非法"),
     ERR_FILE_NOT_FOUND("ERR_FILE_NOT_FOUND", "文件不存在"),
+    ERR_FILE_EXISTS("ERR_FILE_EXISTS", "文件/产物已存在"),
     ERR_DISK_FULL("ERR_DISK_FULL", "磁盘空间不足"),
     ERR_NOT_FOUND("ERR_NOT_FOUND", "未找到（如 UiSelector 无匹配）"),
 
