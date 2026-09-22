@@ -19,6 +19,7 @@ import com.autoscript.domain.storage.ZipArchiver
 import com.autoscript.domain.system.AppLauncher
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DeviceProfile
+import com.autoscript.domain.system.DialogHost
 import com.autoscript.domain.system.FloatingWindowHost
 import com.autoscript.domain.system.FloatingWindowSpec
 import com.autoscript.domain.system.NotificationPoster
@@ -32,6 +33,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -42,7 +44,8 @@ import org.junit.jupiter.api.Test
  * 拼装路径**，经 `AppShell.router` 真分发验三件事：
  * 1. 四条独立缝（datastore/zip/settings/notification）+ 五命名空间束接通，
  *    handler 是 `CapabilityNamespaces` 的真转接（协议解释权在平台侧，装配只挂载）；
- * 2. `dialogs` 恒 null（`DialogHost` 待 §14 P2）→ 如实 `ERR_NOT_IMPLEMENTED`，不伪造；
+ * 2. `dialogs`：inject 缺省不传 → null → 如实 `ERR_NOT_IMPLEMENTED`；传真宿主
+ *    → 经 `CapabilityNamespaces.dialogs` 真转接到 `DialogHost`（生产 of() 传真宿主）；
  * 3. `a11y`/`screen` 生产已接（都经 SystemA11yBridge）：测试进程无无障碍服务 →
  *    如实 `ERR_SERVICE_DISABLED`（不是 NOT_IMPLEMENTED —— namespace 已挂，差的是服务连接）。
  *
@@ -157,7 +160,7 @@ class PlatformWiringTest {
     fun `五命名空间束接通，dialogs 诚实缺位`() = runBlocking {
         val spis = bundle()
         val wiring = PlatformWiring.inject(spis)
-        assertNull(wiring.systemHandlers.dialogs, "DialogHost 待 §14 P2：必须留 null 而不是假实现")
+        assertNull(wiring.systemHandlers.dialogs, "inject 未传 dialogs → 留 null 而不是假实现")
 
         shell(wiring).use { s ->
             // 载荷字段语义归 SystemNamespaces 测试；这里验「装配接通 + SPI 收到真命令」
@@ -222,6 +225,30 @@ class PlatformWiringTest {
                 (spis.zip as FakeZip).compressed,
                 "假归档器必须收到调用方给的两个路径",
             )
+        }
+        Unit
+    }
+
+    @Test
+    fun `dialogs 传真宿主即接通 wire 形状与 extras 契约一致`() = runBlocking {
+        val host = object : DialogHost {
+            override suspend fun prompt(request: com.autoscript.domain.system.DialogPromptRequest) =
+                com.autoscript.domain.system.DialogOutcome("张三", confirmed = true)
+
+            override suspend fun choose(request: com.autoscript.domain.system.DialogChooseRequest) =
+                com.autoscript.domain.system.DialogChoice(1)
+        }
+        val wiring = PlatformWiring.inject(bundle(), dialogs = host)
+        shell(wiring).use { s ->
+            val prompt = okPayload(
+                dispatch(s, "dialogs", "prompt", """{"title":"名字"}"""),
+            )
+            assertTrue(
+                prompt.contains(""""value":"张三"""") && prompt.contains("confirmed"),
+                "prompt 回 value/confirmed 两字段（extras.ts 契约），实际 $prompt",
+            )
+            assertEquals("1", okPayload(dispatch(s, "dialogs", "choose", """{"title":"选","options":["a","b"]}""")),
+                "choose 裸下标直出（取消才是 -1）")
         }
         Unit
     }

@@ -7,7 +7,7 @@
 
     <application>
         <service
-            android:name="com.autoscript.platform.capabilities.AutoScriptAccessibilityService"
+            android:name="com.autoscript.platform.capabilities.device.AutoScriptAccessibilityService"
             android:exported="true"
             android:label="@string/autoscript_a11y_description"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
@@ -18,5 +18,12 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/autoscript_a11y_service" />
         </service>
+
+        <!-- 通知动作回投（dialogs 通知回调路径）：显式 Intent（组件名直指），无需
+             intent-filter；exported=false —— 外部应用发不进来，未登记 key 也进不了
+             进程内回投汇（DialogResultRouter 找不到 key 即丢弃）。 -->
+        <receiver
+            android:name="com.autoscript.platform.capabilities.device.DialogActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

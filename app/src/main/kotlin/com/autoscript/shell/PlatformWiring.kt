@@ -2,11 +2,14 @@ package com.autoscript.shell
 
 import android.content.Context
 import com.autoscript.domain.bridge.NamespaceHandler
+import com.autoscript.domain.system.DialogHost
+import com.autoscript.platform.capabilities.AndroidDialogHost
 import com.autoscript.platform.capabilities.AndroidFrameProducer
 import com.autoscript.platform.capabilities.AndroidGestureInput
 import com.autoscript.platform.capabilities.AndroidUiTree
 import com.autoscript.platform.capabilities.CapabilityNamespaces
 import com.autoscript.platform.capabilities.ScreenshotSource
+import com.autoscript.platform.capabilities.device.SystemDialogOps
 import com.autoscript.platform.system.SystemSpis
 
 /**
@@ -29,7 +32,12 @@ import com.autoscript.platform.system.SystemSpis
  *   换 producer 即插）；
  * 二者都走 `SystemA11yBridge` —— 装配期即可注入（连接态在调用期判定），服务未连 =
  * 桥如实 `ERR_SERVICE_DISABLED`（不伪造可用，也不必等 `onServiceConnected` 才装壳）。
- * **`dialogs` 仍诚实缺位**：`DialogHost` 待 §14 P2，缺位即桥如实 `ERR_NOT_IMPLEMENTED`。
+ *
+ * **`dialogs` 生产已接**：[of] 用同一 `overlayAvailable` 构造
+ * `AndroidDialogHost(SystemDialogOps(...))`（实现住 :platform:capabilities ——
+ * domain KDoc 约定 + 平台模块间无依赖边，构造只能在本类）；[inject] 的
+ * `dialogs` 参数缺省 null（单测不传 → 仍如实 `ERR_NOT_IMPLEMENTED`，测试走
+ * 另一套装配不留门靠的是"同函数可注入真/假"，不是绑死构造）。
  */
 object PlatformWiring {
 
@@ -47,14 +55,18 @@ object PlatformWiring {
         val notificationHandler: NamespaceHandler,
     )
 
-    /** SPI 束 → 注入束（纯转接：不解释 payload、不吞错误、不做权限判断）。 */
-    fun inject(spis: SystemSpis.Bundle): Injection = Injection(
+    /**
+     * SPI 束 → 注入束（纯转接：不解释 payload、不吞错误、不做权限判断）。
+     * [dialogs] 缺省 null = 未提供（桥如实 ERR_NOT_IMPLEMENTED）；生产由 [of] 传真宿主。
+     */
+    fun inject(spis: SystemSpis.Bundle, dialogs: DialogHost? = null): Injection = Injection(
         // 树+动作同一个实例（句柄注册表共享，同 InMemoryUiTree 双身份形态）；
         // 事件流缺省 A11yEventRing.shared（服务 push / 树读同一环）。
         a11yHandler = a11yHandler(),
         screenHandler = screenHandler(),
         systemHandlers = SystemHandlers(
-            dialogs = null,   // DialogHost 待 §14 P2：缺位如实 ERR_NOT_IMPLEMENTED
+            // 缺省 null（未提供）→ 如实 ERR_NOT_IMPLEMENTED；生产由 of() 传真宿主。
+            dialogs = dialogs?.let { CapabilityNamespaces.dialogs(it) },
             shell = CapabilityNamespaces.shell(spis.shell),
             device = CapabilityNamespaces.device(spis.device),
             app = CapabilityNamespaces.app(spis.app),
@@ -77,10 +89,17 @@ object PlatformWiring {
         CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer()))
 
     /**
-     * 生产入口：`Context` → [SystemSpis.of] 八件 → [inject]。
-     * `overlayAvailable` 缺省 `{ false }`：悬浮窗先走 `TYPE_APPLICATION_OVERLAY`；
-     * a11y 服务在跑时由调用方改传 `{ true }`（语义见 [SystemSpis.of]）。
+     * 生产入口：`Context` → [SystemSpis.of] 八件 + DialogHost 构造（本类是唯一同时
+     * 碰得到两个平台模块与 overlay 实况的装配点）→ [inject]。
+     * `overlayAvailable` 缺省 `{ false }`：悬浮窗/对话框先走 `TYPE_APPLICATION_OVERLAY`；
+     * a11y 服务在跑时由调用方改传 `{ true }`（语义见 [SystemSpis.of]）——
+     * 同一个探针喂给悬浮窗与对话框两条路，不各读各的。
      */
-    fun of(context: Context, overlayAvailable: () -> Boolean = { false }): Injection =
-        inject(SystemSpis.of(context, overlayAvailable))
+    fun of(context: Context, overlayAvailable: () -> Boolean = { false }): Injection {
+        val app = context.applicationContext
+        return inject(
+            SystemSpis.of(context, overlayAvailable),
+            dialogs = AndroidDialogHost(SystemDialogOps(app, overlayAvailable), overlayAvailable),
+        )
+    }
 }

@@ -9,24 +9,17 @@ import org.junit.jupiter.api.Test
  * 依赖方向守护（docs §6 模块表）：capabilities 实现 :domain SPI，不反向；
  * 禁服务逻辑（app-service）、禁桥/引擎直连、禁 UI。
  *
- * `a11y`/`screen` 命名空间挂 Router 所需的接缝类型（`com.autoscript.domain.bridge.
- * NamespaceHandler`）住 `:domain`，本模块只见 `:domain`（见 [CapabilityNamespaces]）；
+ * `a11y`/`screen`/`dialogs` 命名空间挂 Router 所需的接缝类型（`com.autoscript.domain.
+ * bridge.NamespaceHandler`）住 `:domain`，本模块只见 `:domain`（见 [CapabilityNamespaces]）；
  * `com.autoscript.bridge..` 仍整体在黑名单里 —— 依赖 `:domain` 的挂载缝不等于依赖桥实现层。
  *
- * `android..` 有**一条包内例外**：无障碍服务三件（[AutoScriptAccessibilityService] +
- * 设备面私有类 ServiceBridge/ServiceNode —— §9.1 设备面唯一触点）。语义层
- * （[AndroidUiTree]/[AndroidGestureInput]/A11yBridge 接缝/handler）必须保持纯 JVM：
- * 它们的可测性（假桥注入、本机无 SDK 跑测）全押在这条线上，Android 只许活在服务文件里。
+ * `android..` 按**包**豁免：设备面全部住 `com.autoscript.platform.capabilities.device`
+ * 子包（无障碍服务 + 截图回调 + 对话框设备面），其余（语义层 [AndroidUiTree]/
+ * [AndroidDialogHost]/[A11yBridge] 接缝/handler）保持纯 JVM —— 它们的可测性
+ * （假桥/假 ops 注入、本机无 SDK 跑测）全押在这条线上。按包不按名：SAM/匿名合成类
+ * （`...$dialog$1`）跟着源文件走，名单不用人肉续（按名豁免已经错过两轮）。
  */
 class ArchitectureTest {
-
-    /** 设备面唯一触点（同文件私有类独立 class 文件，按名排除；截图回调同属服务面）。 */
-    private val androidExempt = arrayOf(
-        "AutoScriptAccessibilityService",
-        "ServiceBridge",
-        "ServiceNode",
-        "ScreenshotCallback",
-    )
 
     @Test
     fun `capabilities 包零跨层泄漏`() {
@@ -48,16 +41,13 @@ class ArchitectureTest {
     }
 
     @Test
-    fun `android 只许服务面名单碰`() {
+    fun `android 只许设备包子包碰`() {
         val classes: JavaClasses =
             ClassFileImporter().importPackages("com.autoscript.platform.capabilities")
 
         ArchRuleDefinition.noClasses()
             .that().resideInAPackage("..capabilities..")
-            .and().doNotHaveSimpleName("AutoScriptAccessibilityService")
-            .and().doNotHaveSimpleName("ServiceBridge")
-            .and().doNotHaveSimpleName("ServiceNode")
-            .and().doNotHaveSimpleName("ScreenshotCallback")
+            .and().resideOutsideOfPackage("..capabilities.device")
             .should().dependOnClassesThat().resideInAnyPackage("android..")
             .check(classes)
     }

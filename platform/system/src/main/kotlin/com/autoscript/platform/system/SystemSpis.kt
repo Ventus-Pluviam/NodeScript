@@ -20,9 +20,10 @@ import com.autoscript.domain.system.ShellExecutor
  * `:platform:capabilities` —— 那是一条 §6 模块表没有的平台内互赖。分层的好处正在于此：
  * 本模块只认 `:domain`，谁把它接到桥上都不影响这里。
  *
- * **`dialogs` 刻意缺席**：`DialogHost` 要 overlay 真弹窗 + 通知回调两条 UI 路径
- * （§14 把它排在 P2）。这里不提供"凑数的 DialogHost"—— 缺了就是缺了，
- * 注入侧那个字段留 null，桥对 `dialogs.*` 如实回 `ERR_NOT_IMPLEMENTED`。
+ * **`dialogs` 仍不在此造**（理由从"待 P2"变成"分层归属"）：`DialogHost` 实现按
+ * domain KDoc 约定住 `:platform:capabilities`（`AndroidDialogHost` 编排 +
+ * `SystemDialogOps` 设备面），而平台模块之间没有依赖边 —— 构造归装配层
+ * `PlatformWiring.of`（同 `overlayAvailable` 参数一并传入）。本类八件不变。
  *
  * 构造点在装配层（持有 `Context` 的 Android 侧）；本类不做权限判断（§9.5：
  * 门禁在 `PermissionFacade`，先判后取）。

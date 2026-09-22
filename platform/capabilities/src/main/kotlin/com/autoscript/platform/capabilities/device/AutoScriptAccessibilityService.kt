@@ -1,4 +1,11 @@
-package com.autoscript.platform.capabilities
+package com.autoscript.platform.capabilities.device
+
+import com.autoscript.platform.capabilities.A11yBridge
+import com.autoscript.platform.capabilities.A11yEventRing
+import com.autoscript.platform.capabilities.A11yNode
+import com.autoscript.platform.capabilities.A11yNodeSnap
+import com.autoscript.platform.capabilities.A11yServiceHolder
+import com.autoscript.platform.capabilities.ProducedFrame
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
