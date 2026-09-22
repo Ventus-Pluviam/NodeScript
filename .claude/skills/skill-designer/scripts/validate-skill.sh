@@ -49,6 +49,12 @@ done < <(find "$dir/scripts" -maxdepth 1 -type f 2>/dev/null)
 grep -q $'\r' "$skill" && err "SKILL.md 含 CRLF 行尾"
 [ -s "$skill" ] || err "SKILL.md 为空"
 
+# 6) 若声明 version: 则必须 x.y.z 三节数字（可选字段，有了就要合法）
+if echo "$fm" | grep -q '^version:'; then
+  v=$(echo "$fm" | sed -n 's/^version:[[:space:]]*\(.*\)/\1/p' | head -1)
+  echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || err "version 应 x.y.z: '$v'"
+fi
+
 if [ "$fail" -eq 0 ]; then
   say "✓ 校验通过: $name"
   exit 0

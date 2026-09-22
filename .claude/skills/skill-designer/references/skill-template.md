@@ -12,10 +12,14 @@
 ---
 name: kebab-case-name
 description: 给模型读的"何时触发 + 做什么"。写触发场景（用户会怎么描述这个需求），不写实现细节；3-6 句。
+version: 1.0.0
 ---
 ```
 - `description` 触发可靠性 > 措辞优美：出现具体触发词（"设计 skill"、"git 提交"、"参考 GitHub"等）比华丽形容词更有用。
+- `version` 可选：自 skill-designer 1.1.0 起建议加，便于维护时追踪升级（升级即 version+1，提交信息注明改动）。
 - 无 `allowed-tools` 白名单时不声明；白名单会限制模型可用工具，仅当 security 需要才加。
+- **反例**：`description: "Helps users create skills"` — 太泛，模型无法判断何时触发；应写「触发于用户要求"设计/创建 skill、技能、斜杠命令"，或要求参考 GitHub 上的 skill 来写…」。
+- **反例**：`description: "Uses GitHub API to search repos and then writes SKILL.md files"` — 写的是实现过程，应写触发场景。
 
 ## 正文结构建议（可裁剪）
 ```markdown

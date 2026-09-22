@@ -1,6 +1,7 @@
 ---
 name: skill-designer
 description: 设计并创建 Claude Code skill（技能），默认写入当前项目的 .claude/skills/<name>/。触发于用户要求「设计/创建/写一个 skill、技能或斜杠命令」，或要求参考 GitHub 上他人公开的 skill 来写、要求改动后 git 提交、要求给项目补描述、要求改动时不整库读代码。流程：GitHub 参考调研 → 套模板设计 → 外科手术式写改 → 自检 → 更新项目描述 → git 提交；也用于维护本 skill 自身。
+version: 1.1.0
 ---
 
 # skill-designer —— Skill 设计与生成器
@@ -21,6 +22,8 @@ description: 设计并创建 Claude Code skill（技能），默认写入当前�
 - 一句话说清 skill 职责；确定目标目录（项目级 `.claude/skills/<name>/` 默认）。
 - 一次只做一个 skill。
 - 已存在同名 skill？→ 进入**更新模式**：先 `git diff` 或 Read 现有内容对齐意图，不静默重建。
+- 与项目级 `.claude/skills/` 同名的 skill 已存在于 `~/.claude/skills/` 或 Claude bundled skills？→ 项目级优先；若用户明确要用户级/全局，写入 `~/.claude/skills/` 并说明覆盖范围。
+- 更新模式固定流程：Read 现有 SKILL.md → `git diff`（若在 git 仓库）→ 对齐用户当前意图 → 最小 Edit 改动 → 跑 validate-skill.sh → 提交（改了什么、为什么改）。
 
 ### Step 1 · 参考调研（用户说"不用参考"则跳过；时间盒 ≤3 仓库 / ≤5 次检索）
 - 打开 `references/github-search.md` 按其执行：浅克隆或 API 检索公开 skill 仓库（anthropics/skills、obra/superpowers、wshobson/agents 等），提炼 frontmatter / 目录结构 / 触发词写法。
@@ -38,6 +41,7 @@ description: 设计并创建 Claude Code skill（技能），默认写入当前�
 
 ### Step 4 · 自检
 - 跑 `scripts/validate-skill.sh <skill-dir>`，修正全部报错至通过。
+- **黑盒运行脚本**：直接执行并读输出，**不要**把脚本源码 Read 进上下文（参考 anthropics/skills webapp-testing 的黑盒策略；脚本设计为可黑盒调用，读进上下文浪费 token 且易被旧实现带偏）。
 - 读回 SKILL.md 首屏，确认：name 与目录名一致、description 是"给模型的触发说明"而非实现细节。
 - 冒烟：`ls -R`（单层即可）确认引用路径齐全；向用户说明下次会话可 `/name` 触发。
 
@@ -81,6 +85,7 @@ description: 设计并创建 Claude Code skill（技能），默认写入当前�
 ## 维护本 skill
 - 给 skill-designer 自身提需求 = 更新模式：先用 `git diff` 看现有内容，再按同一协议改 + 提交。
 - 改进原则：**增规则不增篇幅**，保持 runbook 可 skim。
+- 每次实质改动 frontmatter 的 `version: x.y.z` +1（bugfix=patch，新规则=minor）。
 
 ## 内部文件
 - `references/skill-template.md` —— SKILL.md 模板与命名规范
