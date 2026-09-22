@@ -1,6 +1,10 @@
 package com.autoscript.platform.capabilities
 
 import com.autoscript.domain.automation.FrameSource
+import com.autoscript.domain.automation.InputProvider
+import com.autoscript.domain.automation.UiActionExecutor
+import com.autoscript.domain.automation.UiEventStream
+import com.autoscript.domain.automation.UiNodeTreeReader
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.NamespaceHandler
 
@@ -21,15 +25,18 @@ import com.autoscript.domain.bridge.NamespaceHandler
 object CapabilityNamespaces {
 
     /**
-     * `a11y` 命名空间（§9.1）：窗口树 + 输入通道的 JVM 可测形态。
-     * 真实现到位 = 用 SPI 实现调 `A11yNamespaceHandler(tree, actions, input, events)` 再转接 ——
-     * 本函数只装配内存实现，不解释 payload（见上）。
+     * `a11y` 命名空间（§9.1）：窗口树 + 动作 + 输入通道的装配缝。
+     * 缺省三参 = 内存实现（单测/骨架可测）；Android 真实现（AccessibilityNodeInfo 遍历 /
+     * dispatchGesture）到位 = 传三块 SPI 实现（树、动作、输入，可选事件流）再转接 ——
+     * 本函数不解释 payload（见上），只做形状转接。
      */
     fun a11y(
-        tree: InMemoryUiTree,
-        input: InMemoryInputProvider = InMemoryInputProvider(),
+        tree: UiNodeTreeReader,
+        actions: UiActionExecutor,
+        input: InputProvider = InMemoryInputProvider(),
+        events: UiEventStream? = null,
     ): NamespaceHandler {
-        val handler = A11yNamespaceHandler(tree, tree, input)
+        val handler = A11yNamespaceHandler(tree, actions, input, events)
         return NamespaceHandler { request ->
             when (
                 val r = handler.handle(
@@ -44,8 +51,8 @@ object CapabilityNamespaces {
 
     /**
      * `screen` 命名空间（§9.2 / §8.8）：截图帧源，分类错误而非黑图。
-     * 真实现到位 = 用 `FrameSource` 实现调 `ScreenNamespaceHandler(source)` 再转接 ——
-     * 本函数只装配内存实现。
+     * 参数即 `FrameSource` SPI 实现 —— 本函数从不构造内存帧源（构造是调用方的事），
+     * 单测传 `ScreenshotSource`、真机传 a11y takeScreenshot / MediaProjection 实现。
      */
     fun screen(source: FrameSource): NamespaceHandler {
         val handler = ScreenNamespaceHandler(source)

@@ -428,7 +428,7 @@ interface EnginePool {                                // 实现在 :app-service:
 - **句柄代理**：JS 侧 `UiObject` = 代理对象（§7.4），操作带 generation，控件已离开窗口树 → `ERR_STALE_HANDLE`。
 - 窗口树：`window('modal/active/…)`、`UiObject.window`、event 监听（`EventEmitter`）。
 - 全链路如实时树可能加速：惰性属性化已内建在索引树设计中。
-- **已落地（Kotlin 侧）**：`A11yNamespaceHandler`（方法表与 payload 见该类 KDoc；构造只收 `:domain` SPI `UiNodeTreeReader`/`UiActionExecutor`/`InputProvider`，Android 真实现替换内存树/输入即插——handler 逻辑不变）+ 内存窗口树/输入替身，共 53 项 JVM 单测；**Kotlin 侧 `waitFor` 读的载荷键是 `conditions`**（与 `findOne` 同构；轮询等待是宿主责任，内存树是单次快照，`timeout/interval` 只透传回显，不伪造等待）。JS facade `a11y.ts` 的 `waitFor` 已对齐：发 `conditions`（曾发 `selector`，会在白名单外字段上回 `ERR_INVALID_PARAM`——已修，两侧同构），其余方法键早已对齐。
+- **已落地（Kotlin 侧）**：`A11yNamespaceHandler`（方法表与 payload 见该类 KDoc；构造只收 `:domain` SPI `UiNodeTreeReader`/`UiActionExecutor`/`InputProvider`，Android 真实现替换内存树/输入即插——handler 逻辑不变）+ 内存窗口树/输入替身，共 57 项 JVM 单测；**Kotlin 侧 `waitFor` 读的载荷键是 `conditions`**（与 `findOne` 同构；轮询等待是宿主责任，内存树是单次快照，`timeout/interval` 只透传回显，不伪造等待）。JS facade `a11y.ts` 的 `waitFor` 已对齐：发 `conditions`（曾发 `selector`，会在白名单外字段上回 `ERR_INVALID_PARAM`——已修，两侧同构），其余方法键早已对齐。
 
 ### 9.2 截图与图像管线（`media_projection` / `image` / `@autojs/opencv`）
 ```
@@ -699,7 +699,7 @@ auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], messag
 |---|---|---|---|
 | `console` | `console.ts` | `ConsoleCollector`（`:bridge:java`） | `AppShell.assemble` 已挂 |
 | `engines` | `engines.ts` | `EnginesNamespaceHandler`（`:app-service:runtime`） | 已挂（含 `heartbeat` 打点，§8.4） |
-| `a11y` | `a11y.ts` | `A11yNamespaceHandler`（`:platform:capabilities`） | **已可挂**：`assemble` 的 `a11yHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`） |
+| `a11y` | `a11y.ts` | `A11yNamespaceHandler`（`:platform:capabilities`）+ `CapabilityNamespaces.a11y(tree, actions, input, events)` 装配缝（树/动作/输入/事件四 SPI，缺省内存实现可测） | **已可挂**：`assemble` 的 `a11yHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`） |
 | `screen` | `images.ts` | `ScreenNamespaceHandler`（`:platform:capabilities`） | **已可挂**：同上，`screenHandler` 缝 |
 | `images`（fromFile/matchTemplate/findImage） | `images.ts` | 无 | 待建（`:bridge:image` / native，P1） |
 | `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | 无 | 待建（§9.4/§9.6，多为平台能力） |

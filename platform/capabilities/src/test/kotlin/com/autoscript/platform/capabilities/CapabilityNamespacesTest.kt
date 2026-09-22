@@ -33,7 +33,7 @@ class CapabilityNamespacesTest {
     @Test
     fun `a11y 挂载缝透传 Ok 载荷与 id`() = runBlocking {
         val tree = seedTree()
-        val handler = CapabilityNamespaces.a11y(tree)
+        val handler = CapabilityNamespaces.a11y(tree, tree)
 
         val resp = handler.handle(
             BridgeRequest(7, "a11y", "findOne", """{"conditions":{"text":"启动"}}""", 5_000),
@@ -50,7 +50,7 @@ class CapabilityNamespacesTest {
     @Test
     fun `a11y 挂载缝透传错误码不改写`() = runBlocking {
         val tree = seedTree()
-        val handler = CapabilityNamespaces.a11y(tree)
+        val handler = CapabilityNamespaces.a11y(tree, tree)
 
         val notFound = assertInstanceOf(
             BridgeResponse.Err::class.java,
@@ -70,6 +70,33 @@ class CapabilityNamespacesTest {
             handler.handle(BridgeRequest(3, "a11y", "findOne", "not-json", 5_000)),
         )
         assertEquals(ErrorCode.ERR_INVALID_PARAM.code, badPayload.errorCode)
+        Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `a11y 缝树与动作分离注入后各自生效`() = runBlocking {
+        // 树只给"登录"，动作只认另一棵树的句柄 —— 两块 SPI 各自生效，
+        // 证明转接缝不是把内存树写死的（真实现替换 = 换这两个参数）。
+        val tree = InMemoryUiTree()
+        tree.add(InMemoryUiTree.Attrs(text = "登录", className = "Button", clickable = true))
+        val actions = InMemoryUiTree()
+        val ref = actions.add(InMemoryUiTree.Attrs(text = "注销", className = "Button", clickable = true))
+        val handler = CapabilityNamespaces.a11y(tree, actions)
+
+        val found = assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            handler.handle(BridgeRequest(11, "a11y", "findOne", "{\"conditions\":{\"text\":\"登录\"}}", 5_000)),
+        )
+        assertEquals(11L, found.id)
+
+        val rid = ref.refId
+        val clickOther = assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            handler.handle(
+                BridgeRequest(12, "a11y", "click", "{\"ref\":{\"refId\":" + rid + ",\"generation\":1}}", 5_000),
+            ),
+        )
+        assertEquals(12L, clickOther.id, "动作走 actions 侧：tree 里没有该句柄也照样点得动")
         Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
 

@@ -20,8 +20,8 @@ import com.autoscript.domain.core.ErrorCode
  * 归属：住 `:platform:capabilities`；构造只收 `:domain` SPI
  *（[UiNodeTreeReader]/[UiActionExecutor]/[InputProvider]，事件流可选 [UiEventStream]，
  * 缺省走 `tree.events()`）。Android 真实现（AccessibilityNodeInfo 遍历 / dispatchGesture）
- * 只需实现这三块 SPI 即可替换内存树/输入 —— 本类逐行逻辑不变（见 `CapabilityNamespaces.a11y`
- * 仍以内存实现装配：真实现到位 = 换调用处那一行）。
+ * 只需实现这三块 SPI 即可替换内存树/输入 —— 本类逐行逻辑不变（替换 = 调
+ * `CapabilityNamespaces.a11y` 时换 tree/actions/input/events 四个参数）。
  *
  * `:app` 装配层薄转接挂 BridgeRouter。载荷用本模块内 [A11yBridgeJson]
  *（:bridge:java 的 TinyJson 是 internal，跨模块不可见；见 runtime 的 EngineBridgeJson 同例）。
