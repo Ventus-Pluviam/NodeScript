@@ -63,9 +63,9 @@ class ApkSigningTest {
             listOf(
                 "sign",
                 "--ks", "/k/release.jks",
-                "--ks-pass:env", "AUTOSCRIPT_KS_PASS",
+                "--ks-pass", "env:AUTOSCRIPT_KS_PASS",
                 "--ks-key-alias", "rel",
-                "--key-pass:env", "AUTOSCRIPT_KEY_PASS",
+                "--key-pass", "env:AUTOSCRIPT_KEY_PASS",
                 "--v1-signing-enabled", "true",
                 "--v2-signing-enabled", "true",
                 "--out", "/out/signed.apk",
@@ -82,7 +82,7 @@ class ApkSigningTest {
             plan(), manifest(), "apk".repeat(20), SignSpec(SigningKey.DebugEphemeral),
         )
         val args = ApkSignerArgs.build(req, "/out/u.apk", "/out/s.apk", "/k/debug.jks")
-        assertTrue("--key-pass:env" !in args)
+        assertTrue(args.none { it.startsWith("--key-pass") })
         assertTrue("androiddebugkey" in args)
     }
 }

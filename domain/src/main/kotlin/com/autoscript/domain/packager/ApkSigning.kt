@@ -4,7 +4,7 @@ package com.autoscript.domain.packager
  * APK 签名向导的领域契约（docs/framework-design.md §14 P0 打包：签名向导）。
  *
  * P0 切片：纯 Kotlin 领域模型（零 Android 依赖、JVM 可单测）。
- * 真机签名（apksigner 调用、Android Keystore 取密钥）是 Android 侧实现细节，
+ * 起进程与 Keystore 取密钥是实现侧细节，
  * 消费这里校验过的 [SignRequest] 与 [ApkSignerArgs] 产出的参数表，契约不变。
  *
  * 惯例对齐 [LockSigner]：密钥来源是接缝（生产走 Android Keystore，测试走固定字节）；
@@ -40,7 +40,7 @@ data class SignSpec(
 
 /**
  * 一次签名的请求：待签 APK 内容摘要 + 所依据的改写计划摘要 + 规格。
- * apkSha256 由 Android 侧在改写产出 unsigned APK 后填写；领域层只做绑定校验。
+ * apkSha256 由实现侧在改写产出 unsigned APK 后填写；领域层只做绑定校验。
  */
 data class SignRequest(
     val templatePlanDigest: String,
@@ -66,7 +66,7 @@ object SignPlans {
         )
     }
 
-    /** 签名前复验（Android 侧调用 apksigner 前）：请求仍对得上当初那份计划与清单。 */
+    /** 签名前复验（起 apksigner 进程前）：请求仍对得上当初那份计划与清单。 */
     fun verify(request: SignRequest, plan: TemplateApkPlan, manifest: PackManifest): Boolean {
         if (!TemplateApkPlans.verify(plan, manifest)) return false
         return request.templatePlanDigest == plan.planDigest &&
@@ -76,18 +76,29 @@ object SignPlans {
 
 /**
  * apksigner 参数表纯构造（`apksigner sign --ks … --out … <unsigned.apk>`）。
- * 只产字符串表，不起进程（起进程是 Android 侧实现，见 PackagerCollector 头注）。
- * 口令一律经 `--ks-pass:env` / `--key-pass:env` 环境变量传递，不进参数表（防 ps 泄漏）。
+ * 只产字符串表，不起进程（起进程是实现侧细节，见 PackagerCollector 头注）。
+ * 口令一律经 `env:<name>` 引用**环境变量**传递，不进参数表（防 ps 泄漏）。
+ *
+ * **语法钉死在 apksigner 的 OptionsParser 上**（不是猜的）：口令选项是
+ * `--ks-pass <env:NAME>` / `--key-pass <env:NAME>` —— 选项与取值**两个独立 argv 项**，
+ * 取值自带 `env:` 前缀。写成 `--ks-pass:env` 会被 apksigner 直接以
+ * `Unsupported option` 拒绝（参数表形状看着对、一跑就炸），故此前的单体写法已改。
+ * 该形态已对真 apksigner 手工验证（sign/verify 均过）；两项式 argv 形状由
+ * packager 侧 `ApkSignerRunnerTest`（argv 与本表逐字比对）钉住。
  */
 object ApkSignerArgs {
+
+    /** 口令环境变量名（起进程的一侧必须把口令注入这两个名字，见 [ApkSignerRunner]）。 */
+    const val KS_PASS_ENV = "AUTOSCRIPT_KS_PASS"
+    const val KEY_PASS_ENV = "AUTOSCRIPT_KEY_PASS"
 
     fun build(
         request: SignRequest,
         unsignedApkPath: String,
         signedApkPath: String,
         keystorePath: String,
-        ksPassEnv: String = "AUTOSCRIPT_KS_PASS",
-        keyPassEnv: String = "AUTOSCRIPT_KEY_PASS",
+        ksPassEnv: String = KS_PASS_ENV,
+        keyPassEnv: String = KEY_PASS_ENV,
     ): List<String> {
         require(unsignedApkPath.isNotBlank()) { "unsignedApkPath 不得为空" }
         require(signedApkPath.isNotBlank()) { "signedApkPath 不得为空" }
@@ -95,11 +106,11 @@ object ApkSignerArgs {
         return buildList {
             add("sign")
             add("--ks"); add(keystorePath)
-            add("--ks-pass:env"); add(ksPassEnv)
+            add("--ks-pass"); add("env:$ksPassEnv")
             when (request.spec.key) {
                 is SigningKey.ReleaseKeystore -> {
                     add("--ks-key-alias"); add(request.spec.key.alias)
-                    add("--key-pass:env"); add(keyPassEnv)
+                    add("--key-pass"); add("env:$keyPassEnv")
                 }
                 SigningKey.DebugEphemeral -> {
                     add("--ks-key-alias"); add("androiddebugkey")
