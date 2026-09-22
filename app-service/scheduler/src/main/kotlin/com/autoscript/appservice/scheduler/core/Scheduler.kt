@@ -82,9 +82,9 @@ class Scheduler(
      * 本模块不内建触发器互斥：加锁到 suspend 路径上会掩盖装配层的真实并发模型。
      *
      * 句柄形状（§12.3 engines.exec 的调度侧投影）：intent↔engine 双 id 关联（:domain
-     * [EngineRunLink]，归档/追溯用）+ 优雅停入口（[EngineStopHandle.stop]，填权前为 null：
-     * spiky 现状的 [DispatchReport] 只带 outcome + link，stop 填权随 162a04c 落地——
-     * 在此之前 link != null 的投递只持有身份部分，canStopLastRun/stopLastRun 如实 false）。
+     * [EngineRunLink]，归档/追溯用）+ 优雅停入口（[EngineStopHandle.stop]，由 dispatcher
+     * 经 [DispatchReport.stop] 填权：:app 的 ControllerRunDispatcher 接 RuntimeController.stop
+     * → 池四步 quiesce；骨架期/假 dispatcher 为 null）。
      */
     @Volatile
     var lastHandle: EngineStopHandle? = null
@@ -215,13 +215,16 @@ class Scheduler(
                 recordLink(pending, started.runId, report.link, report.outcome)
                 // 控制面句柄出口（§12.3 engines.exec）：真的产生了引擎执行（link != null）
                 // 才持有句柄 —— 门禁拒绝/排队超时/启动失败没有可停的东西，不持有假句柄。
-                // stop 入口随 DispatchReport.stop 填权（162a04c）到来，在此之前只持身份部分。
+                // stop 与 link 同源（DispatchReport.stop）：link != null 蕴含
+                // 产生了引擎执行，stop != null 蕴含 dispatcher 接好了 §4.1 归口。
+                // 二者任一为 null 都不持有假句柄（门禁拒绝/排队超时/启动失败）。
                 val link = report.link
                 if (link != null) {
                     lastHandle = EngineStopHandle(
                         idLink = link,
                         name = pending.scriptPath,
                         runNonce = pending.runNonce,
+                        stop = report.stop,
                     )
                 }
             }
@@ -308,6 +311,7 @@ class Scheduler(
                     idLink = link,
                     name = pending.scriptPath,
                     runNonce = pending.runNonce,
+                    stop = report.stop,
                 )
             }
             settleOrphanArchive(old.runId)

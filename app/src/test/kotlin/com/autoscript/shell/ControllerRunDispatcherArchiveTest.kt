@@ -137,6 +137,54 @@ class ControllerRunDispatcherArchiveTest {
     }
 
     @Test
+    fun `成功投递回执带可调用的停止入口`() = runBlocking {
+        val (d, controller, _) = rig()
+
+        val report = d.dispatchToReport(pending("nonce-stop", intentRunId = 11))
+
+        assertEquals(RunOutcome.Succeeded, report.outcome)
+        assertNotNull(report.link, "link 与 stop 同源：有 link 才有 stop")
+        assertNotNull(report.stop, "start 成功即绑定停止入口（§4.1 归口）")
+        // 已结算后调用：幂等 no-op（AlreadyGone），不抛
+        report.stop!!()
+        assertTrue(controller.activeRunIds().isEmpty())
+    }
+
+    @Test
+    fun `停止入口走优雅停语义，永不升级为 kill`() = runBlocking {
+        val (d, controller, engines) = rig()
+
+        val report = d.dispatchToReport(pending("nonce-stopkind", intentRunId = 14))
+
+        assertEquals(RunOutcome.Succeeded, report.outcome)
+        report.stop!!()
+        assertEquals(0, engines.sumOf { it.killCalls }, "stop 闭包经 controller.stop：已结算落 AlreadyGone，绝不补 kill")
+        assertTrue(controller.activeRunIds().isEmpty())
+        assertEquals(PoolStats(1, free = 1, busy = 0), controller.stats(), "槽位记账不受 stop 调用影响")
+    }
+
+    @Test
+    fun `未产生引擎执行的投递停止入口为 null`() = runBlocking {
+        // 门禁拒绝：未投递引擎 → link 与 stop 双 null
+        val (denied_d, _, _) = rig(gate = ScreenGate { ScreenGateDecision.Deny("熄屏") })
+        val denied = denied_d.dispatchToReport(pending("nonce-denied", intentRunId = 12))
+        assertNull(denied.link)
+        assertNull(denied.stop, "门禁拒绝：无 link 即无 stop，不持有假句柄")
+
+        // 排队超时：未获槽 → link 与 stop 双 null
+        val (_, controller, _) = rig()
+        val held = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            controller.start(PoolAcquireRequest("p0", "hold.js")),
+        )
+        val queued = ControllerRunDispatcher(controller, queueTimeoutMillis = 100)
+        val cancelled = queued.dispatchToReport(pending("nonce-queued", intentRunId = 13))
+        assertNull(cancelled.link)
+        assertNull(cancelled.stop, "排队取消：未产生引擎执行，无可停的东西")
+        controller.stop(held.runId)
+    }
+
+    @Test
     fun `dispatch 与 dispatchToReport 同源：结果一致`() = runBlocking {
         val (d, _, _) = rig()
         val p = pending("nonce-same", intentRunId = 9)

@@ -13,6 +13,18 @@ import com.autoscript.domain.scripts.EngineRunLink
 data class DispatchReport(
     val outcome: RunOutcome,
     val link: EngineRunLink? = null,
+    /**
+     * 这次投递的停止入口（§4.1 归口 → 四步 quiesce）。由 dispatcher 实现填权
+     * （:app 的 `ControllerRunDispatcher` 接 `RuntimeController.stop`）；null =
+     * 本次投递无可停的东西（门禁拒绝/排队超时/启动失败，与 [link] 为 null 同源），
+     * scheduler 据此如实报 `canStopLastRun() == false`，不持有假句柄。
+     *
+     * 类型是裸 suspend lambda 而非 runtime 句柄：scheduler 的 arch 门禁禁止
+     * scheduler→runtime 直连（见 ArchitectureTest），跨层只能传行为不能传类型。
+     * 停止本身幂等（`RuntimeController.stop(未知 runId)` 回 AlreadyGone），
+     * 故已结算后调用是安全的 no-op，scheduler 成功后不清句柄。
+     */
+    val stop: (suspend () -> Unit)? = null,
 )
 
 /**

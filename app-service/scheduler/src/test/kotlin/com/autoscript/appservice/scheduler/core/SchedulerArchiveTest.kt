@@ -7,6 +7,7 @@ import com.autoscript.domain.scripts.RunState
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test
 
 /**
@@ -29,10 +30,20 @@ class SchedulerArchiveTest {
     private class LinkingDispatcher(
         private val linkFor: (PendingRun) -> EngineRunLink?,
         private val outcome: RunOutcome = RunOutcome.Succeeded,
+        /** stop 填权策略：link != null 时跟一个可观测的 stop（记调用），否则 null。 */
+        private val stops: MutableList<String>? = null,
     ) : RunDispatcher {
         override suspend fun dispatch(pending: PendingRun): RunOutcome = outcome
-        override suspend fun dispatchToReport(pending: PendingRun): DispatchReport =
-            DispatchReport(outcome, linkFor(pending))
+        override suspend fun dispatchToReport(pending: PendingRun): DispatchReport {
+            val link = linkFor(pending)
+            val stop: (suspend () -> Unit)? =
+                if (link != null && stops != null) {
+                    { stops += pending.runNonce; Unit }
+                } else {
+                    null
+                }
+            return DispatchReport(outcome, link, stop)
+        }
     }
 
     private var now = 1_000_000L
@@ -118,6 +129,35 @@ class SchedulerArchiveTest {
             archive.recordsOfIntent(recovered.runId).single().runNonce,
             "nonce 随档案保留（幂等锚点可追溯）",
         )
+    }
+
+    @Test
+    fun `真句柄透传 stop：stopLastRun 转发回执的停止入口`() = runBlocking {
+        val stops = mutableListOf<String>()
+        val log = freshLog()
+        val s = scheduler(log, null, LinkingDispatcher(engineLink, stops = stops))
+
+        s.schedule(ScheduledTask("t4", "任务", "p", "a.js", TimedSchedule.Once(0)))
+        s.onTrigger("t4", scheduledAtMillis = now)
+
+        assertTrue(s.canStopLastRun(), "回执带 link+stop → 句柄可用")
+        assertTrue(s.stopLastRun(), "转发到回执的 stop")
+        assertEquals(listOf(log.all().single().runNonce), stops, "停的是这次投递")
+    }
+
+    @Test
+    fun `假 dispatcher 无 stop 时如实不可停`() = runBlocking {
+        val log = freshLog()
+        // 老形状 dispatcher：只给 link 不给 stop（默认 dispatchToReport 的 null-link 路径同理）
+        val s = scheduler(log, null, LinkingDispatcher(engineLink))
+
+        s.schedule(ScheduledTask("t5", "任务", "p", "a.js", TimedSchedule.Once(0)))
+        s.onTrigger("t5", scheduledAtMillis = now)
+
+        // 有 link 但无 stop：不持有"停不了"的假入口 —— canStop 如实 false
+        assertTrue(s.lastHandle != null, "link 仍持有（归档/追溯用）")
+        assertFalse(s.canStopLastRun(), "stop 为 null → 如实不可停")
+        assertFalse(s.stopLastRun())
     }
 
     @Test

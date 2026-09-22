@@ -64,7 +64,7 @@ class ControllerRunDispatcher(
 
     private suspend fun run(pending: PendingRun): DispatchReport {
         when (val gate = screenGate.pass(pending.screen)) {
-            is ScreenGateDecision.Deny -> return DispatchReport(RunOutcome.Failed, null)
+            is ScreenGateDecision.Deny -> return DispatchReport(RunOutcome.Failed, null, null)
             ScreenGateDecision.Proceed -> Unit
         }
         val started = when (
@@ -81,25 +81,29 @@ class ControllerRunDispatcher(
             )
         ) {
             is RuntimeController.StartOutcome.Started -> s
-            RuntimeController.StartOutcome.QueueTimeout -> return DispatchReport(RunOutcome.Cancelled, null)
-            is RuntimeController.StartOutcome.StartFailed -> return DispatchReport(RunOutcome.Crashed(s.message), null)
+            RuntimeController.StartOutcome.QueueTimeout -> return DispatchReport(RunOutcome.Cancelled, null, null)
+            is RuntimeController.StartOutcome.StartFailed -> return DispatchReport(RunOutcome.Crashed(s.message), null, null)
         }
         // 双 id 关联在此生成（engineRunId = EngineRunReceipt.runId）；intentRunId 缺省（直投时）为 0。
         val link = EngineRunLink(
             intentRunId = pending.intentRunId ?: NO_INTENT_RUN_ID,
             engineRunId = started.runId,
         )
+        // 停止入口在 start 成功时即绑定 runId（§4.1 归口 → controller.stop → 池四步 quiesce）。
+        // 已结算后调用落到 AlreadyGone（幂等 no-op，不抛）；run 仍在途时走优雅停。
+        // 未产生引擎执行的门禁拒绝/排队超时/启动失败三条早退分支回 null stop（如实：无可停的东西）。
+        val stop: suspend () -> Unit = { controller.stop(started.runId); Unit }
         val awaitTimeout = pending.timeoutMillis ?: defaultAwaitTimeoutMillis
         return when (controller.awaitCompletion(started.runId, awaitTimeout)) {
-            RuntimeController.Completed.StoppedClean -> DispatchReport(RunOutcome.Succeeded, link)
-            RuntimeController.Completed.StopTimeout -> DispatchReport(RunOutcome.Failed, link)
+            RuntimeController.Completed.StoppedClean -> DispatchReport(RunOutcome.Succeeded, link, stop)
+            RuntimeController.Completed.StopTimeout -> DispatchReport(RunOutcome.Failed, link, stop)
             RuntimeController.Completed.Killed ->
-                DispatchReport(RunOutcome.Crashed("引擎强杀结算 runId=${started.runId}"), link)
+                DispatchReport(RunOutcome.Crashed("引擎强杀结算 runId=${started.runId}"), link, stop)
             RuntimeController.Completed.UnknownRun ->
-                DispatchReport(RunOutcome.Crashed("run 已结算或从未存在 runId=${started.runId}"), link)
+                DispatchReport(RunOutcome.Crashed("run 已结算或从未存在 runId=${started.runId}"), link, stop)
             RuntimeController.Completed.TimedOut -> {
                 controller.killRun(started.runId, KillCause.REQUESTED)
-                DispatchReport(RunOutcome.Crashed("完成等待超时，已强杀 runId=${started.runId}"), link)
+                DispatchReport(RunOutcome.Crashed("完成等待超时，已强杀 runId=${started.runId}"), link, stop)
             }
         }
     }
