@@ -4,6 +4,11 @@
     <!-- 精确闹钟（§8.6 守时契约）：用户/系统可在设置里收回，收回后走 setWindow 降级
          并在能力中心标注「可能偏差」（AlarmSchedulerProvider.degradedTasks），不静默降级。 -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 开机续排（§8.6 重启后排期重建）：重启清掉全部闹钟，不注册这个 receiver，
+         持久的注册表再完整也没人续排 —— Daily 任务重启后永久停排，且无任何报错。
+         这只是"进程起来"的触发器：续排/重投走 Application.onCreate 正常装配路径，
+         绝不在 receiver 里另起一套（并发撞车，见 BootReceiver KDoc）。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 唤醒锁 + specialUse FGS：见 §8.7（本轮未接线 PowerManager 调用，权限先按契约就位）。 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -27,6 +32,19 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.autoscript.shell.action.ALARM_FIRE" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          开机接收器（§8.6 重启后排期重建）：与 AlarmReceiver 同一"静态注册 + 无判断"纪律。
+          exported=false：BOOT_COMPLETED 是系统保护广播，第三方发不进来。
+        -->
+        <receiver
+            android:name="com.autoscript.shell.BootReceiver"
+            android:directBootAware="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
     </application>
