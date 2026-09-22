@@ -15,7 +15,7 @@
 ## 1. 目标与非目标
 
 ### 目标
-- **对标 AutoJsPro v9 的 API 能力面**：无障碍自动化、截图找图、悬浮窗、定时任务、原生/Web UI、多脚本引擎、打包为独立 APK、VSCode 远程调试、脚本加密。
+- **对标 AutoJsPro v9 的 API 能力面**：无障碍自动化、截图找图、悬浮窗、定时任务、原生/Web UI、多脚本引擎、打包为独立 APK、脚本加密。
 - **脚本即一等公民**：用户用 Node.js 生态写自动化；内置 IDE/控制台/任务中心。
 - **可长期演进**：清晰的依赖方向、明确的接缝（引擎/自动化通道/存储/OCR 可替换）、P0 小而完整可发布。
 - **诚实面对 Android 2000 说「不」**：不在保活、后台启动、跨进程同步这些被系统禁令的地方假装可以。
@@ -25,6 +25,7 @@
 - 不做「无人值守的自愈」：精确闹钟、电池白名单、开机启动默认**不自动授予**，全部走能力中心引导；未授权即降级并在 UI 明示。
 - 不在 v1 承诺 `child_process.spawn`（Node-on-Android 不可用）与未经验证的 `worker_threads`（见 §8.2 决议）。两者都由引擎适配层如实上报为「不支持」，不伪造。
 - 不承诺 iOS/Windows 跨端（单 Android 目标）。
+- 不做桌面端远程调试生态：VSCode 插件 / `inspector over adb forward` / 远程终端 / 多端协作一律不进路线图。调试只走 App 内置 IDE 控制台与日志回传（§8 最小桥的 `console` 通道），不为任何外部编辑器开 adb 转发端口或暴露安装会话。
 - 不做侵入式破解/绕过系统安全（root 通道是用户自选能力，需要 root 设备）。
 
 ---
@@ -645,7 +646,7 @@ auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], messag
 
 - **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警 + 审批卡 UI（仅请求）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；依赖面板 + `auto.npm` 核心 API；打包向导 node_modules 入包。
 - **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ 批准后脚本真实执行（人工确认）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；npm 终端视图；在线 audit + audit signatures + OSV 离线；QuickJS 白名单库独立 vendored；`offlineGap` + 种子金标准测试。
-- **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；VSCode 远程终端复用安装会话队列；prebuild `.node` 交叉编译管线产品化（napi-rs/NDK，`NODE_MODULE_VERSION` 与 libnode ABI 匹配校验 + `--dest-os=android` 断言）；纯 JS 替代清单（sharp→jimp/opencv、bcrypt→bcryptjs、better-sqlite3→node:sqlite）。
+- **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；prebuild `.node` 交叉编译管线产品化（napi-rs/NDK，`NODE_MODULE_VERSION` 与 libnode ABI 匹配校验 + `--dest-os=android` 断言）；纯 JS 替代清单（sharp→jimp/opencv、bcrypt→bcryptjs、better-sqlite3→node:sqlite）。
 - **P3**：跨项目共享 store 去重（pnpm 式，须 store↔lock 加签映射）；程序化安装服务化；ECDSA 签名强制；vendored npm 自动升级（仅通过零 spawn 金标准闸门）；esbuild 类**代码签名原生 exec** 独立通道。
 
 ### 10.12 npm 特有风险与缓解
@@ -830,7 +831,6 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 - `ui` 原生 XML UI 宿主 + `ui_web` WebView JS 桥 + 悬浮窗。
 - datastore SQLite、settings、sensors、notification、app Intent、zip、power_manager。
 - OCR (MLKit 插件基准实现) + `OcrProvider`。
-- VSCode 远程调试（inspector over adb forward）。
 - 插件框架骨架 + 打包合并插件资产。
 - npm P1（§10.11）：spawn 桥 polyfill + 批准后脚本真实执行（纯 JS bin 白名单）+ npm 终端 + 在线/OSV 离线审计 + QuickJS 白名单库独立 vendored + node-shim 红测。
 
@@ -840,11 +840,11 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 - 打包 APK 深度自定义（权限/图标/启动配置、低 targetSdk 壳可配）。
 - 通知触发的 Intent 任务；多时区 cron；alarm 生成日历视图。
 - 市场/分享、`axios`/第三方包预置、插件市场。
-- npm P2（§10.11）：离线 bundle 打包器 + 增量更新；`prebuild .node` 交叉编译管线产品化 + 纯 JS 替代清单；VSCode 远程终端执行 npm。
+- npm P2（§10.11）：离线 bundle 打包器 + 增量更新；`prebuild .node` 交叉编译管线产品化 + 纯 JS 替代清单。
 
 ### P3 — 前沿与实验
 - worker_threads 实验性引擎（若手机端验证可行）——标记实验、默认关闭。
-- 多设备/服务器远端执行；LLM 驱动的自动化智能体；VSCode 协作。
+- 多设备/服务器远端执行；LLM 驱动的自动化智能体。
 - Flutter/Compose 全重做 IDE 主题化；性能剖析面板。
 
 **原则**：P0 的「小而完整」优先于「多而残缺」；每个 P 的退出标准都有可测验收（§16 预算联动）。
