@@ -704,7 +704,7 @@ auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], messag
 | `images`（fromFile/matchTemplate/findImage） | `images.ts` | 无 | 待建（`:bridge:image` / native，P1） |
 | `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | 无 | 待建（§9.4/§9.6，多为平台能力） |
 | `npm` | `npm.ts` | `NpmBridgeHandler`（`:app-service:packager`，`mount(): NamespaceHandler`） | **已可挂**：`assemble` 的 `npmHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`；方法表 11 项，`resolveApproval` 刻意不在桥面，§10.5 人机分离） |
-| `workManager` | `workManager.ts` | 无（纯本地 helper，不发桥调用） | scheduler 面，另走 Scheduler SPI |
+| `workManager`（create/cancel/list 建任务面） | `workManager.ts`（排期工具 + 桥门面） | `WorkManagerNamespaceHandler`（`:app`，直驱 Scheduler，直写注册表） | **已挂**（恒挂载，调度器是本壳自建、无注入缝；cron 桥侧 `ERR_NOT_IMPLEMENTED`） |
 
 **为什么能力命名空间走注入缝**：`a11y`/`screen` 的真实现住 `:platform:capabilities`，而 §6 禁止 `:app` 直连 `:platform`。解法是 `:domain` 上的挂载缝 `NamespaceHandler` + `:platform:capabilities` 的薄转接 `CapabilityNamespaces.{a11y,screen}`，由持有真实现的 Android 侧在调用 `assemble` 时注入；`BridgeRouter` 的 `RequestHandler` 只是这条缝的 typealias。这不违反依赖规则：两侧都只见 `:domain`。
 

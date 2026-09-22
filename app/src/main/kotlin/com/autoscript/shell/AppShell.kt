@@ -34,8 +34,9 @@ import com.autoscript.domain.scripts.RunArchive
  * - **归档（§8.5）**：dispatcher 产出的 [com.autoscript.domain.scripts.EngineRunLink]
  *   （intentRunId ↔ engineRunId）与 :domain `RunRecord` 一并写入 [RunArchive]，
  *   使意图日志行与引擎执行可互相追溯（任务中心/UI 按 IntentRun 读引擎记录）；
- * - 桥（[BridgeRouter] + [RequestRegistry] + [EventBus]）挂 `console`/`engines`
- *   命名空间；`a11y`/`screen` 走 [NamespaceHandler] 挂载缝（见 [assemble] 的
+ * - 桥（[BridgeRouter] + [RequestRegistry] + [EventBus]）挂 `console`/`engines`/
+ *   `workManager` 命名空间（`workManager` 恒挂载：调度器是本壳自建的，无注入缝）；
+ *   `a11y`/`screen` 走 [NamespaceHandler] 挂载缝（见 [assemble] 的
  *   [a11yHandler]/[screenHandler] 注入说明）。
  *
  * Android 能力缝（[engineFactory]/[schedulerProvider]/[screenGate]/[runArchive]）由
@@ -171,6 +172,9 @@ class AppShell(
                 deadlineFor = ControllerRunDispatcher.DEFAULT_QUEUE_TIMEOUTS,
                 taskStore = taskStore,
             )
+            // 脚本建任务面（`auto.workManager.*`）：调度器是本壳自建的（与 a11y/screen
+            // 注入缝不同 —— 真实现不在 `:platform`），故恒挂载，无注入缝。
+            router.register("workManager", WorkManagerNamespaceHandler(scheduler).mount())
 
             // 看门狗：采样器 + 心跳来源在此装配；policy 取 controller 自己那份（单一事实来源，
             //  Threshold 改变只改一处）。缺省 new 一个套在真 controller 上的生产实例。

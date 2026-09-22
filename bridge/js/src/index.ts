@@ -8,17 +8,17 @@ import { runtimeBridge } from './runtime'
 import { a11y } from './a11y'
 import { engines } from './engines'
 import { BridgeEnvelope } from './bridge'
-import { daily, once, fromInput, nextFireAfter, TimedSchedule } from './workManager'
+import { daily, once, fromInput, nextFireAfter, TimedSchedule, createTimedTask, cancelTask, listTasks, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee } from './workManager'
 import { screen, images } from './images'
 import { npm } from './npm'
 import { consoleSink } from './console'
 import { dialogs, shell, device, app, floatingWindow } from './extras'
 import { InvokeHandler } from './bridge'
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload }
-export type { ErrPayload, TimedSchedule }
+export type { ErrPayload, TimedSchedule, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee }
 
 /** workManager 命名空间（scheduler 面：P0 每日/一次性排期工具函数，运行态挂全局任务表）。 */
-export const workManagerNS = { daily, once, fromInput, nextFireAfter }
+export const workManagerNS = { daily, once, fromInput, nextFireAfter, createTimedTask, cancelTask, listTasks }
 
 /** 命名空间根对象：挂各类能力；`install` 由 bootstrap/宿主在引擎就绪时注入桥 handler。 */
 export const auto = {
