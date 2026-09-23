@@ -10,7 +10,8 @@
          这只是"进程起来"的触发器：续排/重投走 Application.onCreate 正常装配路径，
          绝不在 receiver 里另起一套（并发撞车，见 BootReceiver KDoc）。 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- 唤醒锁 + specialUse FGS：见 §8.7（本轮未接线 PowerManager 调用，权限先按契约就位）。 -->
+    <!-- 唤醒锁 + specialUse FGS：见 §8.7。调用侧已接线（WakeLockLedger 取/放 +
+         ForegroundKeeper 起停 + 保活服务声明在下方 application 内）。 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -25,7 +26,7 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- P0 最小闭环宿主：specialUse FGS / 精确闹钟等权限项按 §8.7 逐步补齐 -->
+    <!-- P0 最小闭环宿主：精确闹钟/开机续排/保活 FGS 三件已接线（§8.6/§8.7） -->
     <application
         android:name=".AppShellApplication"
         android:label="AutoScript"
@@ -58,5 +59,24 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          保活前台服务（§8.7 specialUse FGS：`onCreate` 即起、无超时）：
+          - **specialUse + PROPERTY_SPECIAL_USE_FGS_SUBTYPE**：自动化没有贴切的官方类型，
+            specialUse 是唯一能如实描述且不受 6h 超时限制的（API35 普通 FGS 有超时）。
+            subtype 值 `automation` 是 Play 审核要看的说明（"为什么需要长期前台"）。
+          - exported=false：服务只由本应用 startForegroundService 拉起，
+            外部应用没有理由也没有能力绑定它（onBind 恒 null）。
+          - foregroundServiceType 必须与代码侧 startForeground 的第三个参数一致
+            （API 34+ 两处不一致会抛 MissingForegroundServiceTypeException）。
+        -->
+        <service
+            android:name="com.autoscript.shell.AutoScriptForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="automation" />
+        </service>
     </application>
 </manifest>

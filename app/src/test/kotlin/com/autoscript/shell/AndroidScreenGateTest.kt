@@ -69,6 +69,36 @@ class AndroidScreenGateTest {
     }
 
     @Test
+    fun `持锁判定接账本后没锁的 SCREEN_ON 如实拒绝`() = runBlocking {
+        // 生产接线形态：AndroidScreenGate.of(context, deferWakeLock = ledger::isHeld)。
+        // 这里不构造 Context，直接把那条接线的**实参形状**钉住：账本为空 → 拒绝；
+        // 拿到锁（且系统侧真持着）→ 放行。§8.7 原先那条"缝恒真 = 明写的待接"就收口在这条断言上。
+        val ops = object : WakeLockOps {
+            override var held: Boolean = false
+            override fun acquire(): Boolean { held = true; return true }
+            override fun release(): Boolean { held = false; return true }
+        }
+        val ledger = WakeLockLedger(ops)
+        val g = AndroidScreenGate(
+            interactive = ScreenInteractive { true },
+            deferWakeLock = ScreenInteractive { ledger.isHeld() },
+            onScreenOff = ScreenOffGuard { },
+        )
+
+        assertInstanceOf(
+            ScreenGateDecision.Deny::class.java, g.pass(ScreenGuarantee.SCREEN_ON),
+            "没锁不得放行（否则任务在会休眠的 CPU 上跑完还报成功）",
+        )
+        ledger.hold("framework")
+        assertEquals(ScreenGateDecision.Proceed, g.pass(ScreenGuarantee.SCREEN_ON))
+
+        // 系统侧把锁放掉 → 立即回到拒绝（分歧按没持着算）
+        ops.held = false
+        assertInstanceOf(ScreenGateDecision.Deny::class.java, g.pass(ScreenGuarantee.SCREEN_ON))
+        Unit
+    }
+
+    @Test
     fun `AllowAll 与 Android 门禁在 ANY 上结论一致`() = runBlocking {
         val g = gate(screen = false, wake = false)
         // ANY 在两处实现下必须同结论：否则按环境切换门禁会悄悄改变任务语义

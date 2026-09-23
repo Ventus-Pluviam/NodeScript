@@ -69,4 +69,14 @@ private fun StatusBlock(state: HomeState) {
     } else {
         Text(missed, color = colors.onSurfaceVariant)
     }
+    // 保活（§8.7）：false 时熄屏的 SCREEN_ON 任务会被如实拒绝 —— 这条对用户是"任务为什么没跑"
+    // 的直接答案，所以不藏在二级页里。
+    if (state.keepAliveActive) {
+        Text("保活已生效（前台服务 + 唤醒锁）", color = colors.primary)
+    } else {
+        Text(
+            "保活未生效：熄屏的亮屏任务会被拒绝（点亮屏幕可正常运行）",
+            color = colors.error,
+        )
+    }
 }

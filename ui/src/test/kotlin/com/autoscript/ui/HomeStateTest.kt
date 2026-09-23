@@ -23,7 +23,7 @@ class HomeStateTest {
     @Test
     fun `接线后逐字段回读快照`() {
         val host = object : HostSummary {
-            override fun shellSummary() = ShellSummary(shellReady = true, missedAlarms = 3)
+            override fun shellSummary() = ShellSummary(shellReady = true, missedAlarms = 3, keepAliveActive = true)
         }
         val s = HomeState.read(host)
         assertTrue(s.summaryWired)
@@ -34,7 +34,7 @@ class HomeStateTest {
     @Test
     fun `未就绪如实透传（装配中或失败不细分）`() {
         val host = object : HostSummary {
-            override fun shellSummary() = ShellSummary(shellReady = false, missedAlarms = 0)
+            override fun shellSummary() = ShellSummary(shellReady = false, missedAlarms = 0, keepAliveActive = false)
         }
         val s = HomeState.read(host)
         assertTrue(s.summaryWired, "接了读口 ≠ 壳就绪：两态分开")
@@ -42,10 +42,21 @@ class HomeStateTest {
     }
 
     @Test
+    fun `保活事实如实透传（不由壳就绪推断）`() {
+        val host = object : HostSummary {
+            override fun shellSummary() =
+                ShellSummary(shellReady = true, missedAlarms = 0, keepAliveActive = false)
+        }
+        val s = HomeState.read(host)
+        assertTrue(s.shellReady)
+        assertFalse(s.keepAliveActive, "壳就绪 ≠ 保活生效：两条事实不许互相推断")
+    }
+
+    @Test
     fun `read 每次现取（不缓存首读）`() {
         var ready = false
         val host = object : HostSummary {
-            override fun shellSummary() = ShellSummary(shellReady = ready, missedAlarms = 0)
+            override fun shellSummary() = ShellSummary(shellReady = ready, missedAlarms = 0, keepAliveActive = false)
         }
         assertFalse(HomeState.read(host).shellReady)   // 装配完成前
         ready = true

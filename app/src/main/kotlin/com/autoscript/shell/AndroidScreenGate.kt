@@ -40,8 +40,12 @@ fun interface ScreenOffGuard {
 
 /**
  * 生产实现。[interactive] 与 [deferWakeLock] 都是缝：真机由 `:app` 装配层注入
- * （PowerManager + 解锁监听），JVM 单测注入即时值 —— 门禁的判断逻辑因此可测，
- * 不需要 Mock 任何 Android 框架对象。
+ * （PowerManager + [WakeLockLedger] 的持锁事实），JVM 单测注入即时值 ——
+ * 门禁的判断逻辑因此可测，不需要 Mock 任何 Android 框架对象。
+ *
+ * **`deferWakeLock` 的生产实参已接线**（2026-09-23，§8.7 保活落地）：
+ * `AppShellApplication.screenGateOf` 传的是 `WakeLockLedger::isHeld`（账本与系统两侧都真），
+ * 不再是恒真 —— §8.7 里那条"恒真 = 明写的待接"因此收口。
  */
 class AndroidScreenGate(
     private val interactive: ScreenInteractive,
@@ -72,14 +76,25 @@ class AndroidScreenGate(
          *
          * 装配层（`AppShellApplication`）调用；单测不应走这里 ——
          * 它拿的是真 `PowerManager`，桌面 JVM 上取不到。
+         *
+         * @param deferWakeLock 持锁判定（§8.7）。**缺省恒真只对未接保活路径的调用方成立** ——
+         *   生产（`AppShellApplication.screenGateOf`）必须传 `WakeLockLedger::isHeld`：
+         *   缺省值是"旧行为"（明写的待接），不是"可以一直用"。传恒真 = `SCREEN_ON` 任务
+         *   在没锁的情况下也放行，表现是"任务成功、实际在会休眠的 CPU 上跑"。
+         * @param onScreenOff 熄屏裁剪点（§8.8：MediaProjection 在 keyguard 下给黑帧，
+         *   要求的是**分类错误而非黑图**，故熄屏前先收画面类能力）。
          */
-        fun of(context: Context): ScreenGateAndroid {
+        fun of(
+            context: Context,
+            deferWakeLock: ScreenInteractive = ScreenInteractive { true },
+            onScreenOff: ScreenOffGuard = ScreenOffGuard { },
+        ): ScreenGateAndroid {
             val power = context.getSystemService(android.os.PowerManager::class.java)
                 ?: error("PowerManager 不可得（系统服务缺失）")
             return AndroidScreenGate(
                 interactive = ScreenInteractive { power.isInteractive },
-                deferWakeLock = ScreenInteractive { true },   // 真 wakelock 由 FGS/持锁路径保证（§8.7）
-                onScreenOff = ScreenOffGuard { },             // MediaProjection 裁剪随会话实现落地
+                deferWakeLock = deferWakeLock,
+                onScreenOff = onScreenOff,
             )
         }
     }

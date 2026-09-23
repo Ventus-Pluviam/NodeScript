@@ -14,16 +14,23 @@ import com.autoscript.shell.AlarmReceiver
 import com.autoscript.shell.AlarmSchedulerProvider
 import com.autoscript.shell.AndroidAlarmPort
 import com.autoscript.shell.AndroidBridgeBinder
+import com.autoscript.shell.AndroidForegroundOps
+import com.autoscript.shell.AndroidWakeLockOps
 import com.autoscript.shell.AndroidPermissionGates
 import com.autoscript.shell.AndroidScreenGate
 import com.autoscript.shell.AppShell
 import com.autoscript.shell.AppShellKit
+import com.autoscript.shell.AutoScriptForegroundService
 import com.autoscript.shell.BootRecovery
 import com.autoscript.shell.BridgeSocketListener
+import com.autoscript.shell.ForegroundHost
+import com.autoscript.shell.ForegroundKeeper
 import com.autoscript.shell.PlatformWiring
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
 import com.autoscript.shell.ScreenGateAndroid
+import com.autoscript.shell.ScreenInteractive
+import com.autoscript.shell.WakeLockLedger
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import java.nio.file.Path
@@ -44,10 +51,11 @@ import java.nio.file.Path
  * 3. **重建/恢复**：接到广播时 application 已 attach，就地走 2 的路线，幂等由
  *    scheduler 的 runNonce 承担（同一个 runNonce 重复投递不会双跑）。
  *
- * §8.7 的 PowerManager 持锁（wake lock）不在这里假装接线：`deferWakeLock` 缝在
- * [AndroidScreenGate.of] 里默认恒真，真锁的获取/释放随 FGS 路径落地。当前状态下
- * 熄屏任务的 `SCREEN_ON` 会**如实拒绝**而不是"锁也拿不到却照样跑"
- * （那条路径的表现是"任务成功、实际什么都没发生"）。
+ * §8.7 的保活与电源**已接线**（2026-09-23）：[AndroidWakeLockOps] 取真 `PARTIAL_WAKE_LOCK`、
+ * [WakeLockLedger] 做 token 引用计数与超时自动释放、[ForegroundKeeper] 管 specialUse FGS 的
+ * 起停与续期。屏幕门禁的持锁判定取 [WakeLockLedger.isHeld]（账本与系统两侧都真）——
+ * 于是熄屏 + `SCREEN_ON` 的任务要么真有锁放行、要么**如实拒绝**，没有第三条路
+ * （"锁也没拿却照样跑"的表现是"任务成功、实际什么都没发生"）。
  */
 class AppShellApplication : Application(), HostSummary {
 
@@ -87,6 +95,16 @@ class AppShellApplication : Application(), HostSummary {
     @Volatile
     private var gates: com.autoscript.appservice.permissioncenter.PermissionCenter? = null
 
+    /**
+     * 保活编排（§8.7）：唤醒锁账本 + specialUse FGS 的起停/续期。
+     *
+     * **进程级单例式**（懒建 + 缓存）：它持有的唤醒锁是进程级单资源，
+     * 第二份实例会各记各的 token（互相看不见对方持着锁 → 一方 release 把另一方的锁也放掉，
+     * 表现是"熄屏任务随机被拒"，见 [WakeLockLedger] 的引用计数理由）。
+     */
+    @Volatile
+    private var keepAlive: ForegroundKeeper? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -100,6 +118,10 @@ class AppShellApplication : Application(), HostSummary {
         // 放后台线程：`onCreate` 里做文件 IO（replay 两个 jsonl + 建目录）会拖慢冷启动，
         // 而这几件事没有一件是"必须在 onCreate 返回前完成"的 —— 闹钟在那之前响就走
         // 漏投记账（[AlarmDispatch]，不丢账），装配完成后再由 [install] 接上路线。
+        // §8.7 保活先于装配起：屏幕门禁的持锁判定读的就是本对象（[screenGateOf]），
+        // 而门禁在装配期就被交给 dispatcher —— 装完再起会让"装配完成到保活生效"之间
+        // 出现一个窗口，期间 SCREEN_ON 任务被如实拒绝（不是错，但没必要让用户撞上）。
+        foregroundKeeper()
         @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
         GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             installWithFiles(filesDir.toPath(), cacheDir.toPath())
@@ -263,6 +285,57 @@ class AppShellApplication : Application(), HostSummary {
     fun permissionCenter(): com.autoscript.appservice.permissioncenter.PermissionCenter =
         gates ?: AndroidPermissionGates.permissionCenterOf(applicationContext).also { gates = it }
 
+    /**
+     * 保活编排（§8.7）：懒建一次并**立即尝试起保活**。
+     *
+     * 起失败（后台启动受限/权限被收回）**不抛**：保活失败的应用仍应能跑前台任务，
+     * 只是 `SCREEN_ON` 任务被如实拒绝 + 能力中心的「保活」显示未生效 ——
+     * 而不是开机就崩。`keeper.isActive()` 是能力中心该读的东西。
+     */
+    fun foregroundKeeper(): ForegroundKeeper = keepAlive ?: synchronized(this) {
+        keepAlive ?: run {
+            val ops = AndroidForegroundOps.forApplication(
+                applicationContext,
+                AutoScriptForegroundService::class.java,
+                // 通知点开去哪：`:app` 不认识 `:ui` 的 MainActivity，类名只能由这里给。
+                contentActivity = launcherActivityOrNull(),
+            )
+            val keeper = ForegroundKeeper(ops, WakeLockLedger(AndroidWakeLockOps(applicationContext)))
+            ForegroundHost.keeper = keeper
+            if (!keeper.start()) {
+                Log.w(TAG, "保活未生效：服务拉不起或唤醒锁取不到（SCREEN_ON 任务将被如实拒绝）")
+            }
+            keeper.also { keepAlive = it }
+        }
+    }
+
+    /**
+     * 保活是否真在跑（§8.7）：**系统事实 ∧ 账本持锁**，两侧都真才算（见 [ForegroundKeeper.isActive]）。
+     * 能力中心「保活/电源」那一行读这里；不许乐观（"请求过"不是"生效了"）。
+     */
+    fun keepAliveActive(): Boolean = keepAlive?.isActive() ?: false
+
+    /**
+     * launcher Activity 的类名（通知点开用）。
+     *
+     * 走 `PackageManager` 查 LAUNCHER intent 而不是写死 `com.autoscript.ui.MainActivity`：
+     * `:app` 不认识 `:ui`（依赖方向是 app→ui 只为打包，源码零 import），写死类名等于把
+     * 呈现层的类名焊进装配层 —— 换个入口类就得改两处，且编译器不会提醒。
+     * 查不到（无 launcher 声明）= null，通知点不开但服务照常保活（不编一个假 Intent）。
+     */
+    private fun launcherActivityOrNull(): Class<*>? = try {
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        val component = intent?.component
+        if (component == null || component.packageName != packageName) {
+            null
+        } else {
+            Class.forName(component.className)
+        }
+    } catch (t: Throwable) {
+        Log.w(TAG, "查 launcher Activity 失败：通知点不开（保活本身不受影响）", t)
+        null
+    }
+
     /** 降级中的定时任务（`AlarmSchedulerProvider.degradedTasks` 的只读视图；能力中心标「可能偏差」用）。 */
     fun degradedAlarmTasks(): Map<String, Long> =
         (shell?.schedulerProvider as? AlarmSchedulerProvider)?.degradedTasks() ?: emptyMap()
@@ -278,6 +351,8 @@ class AppShellApplication : Application(), HostSummary {
     override fun shellSummary(): ShellSummary = ShellSummary(
         shellReady = shell != null,
         missedAlarms = alarmDispatch.missed().size,
+        // §8.7：保活两侧都真才算（见 ForegroundKeeper.isActive）；未建时如实 false。
+        keepAliveActive = keepAliveActive(),
     )
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
@@ -322,6 +397,21 @@ class AppShellApplication : Application(), HostSummary {
         }
     }
 
+    /**
+     * 进程终止收口（§8.7）：停保活、放唤醒锁。
+     *
+     * **诚实说明**：真机上 `onTerminate` **不会被调用**（进程被杀时没有回调），
+     * 所以它不是"锁一定被释放"的保证 —— 系统在进程死亡时会回收它持有的 wakelock，
+     * 这才是真机上的兜底。这里保留实现是为了两件事：① 测试/模拟器进程里显式收口，
+     * 不留悬挂 ticker；② 让"谁负责停"在代码里有落点（而不是靠"系统会回收"这条隐含假设）。
+     */
+    override fun onTerminate() {
+        keepAlive?.stop()
+        keepAlive = null
+        ForegroundHost.keeper = null
+        super.onTerminate()
+    }
+
     companion object {
         private const val TAG = "AppShellApplication"
 
@@ -330,9 +420,18 @@ class AppShellApplication : Application(), HostSummary {
         internal var instance: AppShellApplication? = null
             private set
 
-        /** 屏幕门禁的生产实现（真 PowerManager）。见 [AndroidScreenGate.of]。 */
+        /**
+         * 屏幕门禁的生产实现（真 PowerManager + 真持锁判定）。见 [AndroidScreenGate.of]。
+         *
+         * `deferWakeLock` 取 [WakeLockLedger.isHeld]（账本与系统两侧都真）：
+         * §8.7 原先那条"缝默认恒真 = 明写的待接"在此收口 —— 拿不到锁时 `SCREEN_ON`
+         * 任务如实被拒，而不是在一个会休眠的 CPU 上跑完还报成功。
+         */
         fun screenGateOf(app: AppShellApplication): ScreenGateAndroid =
-            AndroidScreenGate.of(app.applicationContext)
+            AndroidScreenGate.of(
+                app.applicationContext,
+                deferWakeLock = ScreenInteractive { app.foregroundKeeper().wakeLocks().isHeld() },
+            )
 
         /** 闹钟广播 action（与 manifest 里静态注册的是同一条，常量出处 [AlarmFires]）。 */
         const val ALARM_ACTION: String = AlarmFires.ACTION_FIRE

@@ -23,8 +23,14 @@ interface HostSummary {
  *   「未就绪」，不替 logcat 猜是哪种（失败原因在「壳自装配失败」一行）。
  * @property missedAlarms 漏投账本条数（`AlarmDispatch.missed`；§4.1 装配完成前
  *   响过的闹钟，不静默丢弃）。装配中显示非零不是错误，是如实记账。
+ * @property keepAliveActive 保活真生效（§8.7）：**系统事实 ∧ 唤醒锁账本持锁**，
+ *   两侧都真才算（见 `ForegroundKeeper.isActive`）。false = 保活没起（后台启动受限/
+ *   权限被收回）**或**锁没拿到 —— 此时 `SCREEN_ON` 任务会被屏幕门禁如实拒绝。
+ *   **不给默认值**：每个产出方都得显式回答"保活到底生效没有"，
+ *   漏填就在编译期炸，而不是在能力中心里默认显示成"已保活"。
  */
 data class ShellSummary(
     val shellReady: Boolean,
     val missedAlarms: Int,
+    val keepAliveActive: Boolean,
 )
