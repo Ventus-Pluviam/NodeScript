@@ -480,6 +480,18 @@ class AppShellApplication : Application(), HostSummary {
         built.runTaskNow(taskId)
     }
 
+    /**
+     * 停止一次在途执行（[HostSummary] 的生产实现，§8.2 池四步 quiesce）。
+     * 壳没装好就抛（同 [runTaskNow]）；已结算/从未存在回 false（在途表无此 run，
+     * 不是失败）；真停走回 true。读的是 [AppShellKit.AssembledShell.stopRun]
+     * （壳持有的在途表），不另开第二个 `RuntimeController`。
+     */
+    override suspend fun stopRun(runId: Long): Boolean {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法停止执行")
+        return built.stopRun(runId)
+    }
+
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
     fun missedAlarms(): Map<String, Long> = alarmDispatch.missed()
 

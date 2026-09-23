@@ -42,4 +42,7 @@ open class FakeHost(
 
     override suspend fun runTaskNow(taskId: String): Unit =
         throw UnsupportedOperationException("本替身未提供 runTaskNow（用例按需覆盖）")
+
+    override suspend fun stopRun(runId: Long): Boolean =
+        throw UnsupportedOperationException("本替身未提供 stopRun（用例按需覆盖）")
 }

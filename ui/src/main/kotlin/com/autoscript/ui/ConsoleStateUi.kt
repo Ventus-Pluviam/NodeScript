@@ -35,6 +35,12 @@ data class ConsoleState(
     val activeRuns: List<ActiveRunState>,
     val nowMillis: Long,
     val zone: ZoneId,
+    /** 上一次**停止操作**失败原文（≠ [loadError]：读失败与停失败分开，见 [TaskCenterState] 同纪律）。 */
+    val stopError: String? = null,
+    /** 上一次**停止操作**成功回执（刷新现取即清，不缓存）。 */
+    val stopNotice: String? = null,
+    /** 有停止在挂起中 —— 在途行按钮禁用防连点（停止本身幂等，连点无害但回执会抖）。 */
+    val stopInFlight: Boolean = false,
 ) {
     companion object {
         /**

@@ -26,7 +26,11 @@ import androidx.compose.ui.unit.dp
  * - 丢包（有界队列容量满丢最老）非零**不藏**：用户看到的不是全部，得知道；
  * - 本批拉满（[ConsoleState.pageFull]）提示可继续拉 —— 措辞是「可能还有」，
  *   拉满不等于确实还有；
- * - 在途执行：宿主状态**读不到**如实说读不到（不渲染成某个状态），分歧（drift）标红。
+ * - 在途执行：宿主状态**读不到**如实说读不到（不渲染成某个状态），分歧（drift）标红；
+ *   每行一个「停止」按钮（按 runId 精确停 → 池四步 quiesce，已结算再点如实说"已不在途"，
+ *   不抛 —— 那是 `AlreadyGone` 的诚实投影，不是失败）。
+ * - 停止回执（[ConsoleState.stopNotice]/[ConsoleState.stopError]）与读账分开 ——
+ *   停失败不清已读到的行（同任务屏 opError 不清清单一条理）；挂起中按钮禁用防连点。
  *
  * 游标与累积在 [ConsoleState]（MainActivity 经 `reloadConsole` 驱动），本屏只画。
  */
@@ -34,6 +38,7 @@ import androidx.compose.ui.unit.dp
 fun ConsoleScreen(
     state: ConsoleState,
     onRefresh: () -> Unit,
+    onStopRun: (ActiveRunState) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     MaterialTheme {
@@ -48,7 +53,8 @@ fun ConsoleScreen(
                 Text("控制台", style = MaterialTheme.typography.headlineMedium)
                 Header(state, onRefresh)
                 DroppedBanner(state)
-                ActiveRunsBlock(state)
+                StopFeedback(state)
+                ActiveRunsBlock(state, onStopRun)
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -105,8 +111,27 @@ private fun DroppedBanner(state: ConsoleState) {
     )
 }
 
+/**
+ * 停止回执：成功/失败各自一行，谁都不替谁说话 —— 与任务屏 [OpFeedback] 同一条理。
+ * 失败红字原文透传（区分"壳未装配"与"读崩了"的唯一线索是原文）；成功只说"已请求停止"，
+ * 以刷新后的在途表为准（停走是异步 quiesce，不赌停没停）。
+ */
 @Composable
-private fun ActiveRunsBlock(state: ConsoleState) {
+private fun StopFeedback(state: ConsoleState) {
+    val colors = MaterialTheme.colorScheme
+    if (state.stopInFlight) {
+        Text("正在停止…（挂起期间按钮停用）", color = colors.tertiary)
+    }
+    state.stopError?.let {
+        Text("停止失败：$it", color = colors.error)
+    }
+    state.stopNotice?.let {
+        Text(it, color = colors.tertiary)
+    }
+}
+
+@Composable
+private fun ActiveRunsBlock(state: ConsoleState, onStopRun: (ActiveRunState) -> Unit) {
     val colors = MaterialTheme.colorScheme
     if (state.activeRuns.isEmpty()) {
         // 读成功且没有在途执行 —— 真实事实（在途表是权威），与"没读到"分开。
@@ -130,6 +155,7 @@ private fun ActiveRunsBlock(state: ConsoleState) {
                     // §8.3 校准的事实：两端对不上（判据在 RuntimeController，这里只画）。
                     Text("状态分歧（宿主自报与池侧不一致）", color = colors.error, style = MaterialTheme.typography.bodySmall)
                 }
+                Button(onClick = { onStopRun(run) }, enabled = !state.stopInFlight) { Text("停止") }
             }
         }
     }

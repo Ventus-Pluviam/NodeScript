@@ -9,6 +9,7 @@ import com.autoscript.appservice.scheduler.persist.JournalFileStore
 import com.autoscript.domain.host.ScheduleSpec
 import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.domain.host.TaskRegistration
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -168,6 +169,50 @@ class AppShellTaskOpsTest {
             s.runTaskNow("t1")
             // onTrigger 的 finally：Once 触发即 tombstone（挂起返回时已完成）。
             assertTrue(s.taskCenter().tasks.isEmpty(), "Once 执行后出册（不是被取消）")
+        }
+        Unit
+    }
+
+    /**
+     * 按 runId 精确停止（`AssembledShell.stopRun`）：走**在途表**，不是调度单槽。
+     * 三个落点都不撒谎：真停走 true；已结算/从未存在回 false（`AlreadyGone` 诚实投影）。
+     */
+    @Test
+    fun `stopRun 按 runId 精确停 —— 在途 true 结算后 false`() = runBlocking {
+        val engines = mutableListOf<FakeEngineForDispatcher>()
+        val k = AppShellKit.assemble(
+            filesDir = files,
+            cacheDir = cache,
+            schedulerProvider = RecordingProvider(),
+            screenGate = ScreenGate.AllowAll,
+            engineFactory = { id ->
+                FakeEngineForDispatcher(id, pid = 4242, autoExitAfterMillis = null)
+                    .also { engines += it }
+            },
+        )
+        k.use { s ->
+            s.registerTask(reg(id = "t1", schedule = ScheduleSpec.Daily(7, 5)))
+            // 后台触发：runTaskNow 挂到结算（awaitCompletion 轮询 200ms），另起协程跑，
+            // 停走在途表。runTaskNow 的 awaitCompletion 用 FAKE 引擎的 status 结算：
+            // stop 后 fake 报 STOPPED → settleDone 收走在途表 → runTaskNow 才返回。
+            // runBlocking 域内 async 起后台触发（挂到结算），主协程走在途表停它。
+            val trigger = async { s.runTaskNow("t1") }
+            // 等引擎真正在途（execute 落到 fake 且在途表有 run）。
+            var runId = -1L
+            val deadline = System.currentTimeMillis() + 5_000
+            while (System.currentTimeMillis() < deadline) {
+                runId = s.shell.controller.activeRunIds().firstOrNull() ?: -1L
+                if (runId >= 0) break
+                kotlinx.coroutines.delay(10)
+            }
+            assertTrue(runId >= 0, "引擎应在 5s 内在途")
+            assertTrue(s.stopRun(runId), "在途真停走 → true")
+            trigger.join()
+            assertTrue(trigger.isCompleted, "stop 后 runTaskNow 挂起返回（awaitCompletion 结算）")
+            // 在途表已收走（controller.stop 在 stop 时 remove）：再停是 AlreadyGone。
+            assertTrue(!s.stopRun(runId), "已结算后再停 → false（AlreadyGone 诚实投影，不抛）")
+            // 从未存在的 runId 同样 false。
+            assertTrue(!s.stopRun(9_999_999L), "幽灵 runId → false")
         }
         Unit
     }

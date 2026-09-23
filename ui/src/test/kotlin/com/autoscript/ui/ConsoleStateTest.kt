@@ -220,4 +220,18 @@ class ConsoleStateTest {
         assertEquals("空闲", run.hostLabel)
         assertEquals("运行中", run.poolLabel)
     }
+
+    @Test
+    fun `停止三字段缺省空闲 刷新现取归零`() {
+        val s = ConsoleState.NOT_LOADED
+        assertNull(s.stopError)
+        assertNull(s.stopNotice)
+        assertFalse(s.stopInFlight)
+        val busy = s.copy(stopInFlight = true, stopNotice = "已请求停止 #7")
+        val refreshed = ConsoleState.of(busy, snap(), nowMillis = 2L)
+        assertNull(refreshed.stopError, "现取纪律：回执不缓存，刷新即清")
+        assertNull(refreshed.stopNotice, "现取纪律：回执不缓存，刷新即清")
+        assertFalse(refreshed.stopInFlight, "挂起态不跨刷新：刷新回来按钮恢复可用")
+        assertTrue(refreshed.loaded)
+    }
 }

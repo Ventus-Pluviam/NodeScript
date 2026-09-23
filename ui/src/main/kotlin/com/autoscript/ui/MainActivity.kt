@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity() {
                             Tab.CONSOLE -> ConsoleScreen(
                                 state = consoleState,
                                 onRefresh = { scope.launch { reloadConsole() } },
+                                onStopRun = { run -> scope.launch { stopRunOp(run) } },
                             )
                             Tab.CAPABILITIES -> CapabilityScreen(
                                 state = capabilityState,
@@ -258,6 +259,42 @@ class MainActivity : ComponentActivity() {
         } catch (t: Throwable) {
             ConsoleState.failed(t, previous)
         }
+    }
+
+    /**
+     * 停止一次在途执行（控制台在途行「停止」按钮）：按 runId 精确停（§8.2 池四步 quiesce）。
+     *
+     * 与 [performTaskOp] 同一条纪律：未接线/抛错进 [ConsoleState.stopError]
+     * （原文透传，**不清已读到的行与游标**）；成功回执随后现取一次
+     * （在途表是最新的，回执是刚才那次停止的 —— 回执在刷新**之后**盖上去，
+     * 因 [ConsoleState.of] 会把 stop 字段归零）。
+     * 回执措辞点破：true = 已请求停止（quiesce 异步走，不赌停没停）；
+     * false = 点的时候已不在途（`AlreadyGone` 诚实投影：已结算/从未存在，不是失败）。
+     */
+    private suspend fun stopRunOp(run: ActiveRunState) {
+        if (consoleState.stopInFlight) return // 双保险：按钮已禁用，这里兜住并发入口
+        val host = hostSummary()
+        if (host == null) {
+            consoleState = consoleState.copy(
+                stopInFlight = false,
+                stopError = "宿主摘要未接线（Application 未实现 HostSummary）",
+            )
+            return
+        }
+        consoleState = consoleState.copy(stopInFlight = true, stopError = null, stopNotice = null)
+        val notice = try {
+            val stopped = host.stopRun(run.runId)
+            if (stopped) "已请求停止 #${run.runId}（停止成败见控制台与在途表）"
+            else "#${run.runId} 已不在途（此前已结算或从未存在）"
+        } catch (t: Throwable) {
+            consoleState = consoleState.copy(
+                stopInFlight = false,
+                stopError = t.message ?: t.javaClass.simpleName,
+            )
+            return
+        }
+        reloadConsole()
+        consoleState = consoleState.copy(stopNotice = notice, stopInFlight = false)
     }
 
     private fun hostSummary(): HostSummary? = application as? HostSummary

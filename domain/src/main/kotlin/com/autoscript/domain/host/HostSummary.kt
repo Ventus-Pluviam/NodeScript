@@ -99,6 +99,22 @@ interface HostSummary {
      * 不查就会把 no-op 呈现成"已触发"。
      */
     suspend fun runTaskNow(taskId: String)
+
+    /**
+     * 停止一次**在途**执行（控制台「停止」按钮 / engines.exec 的 cancel 回调入口；
+     * §12.3 + §8.2 池四步 quiesce）。
+     *
+     * 按 runId 精确停止（`RuntimeController.stop(runId)` → 池四步 quiesce，
+     * `TimedOut` 已由池 kill 兜底）：已结算/从未存在 → **false**（`AlreadyGone` 的
+     * 诚实投影，不抛 —— 在途表本来就没有它，不是失败），真停走 → **true**
+     * （`StoppedClean`/`StoppedTimeout` 都算"停过了"，后者在池侧已兜底）。
+     * 壳未装配**抛**（静默 false = 用户点了停止却什么都没发生，比报错更难查）。
+     *
+     * 与 `Scheduler.stopLastRun` 的分工：那是"最近一次投递"的单槽位快捷口
+     * （调度侧持有，恢复重投会覆盖）；本口是"指定 runId"的精确口（在途表持有，
+     * 不受调度单槽覆盖影响）。控制台在途块按行给停止按钮，走本口不走单槽口。
+     */
+    suspend fun stopRun(runId: Long): Boolean
 }
 
 /**

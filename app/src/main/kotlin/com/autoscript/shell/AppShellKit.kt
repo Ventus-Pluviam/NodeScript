@@ -235,6 +235,21 @@ object AppShellKit {
             }
             scheduler.onTrigger(taskId, TriggerSource.USER_CLICK)
         }
+
+        /**
+         * 停止一次在途执行（`HostSummary.stopRun` 的装配实现，§8.2 池四步 quiesce）。
+         *
+         * 走的是**在途表**（`RuntimeController.stop`），不是调度单槽
+         * （`Scheduler.stopLastRun`）：恢复重投会覆盖单槽的 `lastHandle`，
+         * 在途表按 runId 精确命中、不受覆盖影响。`AlreadyGone`（已结算/从未存在）
+         * 如实回 false —— 在途表本来就没有它，不是失败，不抛。
+         * `StoppedClean`/`StoppedTimeout` 都算"停过了"（后者池侧已 kill 兜底）。
+         */
+        suspend fun stopRun(runId: Long): Boolean = when (shell.controller.stop(runId)) {
+            com.autoscript.appservice.runtime.RuntimeController.StopOutcome.StoppedClean -> true
+            is com.autoscript.appservice.runtime.RuntimeController.StopOutcome.StoppedTimeout -> true
+            com.autoscript.appservice.runtime.RuntimeController.StopOutcome.AlreadyGone -> false
+        }
     }
 
     /**
