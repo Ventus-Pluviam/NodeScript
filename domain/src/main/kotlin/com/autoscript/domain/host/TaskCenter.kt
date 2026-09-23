@@ -132,3 +132,35 @@ data class RecoveryRow(
 
     val ok: Boolean get() = !failed
 }
+
+
+/**
+ * 任务登记入参（任务中心操作面的写口载荷；§8.6「登记/取消/立即执行」）。
+ *
+ * 为什么住 `:domain` 而不是 `:ui`/`:app`：`:ui` 表单要构造它、`:app` 装配层要消费它，
+ * 中间隔一个 `:domain` 才不让呈现层 import 装配层（与 [ScheduledTaskRow] 同一条依赖方向铁律）。
+ *
+ * 校验**不在本 DTO 上**：镜像 `workManager.create` 的那套规则（空串/越界/cron 拒绝）住在
+ * `:app` 的 `TaskCenterOps.toScheduledTask` —— 桥与 UI 两个登记入口过**同一套**映射，
+ * DTO 保持纯数据（呈现层测试不必背校验语义）。
+ *
+ * @property schedule 只该给 Once/Daily：[ScheduleSpec.Cron] 在 P1 排期落地前由装配层
+ *   **如实拒绝**（与桥侧 `ERR_NOT_IMPLEMENTED` 同一口径 —— 登记一条算不出下一跳、
+ *   看起来却"在册"的任务是把问题推迟到用户看不见的地方）。
+ * @property id null = 登记时由服务端分配（与桥侧一致；空串同样当没给）。
+ * @property timezoneId null = 系统默认时区（Daily 的 DST 边界靠它，见 `TimedSchedule.nextFireAfter`）。
+ * @property enabled 缺省 true（本版操作面**没有**启停开关 —— 该字段只为与
+ *   `workManager.create` 载荷对齐；停用过的任务仍从任务列表里取消）。
+ */
+data class TaskRegistration(
+    val name: String,
+    val projectId: String,
+    val scriptPath: String,
+    val schedule: ScheduleSpec,
+    val screen: ScreenRequirement = ScreenRequirement.ANY,
+    val args: List<String> = emptyList(),
+    val scriptTimeoutMillis: Long? = null,
+    val timezoneId: String? = null,
+    val enabled: Boolean = true,
+    val id: String? = null,
+)

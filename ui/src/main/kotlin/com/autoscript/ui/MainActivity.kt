@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.host.TaskRegistration
 import kotlinx.coroutines.launch
 
 /**
@@ -83,6 +84,9 @@ class MainActivity : ComponentActivity() {
                             Tab.TASKS -> TaskCenterScreen(
                                 state = taskState,
                                 onRefresh = { scope.launch { reloadTasks() } },
+                                onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
+                                onCancel = { task -> scope.launch { cancelTaskOp(task) } },
+                                onRegister = { form -> scope.launch { registerTaskOp(form) } },
                             )
                             Tab.CONSOLE -> ConsoleScreen(
                                 state = consoleState,
@@ -161,6 +165,73 @@ class MainActivity : ComponentActivity() {
             TaskCenterState.of(host.taskCenter(), nowMillis = System.currentTimeMillis())
         } catch (t: Throwable) {
             TaskCenterState.failed(t)
+        }
+    }
+
+    /**
+     * 操作面统一通道（登记/取消/立即执行）：成功回执 + 现取刷新，失败**保留旧清单**。
+     *
+     * 三种落点都不撒谎：
+     * - 读口未接线 → [opError] 如实说（不动清单 —— 没读到 ≠ 一条任务都没有）；
+     * - 操作抛（校验不过/壳未装配/任务不存在/调度已收口）→ [TaskCenterState.opError]
+     *   保留**原异常文案**（区分现场的唯一线索），[TaskCenterState.of] 之前的清单原样留着 ——
+     *   操作失败把已读到的任务一并抹掉，会让用户以为任务全没了；
+     * - 成功 → [opNotice] 回执，随后**现取**一次（登记/取消/Once 终态化都改了注册表，
+     *   不刷新就与事实脱节）；现取经 [TaskCenterState.of] 会把 op 字段归零，故回执
+     *   在刷新**之后**盖上去（现取纪律：列表是最新的，回执是刚才那次操作的）。
+     *
+     * @param op 执行操作并返回成功回执文案（失败抛 —— 由本函数收进 opError）。
+     */
+    private suspend fun performTaskOp(op: suspend (HostSummary) -> String) {
+        if (taskState.opInFlight) return // 双保险：按钮已禁用，这里兜住并发入口
+        val host = hostSummary()
+        if (host == null) {
+            taskState = taskState.copy(
+                opInFlight = false,
+                opError = "宿主摘要未接线（Application 未实现 HostSummary）",
+            )
+            return
+        }
+        taskState = taskState.copy(opInFlight = true, opError = null, opNotice = null)
+        val notice = try {
+            op(host)
+        } catch (t: Throwable) {
+            taskState = taskState.copy(
+                opInFlight = false,
+                opError = t.message ?: t.javaClass.simpleName,
+            )
+            return
+        }
+        reloadTasks()
+        taskState = taskState.copy(opNotice = notice, opInFlight = false)
+    }
+
+    /** 登记：解析（形状非法在此抛）→ 写口 → 回执带分配到的 id。 */
+    private suspend fun registerTaskOp(form: RegistrationForm) = performTaskOp { host ->
+        val registration: TaskRegistration = form.toRegistration()
+        val id = host.registerTask(registration)
+        "已登记「${registration.name}」（$id）"
+    }
+
+    /** 取消（幂等）：回执只说"已请求取消" —— 以刷新后的清单为准，不赌 tombstone 落没落。 */
+    private suspend fun cancelTaskOp(task: TaskRowState) = performTaskOp { host ->
+        host.cancelTask(task.id)
+        "已取消「${task.name}」"
+    }
+
+    /**
+     * 立即执行（`USER_CLICK`）：**挂起到执行结算**（排队 10s + 脚本超时/默认 30s，
+     * 见 `HostSummary.runTaskNow` KDoc），期间 [TaskCenterState.opInFlight] 禁用按钮。
+     *
+     * 回执措辞点破两条语义：成败不在本口（在意图日志/控制台）；Once 触发即出册
+     * （刷新后卡片消失是调度器语义，不是被取消了）。
+     */
+    private suspend fun runTaskNowOp(task: TaskRowState) = performTaskOp { host ->
+        host.runTaskNow(task.id)
+        if (task.once) {
+            "已执行「${task.name}」并出册（一次性任务；执行成败见控制台）"
+        } else {
+            "已触发「${task.name}」（执行成败见控制台）"
         }
     }
 

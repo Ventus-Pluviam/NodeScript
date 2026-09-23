@@ -21,6 +21,14 @@ import java.time.format.DateTimeFormatter
  * - [loadError] 保留原异常文案（失败原因的唯一线索：ROM 读崩了 vs 壳没装配好）；
  * - 任务行/未结算执行/恢复账各自成段，不揉成一个"状态"（后者见 [RecoveryRowState]）。
  *
+ * **操作面三字段与读账分开记账**（§8.6 登记/取消/立即执行）：
+ * - [opError] ≠ [loadError]：操作失败（校验不过/壳未装配/收口中）**不清任务清单** ——
+ *   清单还是上次读到的事实，把它一并抹掉会让用户以为任务全没了；
+ * - [opNotice] 是上一次操作的回执，只由操作成功写入；刷新现取随 [of] 归零
+ *   （现取纪律：不缓存陈旧提示）；
+ * - [opInFlight] 挂起期间禁用操作按钮（立即执行要挂到本次执行结算，见
+ *   `HostSummary.runTaskNow` KDoc —— 不禁用就会双击双投）。
+ *
  * 时间与时长在这里格式化（不在 Compose 里）：格式化是判断（相对时间怎么念、多久算
  * "刚跑完"），必须可测；`@Composable` 里的 `DateTimeFormatter` 也是每次重组都重建对象。
  */
@@ -33,6 +41,12 @@ data class TaskCenterState(
     /** 渲染时刻（由调用方给，见 [of]）—— 类内不读 `System.currentTimeMillis()`，否则不可测。 */
     val nowMillis: Long,
     val zone: ZoneId,
+    /** 上一次**操作**失败原文（≠ [loadError]：读失败与写失败分开，见类 KDoc）。 */
+    val opError: String? = null,
+    /** 上一次**操作**成功回执（刷新/切页现取即清，不缓存）。 */
+    val opNotice: String? = null,
+    /** 有操作在挂起中（立即执行要等执行结算）—— 按钮禁用防双击双投。 */
+    val opInFlight: Boolean = false,
 ) {
     companion object {
         /**
@@ -103,6 +117,11 @@ data class TaskRowState(
     val nextFireText: String?,
     val enabled: Boolean,
     val degraded: Boolean,
+    /**
+     * 一次性任务（[ScheduleSpec.Once]）：「立即执行」触发即终态化出册（调度器语义）——
+     * 回执要点破"跑完就出册"，否则刷新后卡片消失会被读成"被取消了"。
+     */
+    val once: Boolean = false,
 ) {
     companion object {
         fun of(task: ScheduledTaskRow, nowMillis: Long, zone: ZoneId): TaskRowState = TaskRowState(
@@ -113,6 +132,7 @@ data class TaskRowState(
             nextFireText = task.nextFireAtMillis?.let { ScheduleText.absolute(it, zone) },
             enabled = task.enabled,
             degraded = task.degraded,
+            once = task.schedule is ScheduleSpec.Once,
         )
     }
 }

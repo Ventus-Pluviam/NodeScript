@@ -6,6 +6,7 @@ import android.util.Log
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
+import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.permission.Capability
@@ -417,6 +418,40 @@ class AppShellApplication : Application(), HostSummary {
         val built = assembled
             ?: throw IllegalStateException("壳未装配（装配中或失败）：控制台暂不可读")
         return built.consoleView(sinceSeq, maxLines)
+    }
+
+    /**
+     * 登记任务（[HostSummary] 的生产实现，§8.6 操作面「登记」）。
+     *
+     * **壳没装好就抛**（与 [taskCenter]/[console] 同一条纪律）：静默返回一个"假 id"
+     * 会让用户以为任务已入册 —— 那是比报错严重得多的谎。
+     * 写的是壳自己持有的调度器（store-first 落盘），不让 UI 另开 `FileTaskStore`。
+     */
+    override suspend fun registerTask(registration: TaskRegistration): String {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：任务不可登记")
+        return built.registerTask(registration)
+    }
+
+    /**
+     * 取消任务（[HostSummary] 的生产实现，§8.6 操作面「取消」）。
+     * 壳没装好就抛（同 [registerTask]）；幂等语义在 `Scheduler.cancel`。
+     */
+    override suspend fun cancelTask(taskId: String) {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：任务不可取消")
+        built.cancelTask(taskId)
+    }
+
+    /**
+     * 立即执行（[HostSummary] 的生产实现，§8.6 操作面「立即执行」，`USER_CLICK`）。
+     * 壳没装好就抛；任务不存在/调度已收口由 [AppShellKit.AssembledShell.runTaskNow]
+     * 现查后抛（`onTrigger` 对两者静默 return，不查会把 no-op 呈现成"已触发"）。
+     */
+    override suspend fun runTaskNow(taskId: String) {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法立即执行")
+        built.runTaskNow(taskId)
     }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */

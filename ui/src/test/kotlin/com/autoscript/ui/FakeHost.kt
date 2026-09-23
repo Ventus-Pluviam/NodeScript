@@ -5,6 +5,7 @@ import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
+import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.permission.Capability
 
 /**
@@ -32,4 +33,13 @@ open class FakeHost(
 
     override suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot =
         throw UnsupportedOperationException("本替身未提供 console（用例按需覆盖）")
+
+    override suspend fun registerTask(registration: TaskRegistration): String =
+        throw UnsupportedOperationException("本替身未提供 registerTask（用例按需覆盖）")
+
+    override suspend fun cancelTask(taskId: String): Unit =
+        throw UnsupportedOperationException("本替身未提供 cancelTask（用例按需覆盖）")
+
+    override suspend fun runTaskNow(taskId: String): Unit =
+        throw UnsupportedOperationException("本替身未提供 runTaskNow（用例按需覆盖）")
 }

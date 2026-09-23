@@ -18,6 +18,8 @@ import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
+import com.autoscript.domain.host.TaskRegistration
+import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
 import java.nio.file.Files
@@ -160,6 +162,58 @@ object AppShellKit {
                 maxLines = maxLines,
                 runStatuses = { shell.controller.runStatuses() },
             )
+
+        /**
+         * 登记任务（§8.6 操作面「登记」）—— 呈现层经 `HostSummary.registerTask()` 走到这里。
+         *
+         * 写的是**壳自己持有的调度器**（`Scheduler.schedule`：先落盘再动内存/闹钟，
+         * 落盘失败即抛、注册表无半登记状态），不让 UI 另开 `FileTaskStore` ——
+         * 第二个实例 = 写侧两份视图（同 [taskCenter] 读口一条理）。
+         * 入参校验在 [TaskCenterOps.toScheduledTask]（与桥侧 `workManager.create` 同一套规则）。
+         *
+         * @return 分配到的任务 id（入参 id 为空时服务端 UUID）。
+         */
+        suspend fun registerTask(registration: TaskRegistration): String {
+            val task = TaskCenterOps.toScheduledTask(registration)
+            shell.scheduler.schedule(task)
+            return task.id
+        }
+
+        /**
+         * 取消任务（§8.6 操作面「取消」）：转发 `Scheduler.cancel` —— 幂等
+         * （从未登记的 id 照样返回；先落 tombstone 再动内存），已投递的 runs 不追回。
+         */
+        suspend fun cancelTask(taskId: String) {
+            shell.scheduler.cancel(taskId)
+        }
+
+        /**
+         * 立即执行（§8.6 操作面「立即执行」，触发源 `USER_CLICK`）。
+         *
+         * **触发前现查两件事**（`onTrigger` 对两者都是静默 return —— 不查就会把 no-op
+         * 呈现成"已触发"）：
+         * - 调度已收口（`sink()` 之后宿主正在停止）→ 抛，不让按钮在停机窗口里假装成功；
+         * - 任务不在册（可能已被取消/Once 已终态化）→ 抛，原文带 id。
+         *
+         * **挂起到本次执行结算**（与闹钟/广播同一条 `onTrigger` 路径：排队上限
+         * USER_CLICK 10s + 脚本超时/默认 30s）—— 成败不由此口回报（恒 Unit，
+         * 结局在意图日志/控制台），调用方文案不得把"返回了"说成"跑成功了"。
+         * Once 任务触发即终态化出册，刷新后从列表消失是调度器语义，不是取消。
+         *
+         * 查与触发之间存在极小竞态窗口（并发取消）：后果是本次静默无事发生 ——
+         * 接受它；为关掉它去改 `onTrigger` 返回值会动到全部触发调用点与既有测试的
+         * 表达式体形态，收益不抵风险。
+         */
+        suspend fun runTaskNow(taskId: String) {
+            val scheduler = shell.scheduler
+            if (scheduler.sinking) {
+                throw IllegalStateException("调度已收口（宿主正在停止）：不再接收新触发")
+            }
+            if (scheduler.tasks().none { it.id == taskId }) {
+                throw IllegalStateException("任务不存在（可能已被取消）：$taskId")
+            }
+            scheduler.onTrigger(taskId, TriggerSource.USER_CLICK)
+        }
     }
 
     /**

@@ -207,4 +207,39 @@ class TaskCenterStateTest {
             "起点时刻与下一跳共用同一格式",
         )
     }
+
+    // ---- 操作面三字段（登记/取消/立即执行）----
+
+    @Test
+    fun `哨兵与读失败的操作字段全空 —— 没操作过不冒充有回执`() {
+        for (s in listOf(TaskCenterState.NOT_LOADED, TaskCenterState.failed(IllegalStateException("崩")))) {
+            assertNull(s.opError, "读失败 ≠ 操作失败：两条账分开")
+            assertNull(s.opNotice)
+            assertEquals(false, s.opInFlight)
+        }
+    }
+
+    @Test
+    fun `操作失败保留任务清单 —— copy 不抹已读到的事实`() {
+        val loaded = TaskCenterState.of(snapshot(task()), nowMillis = 1L)
+        val failed = loaded.copy(opError = "任务不存在（可能已被取消）：t1")
+        assertEquals(1, failed.tasks.size, "操作失败把清单抹掉 = 用户以为任务全没了")
+        assertEquals("任务不存在（可能已被取消）：t1", failed.opError)
+        assertNull(failed.loadError, "opError 与 loadError 分行记账，不互相顶替")
+        assertEquals(true, failed.loaded, "清单还在 = 还是「读成功」的状态")
+    }
+
+    @Test
+    fun `现取归零操作回执 —— 刷新不缓存陈旧提示`() {
+        val s = TaskCenterState.of(snapshot(task()), nowMillis = 1L)
+        assertNull(s.opNotice, "of() 是现取投影：上一次操作的回执不穿越到新快照")
+    }
+
+    @Test
+    fun `once 标记由排期推导 —— 回执据此点破出册`() {
+        val once = TaskRowState.of(task(schedule = ScheduleSpec.Once(60)), 1L, zone = ZoneId.systemDefault())
+        val daily = TaskRowState.of(task(schedule = ScheduleSpec.Daily(7, 5)), 1L, zone = ZoneId.systemDefault())
+        assertEquals(true, once.once, "Once：立即执行后出册是调度器语义，回执要说破")
+        assertEquals(false, daily.once)
+    }
 }
