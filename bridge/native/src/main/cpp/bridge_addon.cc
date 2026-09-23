@@ -2,7 +2,8 @@
 //
 // 职责（①③为原契约，②④为 §7.8「起线程/TSF 接线」补全）：
 //  1. `invoke(ns, method, payloadJson, reqId, ttl)`：JS → socket（newline frame，
-//     与 SocketBootstrap/JsonTransport 同信封），返回 undefined = 等响应经 TSF 回来；
+//     与 SocketBootstrap/JsonTransport 同信封 —— payload 在信封里是 **JSON 字符串**，
+//     本函数负责转义字符串化，金样见 JsonTransportTest），返回 undefined = 等响应经 TSF 回来；
 //  2. socket 读线程收 ok/err → 经 TSF 双队列回投 JS（control 永不丢 / data 可丢包计数）；
 //     读线程由 `setSocketFd(fd>=0)` 首次注入时拉起（§7.8「宿主起线程」的 addon 侧半边：
 //     线程体住本文件，宿主只能经注入点拉起），poll 50ms 唤醒重读 g_sock 支持换 fd 重连；
@@ -206,7 +207,16 @@ napi_value Invoke(napi_env env, napi_callback_info info) {
   napi_valuetype t = napi_undefined;
   napi_typeof(env, argv[2], &t);
   bool has_payload = (t == napi_string);
-  if (has_payload) napi_get_value_string_utf8(env, argv[2], payload, sizeof(payload), &n);
+  if (has_payload) {
+    // 先问真实长度再拷：静默截断的 JSON 必然畸形 → 宿主整帧丢弃（同一类"坏帧"事故）。
+    size_t need = 0;
+    napi_get_value_string_utf8(env, argv[2], nullptr, 0, &need);
+    if (need >= sizeof(payload)) {
+      napi_throw_error(env, "ERR_INVALID_PARAM", "payload 超过 64KB 上限");
+      return nullptr;
+    }
+    napi_get_value_string_utf8(env, argv[2], payload, sizeof(payload), &n);
+  }
   int64_t req_id = 0, ttl = 0;
   napi_get_value_int64(env, argv[3], &req_id);
   napi_get_value_int64(env, argv[4], &ttl);
@@ -219,25 +229,55 @@ napi_value Invoke(napi_env env, napi_callback_info info) {
     napi_throw_error(env, "ERR_ENGINE_STOPPED", "桥 socket 未连接");
     return nullptr;
   }
-  // 帧组装（payload 已是 JSON 文本，直接嵌入；零二次解析 §7.7）。
-  char frame[64 * 1024 + 256];
-  int len;
-  if (has_payload) {
-    len = snprintf(frame, sizeof(frame),
-                   "{\"t\":\"req\",\"id\":%lld,\"ns\":\"%s\",\"m\":\"%s\",\"ttl\":%lld,"
-                   "\"payload\":%s,\"side\":null}\n",
-                   (long long)req_id, ns, method, (long long)ttl, payload);
-  } else {
-    len = snprintf(frame, sizeof(frame),
-                   "{\"t\":\"req\",\"id\":%lld,\"ns\":\"%s\",\"m\":\"%s\",\"ttl\":%lld,"
-                   "\"payload\":null,\"side\":null}\n",
-                   (long long)req_id, ns, method, (long long)ttl);
+  // payload 是 JSON 文本（如 {"runId":1,"seq":1}）—— 信封里必须成 JSON **字符串**
+  // （"payload":"{\"runId\":1,...}"），与 JS 侧 BridgeEnvelope.encodeRequest 经
+  // JSON.stringify 的形状一致：宿主 TinyJson 是扁平解码，payloadOrNull 只收字符串/null，
+  // 裸嵌对象会在 readValue 的 '{' 分支被判"非法值"、整帧丢弃（§7.7「零二次解析」指
+  // 宿主不解析 payload 内容，不是可以跳过信封层的字符串化 —— 金样钉在
+  // JsonTransportTest「addon 心跳帧金样」，改本转义必须同批改金样）。
+  std::string quoted;
+  quoted.reserve(n * 2 + 2);
+  quoted += '"';
+  for (size_t i = 0; i < n; ++i) {
+    const unsigned char c = static_cast<unsigned char>(payload[i]);
+    if (c == '"' || c == '\\') {
+      quoted += '\\';
+      quoted += static_cast<char>(c);
+    } else if (c == '\n') {
+      quoted += "\\n";
+    } else if (c == '\r') {
+      quoted += "\\r";
+    } else if (c == '\t') {
+      quoted += "\\t";
+    } else if (c < 0x20) {
+      char u[8];
+      snprintf(u, sizeof(u), "\\u%04x", c);
+      quoted += u;
+    } else {
+      quoted += static_cast<char>(c);
+    }
   }
-  if (len <= 0 || (size_t)len >= sizeof(frame)) {
-    napi_throw_error(env, "ERR_INVALID_PARAM", "帧超长");
+  quoted += '"';
+
+  char head[512];
+  int hlen;
+  if (has_payload) {
+    hlen = snprintf(head, sizeof(head),
+                    "{\"t\":\"req\",\"id\":%lld,\"ns\":\"%s\",\"m\":\"%s\",\"ttl\":%lld,\"payload\":",
+                    (long long)req_id, ns, method, (long long)ttl);
+  } else {
+    hlen = snprintf(head, sizeof(head),
+                    "{\"t\":\"req\",\"id\":%lld,\"ns\":\"%s\",\"m\":\"%s\",\"ttl\":%lld,\"payload\":null",
+                    (long long)req_id, ns, method, (long long)ttl);
+  }
+  if (hlen <= 0 || (size_t)hlen >= sizeof(head)) {
+    napi_throw_error(env, "ERR_INVALID_PARAM", "帧头超长");
     return nullptr;
   }
-  if (!WriteAll(fd, frame, (size_t)len)) {
+  std::string frame(head, (size_t)hlen);
+  if (has_payload) frame += quoted;
+  frame += ",\"side\":null}\n";
+  if (!WriteAll(fd, frame.data(), frame.size())) {
     napi_throw_error(env, "ERR_ENGINE_CRASHED", "socket 写失败（宿主看门狗收单）");
     return nullptr;
   }
