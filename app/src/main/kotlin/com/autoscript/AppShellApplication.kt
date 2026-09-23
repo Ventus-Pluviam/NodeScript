@@ -197,6 +197,10 @@ class AppShellApplication : Application(), HostSummary {
                             // facade 落位根（§12.4）：引擎按 bootstrap.js 在位与否决定
                             // 注入与否（选填纪律）—— 这里只给"应该在哪"，落位归 assemble。
                             bridgeDistPath = ScriptPaths.autoModuleRoot(filesDir),
+                            // addon 落位（§19 交付轨）：同一条选填纪律 —— 引擎按文件在位
+                            // 决定注入与否，这里只给"应该在哪"，落位归 assemble（assets→
+                            // BridgeAddonDeploy）。文件从没落过 = 不注入，脚本照跑。
+                            addonPath = ScriptPaths.bridgeAddonFile(filesDir),
                         ),
                     )
                 },
@@ -222,6 +226,13 @@ class AppShellApplication : Application(), HostSummary {
                     }
                 } catch (_: Exception) {
                     emptyMap()
+                },
+                // bridge addon（§19 交付轨）：单文件资产，没货 = null（不注入的诚实缺省，
+                // 不是"空文件注入"）。读失败与没货同形 —— 引擎侧缺文件降级，不半装。
+                bridgeAddon = try {
+                    appContext.assets.open("bridge-addon/bridge_native.node").use { it.readBytes() }
+                } catch (_: Exception) {
+                    null
                 },
                 // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
                 // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，

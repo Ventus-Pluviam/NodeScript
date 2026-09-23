@@ -319,4 +319,17 @@ class NodeProcessEngineTest {
         assertEquals(1, zombie.destroyForciblyCalls, "拒绝前先强杀，不留野进程")
         assertEquals(1, launcher.spawnCount, "拒绝的那次绝不 spawn 第二个进程")
     }
+
+    @Test
+    fun `addon 注入按文件在位与否降级——配置了但没落位不注入`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        val e = engine(launcher, addon = dir.resolve("never-written.node"))
+        runBlocking { e.execute(request()) }
+        val env = launcher.lastEnv!!
+        assertFalse(
+            NodeProcessEngine.ENV_BRIDGE_ADDON in env,
+            "缺文件 = 降级不注入（与 bridgeDistPath 同一条选填纪律；main.cpp 直跑脚本）",
+        )
+    }
 }

@@ -53,4 +53,23 @@ object ScriptPaths {
      */
     fun autoModuleRoot(filesDir: Path): Path =
         filesDir.resolve("node_modules").resolve("auto")
+
+    /**
+     * bridge addon 的装配期落位：`filesDir/lib/bridge_native.node`（docs §19
+     * jniLibs 交付轨）。
+     *
+     * 为什么住这里：两个 Kotlin 读者 —— `:app-service:script-repo` 的
+     * `BridgeAddonDeploy`（assets→落位）与 `:app` 装配层（`AUTOSCRIPT_BRIDGE_ADDON`
+     * 注入的"应该在哪"）。任一处写错不会编译失败，只会表现为「addon 没接上、
+     * 桥调用点 ERR_ENGINE_STOPPED」这类**没有报错**的故障形态。
+     *
+     * 为什么不放 `nativeLibraryDir`：APK 的 `lib/<abi>/` 只按 `*.so` 提取，
+     * `.node` 进不去；而 main.cpp 的预载是 `require(env)`——Node 只认 `.node`
+     * 扩展走 dlopen，`.so` 会被当 JS 解析当场炸。所以 addon 走 assets 随包
+     * （与 facade dist 同一交付面），装配期落到这条路径；引擎侧
+     * `addonPath` 缺文件即降级不注入（选填纪律，与 bridgeDistPath 同形）。
+     * 换落位只改这里。
+     */
+    fun bridgeAddonFile(filesDir: Path): Path =
+        filesDir.resolve("lib").resolve("bridge_native.node")
 }

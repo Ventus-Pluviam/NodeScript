@@ -13,6 +13,7 @@ import com.autoscript.appservice.scheduler.persist.FileTaskStore
 import com.autoscript.appservice.scheduler.persist.JournalFileStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
+import com.autoscript.appservice.scriptrepo.core.BridgeAddonDeploy
 import com.autoscript.appservice.scriptrepo.core.BridgeDistDeploy
 import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.engine.EngineId
@@ -90,12 +91,22 @@ object AppShellKit {
          * [BridgeDistDeploy.Report.failures] 非空 = 有文件没落上 + 孤儿未清（见其 KDoc 边界）。
          */
         val bridgeDistReport: BridgeDistDeploy.Report = BridgeDistDeploy.Report(),
+        /**
+         * 装配期 bridge addon 落位报告（§19 交付轨：`assets/bridge-addon/` →
+         * `filesDir/lib/bridge_native.node`）。空报告（`deployed` false 且无 failure）
+         * = 本次没货可落（**不是**"addon 已就位"）；引擎侧 `addonPath` 缺文件即降级
+         * 不注入（选填纪律），桥调用点如实 `ERR_ENGINE_STOPPED`。
+         */
+        val bridgeAddonReport: BridgeAddonDeploy.Report = BridgeAddonDeploy.Report(),
     ) : AutoCloseable {
         /** 没补上的脚本（路径 + 原因；能力中心呈现"有脚本没补上"，不吞成一切正常）。 */
         fun deployFailures(): List<ScriptDeployRecovery.Failure> = deployReport.failures
 
         /** 没落上的 facade 文件（路径 + 原因；`require('auto')` 会因此解析不到）。 */
         fun bridgeDistFailures(): List<BridgeDistDeploy.Failure> = bridgeDistReport.failures
+
+        /** addon 没落上的原因（null = 本次没货或已就位；非空 = 来源/写入失败原文）。 */
+        fun bridgeAddonFailure(): String? = bridgeAddonReport.failure
         override fun close() {
             scope?.cancel()          // 先停看门狗轮转，再关壳/持久句柄（轮转中不得关底下的池）
             shell.close()
@@ -300,6 +311,12 @@ object AppShellKit {
          * 生产由 Application 枚举 assets 喂入（本配方不直连 AssetManager，同 scriptSources 纪律）。
          */
         bridgeDist: Map<String, ByteArray> = emptyMap(),
+        /**
+         * 装配期 bridge addon 落位的来源（`assets/bridge-addon/bridge_native.node` 的字节；
+         * §19 交付轨）。null = 本次没货（`bridgeAddonReport.changed == false`），**不粉饰
+         * 成"addon 已就位"** —— 引擎按 `ScriptPaths.bridgeAddonFile` 缺文件即降级不注入。
+         */
+        bridgeAddon: ByteArray? = null,
         poolCapacity: Int = 1,
         monitor: ProcessMonitor = ProcessMonitor(),
         watchdog: EngineWatchdog? = null,
@@ -336,6 +353,11 @@ object AppShellKit {
         // （字节不同即替换 —— 旧 dist 跨版本形状不配对会把"没更新"变成"模块坏了"）。
         // 落位根 = ScriptPaths.autoModuleRoot（require('auto') 的解析点，契约住 :domain）。
         val bridgeDistReport = BridgeDistDeploy(filesDir, bridgeDist).run()
+
+        // bridge addon 落位（§19 交付轨，选填件）：同一条字节即版本纪律，但单文件不 claim
+        // 目录（filesDir/lib 可能住别的，没有孤儿清理）。没货 = 不动盘 —— 引擎侧
+        // addonPath 缺文件降级不注入，与 bridgeDistPath 同一条选填纪律。
+        val bridgeAddonReport = BridgeAddonDeploy(filesDir, bridgeAddon).run()
 
         // 意图日志与运行档案分文件（§8.5）：键不同（intentRunId vs engineRunId），
         // 只写一侧的孤儿因此可被审计。两个都持久：重启后任务中心与 bootRecover 才有据可依。
@@ -379,6 +401,6 @@ object AppShellKit {
             shell.startWatchdog(fresh)
             ownedScope = fresh
         }
-        return AssembledShell(shell, log, archive, tasks, npm, ownedScope, deployReport, bridgeDistReport)
+        return AssembledShell(shell, log, archive, tasks, npm, ownedScope, deployReport, bridgeDistReport, bridgeAddonReport)
     }
 }

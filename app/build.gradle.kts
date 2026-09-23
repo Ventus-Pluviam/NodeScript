@@ -31,6 +31,21 @@ android {
             // `assets.list("bridge-dist")` 认的就是这个键）。指成子目录会把文件拍平到
             // assets 根，list("bridge-dist") 恒空 —— 一条静默的"没货"故障。
             assets.srcDir(layout.buildDirectory.dir("generated/bridgeDistAssets"))
+            // bridge addon 随包（§19 交付轨）：srcDir 取**父目录**，资产键 =
+            // `bridge-addon/<file>`（Application 侧 `assets.open("bridge-addon/…")` 认的
+            // 就是这个键）—— 与 bridge-dist 同一条"指成子目录会拍平"的教训。
+            assets.srcDir(layout.buildDirectory.dir("generated/engineAddonAssets"))
+            // 引擎二进制随包（§19）：srcDir 根下按 ABI 分目录（`arm64-v8a/libnoden.so`），
+            // prepareEngineNativeLibs 拷进 generated/engineNativeLibs/arm64-v8a/。
+            jniLibs.srcDir(layout.buildDirectory.dir("generated/engineNativeLibs"))
+        }
+    }
+    packaging {
+        jniLibs {
+            // exec 需要**真文件**：默认 extractNativeLibs=false（lib 留在 APK 里给
+            // linker 直读）时 nativeLibraryDir 是空的，`hostBinary` 预检/ exec 都落空。
+            // legacy 打包 = 安装期解压 lib/<abi>/* 到 nativeLibraryDir（§19 交付轨前提）。
+            useLegacyPackaging = true
         }
     }
     testOptions {
@@ -72,6 +87,97 @@ val prepareBridgeDistAssets = tasks.register("prepareBridgeDistAssets") {
     }
 }
 
+// ── 引擎二进制随包（§19 jniLibs 交付轨）────────────────────────────────────────
+// 三个来源都不在 git（NDK/node-runtime-build 产物），所以**不能**像 bridge/js/dist
+// 那样缺了就红 —— 分层诚实：
+//   · 三件齐（noden + libnode + libc++_shared）→ 拷进 generated/engineNativeLibs/arm64-v8a/
+//     （noden 改名 libnoden.so —— PackageManager 只提取 *.so，exec 要真文件）；
+//   · 半套（有 noden 没 libnode，或反过来）→ **红**：半个交付比没交付更糟
+//     （APK 看起来有引擎、设备上必 exit 2；预检虽点名，但那是运行期才炸的形态）；
+//   · 全无 → 警告 + 空产出：装配照过（开发机没跑 build-native.sh 不挡 assemble），
+//     设备侧 execute 预检点名绝对路径（已有单测）。
+// addon 独立：.node 不进 jniLibs（PM 不提取非 .so），走 assets/bridge-addon/。
+val engineNativeLibsDir = layout.buildDirectory.dir("generated/engineNativeLibs")
+val engineAddonAssetsDir = layout.buildDirectory.dir("generated/engineAddonAssets/bridge-addon")
+
+val prepareEngineNativeLibs = tasks.register("prepareEngineNativeLibs") {
+    val nodenSrc = rootProject.layout.projectDirectory
+        .file("engine/node-process/build/native-local/noden")
+    val addonSrc = rootProject.layout.projectDirectory
+        .file("engine/node-process/build/native-local/bridge_native.node")
+    // libnode 候选序（先命中先用）：显式 env → node-runtime-build 出口 → 本机验证位。
+    // 与 build-native.sh 的 LIBNODE 默认同源（本机验证配方）。
+    val libnodeCandidates = listOfNotNull(
+        System.getenv("LIBNODE")?.let { File(it) },
+        rootProject.layout.projectDirectory.file("node-runtime-build/out/libnode.so").asFile,
+        File("/tmp/nrb-out7/libnode.so"),
+    )
+    // libc++_shared：libnode 的 NEEDED（readelf 实证），NDK sysroot 同款 ABI。
+    val ndkHome = System.getenv("ANDROID_NDK_HOME") ?: "/root/ndk/android-ndk-r28c"
+    val cxxShared = File(
+        ndkHome,
+        "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so",
+    )
+    outputs.dir(engineNativeLibsDir)
+    outputs.dir(engineAddonAssetsDir)
+    // 来源不在 git：每次装配现查现拷（outputs.upToDateWhen false —— 否则 build-native.sh
+    // 刚重编的 noden 会被"outputs 已存在"跳过，装进 APK 的还是旧件）。
+    outputs.upToDateWhen { false }
+    doLast {
+        val abiDir = engineNativeLibsDir.get().asFile.resolve("arm64-v8a")
+        abiDir.deleteRecursively()
+        abiDir.mkdirs()
+        val addonOut = engineAddonAssetsDir.get().asFile
+        addonOut.deleteRecursively()
+        addonOut.mkdirs()
+
+        val noden = nodenSrc.asFile.takeIf { it.isFile }
+        val libnode = libnodeCandidates.firstOrNull { it.isFile }
+        when {
+            noden != null && libnode != null -> {
+                if (!cxxShared.isFile) {
+                    throw GradleException(
+                        "libnode 在但 libc++_shared 缺：$cxxShared（libnode 的 NEEDED，" +
+                            "缺它设备上 dlopen 必败 —— 检查 ANDROID_NDK_HOME=$ndkHome）",
+                    )
+                }
+                noden.copyTo(File(abiDir, "libnoden.so"), overwrite = true)
+                libnode.copyTo(File(abiDir, "libnode.so"), overwrite = true)
+                cxxShared.copyTo(File(abiDir, "libc++_shared.so"), overwrite = true)
+                logger.lifecycle(
+                    "[engine-natives] 三件齐 → lib/arm64-v8a/{libnoden.so,libnode.so,libc++_shared.so}",
+                )
+            }
+            noden != null || libnode != null -> throw GradleException(
+                "半个引擎交付比没交付更糟：noden=${noden?.absolutePath ?: "缺"} " +
+                    "libnode=${libnode?.absolutePath ?: "缺"} " +
+                    "（两者都来自本机构建：build-native.sh 出 noden，node-runtime-build/ " +
+                    "LIBNODE 出 libnode —— 补齐其一再 assemble）",
+            )
+            else -> logger.warn(
+                "[engine-natives] 未交付（noden/libnode 都缺）：APK 无引擎二进制。" +
+                    "跑 engine/node-process/scripts/build-native.sh + node-runtime-build 出 " +
+                    "libnode（或 export LIBNODE=…）后再 assemble；设备侧 execute 预检会点名。",
+            )
+        }
+
+        // addon（独立选填件）：有就随包成 assets/bridge-addon/bridge_native.node。
+        val addon = addonSrc.asFile
+        if (addon.isFile) {
+            if (addon.length() == 0L) {
+                throw GradleException("addon 源是 0 字节：${addon.absolutePath}（空 .node 落包=运行期 SyntaxError）")
+            }
+            addon.copyTo(File(addonOut, "bridge_native.node"), overwrite = true)
+            logger.lifecycle("[engine-natives] addon → assets/bridge-addon/bridge_native.node")
+        } else {
+            logger.warn(
+                "[engine-natives] addon 未交付（${addon.absolutePath}）：装配期不注入 " +
+                    "AUTOSCRIPT_BRIDGE_ADDON，脚本照跑、桥调用点 ERR_ENGINE_STOPPED（选填纪律）。",
+            )
+        }
+    }
+}
+
 dependencies {
     implementation(project(":app-service:runtime"))
     implementation(project(":app-service:scheduler"))
@@ -101,4 +207,7 @@ dependencies {
     testImplementation(libs.archunit.junit5)
 }
 // 资产合并前必须先生成（AGP 的 preBuild 每变体都有；matching 覆盖配置期尚未注册的情形）。
-tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(prepareBridgeDistAssets) }
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(prepareBridgeDistAssets)
+    dependsOn(prepareEngineNativeLibs)
+}
