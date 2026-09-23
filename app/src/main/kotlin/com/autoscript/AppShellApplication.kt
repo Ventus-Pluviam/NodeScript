@@ -3,6 +3,8 @@ package com.autoscript
 import android.app.Application
 import android.os.Process
 import android.util.Log
+import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.host.ShellSummary
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
 import com.autoscript.engine.nodeprocess.NodeProcessEngine
 import com.autoscript.shell.AlarmDispatch
@@ -47,7 +49,7 @@ import java.nio.file.Path
  * 熄屏任务的 `SCREEN_ON` 会**如实拒绝**而不是"锁也拿不到却照样跑"
  * （那条路径的表现是"任务成功、实际什么都没发生"）。
  */
-class AppShellApplication : Application() {
+class AppShellApplication : Application(), HostSummary {
 
     /**
      * 壳装配产物。**可能为 null** —— 装配有两条路：
@@ -267,6 +269,16 @@ class AppShellApplication : Application() {
 
     /** 壳（null = 未就绪）。UI/能力中心据此如实显示"调度未就绪"，不假装可用。 */
     fun shell(): AppShell? = shell
+
+    /**
+     * 宿主摘要（[HostSummary] 的生产实现；`:ui` 首屏经 `as? HostSummary` 读，不反向 import 本类）。
+     * 现取不缓存：装配在 IO 域异步完成，缓存会把"装配完成"钉死在首读那一刻（首读大概率
+     * 还是装配中，回前台重读才看得到变化 —— 见 MainActivity onResume）。
+     */
+    override fun shellSummary(): ShellSummary = ShellSummary(
+        shellReady = shell != null,
+        missedAlarms = alarmDispatch.missed().size,
+    )
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
     fun missedAlarms(): Map<String, Long> = alarmDispatch.missed()

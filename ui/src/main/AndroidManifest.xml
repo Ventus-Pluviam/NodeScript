@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 启动入口（launcher 随库 manifest 合并进 :app，AGP 处理）。
+         主题用平台自带 Material.Light.NoActionBar：仓库无 appcompat 依赖，
+         不声明会让设备默认主题带出 ActionBar（呈现层排版失控）。 -->
+    <application>
+        <activity
+            android:name="com.autoscript.ui.MainActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

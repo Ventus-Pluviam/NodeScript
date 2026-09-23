@@ -180,11 +180,12 @@
 
 ## 6. Gradle 模块结构与依赖规则
 
-> 批判建议「约 12 个模块、不要过度拆分」，下表为落定清单（14 个），薄模块已合并（原 4 个 `:platform:*` 合并为 2 个，插件管理器/打包器等薄服务并入对应模块）——拆分的唯一目的是：**让依赖方向能在 Gradle 层面被强制**。
+> 批判建议「约 12 个模块、不要过度拆分」，下表为落定清单（15 个），薄模块已合并（原 4 个 `:platform:*` 合并为 2 个，插件管理器/打包器等薄服务并入对应模块）——拆分的唯一目的是：**让依赖方向能在 Gradle 层面被强制**。
 
 | 模块 | 职责 | 允许依赖 | 所有模块禁止 |
 |---|---|---|---|
-| `:app` | Compose UI（IDE/任务中心/控制台/能力中心/打包向导，**拆独立模块**——2026-09-23 决策，创建随 UI 轨动 `settings.gradle.kts`）＋ `AppShellApplication` 启动装配 | `:app-service:*`、`:domain`、`:engine:node-process`†、`:bridge:java`*、`:platform:capabilities`*、`:platform:system`*（带 * 者仅装配包可用，见右列；† 仅根包 `AppShellApplication` 构造 `engineFactory` 注入，`com.autoscript.shell` 装配包仍禁碰 engine —— :app ArchitectureTest「shell 装配包零跨层泄漏」量化） | 直连 `:platform`/`:bridge` 于装配包之外（**包级例外两则**，均仅限 `com.autoscript.shell`、只做字段级转接无业务逻辑：① 把 handler 挂上 `BridgeRouter` 可依赖 `:bridge:java`；② `SystemSpis`+`CapabilityNamespaces` 生产装配（落点 `PlatformWiring`）可依赖 `:platform:capabilities` 与 `:platform:system`） |
+| `:app` | `AppShellApplication` 启动装配（§4.1 Composition Root）。Compose UI 已拆出为 `:ui`（2026-09-23 落地：launcher 随库 manifest 合并；`:app` 源码零 compose、零 import ui —— Application 实现的是 `:domain` 的 `HostSummary`，装配知识不流向呈现层） | `:app-service:*`、`:domain`、`:ui`、`:engine:node-process`†、`:bridge:java`*、`:platform:capabilities`*、`:platform:system`*（带 * 者仅装配包可用，见右列；† 仅根包 `AppShellApplication` 构造 `engineFactory` 注入，`com.autoscript.shell` 装配包仍禁碰 engine —— :app ArchitectureTest「shell 装配包零跨层泄漏」量化） | 直连 `:platform`/`:bridge` 于装配包之外（**包级例外两则**，均仅限 `com.autoscript.shell`、只做字段级转接无业务逻辑：① 把 handler 挂上 `BridgeRouter` 可依赖 `:bridge:java`；② `SystemSpis`+`CapabilityNamespaces` 生产装配（落点 `PlatformWiring`）可依赖 `:platform:capabilities` 与 `:platform:system`） |
+| `:ui` | Compose UI 呈现层：启动 Activity（launcher，manifest 随库合并进 `:app`）、首屏/任务中心/控制台/能力中心等界面。状态经 `:domain` 的 `HostSummary` 读口现取（`MainActivity` 是装配级接线点）；**jvm-test 旁路不含本模块**（compose 无裸 kotlinc 配方），门 = `:ui:testDebugUnitTest`（CI 任务表） | `:domain` | 依赖 `:app` 或业务模块（成环）；承载装配/业务逻辑（呈现层只画快照） |
 | `:app-service:runtime` | 执行编排：RuntimeController、EnginePool、Watchdog 仲裁、kill 权威、`engines` 命名空间处理器 | `:domain` | 依赖 UI/Dialog 类、`com.autoscript.bridge..`（archUnit 强制，严于本表的历史约定） |
 | `:app-service:scheduler` | 定时/Intent/事件任务、checkpoint 意图日志、runNonce 幂等 | `:domain` | 依赖 RunRecord 之外的引擎细节 |
 | `:app-service:script-repo` | 项目/资源/脚本库、assets→filesDir 原子部署（tmp+rename+sha256 校验） | `:domain` | 直访 danger 权限 |
@@ -208,7 +209,7 @@
 
 **例外不是开后门**：`:app` 碰 `:bridge:java` 与 `:platform:capabilities`/`:platform:system` 都只发生在 `com.autoscript.shell` 一个包（后者是 `SystemSpis` + `CapabilityNamespaces` 的生产装配，落点 `com.autoscript.shell.PlatformWiring` → `AppShellApplication.installWithFiles` 喂 `AppShellKit.assemble`）；`:platform:capabilities` 挂 Router 只碰 `:domain` 的 `NamespaceHandler`。越界由 `:app` 的 `ArchitectureTest` 量化执行（shell 之外的 :app 类碰 platform/bridge 即红）+ `:domain` 的 `ModuleGraphTest` 按 build.gradle.kts 依赖边校验，不是口头约定。
 
-**本机自测（快速旁路；SDK 已配置后 CI 同款 `./gradlew` 亦可本机直跑）**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 直接用 Gradle 缓存里的 `kotlin-compiler-embeddable` + JUnit Platform Launcher 编译并跑任意模块的 main+test 源码树；`tools/jvm-test-all.sh [模块名...]` 是逐模块最小依赖的全量驱动（纯 JVM 模块**故意不给** android.jar——`:domain` 里误加 `import android.*` 要能在本机直接编译失败，不被掩盖）。**旁路的结构性盲区**：kotlinc 直跑时 `java.*` 取自本机 JDK（有 `Process.pid`、JDK11+ `Files.readString`），AGP 编译取 android.jar 桩面（**没有**这些）——凡新增 `java.*` 较新 API 必须过一遍 `./gradlew`（2026-09-23 本机 SDK 首跑即抓出 `Process.pid`/`ProcessHandle`/unix 域/`Files.writeString` 四处，jvm-test 全绿掩着）。
+**本机自测（快速旁路；SDK 已配置后 CI 同款 `./gradlew` 亦可本机直跑）**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 直接用 Gradle 缓存里的 `kotlin-compiler-embeddable` + JUnit Platform Launcher 编译并跑任意模块的 main+test 源码树；`tools/jvm-test-all.sh [模块名...]` 是逐模块最小依赖的全量驱动（纯 JVM 模块**故意不给** android.jar——`:domain` 里误加 `import android.*` 要能在本机直接编译失败，不被掩盖）。**旁路的结构性盲区**：kotlinc 直跑时 `java.*` 取自本机 JDK（有 `Process.pid`、JDK11+ `Files.readString`），AGP 编译取 android.jar 桩面（**没有**这些）——凡新增 `java.*` 较新 API 必须过一遍 `./gradlew`（2026-09-23 本机 SDK 首跑即抓出 `Process.pid`/`ProcessHandle`/unix 域/`Files.writeString` 四处，jvm-test 全绿掩着）。**`:ui` 不入旁路清单**：compose/`@Composable` 没有裸 kotlinc 配方，本模块的门只有 `./gradlew :ui:testDebugUnitTest`（CI 同款任务）。
 
 `--android-jar` 只是**编译期桩**（取自 AGP transforms 缓存的 android-library `android.jar`）：`android.*` 方法体在运行期一律抛 `RuntimeException`，所以含 Android 源码的模块要做到「本机可测」，必须把 Android 接触面挡在可注入的 ops 缝后面（模式与落地清单见 `platform/system/README.md`）。这份脚手架是**本机提速用的旁路**，不替代 CI：`./gradlew` 仍是唯一权威（AGP/资源合并/Manifest 合并只有它能验），改动仍以 CI 绿为准。
 

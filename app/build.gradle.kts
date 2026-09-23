@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -19,7 +18,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
     testOptions {
         unitTests {
             all { it.useJUnitPlatform() }
@@ -43,13 +41,12 @@ dependencies {
     implementation(project(":platform:capabilities"))
     implementation(project(":platform:system"))
     implementation(project(":engine:node-process"))   // §19 Kotlin spawn：根包 Application 构造 engineFactory（shell 装配包仍禁碰 —— ArchitectureTest）
+    // 呈现层（2026-09-23 拆出）：只为 APK 组装 + launcher manifest 合并 ——
+    // :app **源码零 import** com.autoscript.ui（装配知识不流向呈现层；
+    // Application 实现的是 :domain 的 HostSummary）。compose 依赖随 UI 同批迁去 :ui。
+    implementation(project(":ui"))
 
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
-    implementation(libs.compose.material3)
-    implementation(libs.compose.ui.tooling)
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
 
     testImplementation(libs.junit.jupiter)

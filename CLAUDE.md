@@ -10,9 +10,9 @@
 | `.claude/skills/skill-designer/` | 项目级 skill：设计/创建技能 + 外科手术式改代码 + git 提交 | — |
 | `module-stubs` 之外的模块 | 各模块职责见下 | §6 |
 
-## Gradle 模块（模块表由 `settings.gradle.kts` 冻结，14 个）
+## Gradle 模块（模块表由 `settings.gradle.kts` 冻结，15 个）
 
-- `:app` — Compose UI（IDE/任务中心/控制台/能力中心/打包向导）+ AppShellApplication 启动装配（§4.1）——UI **拆独立模块**（2026-09-23 决策；创建随 UI 轨动 `settings.gradle.kts`）
+- `:app` — AppShellApplication 启动装配（§4.1 Composition Root）；Compose UI 已拆去 `:ui`（2026-09-23 落地：launcher 随库 manifest 合并，`:app` 源码零 compose / 零 import ui）
 - `:app-service:runtime` — RuntimeController / EnginePool / Watchdog 仲裁（§8）
 - `:app-service:scheduler` — 定时/Intent/事件任务、checkpoint 意图日志、runNonce 幂等（§9.6）
 - `:app-service:script-repo` — 项目/资源/脚本库、assets→filesDir 原子部署（§9.6）
@@ -26,18 +26,19 @@
 - `:engine:sandbox` — QuickJS 宿主进程（P1）
 - `:platform:capabilities` — a11y/截图/输入/悬浮窗/系统/存储（§9.1–9.4）
 - `:platform:system` — overlay/通知/datastore/shell/zip/设备信息（§9.6）
+- `:ui` — Compose UI 呈现层：启动 Activity（launcher）、首屏/任务中心/控制台/能力中心界面；状态经 `:domain` 的 `HostSummary` 读口现取，禁依赖 `:app`（§6）
 - `bridge/js/` — **npm workspace**（TS facade SDK `@autojs/*`，非 Gradle 模块，§12.4）
 - `node-runtime-build/` — **CI 构建管线**（Node 24 源码 recipe + 16KB 对齐门禁，非 Gradle 模块，§3）
 
 ## 依赖方向铁律（Gradle/archUnit 强制，见 §4.1）
 
-`:app` → `:app-service:*` → `:domain`；`:platform:*` → `:domain`（实现 SPI，不反向）；`:bridge:java` → `:domain`；`:domain` 零 Android/零桥。全部禁止把 UI/Dialog 类、危险权限、循环依赖带进下层。
+`:app` → `:app-service:*`/`:ui` → `:domain`；`:platform:*` → `:domain`（实现 SPI，不反向）；`:bridge:java` → `:domain`；`:domain` 零 Android/零桥。全部禁止把 UI/Dialog 类、危险权限、循环依赖带进下层。
 
 ## 构建
 
-- 本机已配置 Android SDK：`/root/android-sdk`（platform-35 + build-tools 35 + platform-tools；`local.properties` 指 `sdk.dir`，已 gitignore），JDK 17 = `/root/develop/claude/tools/jdk-17.0.17+10`。**CI 同款 `./gradlew …` 命令可本机直跑**（11 个测试任务 2026-09-23 实测全绿）——CI 仍是权威门，但本机已能同源复现。`tools/jvm-test*` 旁路保留作快速门；**注意其结构性盲区**：kotlinc 直跑的 `java.*` 来自 JDK（有 `Process.pid` 等），AGP 来自 android.jar 桩面（没有）——新增 `java.*` 较新 API 必须过 gradle（首跑即抓出四处）。
-- **CI 验证门**：`.github/workflows/ci.yml` —— JVM 单测（11 个模块：`:domain`、`:bridge:java`、`:app-service:{runtime,scheduler,script-repo,permission-center,packager}`、`:platform:{capabilities,system}`、`:engine:node-process`、`:app`）+ archUnit + `bridge/js` 的 npm test，跑在 ubuntu-latest（JDK 17 + Gradle 8.9 + Android SDK license）。Android assemble 走后续 `node-runtime-build/Dockerfile`。
-- **本机自测旁路**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 单模块编译+跑测；`tools/jvm-test-all.sh [模块名...]` 全模块驱动（逐模块最小依赖）。`--android-jar` 补一份**编译期** android.jar 桩，供 `:app`/`:platform:system` 这类含 `android.*` 源码的模块本机验证——运行期 android stub 会抛异常，所以这些模块的单测必须把 Android 接触面挡在可注入 ops 缝后（写法见 `platform/system/README.md`）。**这是提速旁路，不是权威**：`./gradlew`（AGP/资源/Manifest 合并）只有 CI 能跑，改动仍以 CI 绿为准。详见 `docs/framework-design.md` §6 末。
+- 本机已配置 Android SDK：`/root/android-sdk`（platform-35 + build-tools 35 + platform-tools；`local.properties` 指 `sdk.dir`，已 gitignore），JDK 17 = `/root/develop/claude/tools/jdk-17.0.17+10`。**CI 同款 `./gradlew …` 命令可本机直跑**（12 个测试任务 2026-09-23 实测全绿）——CI 仍是权威门，但本机已能同源复现。`tools/jvm-test*` 旁路保留作快速门；**注意其结构性盲区**：kotlinc 直跑的 `java.*` 来自 JDK（有 `Process.pid` 等），AGP 来自 android.jar 桩面（没有）——新增 `java.*` 较新 API 必须过 gradle（首跑即抓出四处）。
+- **CI 验证门**：`.github/workflows/ci.yml` —— JVM 单测（12 个模块：`:domain`、`:bridge:java`、`:app-service:{runtime,scheduler,script-repo,permission-center,packager}`、`:platform:{capabilities,system}`、`:engine:node-process`、`:ui`、`:app`）+ archUnit + `bridge/js` 的 npm test，跑在 ubuntu-latest（JDK 17 + Gradle 8.9 + Android SDK license）。Android assemble 走后续 `node-runtime-build/Dockerfile`。
+- **本机自测旁路**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 单模块编译+跑测；`tools/jvm-test-all.sh [模块名...]` 全模块驱动（逐模块最小依赖）。`--android-jar` 补一份**编译期** android.jar 桩，供 `:app`/`:platform:system` 这类含 `android.*` 源码的模块本机验证——运行期 android stub 会抛异常，所以这些模块的单测必须把 Android 接触面挡在可注入 ops 缝后（写法见 `platform/system/README.md`）。**这是提速旁路，不是权威**：`./gradlew`（AGP/资源/Manifest 合并）本机已可直跑（见本节首条），CI 仍是最终门。**`:ui` 不入旁路**（compose/`@Composable` 没有裸 kotlinc 配方）——它的门 = `./gradlew :ui:testDebugUnitTest`（CI 任务表已列）。详见 `docs/framework-design.md` §6 末。
 
 ## 协作纪律（子 agent 必须遵守）
 

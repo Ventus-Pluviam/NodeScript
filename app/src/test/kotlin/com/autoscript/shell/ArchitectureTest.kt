@@ -30,6 +30,9 @@ class ArchitectureTest {
                 "androidx.compose.ui..",
                 "androidx.compose.material3..",
                 "androidx.compose.foundation..",
+                // :ui 模块（2026-09-23 拆出）：装配包不得依赖呈现层 ——
+                // 首屏读口走 :domain 的 HostSummary，不是 shell 反向 import MainActivity。
+                "com.autoscript.ui..",
             )
             .check(classes)
     }

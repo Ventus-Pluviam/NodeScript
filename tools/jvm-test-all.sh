@@ -8,6 +8,10 @@
 # 纯 JVM 模块走 tools/jvm-test.sh（**不给** android.jar：这样 :domain 里误加
 # `import android.*` 会在本机直接编译失败，不被掩盖）；含 Android 源码的模块走
 # `--android-jar`。每个模块 1200s 超时，任一模块失败则整体退出码非 0。
+#
+# :ui **故意不在**下面的清单里：compose/@Composable 没有裸 kotlinc 配方
+# （kotlinc 直跑连 `androidx.compose` 坐标都拿不到）——15 个 Gradle 模块中
+# 它是唯一只走 `./gradlew :ui:testDebugUnitTest`（CI 任务表已列）的。
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

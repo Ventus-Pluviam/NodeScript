@@ -68,6 +68,8 @@ class ModuleGraphTest {
             ":platform:system",      // §6 包级例外二（同上，SystemSpis 入口）
             ":engine:node-process",  // §8.1 注入点：根包 AppShellApplication 构造 engineFactory 传入
                                      //（shell 装配包仍禁碰 engine —— :app ArchitectureTest 量化）
+            ":ui",                   // APK 组装 + launcher manifest 合并；:app 源码零 import ui
+                                     //（接线走 :domain 的 HostSummary —— 反向 import 即成环）
         ),
         ":app-service:runtime" to setOf(":domain"),
         ":app-service:scheduler" to setOf(":domain"),
@@ -84,13 +86,15 @@ class ModuleGraphTest {
         ":engine:sandbox" to emptySet(),
         ":platform:capabilities" to setOf(":domain"),
         ":platform:system" to setOf(":domain"),
+        // 呈现层只认 :domain（HostSummary 读口 + DTO）；反向依赖 :app 会成环。
+        ":ui" to setOf(":domain"),
     )
 
     @Test
     fun `模块表与 settings_gradle 一致（新增模块必须同步登记依赖规则）`() {
         assertEquals(
             allowed.keys, declaredModules,
-            "settings.gradle.kts 与 §6 允许依赖表不一致：新增/删除模块时必须同步本表（§6 冻结 14 个模块）",
+            "settings.gradle.kts 与 §6 允许依赖表不一致：新增/删除模块时必须同步本表（§6 冻结 15 个模块）",
         )
     }
 
