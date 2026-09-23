@@ -15,7 +15,7 @@
 ## 1. 目标与非目标
 
 ### 目标
-- **对标 AutoJsPro v9 的 API 能力面**：无障碍自动化、截图找图、悬浮窗、定时任务、原生/Web UI、多脚本引擎、打包为独立 APK、脚本加密。
+- **对标 AutoJsPro v9 的 API 能力面**：无障碍自动化、截图找图、悬浮窗、定时任务、原生/Web UI、多脚本引擎、打包为独立 APK。
 - **脚本即一等公民**：用户用 Node.js 生态写自动化；内置 IDE/控制台/任务中心。
 - **可长期演进**：清晰的依赖方向、明确的接缝（引擎/自动化通道/存储/OCR 可替换）、P0 小而完整可发布。
 - **诚实面对 Android 2000 说「不」**：不在保活、后台启动、跨进程同步这些被系统禁令的地方假装可以。
@@ -958,16 +958,15 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 - npm P1（§10.11）：spawn 桥 polyfill + 批准后脚本真实执行（纯 JS bin 白名单）+ npm 终端 + 在线/OSV 离线审计 + QuickJS 白名单库独立 vendored + node-shim 红测。
 
 ### P2 — 生态与分发
-- 脚本加密分级（AES-GCM vault → Dex → 快照 → engine-native 逐级）；`.js` 资源重打包链路。
 - `dialogs` 全形态的 **Android 渲染侧**（overlay 真弹窗 / 通知回调的真投递；`mode` 选择与 BAL 降级判据已在 §9.6 的语义层落地）、`root_automator`/Shizuku 输入、`shell` 全量（`ShellMode.ROOT`/`ADB` 的真执行通道；`DEFAULT` 侧语义已落地）。
 - 打包 APK 深度自定义（权限/启动配置、低 targetSdk 壳可配、adaptive 分层图标等深度定制——整图替换已随 P0 落地）。
 - 通知触发的 Intent 任务；多时区 cron；alarm 生成日历视图。
-- 市场/分享、`axios`/第三方包预置、插件市场。
+- 分享、`axios`/第三方包预置。
 - npm P2（§10.11）：离线 bundle 打包器 + 增量更新；`prebuild .node` 交叉编译管线产品化 + 纯 JS 替代清单。
 
 ### P3 — 前沿与实验
 - worker_threads 实验性引擎（若手机端验证可行）——标记实验、默认关闭。
-- 多设备/服务器远端执行；LLM 驱动的自动化智能体。
+- LLM 驱动的自动化智能体。
 - Flutter/Compose 全重做 IDE 主题化；性能剖析面板。
 
 **原则**：P0 的「小而完整」优先于「多而残缺」；每个 P 的退出标准都有可测验收（§16 预算联动）。
