@@ -40,7 +40,7 @@ import java.nio.file.Path
  *
  * **不做的事**：不碰非类查找的 `android:name`（`<action>`/`<uses-permission>`/权限名是
  * 字符串常量而非 `Class.forName` —— 声明与引用成对保留照样互相匹配，改包名不影响可运行性）；
- * 不解码/缩放 PNG（魔数过检即入包；尺寸分设与 adaptive 分层编辑属 §14 P2 深度定制）；
+ * 不解码/缩放 PNG（魔数过检即入包；缩放与 adaptive 分层编辑不属本补丁职责，对应深度定制需求已从 §14 移除）；
  * 不做 zipalign（独立 transform 步骤）；不签名（见上）。
  * 改写前的 planDigest 复验由调用方走 [com.autoscript.domain.packager.TemplateApkPlans.verify]，
  * 本类只负责"给定身份与图标，字节级落地"。

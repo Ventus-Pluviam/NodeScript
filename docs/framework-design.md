@@ -959,14 +959,12 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 
 ### P2 — 生态与分发
 - `dialogs` 全形态的 **Android 渲染侧**（overlay 真弹窗 / 通知回调的真投递；`mode` 选择与 BAL 降级判据已在 §9.6 的语义层落地）、`root_automator`/Shizuku 输入、`shell` 全量（`ShellMode.ROOT`/`ADB` 的真执行通道；`DEFAULT` 侧语义已落地）。
-- 打包 APK 深度自定义（权限/启动配置、低 targetSdk 壳可配、adaptive 分层图标等深度定制——整图替换已随 P0 落地）。
 - 通知触发的 Intent 任务；多时区 cron；alarm 生成日历视图。
 - 分享、`axios`/第三方包预置。
 - npm P2（§10.11）：离线 bundle 打包器 + 增量更新；`prebuild .node` 交叉编译管线产品化 + 纯 JS 替代清单。
 
 ### P3 — 前沿与实验
 - worker_threads 实验性引擎（若手机端验证可行）——标记实验、默认关闭。
-- LLM 驱动的自动化智能体。
 - Flutter/Compose 全重做 IDE 主题化；性能剖析面板。
 
 **原则**：P0 的「小而完整」优先于「多而残缺」；每个 P 的退出标准都有可测验收（§16 预算联动）。
