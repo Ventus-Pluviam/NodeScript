@@ -46,7 +46,10 @@ run permission-center 0 "app-service/permission-center/src/main/kotlin $D"      
 run packager          0 "app-service/packager/src/main/kotlin $D"                                 app-service/packager/src/test/kotlin
 run capabilities      1 "platform/capabilities/src/main/kotlin $D"                                platform/capabilities/src/test/kotlin
 run platform-system   1 "platform/system/src/main/kotlin $D"                                      platform/system/src/test/kotlin
-run app               1 "app/src/main/kotlin app-service/runtime/src/main/kotlin app-service/scheduler/src/main/kotlin app-service/script-repo/src/main/kotlin app-service/permission-center/src/main/kotlin app-service/packager/src/main/kotlin bridge/java/src/main/kotlin platform/capabilities/src/main/kotlin platform/system/src/main/kotlin $D" app/src/test/kotlin
+# engine：纯 JVM（flag 0 = 连 android.jar 都不给 —— 任何 android.* import 直接编译失败，
+# 与 engine ArchitectureTest「本模块保持纯 JVM」同一道闸）。真起 node 的集成测试也在这一行。
+run engine            0 "engine/node-process/src/main/kotlin $D"                                  engine/node-process/src/test/kotlin
+run app               1 "app/src/main/kotlin app-service/runtime/src/main/kotlin app-service/scheduler/src/main/kotlin app-service/script-repo/src/main/kotlin app-service/permission-center/src/main/kotlin app-service/packager/src/main/kotlin bridge/java/src/main/kotlin platform/capabilities/src/main/kotlin platform/system/src/main/kotlin engine/node-process/src/main/kotlin $D" app/src/test/kotlin
 
 if [ ${#FAILED[@]} -gt 0 ]; then
   echo "##### 失败模块: ${FAILED[*]}"

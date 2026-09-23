@@ -98,7 +98,9 @@ class ControllerRunDispatcher(
             RuntimeController.Completed.StoppedClean -> DispatchReport(RunOutcome.Succeeded, link, stop)
             RuntimeController.Completed.StopTimeout -> DispatchReport(RunOutcome.Failed, link, stop)
             RuntimeController.Completed.Killed ->
-                DispatchReport(RunOutcome.Crashed("引擎强杀结算 runId=${started.runId}"), link, stop)
+                // Completed.Killed 两条来路：自然 CRASHED（脚本抛错/宿主 exit≠0）与真被强杀 ——
+                // 措辞必须同时盖住，否则"脚本自己崩了"被日志写成"被强杀"就是撒谎（§1 诚实）。
+                DispatchReport(RunOutcome.Crashed("引擎异常结算（崩溃或被强杀）runId=${started.runId}"), link, stop)
             RuntimeController.Completed.UnknownRun ->
                 DispatchReport(RunOutcome.Crashed("run 已结算或从未存在 runId=${started.runId}"), link, stop)
             RuntimeController.Completed.TimedOut -> {

@@ -66,6 +66,8 @@ class ModuleGraphTest {
             ":bridge:java",          // §6 包级例外一（shell 装配包挂 handler）
             ":platform:capabilities",// §6 包级例外二（shell 装配包生产装配，PlatformWiring）
             ":platform:system",      // §6 包级例外二（同上，SystemSpis 入口）
+            ":engine:node-process",  // §8.1 注入点：根包 AppShellApplication 构造 engineFactory 传入
+                                     //（shell 装配包仍禁碰 engine —— :app ArchitectureTest 量化）
         ),
         ":app-service:runtime" to setOf(":domain"),
         ":app-service:scheduler" to setOf(":domain"),
@@ -76,7 +78,9 @@ class ModuleGraphTest {
         ":bridge:java" to setOf(":domain"),
         ":bridge:native" to emptySet(),
         ":bridge:image" to emptySet(),
-        ":engine:node-process" to setOf(":bridge:native"),
+        // :domain = ScriptEngine SPI 实现方向（domain KDoc「实现位于 :engine:node-process」的机器可读化）；
+        // :bridge:native 是运行期 .so 装载（main.cpp dlopen），不是 Kotlin 源码边。
+        ":engine:node-process" to setOf(":bridge:native", ":domain"),
         ":engine:sandbox" to emptySet(),
         ":platform:capabilities" to setOf(":domain"),
         ":platform:system" to setOf(":domain"),

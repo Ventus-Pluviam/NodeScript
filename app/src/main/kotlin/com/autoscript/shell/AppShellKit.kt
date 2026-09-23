@@ -120,6 +120,8 @@ object AppShellKit {
      *   否则 `SCREEN_ON` 契约（§8.6 亮屏+解锁保底）在装配层被静默取消。
      * @param engineFactory 引擎宿主工厂。缺省 = [UnavailableEngine]：一槽一实例（与
      *   [com.autoscript.appservice.runtime.FixedEnginePool] 的构造约定一致，槽位不共享宿主）。
+     *   生产（`com.autoscript.AppShellApplication`）已显式注入 `NodeProcessEngine`（§19 Kotlin
+     *   spawn）—— 缺省保留给纯 JVM 配方与测试，两边互不覆盖。
      * @param a11yHandler / @param screenHandler `:platform:capabilities` 的真实现（经
      *   `CapabilityNamespaces.{a11y,screen}` 转接）；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param npmHandler npm 命名空间实现；null = 本配方自建（[NpmShellKit]）。

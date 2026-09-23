@@ -33,6 +33,11 @@ import com.autoscript.domain.engine.StopResult
  *
  * **不是假替身**：真实现到了之后本类不会被悄悄换掉 —— engineFactory 是
  * [com.autoscript.shell.AppShellKit] 的显式参数，换实现 = 改装配处那一行。
+ *
+ * **已换**：生产装配 `com.autoscript.AppShellApplication.installWithFiles` 已注入
+ * `NodeProcessEngine`（§19 Kotlin spawn）。本类仍是 [com.autoscript.shell.AppShellKit]
+ * 的**缺省** —— 纯 JVM 配方与测试不经 Application 装配时走这条诚实 CRASHED 通道
+ * （`AppShellKitTest` 钉的正是这个缺省不被悄悄换掉）。
  */
 class UnavailableEngine(override val id: EngineId) : ScriptEngine {
 

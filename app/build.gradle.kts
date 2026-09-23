@@ -42,6 +42,7 @@ dependencies {
     // 见 ArchitectureTest「平台实现只许装配包碰」+ ModuleGraphTest 允许集 + §6「例外不是开后门」。
     implementation(project(":platform:capabilities"))
     implementation(project(":platform:system"))
+    implementation(project(":engine:node-process"))   // §19 Kotlin spawn：根包 Application 构造 engineFactory（shell 装配包仍禁碰 —— ArchitectureTest）
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

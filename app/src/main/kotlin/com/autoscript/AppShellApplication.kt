@@ -2,6 +2,8 @@ package com.autoscript
 
 import android.app.Application
 import android.util.Log
+import com.autoscript.engine.nodeprocess.NodeEngineConfig
+import com.autoscript.engine.nodeprocess.NodeProcessEngine
 import com.autoscript.shell.AlarmDispatch
 import com.autoscript.shell.AlarmFires
 import com.autoscript.shell.AlarmPort
@@ -79,8 +81,9 @@ class AppShellApplication : Application() {
         Log.i(TAG, "装配启动：壳创建中（引擎/a11y 按 §6 缝注入，未接 = 如实记账）")
         // 自装配（§4.1 的真实调用点）：闹钟要有人接、崩溃遗留要有人重投、任务中心要有档案 ——
         // 这三件事都要求「壳在 Application 起来时就存在」，而不是等某个 Activity 顺手装配。
-        // 屏幕门禁取真 PowerManager（[screenGateOf]）；引擎工厂走 [AppShellKit] 的诚实缺省
-        // （native 宿主未落地 → 每次执行如实 CRASHED + 真原因，见 UnavailableEngine）。
+        // 屏幕门禁取真 PowerManager（[screenGateOf]）；引擎工厂 = [NodeProcessEngine] 真 spawn
+        //（§19 Kotlin spawn 生产换线；缺件由 execute 预检点名绝对路径，比笼统"未接入"更可操作）。
+        // [AppShellKit] 缺省仍是 UnavailableEngine —— JVM 配方/测试不经 Application 装配时走诚实缺省。
         //
         // 放后台线程：`onCreate` 里做文件 IO（replay 两个 jsonl + 建目录）会拖慢冷启动，
         // 而这几件事没有一件是"必须在 onCreate 返回前完成"的 —— 闹钟在那之前响就走
@@ -117,11 +120,25 @@ class AppShellApplication : Application() {
                 .also { alarmPort = it }
             val appContext = applicationContext
             val wiring = PlatformWiring.of(appContext)
+            // §19 Kotlin spawn 生产装配：jniLibs 交付位的宿主（命名随打包管线，缺位预检点名 ——
+            // 这一行就是接线点）。socket/addon 两半边未落 → null = 离线 spawn：main.cpp stderr 提示 +
+            // 桥调用点如实 ERR_ENGINE_STOPPED，不悬挂；宿主二进制落位后 spawn 即通（无 socket 也照跑）。
+            val nativeDir = Path.of(applicationInfo.nativeLibraryDir)
             val built = AppShellKit.assemble(
                 filesDir = filesDir,
                 cacheDir = cacheDir,
                 schedulerProvider = AlarmSchedulerProvider(port = port),
                 screenGate = screenGateOf(this),
+                engineFactory = { engineId ->
+                    NodeProcessEngine(
+                        engineId,
+                        NodeEngineConfig(
+                            filesDir = filesDir,
+                            hostBinary = nativeDir.resolve("libnoden.so"),
+                            libnodePath = nativeDir.resolve("libnode.so"),
+                        ),
+                    )
+                },
                 // 首批内置脚本（§9.6 `assets/scripts/<projectId>/`）：枚举 + 按需读，
                 // 补部署只补缺不覆盖 —— 用户"清除数据"后重装配时缺的脚本从这里回来。
                 scriptProjects = try {

@@ -6,10 +6,19 @@
 //                            （addon 的 napi_* 符号从 libnode 动态表可见，不链时依赖）。
 //  AUTOSCRIPT_BRIDGE_ADDON   bridge_native.node 路径（选填）—— 给则经 -e 引导预载，
 //                            并把 AUTOSCRIPT_SOCK_FD 注入 addon.setSocketFd。
-//  AUTOSCRIPT_HOST_SOCKET    :main 的 unix socket 路径（选填）—— 给则必须连上
+//  AUTOSCRIPT_RUN_ID         本次执行的 runId（spawn 侧注入，NodeProcessEngine 同名 env）——
+//                            本文件**透传不消费**：JS 侧读 process.env 打心跳（§8.4）。
+//  AUTOSCRIPT_RUN_NONCE      §8.5 执行体幂等键（同上：透传，JS 读 process.env）。
+//  AUTOSCRIPT_HOST_SOCKET    :main 的 unix socket 地址（选填）—— 给则必须连上
 //                            （连不上 = exit 3，不静默降级：生产由 :main spawn 并带上，
 //                            缺失只应出现在离线调试）；不给 = 离线跑，桥调用如实抛
 //                            ERR_ENGINE_STOPPED（addon 语义），stderr 打一行提示。
+//                            地址两形态（前导 '/' 判别）：以 '/' 开头 = 文件系统路径
+//                            （桌面/CI/回归）；否则 = Linux abstract 名（真机，
+//                            :main 侧 LocalServerSocket 绑抽象命名空间 —— minSdk 26 无
+//                            ServerSocketChannel unix API）。连接后双向 SO_PEERCRED/uid
+//                            校验：abstract 名无文件权限，同设备他 app 可抢绑/连入 ——
+//                            uid 不等于本进程 uid 即拒（exit 3）。
 //
 // 启动序（§7.8，对应四步）：
 //  1) 连 :main socket（宿主建连 —— addon 契约是「宿主注入已连 fd」，不自连 §7.5），
@@ -30,6 +39,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <cstddef>
+
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -49,27 +60,69 @@ constexpr const char kNodeStartSymbol[] = "_ZN4node5StartEiPPc";
 // -e 引导（无换行，单引号安全地嵌进 argv）：预载 addon → 注入 fd → 跑真脚本。
 // -e 形态下 process.argv = [execPath, <--后第一个位置参数>, ...]，故 argv[1] 即脚本路径；
 // "--" 隔开防止脚本路径以 - 开头被 node 当选项。
+// 心跳（§8.4 原生宿主半边）：读 spawn 注入的 AUTOSCRIPT_RUN_ID，500ms 打点（与
+// WatchdogPolicy.heartbeatIntervalMillis 同源）。unref 定时器不吊住事件循环（脚本跑完即退，
+// §5.3 同款纪律，对齐 bridge/js startHeartbeat）。reqId 用 **-seq 负数命名空间**：心跳响应
+// 由 addon 直接回包，将来 JS 消费面（runtimeBridge 正数 id 计数器）装上后，迟到的心跳响应
+// 撞不上任何在途正数 id（handleResponse 查不到即丢），不会错结算别的请求。
+// 无 RUN_ID（非 spawn 起的裸 noden）→ 不打点；离线无 fd 时 invoke 抛错被 beat 吞掉
+// （心跳失败不炸脚本 —— JS 侧 startHeartbeat 同款纪律）。
 constexpr const char kBootstrap[] =
     "const a=require(process.env.AUTOSCRIPT_BRIDGE_ADDON);"
     "if(process.env.AUTOSCRIPT_SOCK_FD)a.setSocketFd(+process.env.AUTOSCRIPT_SOCK_FD);"
+    "const rid=+process.env.AUTOSCRIPT_RUN_ID;"
+    "if(rid>0){let seq=0;setInterval(()=>{seq++;"
+    "try{a.invoke('engines','heartbeat',JSON.stringify({runId:rid,seq}),-seq,2000)}catch(e){}},500).unref();}"
     "require(process.argv[1]);";
 
 // 连 :main 的 unix socket；成功返回 fd，失败 -1（errno 保留给调用方打印）。
+// 地址两形态（见文件头）：'/' 前导 = 文件系统路径；否则 = abstract 名。
+// 连上后 SO_PEERCRED 校验对端 uid == 自身 uid —— 抢绑 abstract 名的他 app 在此被拒。
 int ConnectHostSocket(const char* path) {
   sockaddr_un addr;
   std::memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  if (std::strlen(path) >= sizeof(addr.sun_path)) {
-    errno = ENAMETOOLONG;
-    return -1;
+  const size_t len = std::strlen(path);
+  socklen_t addrlen;
+  if (len > 0 && path[0] == '/') {
+    if (len >= sizeof(addr.sun_path)) {
+      errno = ENAMETOOLONG;
+      return -1;
+    }
+    std::memcpy(addr.sun_path, path, len + 1);
+    addrlen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + len + 1);
+  } else {
+    // abstract：sun_path[0] 留 0，名字从 +1 起；地址长度含那个 0 字节（不含结尾 NUL）。
+    if (len == 0 || len >= sizeof(addr.sun_path) - 1) {
+      errno = ENAMETOOLONG;
+      return -1;
+    }
+    addr.sun_path[0] = '\0';
+    std::memcpy(addr.sun_path + 1, path, len);
+    addrlen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + len);
   }
-  std::memcpy(addr.sun_path, path, std::strlen(path) + 1);
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+  if (connect(fd, reinterpret_cast<sockaddr*>(&addr), addrlen) != 0) {
     int saved = errno;
     close(fd);
     errno = saved;
+    return -1;
+  }
+  struct ucred peer;
+  socklen_t peerlen = sizeof(peer);
+  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &peerlen) != 0) {
+    int saved = errno;
+    close(fd);
+    errno = saved;
+    return -1;
+  }
+  if (peer.uid != getuid()) {
+    std::fprintf(stderr,
+                 ":nodeN 拒绝桥对端：uid %u != 本进程 uid %u（%s 被同设备其他 app 抢绑？）\n",
+                 peer.uid, getuid(), path);
+    close(fd);
+    errno = ECONNREFUSED;
     return -1;
   }
   return fd;

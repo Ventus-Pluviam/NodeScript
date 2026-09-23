@@ -22,7 +22,7 @@
 - `:bridge:java` — Kotlin Router / RequestRegistry(TTL) / HandleRegistry(generation) / EventBus（§7）
 - `:bridge:native` — C++ N-API addon 控制面 + libnode.so 装载（§7，CI 构建）
 - `:bridge:image` — C++ 图像管线 libimgnative.so（OpenCV 4.x，§9.2，CI 构建）
-- `:engine:node-process` — :nodeN 进程宿主 main.cpp（§5，CI 构建）
+- `:engine:node-process` — :nodeN 进程宿主：`NodeProcessEngine`（Kotlin spawn，实现 `:domain` 的 `ScriptEngine`）+ main.cpp（§5/§7.8；`.so`/APK 侧仍 CI 构建）
 - `:engine:sandbox` — QuickJS 宿主进程（P1）
 - `:platform:capabilities` — a11y/截图/输入/悬浮窗/系统/存储（§9.1–9.4）
 - `:platform:system` — overlay/通知/datastore/shell/zip/设备信息（§9.6）
@@ -36,7 +36,7 @@
 ## 构建
 
 - 本机无 Android SDK：Android 模块的编译/验证在 **CI** 完成；本机只有 JDK 17（`/root/develop/claude/tools/jdk-17.0.17+10`）。
-- **CI 验证门**：`.github/workflows/ci.yml` —— JVM 单测（10 个模块：`:domain`、`:bridge:java`、`:app-service:{runtime,scheduler,script-repo,permission-center,packager}`、`:platform:{capabilities,system}`、`:app`）+ archUnit + `bridge/js` 的 npm test，跑在 ubuntu-latest（JDK 17 + Gradle 8.9 + Android SDK license）。Android assemble 走后续 `node-runtime-build/Dockerfile`。
+- **CI 验证门**：`.github/workflows/ci.yml` —— JVM 单测（11 个模块：`:domain`、`:bridge:java`、`:app-service:{runtime,scheduler,script-repo,permission-center,packager}`、`:platform:{capabilities,system}`、`:engine:node-process`、`:app`）+ archUnit + `bridge/js` 的 npm test，跑在 ubuntu-latest（JDK 17 + Gradle 8.9 + Android SDK license）。Android assemble 走后续 `node-runtime-build/Dockerfile`。
 - **本机自测旁路**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 单模块编译+跑测；`tools/jvm-test-all.sh [模块名...]` 全模块驱动（逐模块最小依赖）。`--android-jar` 补一份**编译期** android.jar 桩，供 `:app`/`:platform:system` 这类含 `android.*` 源码的模块本机验证——运行期 android stub 会抛异常，所以这些模块的单测必须把 Android 接触面挡在可注入 ops 缝后（写法见 `platform/system/README.md`）。**这是提速旁路，不是权威**：`./gradlew`（AGP/资源/Manifest 合并）只有 CI 能跑，改动仍以 CI 绿为准。详见 `docs/framework-design.md` §6 末。
 
 ## 协作纪律（子 agent 必须遵守）
