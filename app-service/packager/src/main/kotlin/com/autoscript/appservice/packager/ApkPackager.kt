@@ -34,8 +34,8 @@ import java.security.MessageDigest
  *
  * **诚实边界**：不取 Keystore 口令（Android Keystore 取密是
  * 调用方的事，口令只进 [Signing] 内存与 apksigner 的环境变量，不进 argv）、
- * 不做加密资产/自定义 loader（§3 打包行的后续项）。打包向导 UI 尚未落地 ——
- * 本类是它脚下的那条链，先在纯 JVM 上闭环可测。
+ * 加密资产/自定义 loader **已移出需求**（2026-09-23 收窄）；打包整轨（含向导 UI）移入
+ * 后续版本 —— 本类是那条未来的链，先在纯 JVM 上闭环可测。
  */
 class ApkPackager(
     private val workDir: Path,

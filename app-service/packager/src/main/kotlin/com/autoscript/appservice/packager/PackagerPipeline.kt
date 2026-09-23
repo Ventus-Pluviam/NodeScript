@@ -9,7 +9,7 @@ import java.nio.file.StandardCopyOption
 /**
  * 打包管线装配器（docs/framework-design.md §14 P0「打包：模板 APK 改装 + 签名向导」）。
  *
- * 管线三个阶段（设计 §6 模块职责：模板 APK 改写、签名向导、加密资产注入）：
+ * 管线三个阶段（设计 §6 模块职责：模板 APK 改写、签名向导）：
  * 1. **模板复制**：[templateApk] → 工作目录（保留原始模板，防重复打包互相污染）；
  * 2. **模板改写**：[patch] —— 身份换写由注入的 [TemplatePatch] 完成；P0 真实现是
  *    [IdentityTemplatePatch]（AXML 改 package/version + ARSC 改 label 资源），

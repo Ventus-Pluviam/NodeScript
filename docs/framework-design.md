@@ -69,7 +69,7 @@
 | **截图** | 默认 **a11y `takeScreenshot`**（API34 起 333ms 节流）；**MediaProjection** 做会话式实时截屏/录屏（API34 每会话确认 + FGS 前置）；**图像分析全走 native**（独立 `libimgnative.so`，OpenCV 4.x） | 图像管线 0–1 拷贝直达 Native，避免 Bitmap→Byte[]→Buffer 多次拷贝；`FLAG_SECURE` 窗口如实返回 `ERR_SCREEN_LOCKED/ERR_BLACK_FRAME` 系错误对象 | 维护两份 so；OpenCV 静态链接体积 |
 | **UI** | 脚本 UI = 桥把 XML 布局描述推给 `:main` 渲染（原生 View）；`ui_web` 走 WebView + JS 桥；悬浮窗独立小型宿主 Activity | AutoJsPro 已验证；XML→View 桥符合「脚本进程只产声明、主进程渲染」原则 | UI 事件回的桥链路较多 |
 | **保活** | **specialUse FGS**（`onCreate` 即 `startForeground`，声明 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`，无超时）+ 电池优化白名单引导 + 精确闹钟看门狗 + 开机 specialUse 恢复；**全部作为一级权限项进能力中心** | API35 普通 FGS 有 6h 超时、普通后台启动受限；specialUse 无超时，精确闹钟不受 FGS 后台启动限制 | Play Store 不可发行；部分 ROM 需要引导 |
-| **打包** | 模板 APK 改写（AXML/ARSC 编辑替换 application + 注入 assets/project），复用宿主 Node 引擎 so；加密资产 + 自定义 loader | AutoJsPro 已验证的发行形态；不需要为每个脚本重编 C++ | APK 依赖宿主引擎版本 |
+| **打包** | 模板 APK 改写（AXML/ARSC 编辑替换 application + 注入 assets/project），复用宿主 Node 引擎 so | AutoJsPro 已验证的发行形态；不需要为每个脚本重编 C++ | APK 依赖宿主引擎版本 |
 | **npm 支持** | **D（混合）**：vendored 真 npm CLI（npm 12.x 系，Node≥24.15）在**专用安装会话进程**内进程内执行——P0 默认零 spawn（npm12 官方 `allowScripts=none` 等默认语义把「无 child_process」从 workaround 变成契约）；P1 加 spawn 桥升级通道（批准后 lifecycle/npm run）；内置离线 bundle + 精选 tarball 种子通道 | 纯 JS 生态（axios/dayjs/lodash/ws 等）安装**实证无需子进程**（strace 实测 0 execve）；真 CLI 白拿 lockfile v3/audit/审批语义且可审计；不重造轮子 | npm CLI ~8–9MB 体积；供应链护栏只能靠带外信任锚与审批人机分离（§10） |
 | **进程隔离** | `:main`(UI+服务) / `:node0..N`(脚本) / `:sandbox`(QuickJS) | §4 进程拓扑 | — |
 | **SDK 基线** | minSdk 24 / compile&target **36**（Android 16）/ arm64-v8a 首发（后续 x86_64）；**16KB ELF 对齐进 CI 门禁** | 2026 事实标准；16KB 页设备成为主流 | 放弃 32 位旧机 |
@@ -184,12 +184,12 @@
 
 | 模块 | 职责 | 允许依赖 | 所有模块禁止 |
 |---|---|---|---|
-| `:app` | Compose UI（IDE/任务中心/控制台/能力中心/打包向导）＋ `AppShellApplication` 启动装配 | `:app-service:*`、`:domain`、`:engine:node-process`†、`:bridge:java`*、`:platform:capabilities`*、`:platform:system`*（带 * 者仅装配包可用，见右列；† 仅根包 `AppShellApplication` 构造 `engineFactory` 注入，`com.autoscript.shell` 装配包仍禁碰 engine —— :app ArchitectureTest「shell 装配包零跨层泄漏」量化） | 直连 `:platform`/`:bridge` 于装配包之外（**包级例外两则**，均仅限 `com.autoscript.shell`、只做字段级转接无业务逻辑：① 把 handler 挂上 `BridgeRouter` 可依赖 `:bridge:java`；② `SystemSpis`+`CapabilityNamespaces` 生产装配（落点 `PlatformWiring`）可依赖 `:platform:capabilities` 与 `:platform:system`） |
+| `:app` | Compose UI（IDE/任务中心/控制台/能力中心/打包向导，**拆独立模块**——2026-09-23 决策，创建随 UI 轨动 `settings.gradle.kts`）＋ `AppShellApplication` 启动装配 | `:app-service:*`、`:domain`、`:engine:node-process`†、`:bridge:java`*、`:platform:capabilities`*、`:platform:system`*（带 * 者仅装配包可用，见右列；† 仅根包 `AppShellApplication` 构造 `engineFactory` 注入，`com.autoscript.shell` 装配包仍禁碰 engine —— :app ArchitectureTest「shell 装配包零跨层泄漏」量化） | 直连 `:platform`/`:bridge` 于装配包之外（**包级例外两则**，均仅限 `com.autoscript.shell`、只做字段级转接无业务逻辑：① 把 handler 挂上 `BridgeRouter` 可依赖 `:bridge:java`；② `SystemSpis`+`CapabilityNamespaces` 生产装配（落点 `PlatformWiring`）可依赖 `:platform:capabilities` 与 `:platform:system`） |
 | `:app-service:runtime` | 执行编排：RuntimeController、EnginePool、Watchdog 仲裁、kill 权威、`engines` 命名空间处理器 | `:domain` | 依赖 UI/Dialog 类、`com.autoscript.bridge..`（archUnit 强制，严于本表的历史约定） |
 | `:app-service:scheduler` | 定时/Intent/事件任务、checkpoint 意图日志、runNonce 幂等 | `:domain` | 依赖 RunRecord 之外的引擎细节 |
 | `:app-service:script-repo` | 项目/资源/脚本库、assets→filesDir 原子部署（tmp+rename+sha256 校验） | `:domain` | 直访 danger 权限 |
 | `:app-service:permission-center` | 权限三态门禁、引导页、降级路径 | `:domain` | — |
-| `:app-service:packager` | 模板 APK 改写、签名向导、加密资产注入 | `:domain` | — |
+| `:app-service:packager` | 模板 APK 改写、签名向导 | `:domain` | — |
 | `:domain` | **纯 Kotlin 领域：全部 SPI 接口 + DTO + 状态机 + 领域规则** | 无（std 仅） | 禁 Android 依赖 |
 | `:bridge:java` | Kotlin Router、RequestRegistry(TTL)、HandleRegistry(generation)、EventBus、transports | `:domain` | 禁 UI |
 | `:bridge:native` | C++：N-API addon 控制面（含 JNI glue、TSF 管理、node::Start）、`libnode.so` 装载 | 被引擎宿主进程引用 | 禁 Android 业务 |
@@ -208,7 +208,7 @@
 
 **例外不是开后门**：`:app` 碰 `:bridge:java` 与 `:platform:capabilities`/`:platform:system` 都只发生在 `com.autoscript.shell` 一个包（后者是 `SystemSpis` + `CapabilityNamespaces` 的生产装配，落点 `com.autoscript.shell.PlatformWiring` → `AppShellApplication.installWithFiles` 喂 `AppShellKit.assemble`）；`:platform:capabilities` 挂 Router 只碰 `:domain` 的 `NamespaceHandler`。越界由 `:app` 的 `ArchitectureTest` 量化执行（shell 之外的 :app 类碰 platform/bridge 即红）+ `:domain` 的 `ModuleGraphTest` 按 build.gradle.kts 依赖边校验，不是口头约定。
 
-**本机自测（无 Android SDK 时的等价通道）**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 直接用 Gradle 缓存里的 `kotlin-compiler-embeddable` + JUnit Platform Launcher 编译并跑任意模块的 main+test 源码树；`tools/jvm-test-all.sh [模块名...]` 是逐模块最小依赖的全量驱动（纯 JVM 模块**故意不给** android.jar——`:domain` 里误加 `import android.*` 要能在本机直接编译失败，不被掩盖）。
+**本机自测（快速旁路；SDK 已配置后 CI 同款 `./gradlew` 亦可本机直跑）**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 直接用 Gradle 缓存里的 `kotlin-compiler-embeddable` + JUnit Platform Launcher 编译并跑任意模块的 main+test 源码树；`tools/jvm-test-all.sh [模块名...]` 是逐模块最小依赖的全量驱动（纯 JVM 模块**故意不给** android.jar——`:domain` 里误加 `import android.*` 要能在本机直接编译失败，不被掩盖）。**旁路的结构性盲区**：kotlinc 直跑时 `java.*` 取自本机 JDK（有 `Process.pid`、JDK11+ `Files.readString`），AGP 编译取 android.jar 桩面（**没有**这些）——凡新增 `java.*` 较新 API 必须过一遍 `./gradlew`（2026-09-23 本机 SDK 首跑即抓出 `Process.pid`/`ProcessHandle`/unix 域/`Files.writeString` 四处，jvm-test 全绿掩着）。
 
 `--android-jar` 只是**编译期桩**（取自 AGP transforms 缓存的 android-library `android.jar`）：`android.*` 方法体在运行期一律抛 `RuntimeException`，所以含 Android 源码的模块要做到「本机可测」，必须把 Android 接触面挡在可注入的 ops 缝后面（模式与落地清单见 `platform/system/README.md`）。这份脚手架是**本机提速用的旁路**，不替代 CI：`./gradlew` 仍是唯一权威（AGP/资源合并/Manifest 合并只有它能验），改动仍以 CI 绿为准。
 
@@ -761,7 +761,7 @@ auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], messag
 
 - **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警 + 审批卡 UI（仅请求）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；依赖面板 + `auto.npm` 核心 API；打包向导 node_modules 入包。
 - **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ 批准后脚本真实执行（人工确认）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；npm 终端视图；在线 audit + audit signatures + OSV 离线；QuickJS 白名单库独立 vendored；`offlineGap` + 种子金标准测试。
-- **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；native 依赖 **wasm 方案**（2026-09 拍板）：优先取上游 wasm 构建（`esbuild-wasm`、`argon2-wasm`、sql.js 等——Node 内置 `WebAssembly`，无 ABI/无 dlopen、一份全平台、随 bundle 离线送达），无 wasm 产物的回落纯 JS 替代/内置（sharp→jimp 或平台图像桥、bcrypt→bcryptjs、better-sqlite3→node:sqlite）；安装期检测 `binding.gyp`/平台 optionalDeps 点名引导，不静默半装。**对标 AutoX-v7（研究笔记，2026-09）**：它**不需要**这条管线 —— 运行时是 Javet（`com.caoccao.javet:javet-node-android:5.0.2`，进程内 `NodeRuntime`）而非真 libnode，全仓零 node-gyp/prebuild/`NODE_MODULE_VERSION`/`.node` dlopen 痕迹；模块解析是自研 `NodeModuleResolver`（`createRequire` + package.json 走查 + ESM），常用包以**已物化的纯 JS 树**预置在 `assets/modules/npm`（buffer/stream/process/events + lodash/cheerio/bluebird/rxjs），原生能力全走 Java↔V8 绑定（`NativeApiManager` → `Autox.*`），paddle OCR 等 `.so` 只经 Java `System.loadLibrary`、与 JS 引擎无关。即：没有 N-API 加载面就没有 `.node` 交付问题。本仓 §7 桥本体就是 N-API addon（真 libnode 不能换），故 native 依赖的策略已定为 **wasm 优先、纯 JS 兜底**——他们 assets 全纯 JS 是兜底可行的实证；**prebuild `.node` 小工具已移出排期**（需要时再立需求），ABI/`--dest-os` 断言届时随需求一起复活。
+- **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；native 依赖 **wasm 方案**（2026-09 拍板）：优先取上游 wasm 构建（`esbuild-wasm`、`argon2-wasm`、sql.js 等——Node 内置 `WebAssembly`，无 ABI/无 dlopen、一份全平台、随 bundle 离线送达），无 wasm 产物的回落纯 JS 替代/内置（sharp→jimp 或平台图像桥、bcrypt→bcryptjs、better-sqlite3→`node:sqlite`——Node 24 官方标 **STABILITY 1.2 Release-candidate**，随 libnode 钉版即锁 API，保守备选 sql.js-wasm）；安装期检测 `binding.gyp`/平台 optionalDeps 点名引导，不静默半装。**对标 AutoX-v7（研究笔记，2026-09）**：它**不需要**这条管线 —— 运行时是 Javet（`com.caoccao.javet:javet-node-android:5.0.2`，进程内 `NodeRuntime`）而非真 libnode，全仓零 node-gyp/prebuild/`NODE_MODULE_VERSION`/`.node` dlopen 痕迹；模块解析是自研 `NodeModuleResolver`（`createRequire` + package.json 走查 + ESM），常用包以**已物化的纯 JS 树**预置在 `assets/modules/npm`（buffer/stream/process/events + lodash/cheerio/bluebird/rxjs），原生能力全走 Java↔V8 绑定（`NativeApiManager` → `Autox.*`），paddle OCR 等 `.so` 只经 Java `System.loadLibrary`、与 JS 引擎无关。即：没有 N-API 加载面就没有 `.node` 交付问题。本仓 §7 桥本体就是 N-API addon（真 libnode 不能换），故 native 依赖的策略已定为 **wasm 优先、纯 JS 兜底**——他们 assets 全纯 JS 是兜底可行的实证；**prebuild `.node` 小工具已移出排期**（需要时再立需求），ABI/`--dest-os` 断言届时随需求一起复活。
 - **P3**：跨项目共享 store 去重（pnpm 式，须 store↔lock 加签映射）；程序化安装服务化；ECDSA 签名强制；vendored npm 自动升级（仅通过零 spawn 金标准闸门）；esbuild 类**代码签名原生 exec** 独立通道。
 
 ### 10.12 npm 特有风险与缓解
@@ -931,7 +931,7 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 ## 14. 需求优先级路线图
 
 ### P0 — 小而完整、可发布的最小闭环
-**用户故事**：写一个无障碍脚本 → 在 App 内运行/停止/看 console → 被守护（看门狗杀僵尸不拖垮 UI）→ 能设一个每天定时任务 → 能打包成独立 APK。
+**用户故事**：写一个无障碍脚本 → 在 App 内运行/停止/看 console → 被守护（看门狗杀僵尸不拖垮 UI）→ 能设一个每天定时任务。
 - 构建链行：`:node` 进程宿主（单脚本）、Node 24 自建管线 + 16KB 门禁。
 - 最小桥：TSF 双队列 + RPC + TTL + HandleRegistry、`console` 回传。
 - a11y 基础：选择器/click/scroll/setText/文本事件；a11y 截图（333ms）。
@@ -939,12 +939,12 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 - 执行：池（默认 1）状态机、四步 quiesce、心跳+Cpu+OOM 看门狗、崩溃重启(仅本轮 run)。
 - 定时：单 alarm 定时任务 + 意图日志 + runNonce 幂等。
 - 权限三态中心 UI + 引导页；specialUse FGS 骨架。
-- 打包：模板 APK 改装（assets 注入、签名向导）——闭环验证。
+- 打包：模板 APK 改装（assets 注入、签名向导）——**整轨移入后续版本**（2026-09-23 决策：本版不做打包；下方已落地记录保留作既成事实）。
   **P0 领域+收集侧已落地**：`ApkIdentity`（包名/aapt2 关键字校验）+ `TemplateInfo`（引擎版本锚定）+ `TemplateApkPlans`（planDigest 组装/改写前复验，防清单错配；`offlineVariant` 参与摘要）+ `PackagerCollector.plan()`（规格+清单+身份一次产出计划），均 JVM 可测。
-  **P0 AXML/ARSC 真改写已落地（纯 JVM，`:app-service:packager`）**：`IdentityTemplatePatch` 接 `PackagerPipeline.TemplatePatch` 缝——`AxmlPatcher` 改 manifest 的 package/versionName/versionCode/label，label 为 `@string` REF 时走 `ArscPatcher` 按资源 id 改全局池（REF 的 data 不变，AXML 无需重排；ARSC 缺资源则兜底降级为字面串），组件类名按**旧包**绝对化（`.X`/裸名 → 绝对名；dex 命名空间随模板编译定死，换 `package` 后相对名会按新包解析而类并不存在、装上即崩；本就绝对的与外部类不动，alias 的 `targetActivity` 同规则），`ApkRepacker` 重打包并剔除旧 v1 签名条目。字符串池**只追尾追加**（已有下标不动），未改动条目与未追加时的池字节逐字节保留，未知顶层块原样透传；夹具 APK（aapt2 产物）回读校验（另附组件+图标俱全的 `fixture-template-full.apk`）。换图标同趟条目级完成：`ApkPackager.iconPng` 换掉全密度 `ic_launcher(_round).png` 并剔除 `anydpi` 自适应 XML（API26+ 会拿自适应遮住 PNG），无密度 PNG/非 PNG 魔数/文件缺都在动模板前拒绝，`ApkRepacker.rewrite` 增删除集与 `entries()` 实况枚举。编排闭环已落地：`ApkPackager`（plan 两段式 → prepare → 身份改写 → `assets/project/` 批量注入（逐文件 sha256 对清单，collect 后被改即拒）→ `ZipAlignRunner` → `ApkSignerRunner`，**先对齐后签名**焊死，`apkSha256` 取对齐后字节），packager 模块内 200+ JVM 单测覆盖 argv/顺序/两道复验/失败口径；本机对真 `zipalign`+`apksigner`+debug keystore 手工跑通并 `zipalign -c`/`apksigner verify` 回读。仍留 Android/后续侧：打包向导 UI、Keystore 取密（口令现由调用方给 `ApkPackager.Signing`）、加密资产/loader。
+  **P0 AXML/ARSC 真改写已落地（纯 JVM，`:app-service:packager`）**：`IdentityTemplatePatch` 接 `PackagerPipeline.TemplatePatch` 缝——`AxmlPatcher` 改 manifest 的 package/versionName/versionCode/label，label 为 `@string` REF 时走 `ArscPatcher` 按资源 id 改全局池（REF 的 data 不变，AXML 无需重排；ARSC 缺资源则兜底降级为字面串），组件类名按**旧包**绝对化（`.X`/裸名 → 绝对名；dex 命名空间随模板编译定死，换 `package` 后相对名会按新包解析而类并不存在、装上即崩；本就绝对的与外部类不动，alias 的 `targetActivity` 同规则），`ApkRepacker` 重打包并剔除旧 v1 签名条目。字符串池**只追尾追加**（已有下标不动），未改动条目与未追加时的池字节逐字节保留，未知顶层块原样透传；夹具 APK（aapt2 产物）回读校验（另附组件+图标俱全的 `fixture-template-full.apk`）。换图标同趟条目级完成：`ApkPackager.iconPng` 换掉全密度 `ic_launcher(_round).png` 并剔除 `anydpi` 自适应 XML（API26+ 会拿自适应遮住 PNG），无密度 PNG/非 PNG 魔数/文件缺都在动模板前拒绝，`ApkRepacker.rewrite` 增删除集与 `entries()` 实况枚举。编排闭环已落地：`ApkPackager`（plan 两段式 → prepare → 身份改写 → `assets/project/` 批量注入（逐文件 sha256 对清单，collect 后被改即拒）→ `ZipAlignRunner` → `ApkSignerRunner`，**先对齐后签名**焊死，`apkSha256` 取对齐后字节），packager 模块内 200+ JVM 单测覆盖 argv/顺序/两道复验/失败口径；本机对真 `zipalign`+`apksigner`+debug keystore 手工跑通并 `zipalign -c`/`apksigner verify` 回读。**打包整轨已移入后续版本**（2026-09-23 决策：向导 UI 与 Keystore 取密随轨道走）；加密资产/loader 一并移出需求（与脚本加密同批收窄）。
   **P0 签名向导领域侧已落地**：`SigningKey`（Debug 临时/ECDSA 发布密钥库描述）+ `SignPlans`（请求组装绑定计划摘要，签名前复验）+ `ApkSignerArgs`（apksigner 参数表纯构造，口令只走 `env:NAME` 不进参数表），均 JVM 可测。
   **P0 apksigner 起进程已落地（纯 JVM 缝）**：`ApkSignerRunner` 注入 `ProcessLauncher`（对齐 `HostNodeExecutor` 惯例）——argv 与领域参数表逐字一致、口令只经 `AUTOSCRIPT_KS_PASS`/`AUTOSCRIPT_KEY_PASS` 环境变量、非 0 退出码与"报成功但没产出包"都如实失败。**参数形态经真 apksigner 验证**：必须是两项式 `--ks-pass env:NAME`（`--ks-pass:env` 连写会被拒 `Unsupported option`）。`ZipAlignRunner`（`zipalign -f -p 4 in out`，同样注入 `ProcessLauncher`）与编排顺序（先对齐后签名、`SignPlans` 摘要绑对齐后字节）已由 `ApkPackager` 焊死。仍留 Android/后续侧：Keystore 取密钥、签名向导 UI。
-- 单测/archUnit CI；Docker 构建镜像。**已落地**：`.github/workflows/ci.yml`（JVM 单测 + archUnit）；本机无 Android SDK 时用 `tools/jvm-test.sh [--android-jar]`（+ 全模块驱动 `tools/jvm-test-all.sh`）跑同一批单测，见 §6 末。
+- 单测/archUnit CI；Docker 构建镜像。**已落地**：`.github/workflows/ci.yml`（JVM 单测 + archUnit）；本机已配 Android SDK（`/root/android-sdk`，2026-09-23）——CI 同款 `./gradlew …` 命令可本机直跑复现；`tools/jvm-test.sh [--android-jar]`（+ `jvm-test-all.sh`）仍是快速旁路，见 §6 末。
 - npm P0（§10.11）：vendored npm CLI + 专用安装会话进程 + 零 spawn 主路径 + 事务化安装/journal 自愈 + 精选缓存种子离线首装 + 带外信任锚/lock 验签/审批卡 UI + 依赖面板 + 打包 node_modules 入包。
 
 ### P1 — 并发、沙箱、图像、生态关键件

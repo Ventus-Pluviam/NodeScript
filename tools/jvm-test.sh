@@ -21,14 +21,18 @@ WITH_ANDROID_JAR=0
 
 jar() { find "$G/$1" -name "$2" 2>/dev/null | head -1; }
 
-# android.jar 只从 AGP 的 transforms 缓存里找（= 与 Gradle 编译 android-library 用的同一份），
-# 不去找 $ANDROID_HOME/platforms（本机无 SDK；且那份是完整 framework，语义不同）。
+# android.jar：优先本机 Android SDK 平台桩（/root/android-sdk，2026-09-23 起已配置 = AGP 同源），
+# 回落 AGP transforms 缓存。**结构性盲区**：kotlinc 直跑时 java.* 取自本机 JDK（有 Process.pid、
+# JDK11+ Files.readString），AGP 取 android.jar 桩面（没有）—— java.* 新 API 必须过一遍 ./gradlew。
 ANDROID_JAR=""
 if [ "$WITH_ANDROID_JAR" = 1 ]; then
-  ANDROID_JAR=$(find /root/.gradle/caches/8.9/transforms -name 'android.jar' -path '*/transformed/*' 2>/dev/null | head -1)
+  ANDROID_JAR=$(find /root/android-sdk/platforms -name android.jar 2>/dev/null | sort | tail -1)
   if [ -z "$ANDROID_JAR" ]; then
-    echo "tools/jvm-test.sh: --android-jar 需要 android.jar，但 Gradle transforms 缓存里没有。" >&2
-    echo "  先跑一次任意 android-library 模块的 Gradle 编译把缓存养出来（CI 上由 setup-android 提供），" >&2
+    ANDROID_JAR=$(find /root/.gradle/caches/8.9/transforms -name 'android.jar' -path '*/transformed/*' 2>/dev/null | head -1)
+  fi
+  if [ -z "$ANDROID_JAR" ]; then
+    echo "tools/jvm-test.sh: --android-jar 需要 android.jar，但本机 SDK 与 Gradle transforms 缓存里都没有。" >&2
+    echo "  配置 Android SDK（/root/android-sdk），或跑一次任意 android-library 模块的 Gradle 编译养出缓存，" >&2
     echo "  或去掉 --android-jar 只编译纯 JVM 模块。" >&2
     exit 2
   fi
