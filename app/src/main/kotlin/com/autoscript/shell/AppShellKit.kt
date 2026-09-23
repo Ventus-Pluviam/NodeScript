@@ -13,6 +13,7 @@ import com.autoscript.appservice.scheduler.persist.FileTaskStore
 import com.autoscript.appservice.scheduler.persist.JournalFileStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
+import com.autoscript.appservice.scriptrepo.core.BridgeDistDeploy
 import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.ScriptEngine
@@ -83,9 +84,18 @@ object AppShellKit {
          * —— 装配层日志/能力中心不得把它说成"脚本已恢复"。
          */
         val deployReport: ScriptDeployRecovery.Report = ScriptDeployRecovery.Report(),
+        /**
+         * 装配期 facade dist 落位报告（§12.4 资产交付轨：`assets/bridge-dist/` →
+         * `filesDir/node_modules/auto/`）。空报告 = 本次没货可落（**不是**"facade 已就位"）；
+         * [BridgeDistDeploy.Report.failures] 非空 = 有文件没落上 + 孤儿未清（见其 KDoc 边界）。
+         */
+        val bridgeDistReport: BridgeDistDeploy.Report = BridgeDistDeploy.Report(),
     ) : AutoCloseable {
         /** 没补上的脚本（路径 + 原因；能力中心呈现"有脚本没补上"，不吞成一切正常）。 */
         fun deployFailures(): List<ScriptDeployRecovery.Failure> = deployReport.failures
+
+        /** 没落上的 facade 文件（路径 + 原因；`require('auto')` 会因此解析不到）。 */
+        fun bridgeDistFailures(): List<BridgeDistDeploy.Failure> = bridgeDistReport.failures
         override fun close() {
             scope?.cancel()          // 先停看门狗轮转，再关壳/持久句柄（轮转中不得关底下的池）
             shell.close()
@@ -284,6 +294,12 @@ object AppShellKit {
          * `android.content.res.AssetManager`，配方保持纯 JVM 可测），故由 Application 喂。
          */
         assetReader: ((String) -> Map<String, ByteArray>)? = null,
+        /**
+         * 装配期 facade dist 落位的来源（`assets/bridge-dist/` 扁平文件名 → 字节；§12.4）。
+         * 缺省空映射 = 本次没货（`bridgeDistReport.changed == false`），**不粉饰成"已部署"**。
+         * 生产由 Application 枚举 assets 喂入（本配方不直连 AssetManager，同 scriptSources 纪律）。
+         */
+        bridgeDist: Map<String, ByteArray> = emptyMap(),
         poolCapacity: Int = 1,
         monitor: ProcessMonitor = ProcessMonitor(),
         watchdog: EngineWatchdog? = null,
@@ -315,6 +331,11 @@ object AppShellKit {
                 merged
             }
         val deployReport = ScriptDeployRecovery(filesDir, mergedSources).run()
+
+        // facade dist 落位（§12.4 资产交付轨）：应用自有资产，覆盖语义与脚本补部署相反
+        // （字节不同即替换 —— 旧 dist 跨版本形状不配对会把"没更新"变成"模块坏了"）。
+        // 落位根 = ScriptPaths.autoModuleRoot（require('auto') 的解析点，契约住 :domain）。
+        val bridgeDistReport = BridgeDistDeploy(filesDir, bridgeDist).run()
 
         // 意图日志与运行档案分文件（§8.5）：键不同（intentRunId vs engineRunId），
         // 只写一侧的孤儿因此可被审计。两个都持久：重启后任务中心与 bootRecover 才有据可依。
@@ -358,6 +379,6 @@ object AppShellKit {
             shell.startWatchdog(fresh)
             ownedScope = fresh
         }
-        return AssembledShell(shell, log, archive, tasks, npm, ownedScope, deployReport)
+        return AssembledShell(shell, log, archive, tasks, npm, ownedScope, deployReport, bridgeDistReport)
     }
 }

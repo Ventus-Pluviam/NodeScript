@@ -35,4 +35,22 @@ object ScriptPaths {
      */
     fun scriptFile(filesDir: Path, projectId: String, scriptPath: String): Path =
         projectRoot(filesDir, projectId).resolve(scriptPath)
+
+    /**
+     * facade 包 `auto` 的落位根：`filesDir/node_modules/auto`（docs §12.4 资产交付轨）。
+     *
+     * 为什么住这里（与 [projectRoot] 同一条理由）：这个路径被两处拼 ——
+     * `:app-service:script-repo` 的 `BridgeDistDeploy`（assets→落位）与 `:app` 装配层
+     * （`AUTOSCRIPT_BRIDGE_DIST` 注入）。任一处写错不会编译失败，只会表现为
+     * 「`require('auto')` 解析不到 / attachNative 没接上」这类**没有报错**的故障形态。
+     *
+     * 选这里的依据是 Node 的解析走位：脚本住 `files/scripts/<projectId>/x.js`，
+     * `require('auto')` 沿目录树向上找 `node_modules/auto`，第 3 站正是 `filesDir/node_modules`
+     * （脚本目录 → `files/scripts/<projectId>/node_modules` → `files/scripts/node_modules`
+     * → `files/node_modules` = [autoModuleRoot] 的父级）。目录内**不需要 package.json**：
+     * 无 package.json 时 Node 目录解析缺省落到 `index.js`，而 dist 的 `index.js` 就是
+     * 命名空间根（§12.1 `require('auto')`）。此约定必须与部署侧同一出处 —— 换落位只改这里。
+     */
+    fun autoModuleRoot(filesDir: Path): Path =
+        filesDir.resolve("node_modules").resolve("auto")
 }

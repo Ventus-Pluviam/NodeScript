@@ -10,6 +10,7 @@ import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.permission.Capability
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
 import com.autoscript.engine.nodeprocess.NodeProcessEngine
 import com.autoscript.shell.AlarmDispatch
@@ -193,6 +194,9 @@ class AppShellApplication : Application(), HostSummary {
                             hostBinary = nativeDir.resolve("libnoden.so"),
                             libnodePath = nativeDir.resolve("libnode.so"),
                             hostSocketName = bridge?.socketName,
+                            // facade 落位根（§12.4）：引擎按 bootstrap.js 在位与否决定
+                            // 注入与否（选填纪律）—— 这里只给"应该在哪"，落位归 assemble。
+                            bridgeDistPath = ScriptPaths.autoModuleRoot(filesDir),
                         ),
                     )
                 },
@@ -207,6 +211,17 @@ class AppShellApplication : Application(), HostSummary {
                     com.autoscript.appservice.scriptrepo.assets.AndroidAssetsSource(
                         appContext.assets, projectId,
                     ).readScripts()
+                },
+                // facade dist（§12.4 资产交付轨）：`assets/bridge-dist/` 全量读成扁平 map。
+                // 枚举或任一读失败 = 整体空 map（**宁可这次不落，不可半量落**：半量 + 孤儿
+                // 清理会把"读失败那个文件"当成旧版删掉）—— bridgeDistReport 如实为空。
+                bridgeDist = try {
+                    val names = appContext.assets.list("bridge-dist")?.toList() ?: emptyList()
+                    names.associateWith { name ->
+                        appContext.assets.open("bridge-dist/$name").use { it.readBytes() }
+                    }
+                } catch (_: Exception) {
+                    emptyMap()
                 },
                 // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
                 // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，
