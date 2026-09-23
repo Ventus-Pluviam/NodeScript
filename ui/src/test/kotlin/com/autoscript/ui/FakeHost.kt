@@ -3,6 +3,7 @@ package com.autoscript.ui
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.ShellSummary
+import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.permission.Capability
 
 /**
@@ -24,4 +25,7 @@ open class FakeHost(
 
     override fun openCapabilitySettings(capability: Capability): Unit =
         throw UnsupportedOperationException("本替身未提供 openCapabilitySettings（用例按需覆盖）")
+
+    override suspend fun taskCenter(): TaskCenterSnapshot =
+        throw UnsupportedOperationException("本替身未提供 taskCenter（用例按需覆盖）")
 }

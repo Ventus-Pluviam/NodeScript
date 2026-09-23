@@ -35,6 +35,18 @@ interface HostSummary {
      * 本读口只把请求转下去 —— 呈现层因此不必（也不许）碰 `Settings`/`Intent`。
      */
     fun openCapabilitySettings(capability: Capability)
+
+    /**
+     * 任务中心快照（§8.6 排期 + §8.5 执行档案/恢复账）。
+     *
+     * 挂起：[TaskCenterSnapshot] 要读两个持久寄存器（注册表 + 运行档案）与恢复账，
+     * 都是 IO/挂起路径（`FileTaskStore.loadAll` / `RunArchive.unfinished`）；
+     * 首屏那份同步的 [shellSummary] 里塞不下它。
+     *
+     * 读失败**抛**（与 [capabilityCenter] 同一条纪律）：`:ui` 据此如实显示「读任务失败」，
+     * 而不是渲染成"一条任务都没有" —— 后者会让用户以为自己的定时任务全没了。
+     */
+    suspend fun taskCenter(): TaskCenterSnapshot
 }
 
 /**

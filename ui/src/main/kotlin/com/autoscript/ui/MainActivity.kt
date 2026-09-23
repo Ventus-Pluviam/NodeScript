@@ -30,10 +30,12 @@ import kotlinx.coroutines.launch
  * 把 `application` 现转 `as? HostSummary`（`:domain` 读口，`AppShellApplication`
  * 实现），未实现即 [HomeState.UNWIRED] / [CapabilityCenterState.NOT_LOADED] 如实显示。
  *
- * 两个页签：首屏（壳/保活/漏投）与能力中心（§9.5 三态）。刷新时机分两种，**不能混**：
+ * 三个页签：首屏（壳/保活/漏投）、任务中心（§8.6 排期 + §8.5 档案/恢复账）、
+ * 能力中心（§9.5 三态）。刷新时机分两种，**不能混**：
  * - 首屏状态是**同步**读（`shellSummary()`）：`onCreate` 首读 + 每次 `onResume` 重读；
- * - 能力态是**挂起**的（`capabilityCenter()` 每次现问系统，含 root 探测的 IO 切换）：
- *   由 `LaunchedEffect(resumeTick, tab)` 驱动 —— 回前台、或切到该页签时重问一次。
+ * - 能力态与任务态都是**挂起**的（`capabilityCenter()` 每次现问系统，含 root 探测的 IO 切换；
+ *   `taskCenter()` 要读两个持久寄存器）：由 `LaunchedEffect(resumeTick, tab)` 驱动 ——
+ *   回前台、或切到该页签时重取一次。
  *   这样用户从系统设置页授完权回来，看到的是**刚问过**的结论，而不是离开时那份缓存
  *   （后者正是"授权了但界面还说没授权"的来源）。
  *
@@ -47,6 +49,9 @@ class MainActivity : ComponentActivity() {
 
     /** 能力中心状态（同上）。 */
     private var capabilityState: CapabilityCenterState by mutableStateOf(CapabilityCenterState.NOT_LOADED)
+
+    /** 任务中心状态（同上）。 */
+    private var taskState: TaskCenterState by mutableStateOf(TaskCenterState.NOT_LOADED)
 
     /** 当前页签。 */
     private var tab: Tab by mutableStateOf(Tab.HOME)
@@ -71,6 +76,10 @@ class MainActivity : ComponentActivity() {
                                 state = homeState,
                                 onRefresh = { homeState = HomeState.read(hostSummary()) },
                             )
+                            Tab.TASKS -> TaskCenterScreen(
+                                state = taskState,
+                                onRefresh = { scope.launch { reloadTasks() } },
+                            )
                             Tab.CAPABILITIES -> CapabilityScreen(
                                 state = capabilityState,
                                 onRefresh = { scope.launch { reloadCapabilities() } },
@@ -84,7 +93,11 @@ class MainActivity : ComponentActivity() {
             // 重读的触发权只在这两条（回前台/切页签）与手动刷新手里 —— 读失败不会
             // 反过来改 resumeTick 形成自激（见 reloadCapabilities）。
             LaunchedEffect(resumeTick, tab) {
-                if (tab == Tab.CAPABILITIES) reloadCapabilities()
+                when (tab) {
+                    Tab.HOME -> Unit
+                    Tab.TASKS -> reloadTasks()
+                    Tab.CAPABILITIES -> reloadCapabilities()
+                }
             }
         }
     }
@@ -119,9 +132,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 现取任务中心（挂起；只写 [taskState]，不触发重读）。
+     *
+     * 三种落点都不撒谎（与 [reloadCapabilities] 同构）：
+     * - 读口未接线 → 留 [TaskCenterState.NOT_LOADED]，**不冒充**"没有任务"；
+     * - 读取抛错（壳未装配/寄存器读崩）→ [TaskCenterState.failed]，原异常文案带上；
+     * - 成功 → 任务 + 未结算执行 + 恢复账。
+     *
+     * 取 `nowMillis` 一次传进去（不在状态类里现取）：同一帧里所有相对时间共用同一个 now。
+     */
+    private suspend fun reloadTasks() {
+        val host = hostSummary()
+        if (host == null) {
+            taskState = TaskCenterState.NOT_LOADED
+            return
+        }
+        taskState = try {
+            TaskCenterState.of(host.taskCenter(), nowMillis = System.currentTimeMillis())
+        } catch (t: Throwable) {
+            TaskCenterState.failed(t)
+        }
+    }
+
     private fun hostSummary(): HostSummary? = application as? HostSummary
 
-    enum class Tab { HOME, CAPABILITIES }
+    enum class Tab { HOME, TASKS, CAPABILITIES }
 }
 
 /** 页签条（P0 两个：首屏/能力中心）。选中态用前缀点标出，不引入额外图标依赖。 */
@@ -138,5 +174,6 @@ private fun Tabs(current: MainActivity.Tab, onSelect: (MainActivity.Tab) -> Unit
 
 private fun MainActivity.Tab.label(): String = when (this) {
     MainActivity.Tab.HOME -> "首屏"
+    MainActivity.Tab.TASKS -> "任务中心"
     MainActivity.Tab.CAPABILITIES -> "能力中心"
 }

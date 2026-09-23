@@ -16,6 +16,7 @@ import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
 import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.ScriptEngine
+import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
 import java.nio.file.Files
@@ -105,6 +106,42 @@ object AppShellKit {
 
         /** 某次执行的终态（null = 无此记录；UI 按 runId 读"为何没跑"的落点）。 */
         suspend fun runRecord(engineRunId: Long): RunRecord? = archive.record(engineRunId)
+
+        /**
+         * 任务中心快照（§8.6 排期 + §8.5 档案/恢复账）—— 呈现层经 `HostSummary.taskCenter()`
+         * 读到的就是这一份。
+         *
+         * 读的是**壳自己持有的那两个寄存器**（注册表经 [AppShell.scheduler]、档案经
+         * [archive]），不让 UI 另开 `FileTaskStore`/`FileRunArchive`：第二个实例会各自持
+         * channel 与内存视图，写侧两份即失真（见本类 KDoc 的读口说明）。
+         *
+         * 下一跳由**调度数学的唯一出处**算（`TimedSchedule.nextFireAfter`），停用任务
+         * 直接回 null —— 停用任务也会有一个"如果启用就会在何时跑"的答案，把它显示出来
+         * 就是在骗用户说这条还会跑。
+         *
+         * 恢复账取 [recovery]（装配层在 `install` 时接上的那份读口）；缺省 `{ null }` =
+         * 本装配没接恢复账，快照里 [TaskCenterSnapshot.recovery] 如实为 null
+         * （"本次进程还没跑过恢复"，不是"恢复了 0 条"）。
+         */
+        suspend fun taskCenter(
+            recovery: () -> RecoverySnapshot? = { null },
+        ): TaskCenterSnapshot {
+            val now = System.currentTimeMillis()
+            val tasks = shell.scheduler.tasks()
+            val degraded = (shell.schedulerProvider as? AlarmSchedulerProvider)
+                ?.degradedTasks()?.keys ?: emptySet()
+            return TaskCenterRead.snapshot(
+                tasks = tasks,
+                // 停用任务不问下一跳（见 KDoc）；时区取任务自己的（Daily 的 DST 边界靠它）。
+                nextFireAt = { task ->
+                    if (!task.enabled) null else task.schedule.nextFireAfter(now, task.timezone)
+                },
+                degradedTaskIds = degraded,
+                runs = archive.unfinished(),
+                linkOf = { id -> archive.link(id) },
+                recovery = recovery(),
+            )
+        }
     }
 
     /**

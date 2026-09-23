@@ -5,6 +5,7 @@ import android.os.Process
 import android.util.Log
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.permission.Capability
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
@@ -381,6 +382,25 @@ class AppShellApplication : Application(), HostSummary {
      */
     override fun openCapabilitySettings(capability: Capability) {
         permissionCenter().openSystemSettings(capability)
+    }
+
+    /**
+     * 任务中心快照（[HostSummary] 的生产实现，§8.6/§8.5）。
+     *
+     * **壳没装好就抛**（不返回空快照）：空快照长得像"一条任务都没有"，而用户看到的会是
+     * 自己的定时任务凭空消失 —— 那是比"读失败"严重得多的谎。抛出去由 `:ui` 如实显示，
+     * 文案里点名"壳未装配"（与首屏的 `ShellSummary.shellReady` 是同一条事实的两种说法：
+     * 首屏答"装配到哪一步了"，这里答"所以任务读不到"）。
+     *
+     * 读的是 [AppShellKit.AssembledShell.taskCenter]（壳自己持有的两个寄存器），
+     * 不让 UI 另开一份 `FileTaskStore`/`FileRunArchive`（第二个实例 = 写侧两份视图）。
+     * 恢复账取 [recoverySnapshot]（[BootRecovery] 的账）：它答的是"重启后那些遗留任务
+     * 怎么样了"，与任务列表是两件事，分列在快照里。
+     */
+    override suspend fun taskCenter(): TaskCenterSnapshot {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：任务与执行记录暂不可读")
+        return built.taskCenter { recoverySnapshot() }
     }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
