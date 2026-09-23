@@ -168,6 +168,89 @@ class IdentityTemplatePatchTest {
         )
     }
 
+    /** 完整夹具（组件 + 图标资源俱全）拷进 @TempDir 后使用。 */
+    private fun fullTemplate(): Path {
+        val target = tmp.resolve("full.apk")
+        Files.copy(FixtureAxml.templateFullApk(), target)
+        return target
+    }
+
+    /** 魔数过检即算 PNG（本补丁不解码）：8 字节签名 + 随便什么负载。 */
+    private fun pngish(marker: Int = 0x42): ByteArray =
+        byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, marker.toByte(), 1, 2, 3)
+
+    @Test
+    fun `组件类名按旧包绝对化——相对与裸名改写，绝对名与外部类不动`() {
+        val apk = fullTemplate()
+        IdentityTemplatePatch(identity).apply(apk)
+
+        val axml = AxmlPatcher.parse(entry(apk, "AndroidManifest.xml")!!)
+        assertEquals(
+            listOf(
+                "com.autoscript.template.AppTemplate",   // .AppTemplate → 旧包绝对
+                "com.autoscript.template.MainActivity",  // .MainActivity → 同上
+                "com.autoscript.template.FqActivity",    // 本就绝对：原样（dex 命名空间）
+                "com.autoscript.template.LauncherAlias", // alias 自己的 name 同规则
+                "com.autoscript.template.BareService",   // 裸名 → 旧包绝对
+                "com.other.KeepReceiver",                // 外部类：原样
+                "com.autoscript.template.TplProvider",
+            ),
+            listOf("application", "activity", "activity-alias", "service", "receiver", "provider")
+                .flatMap { axml.readStringAttrs(it, "name") },
+            "新身份包是 com.example.repacked —— 断言里出现旧包才说明按旧包绝对化了",
+        )
+        assertEquals(
+            listOf("com.autoscript.template.MainActivity"),
+            axml.readStringAttrs("activity-alias", "targetActivity"),
+            "alias 的 targetActivity 同规则（相对 → 旧包绝对）",
+        )
+        assertEquals(ManifestAttrValue.Text("com.example.repacked"), axml.readAttr("manifest", "package"))
+    }
+
+    @Test
+    fun `换图标——密度 PNG 全换、自适应 XML 剔除、身份同趟落地`() {
+        val apk = fullTemplate()
+        val fgBefore = entry(apk, "res/drawable-xxhdpi-v4/ic_launcher_foreground.png")!!
+        val icon = pngish()
+
+        IdentityTemplatePatch(identity, iconPng = icon).apply(apk)
+
+        val names = zipNames(apk)
+        for (d in listOf("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi")) {
+            assertArrayEquals(icon, entry(apk, "res/mipmap-$d-v4/ic_launcher.png"), "密度 $d 的图标必须换成用户字节")
+        }
+        assertArrayEquals(icon, entry(apk, "res/mipmap-xxxhdpi-v4/ic_launcher_round.png"), "round 条目同样换")
+        assertFalse(names.contains("res/mipmap-anydpi-v26/ic_launcher.xml"), "自适应 XML 必须剔除（API26+ 会遮住新图标）")
+        assertFalse(names.contains("res/mipmap-anydpi-v26/ic_launcher_round.xml"))
+        assertArrayEquals(fgBefore, entry(apk, "res/drawable-xxhdpi-v4/ic_launcher_foreground.png"), "前景图不归换图标管")
+        assertEquals(
+            ManifestAttrValue.Text("com.example.repacked"),
+            AxmlPatcher.parse(entry(apk, "AndroidManifest.xml")!!).readAttr("manifest", "package"),
+            "图标与身份必须同一趟 rewrite 落地",
+        )
+    }
+
+    @Test
+    fun `模板没有密度 PNG——换图标如实拒绝，原包一字节不动`() {
+        val apk = template()          // 最小夹具：没有 res/ 条目
+        val before = Files.readAllBytes(apk)
+
+        val e = runCatching { IdentityTemplatePatch(identity, iconPng = pngish()).apply(apk) }.exceptionOrNull()
+
+        assertInstanceOf(AutojsException::class.java, e)
+        assertEquals(ErrorCode.ERR_NOT_FOUND, (e as AutojsException).error)
+        assertTrue("密度图标" in e.message!!)
+        assertArrayEquals(before, Files.readAllBytes(apk), "拒绝发生在 rewrite 之前，原包不得被动过")
+    }
+
+    @Test
+    fun `非 PNG 图标——构造期就拒绝`() {
+        val e = runCatching { IdentityTemplatePatch(identity, iconPng = byteArrayOf(1, 2, 3)) }.exceptionOrNull()
+        assertInstanceOf(AutojsException::class.java, e)
+        assertEquals(ErrorCode.ERR_INVALID_PARAM, (e as AutojsException).error)
+        assertTrue("PNG" in e.message!!)
+    }
+
     private fun addEntry(apk: Path, name: String, bytes: ByteArray) {
         val tmpOut = apk.resolveSibling("rezip.tmp")
         ZipOutputStream(Files.newOutputStream(tmpOut)).use { out ->

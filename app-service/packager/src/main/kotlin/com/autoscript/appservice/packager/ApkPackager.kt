@@ -17,8 +17,8 @@ import java.security.MessageDigest
  * 打包全链编排（docs §14 P0「写一个项目 → 独立 APK」在 `:app-service:packager` 内的闭环）：
  *
  * ```
- * planWithManifest ─► prepare ─► 身份改写 ─► 资产注入 ─► zipalign ─► apksigner
- *   (清单自哈希)      (复制模板)  (AXML/ARSC)  (assets/project)  (对齐)      (签名)
+ * planWithManifest ─► prepare ─► 模板改写 ──► 资产注入 ─► zipalign ─► apksigner
+ *   (清单自哈希)      (复制模板) (身份/组件/图标) (assets/project) (对齐)      (签名)
  * ```
  *
  * **复验两道，缺一不可**（都来自领域契约，不自创）：
@@ -32,7 +32,7 @@ import java.security.MessageDigest
  * 假可执行体，生产由调用方（打包向导）给真前缀。顺序铁律在本类里焊死：**先对齐再签名**
  * （签完再动条目布局 = v2 验签必炸），[SignPlans.build] 的 apkSha256 取**对齐后**的字节。
  *
- * **诚实边界**：不做图标/组件名改写、不取 Keystore 口令（Android Keystore 取密是
+ * **诚实边界**：不取 Keystore 口令（Android Keystore 取密是
  * 调用方的事，口令只进 [Signing] 内存与 apksigner 的环境变量，不进 argv）、
  * 不做加密资产/自定义 loader（§3 打包行的后续项）。打包向导 UI 尚未落地 ——
  * 本类是它脚下的那条链，先在纯 JVM 上闭环可测。
@@ -43,9 +43,21 @@ class ApkPackager(
     private val zipAligner: ZipAlignRunner,
     /** null = 不签名（产物是对齐后的 unsigned 包）；给了就必须给 [zipAligner] 且签名器在位。 */
     private val signer: ApkSignerRunner? = null,
+    /**
+     * 启动图标源文件（PNG；null = 模板图标原样）。与 [templateApk] 同级的**装配配置** ——
+     * 不入 planDigest（模板文件本身也不入；向导应在 plan 前定好图标）。给了就在模板改写
+     * 同趟换掉全部密度 `ic_launcher(_round).png` 并剔除 anydpi 自适应 XML（API26+ 会拿
+     * 自适应遮住 PNG）；文件缺 / 非 PNG 魔数 / 模板无密度 PNG 都在动模板**之前**如实失败。
+     * 注入 [templatePatch] 的调用方拿同一份字节自行落地（不接 = 显式放弃，调用方自知）。
+     */
+    private val iconPng: Path? = null,
     private val collector: PackagerCollector = PackagerCollector(),
-    /** 身份改写实现注入缝（默认真 AXML/ARSC 补丁；测试可换成记事本补丁）。 */
-    private val templatePatch: (ApkIdentity) -> PackagerPipeline.TemplatePatch = { IdentityTemplatePatch(it) },
+    /**
+     * 模板改写实现注入缝（默认真补丁 [IdentityTemplatePatch]；测试可换成记事本补丁）。
+     * 第二参 = [iconPng] 读出且过魔数校验的字节（null = 没配图标）。
+     */
+    private val templatePatch: (ApkIdentity, ByteArray?) -> PackagerPipeline.TemplatePatch =
+        { id, icon -> IdentityTemplatePatch(id, iconPng = icon) },
 ) {
 
     /**
@@ -132,8 +144,19 @@ class ApkPackager(
             assets[entry.relPath] = bytes
         }
 
-        // 1) 复制模板 → 2) 身份改写 → 3) 资产注入（一次批量重写）
-        val pipeline = PackagerPipeline(workDir, templateApk, templatePatch(plan.identity))
+        // 图标读出 + 魔数校验：赶在 prepare 之前（与"动模板前早失败"同一条纪律）。
+        val iconBytes = iconPng?.let { p ->
+            val bytes = try {
+                Files.readAllBytes(p)
+            } catch (e: java.nio.file.NoSuchFileException) {
+                throw AutojsException(ErrorCode.ERR_NOT_FOUND, "图标文件不存在：$p", e)
+            }
+            requirePngIcon(bytes, "图标文件 $p")
+            bytes
+        }
+
+        // 1) 复制模板 → 2) 模板改写（身份/组件/图标）→ 3) 资产注入（一次批量重写）
+        val pipeline = PackagerPipeline(workDir, templateApk, templatePatch(plan.identity, iconBytes))
         var apk = pipeline.prepare()
         apk = pipeline.patch().apply(apk)
         pipeline.injectAssets(apk, assets)

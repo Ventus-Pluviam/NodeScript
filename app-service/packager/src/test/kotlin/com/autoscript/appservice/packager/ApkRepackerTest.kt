@@ -100,5 +100,51 @@ class ApkRepackerTest {
         assertEquals("x", String(entry(apk, "assets/project/x.js")!!))
     }
 
+    @Test
+    fun `rewrite 同趟替换与剔除——换图标那条路的条目级分工`() {
+        val apk = fixture()
+        // 造一对"密度图标 + 自适应 XML"，走一次 replace+remove 组合（生产即图标改写）。
+        repacker.addEntries(
+            apk,
+            linkedMapOf(
+                "res/mipmap-xhdpi-v4/ic_launcher.png" to byteArrayOf(1),
+                "res/mipmap-anydpi-v26/ic_launcher.xml" to "<x/>".toByteArray(),
+            ),
+            apk,
+        )
+        val manifestBefore = entry(apk, "AndroidManifest.xml")!!
+
+        repacker.rewrite(
+            apk,
+            mapOf("res/mipmap-xhdpi-v4/ic_launcher.png" to byteArrayOf(9, 9)),
+            apk,
+            removals = setOf("res/mipmap-anydpi-v26/ic_launcher.xml"),
+        )
+
+        assertArrayEquals(byteArrayOf(9, 9), entry(apk, "res/mipmap-xhdpi-v4/ic_launcher.png"))
+        assertNull(entry(apk, "res/mipmap-anydpi-v26/ic_launcher.xml"), "删除集里的条目必须消失")
+        assertArrayEquals(manifestBefore, entry(apk, "AndroidManifest.xml"), "未涉及的条目原样")
+        assertTrue(repacker.entries(apk).containsAll(listOf("AndroidManifest.xml", "resources.arsc")))
+    }
+
+    @Test
+    fun `rewrite 拒绝既替换又删除同一条目（调用方自相矛盾）`() {
+        val apk = fixture()
+        assertThrows(IllegalArgumentException::class.java) {
+            repacker.rewrite(
+                apk,
+                mapOf("resources.arsc" to byteArrayOf(1)),
+                apk,
+                removals = setOf("resources.arsc"),
+            )
+        }
+        assertTrue(apkExists(apk), "被拒后原包不动")
+    }
+
+    @Test
+    fun `entries 按 zip 原序枚举全部条目名`() {
+        assertEquals(listOf("AndroidManifest.xml", "resources.arsc"), repacker.entries(fixture()))
+    }
+
     private fun apkExists(apk: Path): Boolean = java.nio.file.Files.isRegularFile(apk)
 }

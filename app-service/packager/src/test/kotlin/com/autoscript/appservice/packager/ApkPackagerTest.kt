@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * 打包全链编排的闭环（§14 P0）：plan → prepare → 身份改写 → assets/project 注入 →
+ * 打包全链编排的闭环（§14 P0）：plan → prepare → 模板改写（身份/组件/图标）→ assets/project 注入 →
  * zipalign → apksigner。两个外进程都走注入的假 runner（记录 argv + 抄文件），
  * 因此顺序、argv、产物、两道复验全在纯 JVM 上可判 —— 不赌二进制在不在。
  */
@@ -221,5 +221,60 @@ class ApkPackagerTest {
         assertInstanceOf(AutojsException::class.java, e)
         assertEquals(ErrorCode.ERR_INVALID_PARAM, (e as AutojsException).error)
         assertTrue("未装 ApkSignerRunner" in e.message!!)
+    }
+
+    @Test
+    fun `图标随全链落地——密度 PNG 换掉、自适应剔除、组件与身份照改`() {
+        val align = AlignProbe()
+        val icon = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 7, 7, 7)
+        val iconFile = tmp.resolve("icon.png")
+        Files.write(iconFile, icon)
+        val packager = ApkPackager(
+            workDir(), FixtureAxml.templateFullApk(), align.runner,
+            iconPng = iconFile,
+        )
+
+        val result = packager.pack(spec(), project(), identity, templateInfo, signing = null)
+
+        assertArrayEquals(icon, entry(result.apk, "res/mipmap-xhdpi-v4/ic_launcher.png"))
+        assertNull(entry(result.apk, "res/mipmap-anydpi-v26/ic_launcher.xml"), "自适应必须剔除")
+        val axml = AxmlPatcher.parse(entryOrFail(result.apk, "AndroidManifest.xml"))
+        assertEquals(ManifestAttrValue.Text("com.example.repacked"), axml.readAttr("manifest", "package"))
+        assertEquals(
+            "com.autoscript.template.MainActivity",
+            axml.readStringAttrs("activity", "name").first(),
+            "组件绝对化与图标在同一趟模板改写里",
+        )
+        val labelId = (axml.readAttr("application", "label") as ManifestAttrValue.ResourceRef).resourceId
+        assertEquals(
+            "重打包应用",
+            ArscPatcher.parse(entryOrFail(result.apk, "resources.arsc")).readStringResource(labelId),
+        )
+        assertEquals(1, align.calls.size, "对齐照走")
+    }
+
+    @Test
+    fun `图标文件缺失或不是 PNG——动模板与对齐之前就拒绝`() {
+        val missingAlign = AlignProbe()
+        val missing = ApkPackager(
+            workDir(), FixtureAxml.templateFullApk(), missingAlign.runner,
+            iconPng = tmp.resolve("nope.png"),
+        )
+        val plannedMissing = missing.plan(spec(), project(), identity, templateInfo)
+        val e1 = runCatching { missing.pack(plannedMissing, project()) }.exceptionOrNull()
+        assertInstanceOf(AutojsException::class.java, e1)
+        assertEquals(ErrorCode.ERR_NOT_FOUND, (e1 as AutojsException).error)
+        assertTrue("图标文件不存在" in e1.message!!)
+        assertTrue(missingAlign.calls.isEmpty(), "早失败必须赶在对齐之前")
+
+        val badAlign = AlignProbe()
+        val badFile = tmp.resolve("bad.png")
+        Files.write(badFile, "not-a-png".toByteArray())
+        val bad = ApkPackager(workDir(), FixtureAxml.templateFullApk(), badAlign.runner, iconPng = badFile)
+        val plannedBad = bad.plan(spec(), project(), identity, templateInfo)
+        val e2 = runCatching { bad.pack(plannedBad, project()) }.exceptionOrNull()
+        assertInstanceOf(AutojsException::class.java, e2)
+        assertEquals(ErrorCode.ERR_INVALID_PARAM, (e2 as AutojsException).error)
+        assertTrue(badAlign.calls.isEmpty())
     }
 }

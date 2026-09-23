@@ -28,7 +28,7 @@ sealed interface ManifestAttrValue {
  * 3. [toBytes] 重排外层 size + 池 + 资源映射 + 节点。
  *
  * 为什么不用 aapt2：模板已编译好，重跑 aapt2 link 需要完整资源树与 framework，
- * 而我们要改的只是包名/版本/显示名三个字段 —— 字节级改写既免依赖也免重编译，
+ * 而我们要改的只是包名/版本/显示名与组件类名这类小字段 —— 字节级改写既免依赖也免重编译，
  * 且改完仍能被 aapt2/apksigner 当合法 AXML 读（见测试的往返断言）。
  */
 class AxmlPatcher private constructor(
@@ -59,10 +59,7 @@ class AxmlPatcher private constructor(
     /** 设字面串属性（必要时把 REF 型就地降级为字面串 —— ARSC 缺资源时的兜底路径）。 */
     fun setStringAttr(element: String, attr: String, value: String) {
         val (node, attrOff) = locate(element, attr)
-        val index = pool.add(value)
-        putU32(node, attrOff + 8, index)              // rawValue
-        node[attrOff + 15] = ResChunk.TYPE_STRING.toByte()
-        putU32(node, attrOff + 16, index)             // data
+        writeStringAttr(node, attrOff, value)
     }
 
     /** 设整型属性（`versionCode`）：rawValue 置无下标，data 存数值。 */
@@ -90,6 +87,36 @@ class AxmlPatcher private constructor(
             ResChunk.TYPE_REFERENCE -> ManifestAttrValue.ResourceRef(data)
             ResChunk.TYPE_INT_DEC, ResChunk.TYPE_INT_HEX -> ManifestAttrValue.Number(data)
             else -> ManifestAttrValue.Other(dataType, data)
+        }
+    }
+
+    /**
+     * 读同名元素上 [attr] 的**全部**字面串值（按文档序）。[readAttr] 只取首个节点 ——
+     * `<activity>` 有多个时不够用，组件名改写后的回读/诊断走这里。
+     */
+    fun readStringAttrs(element: String, attr: String): List<String> {
+        val out = mutableListOf<String>()
+        forEachStartElement(setOf(element)) { node ->
+            val attrOff = findAttr(node, attr) ?: return@forEachStartElement
+            stringAttrAt(node, attrOff)?.let { out += it }
+        }
+        return out
+    }
+
+    /**
+     * 遍历 [elements] 每类 START_ELEMENT，把其上 [attr] 的字面串值经 [transform] 就地改写。
+     * 组件类名按旧包绝对化走这条（[com.autoscript.appservice.packager.IdentityTemplatePatch]）
+     * —— 同类型有多个节点，[setStringAttr] 的"首配"语义不够用。缺 [attr] 或非字面串的
+     * 节点跳过（`targetActivity` 只在 activity-alias 上有；`name` 是 aapt2 必填，缺 = 模板
+     * 非 aapt2 产物，组件找不到由运行时如实报，不在字节层替它猜）。[transform] 返回原串时
+     * 不动节点字节、不追加池串。
+     */
+    fun transformStringAttrs(elements: Set<String>, attr: String, transform: (String) -> String) {
+        forEachStartElement(elements) { node ->
+            val attrOff = findAttr(node, attr) ?: return@forEachStartElement
+            val current = stringAttrAt(node, attrOff) ?: return@forEachStartElement
+            val next = transform(current)
+            if (next != current) writeStringAttr(node, attrOff, next)
         }
     }
 
@@ -143,6 +170,35 @@ class AxmlPatcher private constructor(
             if (nameIndex >= 0 && nameIndex < pool.size && pool[nameIndex] == name) return off
         }
         return null
+    }
+
+    /** 按元素类型名遍历 START_ELEMENT（节点保持文档序；[block] 内可 return@ 跳过本节点）。 */
+    private fun forEachStartElement(names: Set<String>, block: (ByteArray) -> Unit) {
+        for (n in nodes) {
+            if (needU16(n, 0, "节点 type") != ResChunk.XML_START_ELEMENT) continue
+            val nameIndex = u32(n, 20)
+            if (nameIndex < 0 || nameIndex >= pool.size) continue
+            if (pool[nameIndex] !in names) continue
+            block(n)
+        }
+    }
+
+    /** 属性的字面串值（下标口径与 [readAttr] 字符串分支一致：data 优先、回落 rawValue）。 */
+    private fun stringAttrAt(node: ByteArray, attrOff: Int): String? {
+        if (u8(node, attrOff + 15) != ResChunk.TYPE_STRING) return null
+        val data = u32(node, attrOff + 16)
+        val rawIndex = u32(node, attrOff + 8)
+        val index = if (data >= 0 && data < pool.size) data else rawIndex
+        if (index < 0 || index >= pool.size) return null
+        return pool[index]
+    }
+
+    /** 就地写字面串属性（rawValue/data 同指新串；池按需追加、已存在则复用下标）。 */
+    private fun writeStringAttr(node: ByteArray, attrOff: Int, value: String) {
+        val index = pool.add(value)
+        putU32(node, attrOff + 8, index)
+        node[attrOff + 15] = ResChunk.TYPE_STRING.toByte()
+        putU32(node, attrOff + 16, index)
     }
 
     companion object {

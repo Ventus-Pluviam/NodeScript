@@ -12,7 +12,7 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /**
- * APK（zip）条目级重写：替换若干条目、丢弃旧签名、其余条目原样搬运。
+ * APK（zip）条目级重写：替换若干条目、按删除集剔除、丢弃旧签名、其余条目原样搬运。
  *
  * 为什么不用 `java.nio.file.FileSystems.newFileSystem(zip:)`：那条路对 STORED 条目
  * 会重算 crc/size 却不管对齐，且改完关不干净容易留半截文件。这里显式走
@@ -25,12 +25,22 @@ import java.util.zip.ZipOutputStream
 internal class ApkRepacker {
 
     /**
-     * 读 [apk]，把 [replacements] 里给出的条目换成新字节，剔除旧签名，写回 [target]。
-     * 未在 [replacements] 中出现的条目名照抄原字节（含压缩方式）。
+     * 读 [apk]，把 [replacements] 里给出的条目换成新字节、把 [removals] 里的条目剔掉，
+     * 再剔除旧签名，写回 [target]。不在两者中的条目名照抄原字节（含压缩方式）。
      * **替换项必须都真的存在于模板里**：打错包名/路径早失败，不产出"少一个条目"的坏包。
+     * 删除集按调用方 [entries] 实况给出 —— 不存在的名字静默无事（图标那条路先枚举再删，
+     * 天然都在）；[removals] 与 [replacements] 相交是调用方自相矛盾，直接拒绝。
      */
-    fun rewrite(apk: Path, replacements: Map<String, ByteArray>, target: Path) =
-        rewriteInternal(apk, replacements, target, allowNew = false)
+    fun rewrite(
+        apk: Path,
+        replacements: Map<String, ByteArray>,
+        target: Path,
+        removals: Set<String> = emptySet(),
+    ) {
+        val clash = replacements.keys.intersect(removals)
+        require(clash.isEmpty()) { "条目不能既替换又删除：${clash.sorted()}" }
+        rewriteInternal(apk, replacements, target, allowNew = false, removals = removals)
+    }
 
     /**
      * 往 [apk] 追加/覆盖 [additions] 条目并写回 [target] —— 与 [rewrite] 的分工：
@@ -45,7 +55,7 @@ internal class ApkRepacker {
                 "包内条目名不得是绝对路径或含 ..：$name"
             }
         }
-        rewriteInternal(apk, additions, target, allowNew = true)
+        rewriteInternal(apk, additions, target, allowNew = true, removals = emptySet())
     }
 
     private fun rewriteInternal(
@@ -53,6 +63,7 @@ internal class ApkRepacker {
         replacements: Map<String, ByteArray>,
         target: Path,
         allowNew: Boolean,
+        removals: Set<String>,
     ) {
         Files.createDirectories(target.parent)
         val tmp = target.resolveSibling(".${target.fileName}.tmp")
@@ -72,6 +83,7 @@ internal class ApkRepacker {
                         val entry = entries.nextElement()
                         val name = entry.name
                         if (isV1SignatureEntry(name)) continue // 旧签名必须剔除（内容已变，留着验签必炸）
+                        if (name in removals) continue         // 删除集：调用方按 entries() 实况给出（自适应 XML 等）
                         if (!written.add(name)) continue        // 重复条目：只留第一个
                         val replacement = replacements[name]
                         if (replacement != null) {
@@ -110,6 +122,10 @@ internal class ApkRepacker {
             return zf.getInputStream(entry).readBytes()
         }
     }
+
+    /** 枚举包内全部条目名（按 zip 原序，含目录条目）——换/删集合按实况枚举，不盲写名字。 */
+    fun entries(apk: Path): List<String> =
+        ZipFile(apk.toFile()).use { zf -> zf.entries().asSequence().map { it.name }.toList() }
 
     private fun writeEntry(out: ZipOutputStream, name: String, method: Int, bytes: ByteArray) {
         val entry = ZipEntry(name)
