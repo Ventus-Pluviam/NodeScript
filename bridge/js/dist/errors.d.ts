@@ -59,3 +59,12 @@ declare function fromErrPayload(p: ErrPayload): AutojsError;
 export { fromErrPayload as errFromPayload };
 /** 抛错（辅助）：把桥回包转成可抛异常。 */
 export declare function throwErr(p: ErrPayload): never;
+/**
+ * 把「handler 同步抛出的异常」折成 [AutojsError]（InvokeHandler 包装面用）：
+ * - 已是 [AutojsError] → 原样（码与明细都可信）；
+ * - 带 `ERR_*` 字符串 `.code` 的对象 → 以该码折叠 —— N-API `napi_throw_error` 产的
+ *   就是这种（普通 Error + `.code`）；若折成 `ERR_INVALID_PARAM`，「桥没连上」会被
+ *   说成「参数错了」，那是撒谎（§1 诚实：真原因原样上抛）；
+ * - 其余 → `ERR_INVALID_PARAM` + message（与 [RuntimeBridgeImpl.invoke] 的异常折叠同口径）。
+ */
+export declare function errFromThrown(e: unknown): AutojsError;

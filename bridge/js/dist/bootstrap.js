@@ -4,8 +4,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SocketBootstrap = void 0;
+exports.NativeBootstrap = exports.SocketBootstrap = void 0;
 exports.connectBootstrap = connectBootstrap;
+exports.attachNative = attachNative;
 const node_net_1 = __importDefault(require("node:net"));
 const bridge_1 = require("./bridge");
 const errors_1 = require("./errors");
@@ -157,6 +158,91 @@ exports.SocketBootstrap = SocketBootstrap;
 async function connectBootstrap(opts = {}) {
     const b = new SocketBootstrap(opts);
     await b.connect();
+    b.install();
+    return b;
+}
+/**
+ * 嵌入式宿主接入面（§7.8 启动序③「JS 侧 setup 由 facade 接入时调」的落地）：
+ * - [setup]：`addon.setup(onFrame)` 一次性接结算面 —— ok/err 行 → [runtimeBridge.handleResponse]
+ *   按在途 id 结算；**负 id / 未知 id 静默丢**（kBootstrap 心跳 `-seq` 与跨代迟到响应的合同：
+ *   查不到即丢，绝不撞别的在途调用）；非法 JSON 走 [onFrameError] 钩子，不炸在途；
+ * - [install]：`addon.invoke` 直接作 [InvokeHandler] 注入（返回 undefined = 已投递、等结算；
+ *   同步抛错经 `errFromThrown` 折叠 —— NAPI 的 `ERR_ENGINE_STOPPED` 等真码原样保留）；
+ * - **不碰 `setSocketFd`**：fd 注入归宿主 kBootstrap（§7.5「宿主注入已连 fd、addon 不自连」），
+ *   本面接的是"fd 已就位"之后的 JS 半边；
+ * - 装配顺序 setup → install：TSF 先就位，任何回包都有人收（install 前到达的按未知 id 丢，
+ *   与 `droppedData()` 的未 setup 记账互补）。
+ *
+ * 与 [SocketBootstrap] 同纪律：install 单例、重复安装由 [runtimeBridge] 拒绝。
+ */
+class NativeBootstrap {
+    addon;
+    /** 响应帧非法 JSON 时的诊断钩子（缺省 null：与 `onSocketError` 同款"默认不抛"）。 */
+    onFrameError = null;
+    setupDone = false;
+    constructor(opts = {}) {
+        if (opts.addon) {
+            this.addon = opts.addon;
+            return;
+        }
+        const p = process.env.AUTOSCRIPT_BRIDGE_ADDON;
+        if (!p) {
+            throw new errors_1.AutojsError({
+                code: "ERR_ENGINE_STOPPED" /* ErrCode.ENGINE_STOPPED */,
+                detail: '缺 AUTOSCRIPT_BRIDGE_ADDON（宿主未预载 addon：离线/未接线，快速拒绝不悬挂）',
+            });
+        }
+        // eslint-disable-next-line @typescript-eslint/no-var-requires -- 动态路径 require N-API 模块（CJS 产物）
+        this.addon = require(p);
+    }
+    /**
+     * 接结算面（幂等：本实例二次调用 no-op —— addon 侧 `setup` 是一次性的，
+     * 重复 attach 场景由 [runtimeBridge.install] 的单例拒绝兜底，两层各管各的）。
+     */
+    setup() {
+        if (this.setupDone)
+            return;
+        this.addon.setup((line) => this.onFrame(line));
+        this.setupDone = true;
+    }
+    onFrame(line) {
+        let frame;
+        try {
+            frame = JSON.parse(line);
+        }
+        catch (e) {
+            this.onFrameError?.(new Error(`桥响应帧非法 JSON: ${e instanceof Error ? e.message : String(e)}`));
+            return;
+        }
+        if (frame && (frame.t === 'ok' || frame.t === 'err')) {
+            runtime_1.runtimeBridge.handleResponse(frame);
+        }
+        // 其他 t 值（事件帧 P1）由事件订阅层处理；本层忽略 —— 与 SocketBootstrap.onData 同口径
+    }
+    /** [InvokeHandler]：addon.invoke 直接注入；undefined = 已投递，等 onFrame 结算。 */
+    handler = (ns, method, payload, reqId, ttl) => {
+        try {
+            this.addon.invoke(ns, method, payload, reqId, ttl);
+        }
+        catch (e) {
+            throw (0, errors_1.errFromThrown)(e);
+        }
+        return undefined;
+    };
+    /** 安装到单例桥（重复 install 由 runtimeBridge 拒绝，与 SocketBootstrap 同口径）。 */
+    install() {
+        runtime_1.runtimeBridge.install(this.handler);
+    }
+}
+exports.NativeBootstrap = NativeBootstrap;
+/**
+ * 嵌入式宿主便捷接线（同步 —— 无 IO：fd 已由宿主注入，本函数只做 setup + install）。
+ * 打包入口/脚本首行调一次；返回的实例挂 [NativeBootstrap.onFrameError] 诊断钩子。
+ * 可 `await`（值被包成已兑现 Promise），与 `connectBootstrap` 的用法对称。
+ */
+function attachNative(opts = {}) {
+    const b = new NativeBootstrap(opts);
+    b.setup(); // 先接结算面：TSF 就位后任何回包都有人收
     b.install();
     return b;
 }

@@ -63,7 +63,8 @@ constexpr const char kNodeStartSymbol[] = "_ZN4node5StartEiPPc";
 // 心跳（§8.4 原生宿主半边）：读 spawn 注入的 AUTOSCRIPT_RUN_ID，500ms 打点（与
 // WatchdogPolicy.heartbeatIntervalMillis 同源）。unref 定时器不吊住事件循环（脚本跑完即退，
 // §5.3 同款纪律，对齐 bridge/js startHeartbeat）。reqId 用 **-seq 负数命名空间**：心跳响应
-// 由 addon 直接回包，将来 JS 消费面（runtimeBridge 正数 id 计数器）装上后，迟到的心跳响应
+// 由 addon 直接回包，JS 消费面（facade `attachNative` → runtimeBridge.handleResponse，
+// §12.4 接入面 1 —— bridge/js 已落，设备侧待打包入口调用）装上后，迟到的心跳响应
 // 撞不上任何在途正数 id（handleResponse 查不到即丢），不会错结算别的请求。
 // 无 RUN_ID（非 spawn 起的裸 noden）→ 不打点；离线无 fd 时 invoke 抛错被 beat 吞掉
 // （心跳失败不炸脚本 —— JS 侧 startHeartbeat 同款纪律）。

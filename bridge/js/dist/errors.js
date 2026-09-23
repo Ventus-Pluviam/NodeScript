@@ -8,6 +8,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ERROR_CODES = exports.NotFoundError = exports.AutojsError = void 0;
 exports.errFromPayload = fromErrPayload;
 exports.throwErr = throwErr;
+exports.errFromThrown = errFromThrown;
 /**
  * 统一异常类型：脚本侧可 `catch (e) { if (e instanceof AutojsError) … }` 策略化。
  * 由桥把 ErrPayload 还原为实例；模块封装层不得悄悄吞掉。
@@ -73,4 +74,22 @@ function fromErrPayload(p) {
 /** 抛错（辅助）：把桥回包转成可抛异常。 */
 function throwErr(p) {
     throw fromErrPayload(p);
+}
+/**
+ * 把「handler 同步抛出的异常」折成 [AutojsError]（InvokeHandler 包装面用）：
+ * - 已是 [AutojsError] → 原样（码与明细都可信）；
+ * - 带 `ERR_*` 字符串 `.code` 的对象 → 以该码折叠 —— N-API `napi_throw_error` 产的
+ *   就是这种（普通 Error + `.code`）；若折成 `ERR_INVALID_PARAM`，「桥没连上」会被
+ *   说成「参数错了」，那是撒谎（§1 诚实：真原因原样上抛）；
+ * - 其余 → `ERR_INVALID_PARAM` + message（与 [RuntimeBridgeImpl.invoke] 的异常折叠同口径）。
+ */
+function errFromThrown(e) {
+    if (e instanceof AutojsError)
+        return e;
+    const raw = e;
+    const code = typeof e === 'object' && e !== null && typeof raw?.code === 'string' && raw.code.startsWith('ERR_')
+        ? raw.code
+        : "ERR_INVALID_PARAM" /* ErrCode.INVALID_PARAM */;
+    const detail = e instanceof Error ? e.message : String(e);
+    return new AutojsError({ code, detail });
 }
