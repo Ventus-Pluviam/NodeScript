@@ -1,6 +1,7 @@
 package com.autoscript
 
 import android.app.Application
+import android.os.Process
 import android.util.Log
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
 import com.autoscript.engine.nodeprocess.NodeProcessEngine
@@ -10,11 +11,13 @@ import com.autoscript.shell.AlarmPort
 import com.autoscript.shell.AlarmReceiver
 import com.autoscript.shell.AlarmSchedulerProvider
 import com.autoscript.shell.AndroidAlarmPort
+import com.autoscript.shell.AndroidBridgeBinder
 import com.autoscript.shell.AndroidPermissionGates
 import com.autoscript.shell.AndroidScreenGate
 import com.autoscript.shell.AppShell
 import com.autoscript.shell.AppShellKit
 import com.autoscript.shell.BootRecovery
+import com.autoscript.shell.BridgeSocketListener
 import com.autoscript.shell.PlatformWiring
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
@@ -71,6 +74,13 @@ class AppShellApplication : Application() {
     /** 闹钟出口（真 AlarmManager）：本类持有引用，供取消/续排路径按 taskId 撤销。 */
     private var alarmPort: AlarmPort? = null
 
+    /**
+     * 桥监听（§7.5，[BridgeSocketListener]）：**绑定一次、进程生命周期持有** ——
+     * abstract 名是进程级资源，重装装配复用同一实例（[BridgeSocketListener.start]
+     * 换 router 面即可）；装配失败也不关（关了重试绑不回，名字还可能已被抢）。
+     */
+    private var bridgeListener: BridgeSocketListener? = null
+
     /** 门禁生产实例缓存（见 [permissionCenter]；查询本身不缓存）。 */
     @Volatile
     private var gates: com.autoscript.appservice.permissioncenter.PermissionCenter? = null
@@ -120,9 +130,25 @@ class AppShellApplication : Application() {
                 .also { alarmPort = it }
             val appContext = applicationContext
             val wiring = PlatformWiring.of(appContext)
+            // §7.5 生产桥监听：**bind 必须赶在 assemble 前** —— FixedEnginePool.init 是
+            // eager 构造引擎（engineFactory 闭包在 init 时就捕获 hostSocketName）。
+            // 绑定失败 = 离线降级：不注入名 → spawn 无 socket env → main.cpp stderr 提示，
+            // 绝不注入一个绑不上的名字（那会触发 exit 3 硬失败）。名按 uid 隔离（见 defaultName）。
+            if (bridgeListener == null) {
+                val uid = Process.myUid()
+                bridgeListener = BridgeSocketListener.bind(
+                    BridgeSocketListener.defaultName(uid),
+                    AndroidBridgeBinder,
+                    uid,
+                )
+                if (bridgeListener == null) {
+                    Log.w(TAG, "桥监听绑定失败（abstract 名被抢/权限）：本次装配走离线 spawn（不注入 hostSocketName）")
+                }
+            }
+            val bridge = bridgeListener
             // §19 Kotlin spawn 生产装配：jniLibs 交付位的宿主（命名随打包管线，缺位预检点名 ——
-            // 这一行就是接线点）。socket/addon 两半边未落 → null = 离线 spawn：main.cpp stderr 提示 +
-            // 桥调用点如实 ERR_ENGINE_STOPPED，不悬挂；宿主二进制落位后 spawn 即通（无 socket 也照跑）。
+            // 这一行就是接线点）。socket 名 = 桥监听**绑定成功才注入**（离线降级见上）；
+            // addon 仍 null = 不预载（脚本照跑，桥调用点如实 ERR_ENGINE_STOPPED，不悬挂）。
             val nativeDir = Path.of(applicationInfo.nativeLibraryDir)
             val built = AppShellKit.assemble(
                 filesDir = filesDir,
@@ -136,6 +162,7 @@ class AppShellApplication : Application() {
                             filesDir = filesDir,
                             hostBinary = nativeDir.resolve("libnoden.so"),
                             libnodePath = nativeDir.resolve("libnode.so"),
+                            hostSocketName = bridge?.socketName,
                         ),
                     )
                 },
@@ -162,6 +189,10 @@ class AppShellApplication : Application() {
                 notificationHandler = wiring.notificationHandler,
                 systemHandlers = wiring.systemHandlers,
             )
+            // accept 开 serve：壳 router 就绪才收（bind 与 start 之间的入连接在内核 backlog
+            // 排队，start 后取用）；必须在 install 前 —— install 后闹钟路线即通，执行体可能
+            // 随时 spawn 来连。
+            bridge?.start(built.shell)
             install(built.shell)
             assembled = built
             built.shell
