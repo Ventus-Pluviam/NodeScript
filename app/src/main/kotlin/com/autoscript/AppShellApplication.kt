@@ -3,8 +3,10 @@ package com.autoscript
 import android.app.Application
 import android.os.Process
 import android.util.Log
+import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.ShellSummary
+import com.autoscript.domain.permission.Capability
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
 import com.autoscript.engine.nodeprocess.NodeProcessEngine
 import com.autoscript.shell.AlarmDispatch
@@ -23,6 +25,7 @@ import com.autoscript.shell.AppShellKit
 import com.autoscript.shell.AutoScriptForegroundService
 import com.autoscript.shell.BootRecovery
 import com.autoscript.shell.BridgeSocketListener
+import com.autoscript.shell.CapabilityCenterRead
 import com.autoscript.shell.ForegroundHost
 import com.autoscript.shell.ForegroundKeeper
 import com.autoscript.shell.PlatformWiring
@@ -354,6 +357,31 @@ class AppShellApplication : Application(), HostSummary {
         // §8.7：保活两侧都真才算（见 ForegroundKeeper.isActive）；未建时如实 false。
         keepAliveActive = keepAliveActive(),
     )
+
+    /**
+     * 能力中心快照（[HostSummary] 的生产实现，§9.5）。
+     *
+     * **全量枚举**：`Capability.entries` 逐项问系统（[permissionCenter] 每次直读不缓存）——
+     * 只列异常项会让用户以为其余能力不存在。引导文案取 `PermissionCenter.guideText`
+     * 的同一份，不在这里另写一套（两套文案必然漂移）。
+     *
+     * **读失败抛**（不吞成全 DENIED 的假快照）：`:ui` 据此如实显示「读能力态失败」——
+     * 让用户以为授权全丢了，比不显示更糟。
+     */
+    override suspend fun capabilityCenter(): CapabilityCenterSnapshot =
+        CapabilityCenterRead.snapshot(
+            facade = permissionCenter(),
+            // 降级任务账（§8.6「可能偏差」）：键排序只为让 UI 上的顺序稳定，不改账本语义。
+            degradedAlarmTaskIds = degradedAlarmTasks().keys.sorted(),
+        )
+
+    /**
+     * 一键跳转（能力中心「去授权」）：转给 [permissionCenter] 的 launcher。
+     * 本类不做判断（去哪一页是 `AndroidGrantLauncher.pageFor` 的事）。
+     */
+    override fun openCapabilitySettings(capability: Capability) {
+        permissionCenter().openSystemSettings(capability)
+    }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
     fun missedAlarms(): Map<String, Long> = alarmDispatch.missed()
