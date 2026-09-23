@@ -30,12 +30,13 @@ import kotlinx.coroutines.launch
  * 把 `application` 现转 `as? HostSummary`（`:domain` 读口，`AppShellApplication`
  * 实现），未实现即 [HomeState.UNWIRED] / [CapabilityCenterState.NOT_LOADED] 如实显示。
  *
- * 三个页签：首屏（壳/保活/漏投）、任务中心（§8.6 排期 + §8.5 档案/恢复账）、
- * 能力中心（§9.5 三态）。刷新时机分两种，**不能混**：
+ * 四个页签：首屏（壳/保活/漏投）、任务中心（§8.6 排期 + §8.5 档案/恢复账）、
+ * 控制台（§7.3 游标拉取 + 在途执行）、能力中心（§9.5 三态）。刷新时机分两种，**不能混**：
  * - 首屏状态是**同步**读（`shellSummary()`）：`onCreate` 首读 + 每次 `onResume` 重读；
- * - 能力态与任务态都是**挂起**的（`capabilityCenter()` 每次现问系统，含 root 探测的 IO 切换；
- *   `taskCenter()` 要读两个持久寄存器）：由 `LaunchedEffect(resumeTick, tab)` 驱动 ——
- *   回前台、或切到该页签时重取一次。
+ * - 能力态/任务态/控制台都是**挂起**的（`capabilityCenter()` 每次现问系统，含 root 探测的
+ *   IO 切换；`taskCenter()` 要读两个持久寄存器；`console(seq, max)` 是游标增量拉取）：
+ *   由 `LaunchedEffect(resumeTick, tab)` 驱动 —— 回前台、或切到该页签时重取一次。
+ *   控制台尤其依赖这条：行是**累积**的，游标只进不退（见 [ConsoleState]）。
  *   这样用户从系统设置页授完权回来，看到的是**刚问过**的结论，而不是离开时那份缓存
  *   （后者正是"授权了但界面还说没授权"的来源）。
  *
@@ -52,6 +53,9 @@ class MainActivity : ComponentActivity() {
 
     /** 任务中心状态（同上）。 */
     private var taskState: TaskCenterState by mutableStateOf(TaskCenterState.NOT_LOADED)
+
+    /** 控制台状态（同上；行与游标随失败保留 —— 见 [ConsoleState.failed]）。 */
+    private var consoleState: ConsoleState by mutableStateOf(ConsoleState.NOT_LOADED)
 
     /** 当前页签。 */
     private var tab: Tab by mutableStateOf(Tab.HOME)
@@ -80,6 +84,10 @@ class MainActivity : ComponentActivity() {
                                 state = taskState,
                                 onRefresh = { scope.launch { reloadTasks() } },
                             )
+                            Tab.CONSOLE -> ConsoleScreen(
+                                state = consoleState,
+                                onRefresh = { scope.launch { reloadConsole() } },
+                            )
                             Tab.CAPABILITIES -> CapabilityScreen(
                                 state = capabilityState,
                                 onRefresh = { scope.launch { reloadCapabilities() } },
@@ -96,6 +104,7 @@ class MainActivity : ComponentActivity() {
                 when (tab) {
                     Tab.HOME -> Unit
                     Tab.TASKS -> reloadTasks()
+                    Tab.CONSOLE -> reloadConsole()
                     Tab.CAPABILITIES -> reloadCapabilities()
                 }
             }
@@ -155,12 +164,42 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 现拉控制台（挂起；只写 [consoleState]，不触发重读）。
+     *
+     * 游标取 `consoleState.nextSeq`（只进不退；首读 0），成功经 [ConsoleState.of]
+     * **累积**入列，失败经 [ConsoleState.failed] **保留旧行与游标** —— 瞬时失败不清缓冲，
+     * 下次从上次成功处续拉。读口未接线仍留 [ConsoleState.NOT_LOADED]。
+     */
+    private suspend fun reloadConsole() {
+        val host = hostSummary()
+        if (host == null) {
+            consoleState = ConsoleState.NOT_LOADED
+            return
+        }
+        val previous = consoleState
+        consoleState = try {
+            ConsoleState.of(
+                previous = previous,
+                added = host.console(sinceSeq = previous.nextSeq, maxLines = CONSOLE_PAGE),
+                nowMillis = System.currentTimeMillis(),
+            )
+        } catch (t: Throwable) {
+            ConsoleState.failed(t, previous)
+        }
+    }
+
     private fun hostSummary(): HostSummary? = application as? HostSummary
 
-    enum class Tab { HOME, TASKS, CAPABILITIES }
+    enum class Tab { HOME, TASKS, CONSOLE, CAPABILITIES }
+
+    private companion object {
+        /** 控制台单批上限：够一屏翻阅，拉满时 [ConsoleState.pageFull] 提示续拉。 */
+        const val CONSOLE_PAGE = 256
+    }
 }
 
-/** 页签条（P0 两个：首屏/能力中心）。选中态用前缀点标出，不引入额外图标依赖。 */
+/** 页签条（四页签）。选中态用前缀点标出，不引入额外图标依赖。 */
 @Composable
 private fun Tabs(current: MainActivity.Tab, onSelect: (MainActivity.Tab) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -175,5 +214,6 @@ private fun Tabs(current: MainActivity.Tab, onSelect: (MainActivity.Tab) -> Unit
 private fun MainActivity.Tab.label(): String = when (this) {
     MainActivity.Tab.HOME -> "首屏"
     MainActivity.Tab.TASKS -> "任务中心"
+    MainActivity.Tab.CONSOLE -> "控制台"
     MainActivity.Tab.CAPABILITIES -> "能力中心"
 }

@@ -47,6 +47,19 @@ interface HostSummary {
      * 而不是渲染成"一条任务都没有" —— 后者会让用户以为自己的定时任务全没了。
      */
     suspend fun taskCenter(): TaskCenterSnapshot
+
+    /**
+     * 控制台快照（§7.3 seq 游标拉取 + §8.3 在途执行两端对照）。
+     *
+     * @param sinceSeq 只回 `seq > sinceSeq` 的行（首读传 0）；快照里的
+     *   [ConsoleSnapshot.nextSeq] 是下次该传的值 —— 游标只进不退，读失败也不清零。
+     * @param maxLines 本批上限（> 0）；拉满时 [ConsoleSnapshot.pageFull] 为 true。
+     *
+     * 读失败**抛**（与 [capabilityCenter]/[taskCenter] 同一条纪律）：`:ui` 据此如实
+     * 显示「读控制台失败」并**保留已读到的行**，而不是把缓冲清成"尚无日志"
+     * —— 一次瞬时失败抹掉用户已经看到的日志，比报错更糟。
+     */
+    suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot
 }
 
 /**

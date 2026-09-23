@@ -6,6 +6,7 @@ import android.util.Log
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
+import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.permission.Capability
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
@@ -401,6 +402,21 @@ class AppShellApplication : Application(), HostSummary {
         val built = assembled
             ?: throw IllegalStateException("壳未装配（装配中或失败）：任务与执行记录暂不可读")
         return built.taskCenter { recoverySnapshot() }
+    }
+
+    /**
+     * 控制台快照（§7.3 seq 游标拉取）。
+     *
+     * **壳没装好就抛**（与 [taskCenter] 同一条纪律）：返回一份空快照长得像"暂无日志"，
+     * 而事实是"根本没读到" —— 用户会以为脚本安静地什么都没输出。
+     *
+     * 读的是 [AppShellKit.AssembledShell.consoleView]（壳持有的收集器与在途表），
+     * 不让 UI 另开收集器（第二个收集器收不到桥上的行）。
+     */
+    override suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：控制台暂不可读")
+        return built.consoleView(sinceSeq, maxLines)
     }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */

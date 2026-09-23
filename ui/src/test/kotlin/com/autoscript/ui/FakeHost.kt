@@ -1,6 +1,7 @@
 package com.autoscript.ui
 
 import com.autoscript.domain.host.CapabilityCenterSnapshot
+import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
@@ -28,4 +29,7 @@ open class FakeHost(
 
     override suspend fun taskCenter(): TaskCenterSnapshot =
         throw UnsupportedOperationException("本替身未提供 taskCenter（用例按需覆盖）")
+
+    override suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot =
+        throw UnsupportedOperationException("本替身未提供 console（用例按需覆盖）")
 }

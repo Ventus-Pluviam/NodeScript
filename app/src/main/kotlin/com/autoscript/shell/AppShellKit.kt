@@ -17,6 +17,7 @@ import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.host.TaskCenterSnapshot
+import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
 import java.nio.file.Files
@@ -142,6 +143,23 @@ object AppShellKit {
                 recovery = recovery(),
             )
         }
+
+        /**
+         * 控制台快照（§7.3 游标拉取）—— 呈现层经 `HostSummary.console()` 读到的就是这一份。
+         *
+         * 读的是**壳自己持有的两件东西**（收集器 [AppShell.console] + 在途表
+         * [AppShell.controller]），不让 UI 另开 `ConsoleCollector`：第二个收集器收不到
+         * 桥上注册的行，读到的永远是空（写侧两份视图的老问题，同 `FileRunArchive` 一条理）。
+         *
+         * 游标（[sinceSeq]）由调用方传：数据面是拉取不是推送，游标只进不退。
+         */
+        suspend fun consoleView(sinceSeq: Long, maxLines: Int): ConsoleSnapshot =
+            ConsoleRead.snapshot(
+                collector = shell.console,
+                sinceSeq = sinceSeq,
+                maxLines = maxLines,
+                runStatuses = { shell.controller.runStatuses() },
+            )
     }
 
     /**
