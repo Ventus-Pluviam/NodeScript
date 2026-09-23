@@ -212,8 +212,10 @@ class PlatformWiringTest {
             // notification：canPost 探针 + post 真落到假 SPI
             assertEquals("true", okPayload(dispatch(s, "notification", "canPost", null)))
             assertEquals("true", okPayload(dispatch(s, "notification", "post", """{"id":7,"text":"跑完了"}""")))
-            assertEquals(1, (spis.notification as FakeNotification).posted.size)
-            assertEquals("跑完了", spis.notification.posted[0].text)
+            // 落局部：SystemSpis 来自 :domain（跨模块 public 属性不给 smart cast；jvm-test 同模块会掩掉）。
+            val notifier = spis.notification as FakeNotification
+            assertEquals(1, notifier.posted.size)
+            assertEquals("跑完了", notifier.posted[0].text)
 
             // zip：compress 参数原样到假归档器
             assertInstanceOf(

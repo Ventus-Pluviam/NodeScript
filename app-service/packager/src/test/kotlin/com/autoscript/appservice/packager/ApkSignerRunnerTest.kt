@@ -115,7 +115,7 @@ class ApkSignerRunnerTest {
     fun `真起进程：假可执行体走通全链路`() {
         // 与记录型互补：这条验证 ProcessBuilderLauncher 真的拼命令、注入 env、收输出、读退出码。
         val script = tmp.resolve("fake-apksigner.sh")
-        Files.writeString(
+        writeString(
             script,
             """
             #!/bin/sh
@@ -143,18 +143,18 @@ class ApkSignerRunnerTest {
             .sign(releaseRequest(), unsigned, signed, "/k/release.jks", "ks-pass-value", "key-pass-value")
 
         assertTrue(Files.isRegularFile(signed), "假 apksigner 产出了签名包")
-        assertEquals("unsigned-bytes", Files.readString(signed), "假体把输入原样抄成了输出")
-        val argv = Files.readString(log)
+        assertEquals("unsigned-bytes", readString(signed), "假体把输入原样抄成了输出")
+        val argv = readString(log)
         assertTrue(argv.contains("--ks"), "应带上 --ks：$argv")
         assertTrue(argv.contains("env:${ApkSignerArgs.KS_PASS_ENV}"), "口令应以 env: 引用：$argv")
         assertFalse(argv.contains("ks-pass-value"), "口令不得出现在 argv：$argv")
-        assertEquals("ks-pass-value|key-pass-value", Files.readString(envLog).trim(), "口令必须经环境变量送达")
+        assertEquals("ks-pass-value|key-pass-value", readString(envLog).trim(), "口令必须经环境变量送达")
     }
 
     @Test
     fun `真起进程：非 0 退出码的假体照样失败`() {
         val script = tmp.resolve("failing-apksigner.sh")
-        Files.writeString(script, "#!/bin/sh\necho 'boom: bad keystore' >&2\nexit 3\n")
+        writeString(script, "#!/bin/sh\necho 'boom: bad keystore' >&2\nexit 3\n")
         script.toFile().setExecutable(true)
         val unsigned = Files.write(tmp.resolve("u2.apk"), byteArrayOf(1))
         val e = runCatching {

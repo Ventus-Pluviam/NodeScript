@@ -44,11 +44,23 @@ interface SpawnedProcess {
 }
 
 /**
+ * `Process.pid()` 的反射句柄：android.jar 桩面没有这个方法（编译期不可见），类加载时探测一次 ——
+ * 桌面 JDK 得到真句柄；设备运行时按其 libcore 有无法如实为 null。
+ */
+private val jdkProcessPidMethod: java.lang.reflect.Method? = try {
+    Process::class.java.getMethod("pid")
+} catch (_: NoSuchMethodException) {
+    null
+}
+
+/**
  * 真起进程（`ProcessBuilder`）。stdout/stderr 合流进 PIPE 并由守护排水线程读到 EOF ——
  * 不排水会把管道写满、把子进程卡死在 write 上（经典 pipe 反压死锁），丢弃内容不丢进程。
  *
- * `Process.pid()` 是 Java 9 / 旧 Android 运行时可能缺失的方法：编译期 compileSdk 35 可见，
- * 运行期缺方法抛 [NoSuchMethodError] → 如实回 null（§8.4 noPid 路径，不是崩溃）。
+ * `Process.pid()` **在 android.jar 桩面（compileSdk 35）根本不存在**——直接调用编译不过
+ * （本机 Android SDK 编译门抓出；此前"compileSdk 35 可见"的判断是被 JDK 的 `java.lang.*`
+ * 遮蔽后的误判，javap 不解包就看到的是 JDK 自己的类）。故取 pid 走反射探测：桌面 JDK 恒有
+ * 真 pid；Android 运行时有该方法则取，没有如实回 null（§8.4 noPid 路径，不是崩溃、不是 0/自身）。
  */
 class ProcessBuilderLauncher : ProcessLauncher {
 
@@ -82,9 +94,9 @@ class ProcessBuilderLauncher : ProcessLauncher {
         @Suppress("unused") private val drain: Thread,   // 持引用防 GC 提前回收排水线程句柄
     ) : SpawnedProcess {
         override val pid: Int? = try {
-            process.pid().toInt()
-        } catch (_: NoSuchMethodError) {
-            null                      // 旧运行时无 Process.pid()：诚实 noPid（§8.4），不是 0/自身
+            (jdkProcessPidMethod?.invoke(process) as? Long)?.toInt()
+        } catch (_: java.lang.ReflectiveOperationException) {
+            null                      // 运行时无 Process.pid()/反射不可达：诚实 noPid（§8.4），不是 0/自身
         } catch (_: SecurityException) {
             null
         }

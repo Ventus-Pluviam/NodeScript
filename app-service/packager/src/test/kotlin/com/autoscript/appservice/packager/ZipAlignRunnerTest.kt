@@ -94,7 +94,7 @@ class ZipAlignRunnerTest {
     @Test
     fun `真起进程——假可执行体按位置参数抄文件`() {
         val script = tmp.resolve("fake-zipalign.sh")
-        Files.writeString(
+        writeString(
             script,
             """
             #!/bin/sh
@@ -111,7 +111,7 @@ class ZipAlignRunnerTest {
         val output = tmp.resolve("a.apk")
         ZipAlignRunner(listOf(script.toString()), ProcessBuilderLauncher()).align(input, output)
 
-        assertEquals("bytes", Files.readString(output), "假体把输入原样抄成输出 = 全链路真跑通")
+        assertEquals("bytes", readString(output), "假体把输入原样抄成输出 = 全链路真跑通")
     }
 
     private fun assertThrowsIllegal(block: () -> Unit) {

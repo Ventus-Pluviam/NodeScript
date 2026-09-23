@@ -18,7 +18,6 @@ import com.autoscript.shell.AppShellKit
 import com.autoscript.shell.ScreenGate
 import java.io.File
 import java.net.StandardProtocolFamily
-import java.net.UnixDomainSocketAddress
 import java.nio.channels.Channels
 import java.nio.channels.ServerSocketChannel
 import java.nio.file.Files
@@ -49,6 +48,23 @@ import org.junit.jupiter.api.io.TempDir
  * noden 宿主）；桌面跑系统 node（无 main.cpp）→ 按 §12.2 显式调用补半边，同一条
  * `engines.heartbeat` 契约（runId 来自 env；宿主只认在途 runId）。
  */
+/**
+ * unix 域服务器通道（仅本桌面 E2E 用）：android.jar 桩面没有
+ * `ServerSocketChannel.open(ProtocolFamily)` 重载与 `UnixDomainSocketAddress`（Java16 API），
+ * 直接引用会把 `testDebugUnitTest` 编译炸掉 —— 反射取，运行期在桌面 JDK 上恒有。
+ */
+private fun openUnixServerChannel(): ServerSocketChannel {
+    val protocolFamily = Class.forName("java.net.ProtocolFamily")   // 实名：ProtocolFamily 住 java.net（记错成 nio.channels 会运行期 ClassNotFound）
+    return ServerSocketChannel::class.java
+        .getMethod("open", protocolFamily)
+        .invoke(null, StandardProtocolFamily.UNIX) as ServerSocketChannel
+}
+
+private fun unixAddressOf(path: String): java.net.SocketAddress =
+    Class.forName("java.net.UnixDomainSocketAddress")
+        .getMethod("of", String::class.java)
+        .invoke(null, path) as java.net.SocketAddress
+
 class NodeProcessSpawnE2ETest {
 
     @TempDir
@@ -92,10 +108,10 @@ class NodeProcessSpawnE2ETest {
         assertTrue(File(dist, "bootstrap.js").isFile && File(dist, "engines.js").isFile, "dist 缺件：$dist")
 
         // sun_path 上限 108B，且 Gradle 测试 tmpdir（build/tmp/workers/…）叠目录名易超 —— 固定 /tmp 短名。
-        val sockPath = "/tmp/as-e2e-${ProcessHandle.current().pid()}.sock"
+        val sockPath = "/tmp/as-e2e-${System.nanoTime()}.sock"   // 唯一名：ProcessHandle 不在 android.jar 桩面
         Files.deleteIfExists(Path.of(sockPath))
-        val serverChannel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
-        serverChannel.bind(UnixDomainSocketAddress.of(sockPath))
+        val serverChannel = openUnixServerChannel()
+        serverChannel.bind(unixAddressOf(sockPath))
 
         val scriptBody = """
             const { connectBootstrap } = require('$dist/bootstrap.js');

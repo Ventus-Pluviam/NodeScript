@@ -47,8 +47,8 @@ class ApkPackagerTest {
     private fun project(): Path {
         val root = tmp.resolve("project")
         Files.createDirectories(root.resolve("lib"))
-        Files.writeString(root.resolve("main.js"), "console.log('entry')")
-        Files.writeString(root.resolve("lib/util.js"), "module.exports = 1")
+        writeString(root.resolve("main.js"), "console.log('entry')")
+        writeString(root.resolve("lib/util.js"), "module.exports = 1")
         return root
     }
 
@@ -155,7 +155,7 @@ class ApkPackagerTest {
 
         assertEquals(1, align.calls.size, "对齐恰好一次")
         assertEquals(1, sign.calls.size, "签名恰好一次")
-        assertEquals("signed-by-fake", Files.readString(result.signed!!))
+        assertEquals("signed-by-fake", readString(result.signed!!))
         assertEquals(result.signed, result.apk, "签名后交付物 = 签名包")
         assertTrue(Files.isRegularFile(result.unsignedAligned), "中间产物对齐包仍在（可复查）")
 
@@ -186,7 +186,7 @@ class ApkPackagerTest {
         val root = project()   // 只建一次：project() 会重写文件，调两次就把篡改复原了
         val packager = ApkPackager(workDir(), FixtureAxml.templateApk(), AlignProbe().runner)
         val planned = packager.plan(spec(), root, identity, templateInfo)
-        Files.writeString(root.resolve("main.js"), "TAMPERED")
+        writeString(root.resolve("main.js"), "TAMPERED")
         val e = runCatching { packager.pack(planned, root) }.exceptionOrNull()
         assertInstanceOf(AutojsException::class.java, e)
         assertEquals(ErrorCode.ERR_INVALID_PARAM, (e as AutojsException).error)

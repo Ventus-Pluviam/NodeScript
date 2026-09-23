@@ -61,16 +61,29 @@ class NodeProcessEngineRealSpawnTest {
         return e.status()
     }
 
+    /**
+     * 自身 pid（仅本桌面单测用）：`ProcessHandle` 同样不在 android.jar 桩面（compileSdk 35），
+     * 直接引用会把 gradle/CI 的 testDebugUnitTest 编译炸掉 —— 反射取，拿不到回 null（断言仍成立但弱化）。
+     */
+    private fun selfPid(): Long? = try {
+        val ph = Class.forName("java.lang.ProcessHandle")
+        ph.getMethod("pid").invoke(ph.getMethod("current").invoke(null)) as Long
+    } catch (_: ReflectiveOperationException) {
+        null
+    }
+
     @Test
     fun `真起 node——pid 快照为真，退出0 STOPPED 且 pid 回 null`() {
         writeScript("process.exit(0)")
         val e = engine()
         val receipt = runBlocking { e.execute(request()) }
 
-        val self = ProcessHandle.current().pid().toInt()
-        assertTrue(receipt.pid != null && receipt.pid > 0, "receipt.pid 必须是真子进程 pid：${receipt.pid}")
-        assertNotEquals(self, receipt.pid, "pid 绝不给自身（§8.4：会把看门狗引到杀主进程）")
-        assertEquals(receipt.pid, e.pid, "存活期 ScriptEngine.pid = 当前子进程 pid")
+        val self = selfPid()
+        // 落成局部再判：receipt 是 :domain 类型，跨模块 public val 不给 smart cast（jvm-test 同模块会掩掉这差异）。
+        val childPid = receipt.pid
+        assertTrue(childPid != null && childPid > 0, "receipt.pid 必须是真子进程 pid：${childPid}")
+        assertNotEquals(self, childPid?.toLong(), "pid 绝不给自身（§8.4：会把看门狗引到杀主进程）")
+        assertEquals(childPid, e.pid, "存活期 ScriptEngine.pid = 当前子进程 pid")
 
         val settled = runBlocking { awaitStatus(e, EngineStatus.STOPPED) }
         assertEquals(EngineStatus.STOPPED, settled, "自然退出 0 → STOPPED")
