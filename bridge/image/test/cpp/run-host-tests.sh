@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# 宿主机语义测试：把 bridge/image/src/main/cpp/imgnative.cpp（纯计算核、零 JNI）
+# 与**同 commit** 的 OpenCV 4.14.0 静态库链成一个 x86_64 可执行文件，跑断言。
+#
+# 为什么需要它：NDK `-fsyntax-only` 只证明编得过，不证明判读对。计算核里有几处
+# "译反了照样出结论"的判读（Vec4b 通道序、ROI 偏移回加、扫过 vs 扫过 0 像素）,
+# 只有真跑像素才能证伪。真机红测仍是最后一关，但"等上设备才发现"太贵。
+#
+# 用法：bash bridge/image/test/cpp/run-host-tests.sh [opencv 源码目录]
+#   不给目录 = $OCV_SRC 环境变量，再没有则 /tmp/ocvpin（本机惯位）
+# OpenCV 的 commit pin 见 node-runtime-build/VERSIONS.env 的 OPENCV_COMMIT ——
+# 与 build-opencv.sh 拉的是同一个 SHA，不是"本机随便哪个版本"。
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../../../.. && pwd)"; cd "$REPO"
+
+OCV_SRC="${1:-${OCV_SRC:-/tmp/ocvpin}}"
+BUILD="${OCV_HOST_BUILD:-/tmp/ocvhostbuild}"
+HERE=bridge/image/test/cpp
+
+[ -f "$OCV_SRC/CMakeLists.txt" ] || {
+  printf '[FATAL] 找不到 OpenCV 源码：%s（先按 build-opencv.sh 的 commit 拉一份）\n' "$OCV_SRC" >&2
+  exit 1
+}
+command -v cmake >/dev/null || { printf '[FATAL] 缺 cmake\n' >&2; exit 1; }
+command -v g++ >/dev/null || { printf '[FATAL] 缺 g++\n' >&2; exit 1; }
+
+if [ ! -f "$BUILD/lib/libopencv_core.a" ]; then
+  printf '[build] 配置 + 编译 host OpenCV（一次性，产物落 %s）\n' "$BUILD"
+  # kleidicv OFF：host 是 x86_64，那条加速面只在 aarch64 上（开着会让 configure
+  # 尝试交叉/下载）。CPU_BASELINE 写 SSE3 而不是 DETECT —— 要的是能在任意 x86_64
+  # 上跑，不把本机指令集烤进基线（与 build-opencv.sh 不手写 -march 同一考虑）。
+  cmake -S "$OCV_SRC" -B "$BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+    -DBUILD_LIST=core,imgproc,imgcodecs \
+    -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOCS=OFF \
+    -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF -DBUILD_JAVA=OFF \
+    -DBUILD_ANDROID_PROJECTS=OFF -DBUILD_ANDROID_EXAMPLES=OFF \
+    -DBUILD_FAT_JAVA_LIB=OFF -DBUILD_PACKAGE=OFF -DBUILD_opencv_apps=OFF \
+    -DWITH_OPENMP=OFF -DWITH_OPENCL=OFF -DWITH_TBB=OFF -DWITH_ITT=OFF -DWITH_IPP=OFF \
+    -DWITH_LAPACK=OFF -DWITH_EIGEN=OFF -DWITH_PROTOBUF=OFF -DWITH_FFMPEG=OFF \
+    -DWITH_GTK=OFF -DWITH_QT=OFF -DWITH_WEBP=OFF -DWITH_TIFF=OFF -DWITH_OPENEXR=OFF \
+    -DWITH_OPENJPEG=OFF -DWITH_KLEIDICV=OFF -DCPU_BASELINE=SSE3 -DCPU_DISPATCH="" \
+    -DBUILD_ZLIB=ON -DBUILD_JPEG=ON -DBUILD_PNG=ON >/tmp/ocvhost-build.log 2>&1
+  cmake --build "$BUILD" --target opencv_imgcodecs -j"$(nproc)" >>/tmp/ocvhost-build.log 2>&1
+fi
+
+INC=(-I"$OCV_SRC/modules/core/include" -I"$OCV_SRC/modules/imgproc/include"
+     -I"$OCV_SRC/modules/imgcodecs/include" -I"$BUILD")
+LIBS=(-L"$BUILD/lib" -L"$BUILD/3rdparty/lib"
+      -lopencv_imgcodecs -lopencv_imgproc -lopencv_core
+      -llibjpeg-turbo -llibpng -llibjasper -lzlib)
+
+OUT=$(mktemp -d)
+trap 'rm -rf "$OUT"' EXIT
+failed=0
+for t in host_color_test host_decode_norm_test; do
+  printf '[cc] %s\n' "$t"
+  g++ -std=c++17 -O2 -Wall -Wextra "${INC[@]}" -o "$OUT/$t" \
+    "$HERE/$t.cpp" bridge/image/src/main/cpp/imgnative.cpp "${LIBS[@]}"
+  printf '[run] %s\n' "$t"
+  if ! "$OUT/$t"; then
+    printf '[FAIL] %s\n' "$t" >&2
+    failed=1
+  fi
+done
+[ "$failed" = 0 ] && printf '[OK] 全部宿主机语义测试通过\n'
+exit "$failed"
