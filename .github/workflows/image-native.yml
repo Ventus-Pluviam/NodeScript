@@ -1,0 +1,117 @@
+name: image-native
+
+# libimgnative.so 构建（docs/framework-design.md §9.2 / §16）
+#
+# 与 ci.yml 的分工：本文件**只**跑 OpenCV 静态链接 + 我们的桥面 C++ → 单个
+# libimgnative.so（arm64-android26），跑 node-runtime-build/scripts/build-opencv.sh
+# —— 同一脚本也由 node-runtime-build/Dockerfile 的 OpenCV 轨调用，两处同源同门禁。
+# Node 24 那条轨（fetch-and-build.sh → libnode.so）**不经本文件**：体量差一个量级
+# （600MB 源码 + 半小时以上），放进 PR 门会让每次改动都等一轮；libnode 的构建门
+# 由 node-runtime-build/Dockerfile 承担（见 ci.yml 末注）。
+#
+# 产物不随 APK 走：装配侧 app/build.gradle.kts 的 prepareEngineNativeLibs 候选位
+# 含 node-runtime-build/out-opencv/libimgnative.so，本 workflow 的 artifact 是给
+# 人下载核验的（16KB 对齐 + NEEDED 白名单在脚本尾部已断言）。
+# 触发面（2026-09-25 修过一次"推了分支却没跑"）：
+# 初版写成 `push: branches:[main]` + `pull_request: paths:`，而 image-native 这类
+# 长生命周期分支既不在 main、又还没有 PR → **一步都不跑**（gh token 无该私仓权限，
+# 开不了 PR 也就触发不了）。故 push 与 PR **都不限分支**，靠 paths 过滤把构建
+# 限定在"真的动了图像构建面"的提交上 —— 路径过滤才是轻量的来源，不是分支白名单。
+on:
+  push:
+    paths:
+      - 'node-runtime-build/VERSIONS.env'
+      - 'node-runtime-build/scripts/build-opencv.sh'
+      - 'node-runtime-build/scripts/check-opencv-alignment.sh'
+      - 'bridge/image/**'
+      - '.github/workflows/image-native.yml'
+  pull_request:
+    paths:
+      - 'node-runtime-build/VERSIONS.env'
+      - 'node-runtime-build/scripts/build-opencv.sh'
+      - 'node-runtime-build/scripts/check-opencv-alignment.sh'
+      - 'bridge/image/**'
+      - '.github/workflows/image-native.yml'
+  workflow_dispatch:
+
+concurrency:
+  # 同一分支重复触发时取消上一次（构建 20 分钟级，串行等待没有信息量）。
+  group: image-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-imgnative:
+    name: OpenCV 4.14.0 → libimgnative.so（arm64-android26，kleidicv 审计）
+    runs-on: ubuntu-latest
+    timeout-minutes: 90        # OpenCV 全量 configure+编译实测 15–30 分钟；CI 抢不到核时放宽
+    env:
+      # 全 job 共用一个 WORK_DIR：build-opencv.sh 按 $WORK/{src,ndk,out-opencv,build-opencv}
+      # 布局走，而"产物审计"步骤也要读同一个 OUT —— 只在构建步骤里设 env 的话，
+      # 后续步骤的 $WORK 是空的（审计步骤会安静地 ls 到空路径然后失败在 artifact 上）。
+      WORK_DIR: ${{ github.workspace }}/work
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装编译期依赖（cmake + ninja + unzip + git + python3）
+        run: |
+          # unzip 是 NDK 解包要用的：放在 NDK 步骤**之前**，不赌 runner 镜像预装
+          # （赌输了要等 700MB 下载完才在 unzip 上炸，白等一次）。
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build unzip git python3
+
+      - name: 安装 NDK r28c（dl.google.com zip + size/sha1 校验，同 Node 管线）
+        run: |
+          # 不借 sdkmanager：build-opencv.sh 从 $WORK/ndk/android-ndk-$NDK_VERSION
+          # 找 NDK（fetch-and-build.sh 的同一布局），而 sdkmanager 装到
+          # $ANDROID_SDK_ROOT/ndk/<VERSION_CODE>/，目录语义是"版本码"不是"版本名"，
+          # 中间得再软链一层 —— 2026-09-24 实测就是这层漏了，构建死在工具链探测上
+          # （[FATAL] NDK clang 缺失: .../work/ndk/android-ndk-r28c/toolchains/…）。
+          # 改走 zip：与 Node 管线同源同校验（VERSIONS.env 的 NDK_ZIP_SIZE/NDK_SHA1），
+          # 解包落点即脚本期望的路径，不依赖 runner 预装 SDK 的位置。
+          V=node-runtime-build/VERSIONS.env
+          NDK_VERSION="$(sed -n 's/^NDK_VERSION=//p' "$V")"
+          NDK_ZIP_SIZE="$(sed -n 's/^NDK_ZIP_SIZE=//p' "$V")"
+          NDK_SHA1="$(sed -n 's/^NDK_SHA1=//p' "$V")"
+          API="$(sed -n 's/^ANDROID_API=//p' "$V")"
+          [ -n "$NDK_VERSION" ] && [ -n "$NDK_ZIP_SIZE" ] && [ -n "$NDK_SHA1" ] \
+            || { echo "VERSIONS.env 缺 NDK_VERSION/ZIP_SIZE/SHA1"; exit 1; }
+          [ -n "$API" ] || { echo "VERSIONS.env 缺 ANDROID_API"; exit 1; }
+          DL="$WORK_DIR/dl"
+          mkdir -p "$DL" "$WORK_DIR/ndk"
+          ZIP="$DL/android-ndk-${NDK_VERSION}-linux.zip"
+          echo "下载 NDK $NDK_VERSION（约 $((NDK_ZIP_SIZE / 1024 / 1024))MB）…"
+          curl -fsS --retry 3 -o "$ZIP" \
+            "https://dl.google.com/android/repository/$(basename "$ZIP")"
+          echo "校验 size=$NDK_ZIP_SIZE sha1=${NDK_SHA1:0:16}…"
+          actual_size=$(stat -c%s "$ZIP")
+          [ "$actual_size" = "$NDK_ZIP_SIZE" ] || { echo "NDK zip 大小不符: $actual_size"; exit 1; }
+          actual_sha1=$(sha1sum "$ZIP" | awk '{print $1}')
+          [ "$actual_sha1" = "$NDK_SHA1" ] || { echo "NDK sha1 不符: $actual_sha1"; exit 1; }
+          unzip -q "$ZIP" -d "$WORK_DIR/ndk"
+          TOOLCHAIN="$WORK_DIR/ndk/android-ndk-$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64"
+          # 与 build-opencv.sh:51 同一探针（aarch64-linux-android$API-clang）
+          [ -x "$TOOLCHAIN/bin/aarch64-linux-android${API}-clang" ] \
+            || { echo "解包后无 aarch64-linux-android${API}-clang: $TOOLCHAIN"; exit 1; }
+          echo "[OK] NDK 就位: $TOOLCHAIN"
+
+      - name: 编译 libimgnative.so
+        run: |
+          # kleidicv 走 gitlab.arm.com 的 release 包：CI 首次跑须从下方日志的
+          # `kleidicv 状态:` 一行读 ON/OFF（软降级不 fatal，结论也写进 SHASUMS256 审计行）。
+          bash node-runtime-build/scripts/build-opencv.sh 2>&1 | tee /tmp/build-opencv.log
+          grep -q '完成。产物' /tmp/build-opencv.log || { echo "构建日志无完成行"; exit 1; }
+          grep 'kleidicv 状态:' /tmp/build-opencv.log
+
+      - name: 产物审计（16KB LOAD + NEEDED 白名单 + 审计行）
+        run: |
+          cat "$WORK_DIR/out-opencv/SHASUMS256"
+          ls -l "$WORK_DIR/out-opencv/libimgnative.so"
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libimgnative
+          path: |
+            work/out-opencv/libimgnative.so
+            work/out-opencv/SHASUMS256
+          if-no-files-found: error

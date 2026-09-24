@@ -1,6 +1,16 @@
-# :node-runtime-build —— Node 24（arm64·Android）自建管线
+# :node-runtime-build —— Node 24 / OpenCV 4.14（arm64·Android）自建管线
 
-非 Gradle 模块（docs §3）：产出 **16KB 对齐的 `libnode.so`** 与 `node` 可执行，供 `:bridge:native`（dlopen + `node::Start`）与 §844 垂直切片使用。**本机无 Android SDK**，构建+门禁都在本管线内完成（Docker 或 CI），不占 Gradle assemble。
+非 Gradle 模块（docs §3）：两条**独立**构建轨，共居一个版本矩阵（`VERSIONS.env`）与同一套 16KB 门禁纪律，但**产物、门禁项、可信链都不共用**：
+
+| 轨 | 脚本 | 产物 | 用途 | CI |
+|---|---|---|---|---|
+| Node 24 | `scripts/fetch-and-build.sh` | `libnode.so.137` + `node` | `:bridge:native` dlopen 宿主引擎、§844 垂直切片 | `Dockerfile`（体量 ~600MB 源码 + 半小时级，不进 PR 门） |
+| OpenCV 4.14.0 | `scripts/build-opencv.sh` | `libimgnative.so` | `:bridge:image` 图像分析管线（JNI 装载，不进 Node） | `.github/workflows/image-native.yml` |
+
+OpenCV 轨 20 分钟级，故单独走 PR 门（改了图像构建面就跑，路径过滤）；Node 轨不进 PR 门，构建门由 Dockerfile 承担。
+
+> 下方「为什么自建」起的各节都是 **Node 轨**视角（冻结版本矩阵里 NDK/ABI 行两轨共用）；
+> OpenCV 轨单列在文末「OpenCV 轨（`libimgnative.so`）」，版本矩阵另见 `VERSIONS.env` 的 OpenCV 块与 RISKS §13。
 
 ## 为什么自建（短版）
 
@@ -37,18 +47,35 @@ ls out/          # node  libnode.so.137*  SHASUMS256  config.gypi  config.mk
 | `out/config.gypi` + `out/config.mk` | 平台契约审计（config.gypi 的 JSON `variables.OS=android` / `node_shared=true`） |
 | `out/SHASUMS256` | 产物基表（发布/增量比对） |
 
-## 硬门禁（`check-alignment.sh`，build 尾部必过）
+## 硬门禁（Node 轨：`check-alignment.sh`，build 尾部必过）
 
 1. **16KB**：每个 `LOAD` 段 `align >= 2**14`（`llvm-objdump -p`；未对齐在新设备 dlopen 即崩）——r28 链接器默认满足，门禁是最终仲裁。
 2. **平台**：`config.gypi` 的 `variables.OS == "android"` 且 `node_shared == true`（`config.mk` 只含 `BUILDTYPE`/`NODE_TARGET_TYPE`，CLI 参数不回显；JSON 键才是契约证据）。
 3. **ABI**：存在 `libnode.so.<137>`（预编译 `.node` addon 必须同号，见 RISKS §4）。
 
-## 升级流程（一次提交）
+## 升级流程（一次提交，Node 轨）
 
 1. 改 `VERSIONS.env`（新 `NODE_VERSION` / `NODE_SHA256` 取自 `nodejs.org/dist/<v>/SHASUMS256.txt`；必要时一并评估 NDK）。
 2. 跑 Docker 全量重建，门禁 + 基表变化即回归证据。
 3. 交垂直切片验证（§844 里程碑：最小 `:node` 进程 `console.log` 回传）后合入。
 
+OpenCV 轨的升级同纪律但走它自己的门：改 `VERSIONS.env` 的 OpenCV/kleidicv 块 → `image-native.yml` 自动跑（改 `build-opencv.sh` 同触发）→ 看审计行的 kleidicv ON/OFF 与 NEEDED 白名单是否仍成立。
+
+## OpenCV 轨（`libimgnative.so`）
+
+```bash
+# 手工（与 CI 同一脚本）：先备好 $WORK/ndk/android-ndk-r28c 与 $WORK/src/opencv 的下载源
+WORK_DIR=/build bash scripts/build-opencv.sh
+ls out-opencv/    # libimgnative.so  SHASUMS256（旁带 kleidicv ON/OFF 审计行）
+```
+
+- 版本：OpenCV **4.14.0**（按 commit SHA `0654a42…` 固定）+ kleidicv pin `26.03`（md5 校验，上游 hal 里 grep 复核）。
+- 裁剪：`BUILD_LIST=core,imgproc,imgcodecs`；格式库 `libjpeg-turbo`/`libpng`/`zlib` 走树内源码（`BUILD_*=ON`），无外部下载。
+- `WITH_KLEIDICV` 保持**默认 ON**（AArch64+Android 默认开）——它**不含 `matchTemplate`/`imdecode`**，是给未来算子铺路；下载失败软降级，结论写进审计行。
+- 编译面：`imgnative.cpp`（纯计算核，零 JNI）+ `images_jni.cc`（装载面，全仓唯一 `#include <jni.h>`）两个 .cpp 一起链进同一个 so —— **只编计算核会得到一个没有 JNI 入口的 so**（2026-09-24 CI 实测：链接行不含装载面时产物缺 `Java_com_autoscript_platform_system_NativeImageAnalyzer_*`，Kotlin 侧 `loadOrNull()` 只会回 null，症状是"图分析全 NOT_IMPLEMENTED"而非编译错误）。脚本头部对两个源文件各做一次存在 assert。
+- 门禁（`check-opencv-alignment.sh`）：16KB LOAD 对齐 + AArch64/ET_DYN + **NEEDED 白名单（不许 `libopencv_*.so` = 静态链接的验收点）**。
+- 交付位：`app/build.gradle.kts` 的 `prepareEngineNativeLibs` 候选位含 `node-runtime-build/out-opencv/libimgnative.so`（或 `export LIBIMGNATIVE=…`）；**缺位只 warn 不 fail**（"选填纪律"与 addon 同）—— so 不在时 `images.*` 桥如实 `ERR_NOT_IMPLEMENTED`，不塞内存替身。
+
 ## 风险与决策记录
 
-见 [RISKS.md](RISKS.md)：上游停更自持、r28c 锁版（r27d 备选需手工对齐旗标但 configure 不读 LDFLAGS）、ICU 面、ABI 锁步 137、16KB 排查路径、`--openssl-no-asm` 取舍、minSdk 对齐纪律。
+见 [RISKS.md](RISKS.md)：上游停更自持、r28c 锁版（r27d 备选需手工对齐旗标但 configure 不读 LDFLAGS）、ICU 面、ABI 锁步 137、16KB 排查路径、`--openssl-no-asm` 取舍、minSdk 对齐纪律；OpenCV/kleidicv 轨的单列风险（软降级审计行、matchTemplate 不走 kleidicv、静态链接的 NEEDED 白名单）见 RISKS §13。
