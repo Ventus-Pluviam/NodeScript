@@ -36,6 +36,7 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 | `JdkZipArchiver` | **无**（`java.util.zip` 纯 JVM，整类真 IO 进单测） | zip-slip 先验后写（全包校验完才落字节）、目录/空目录往返、压缩 tmp+rename 原子落位、垃圾包如实 ERR_IO |
 | `AndroidSystemSettings` | `SettingsSystemOps`（`android.provider.Settings`） | 写前 canWrite 门（未授 → ERR_PERMISSION_DENIED 非 false）、已授权仍拒 → ERR_IO、读侧缺失 null 不拿 0/空串冒充、空白键拒 |
 | `AndroidNotificationPoster` | `NotificationOps`（`android.app.NotificationManager`） | 发前 canPost 门（未授 → ERR_PERMISSION_DENIED **非 false** —— 系统被拒时不抛异常直接丢弃，门禁必须在它前面）、空白正文拒、cancel 无回执（契约回 Unit 不编 Boolean）、默认 channel 懒建 |
+| `AndroidClipboard` | `ClipboardOps`（`android.content.ClipboardManager`） | 读空/后台受限 null 原样透传不编错误码、写侧无门禁不设探针、空串是真值（与 a11y 剪贴板同口径 `coerceToText`） |
 
 真机 ops 实现分别住 `WindowManagerOps.kt` / `PackageManagerOps.kt`（这两个文件里有真
 `WindowManager`/`PackageManager` 调用，本机 JVM 只编译、不执行）。
@@ -45,15 +46,16 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 - **铁律 3（每次操作有 TTL）**：`AndroidShellExecutor` 的超时是**实现者义务** ——
   到点 `destroyForcibly` 并抛 `ERR_TIMEOUT`，不是返回半截输出，更不是继续挂着。
 - **诚实上报**：`app.launch` 回 `false`、`currentPackage` 回 `null` 都是**答案**不是异常；
-  `dialogs` 的 `DialogHost` 没实现就**不提供**（注入侧留 null → 桥回 `ERR_NOT_IMPLEMENTED`），
-  绝不塞一个凑数实现。
+  未注入的实现**不提供**（注入侧留 null → 桥回 `ERR_NOT_IMPLEMENTED`；`dialogs` 生产已接，
+  构造在 `PlatformWiring.of`，单测缺省仍 null），绝不塞一个凑数实现。
 - **能力门禁不在这里**（§9.5）：`PermissionFacade` 住 `:app-service:*`，由装配层先判后取；
   本模块只处理"系统在调用现场拒绝"这一事实（折成分类错误或 null）。
 
 ## 尚未实现（别在文档里写成"差不多能用"）
 
-`dialogs`（`DialogHost`，overlay 真弹窗 + 通知回调，§14 P2）。
+`dialogs` 的 `DialogHost` 实现按 domain KDoc 住 `:platform:capabilities`（`AndroidDialogHost` + `device` 子包 `SystemDialogOps`），构造在 `PlatformWiring.of` —— 生产已接；本模块仍不造 `dialogs`（平台模块间无依赖边）。
 （datastore：`AndroidDataStore` + `SqliteKvOps`；zip：`JdkZipArchiver`；
-settings：`AndroidSystemSettings` + `SettingsSystemOps` —— 入口
-`SystemSpis.Bundle.{datastore,zip,settings}`；生产拼装仍待装配层拓扑决策 ——
-实现备好 ≠ 已接线，别在文档里写成"能用了"。）
+settings：`AndroidSystemSettings` + `SettingsSystemOps`；notification：`AndroidNotificationPoster` + `NotificationOps`；
+clipboard：`AndroidClipboard` + `ClipboardOps` —— 入口
+`SystemSpis.Bundle.{datastore,zip,settings,notification,clipboard}`；生产已接
+（`PlatformWiring.of` → `inject` → `installWithFiles` 喂独立缝）。）

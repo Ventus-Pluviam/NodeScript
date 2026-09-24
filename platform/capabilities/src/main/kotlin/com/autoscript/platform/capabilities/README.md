@@ -16,11 +16,11 @@ SPI 契约 ────── :domain  UiNodeTreeReader / UiActionExecutor / Inp
         ▲
         │  实现（两处，别混）
 内存可测形态 ──── 本模块  InMemoryUiTree / InMemoryInputProvider / ScreenshotSource(FrameProducer 缝)
-Android 真实现 ── :platform:system（SystemSpis.of）或 §9.1 的无障碍服务（待落地）
+Android 真实现 ── :platform:system（SystemSpis.of）与 `device/` 的无障碍服务（生产已接，见下表）
 ```
 
 挂载发生在装配层：`CapabilityNamespaces.*` 把 handler 折成 `:domain` 的
-`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，系统/存储面另有 `datastoreHandler`/`zipHandler`/`settingsHandler`/`notificationHandler` 四条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
+`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，系统/存储面另有 `datastoreHandler`/`zipHandler`/`settingsHandler`/`notificationHandler`/`clipboardHandler` 五条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
 
 ## 铁律在本模块的落点
 
@@ -45,12 +45,13 @@ Android 真实现 ── :platform:system（SystemSpis.of）或 §9.1 的无障�
 
 | 能力 | 语义层（本模块） | 真实现落点 |
 |---|---|---|
-| a11y | `A11yNamespaceHandler`（已就绪，只依赖 `:domain`） | `AccessibilityService` 遍历 `AccessibilityNodeInfo` + `dispatchGesture`，**待落地**（§9.1） |
-| screen | `ScreenNamespaceHandler` + `ScreenshotSource`（333ms 节流/会话/分类错误已就绪） | MediaProjection 会话 + `SnapshotAwareProducer` 的 Android 实现，**待落地**（§9.2） |
-| 系统五个 | `SystemNamespaces`（五个 handler） | `SystemSpis.of(context)` 已给四件（`shell`/`device`/`app`/`floatingWindow`）；`dialogs` 待 §14 P2 |
-| 存储三个（§9.6） | `DatastoreNamespaceHandler` / `ZipNamespaceHandler` / `SettingsNamespaceHandler`（三个独立注入缝，不入 `systemHandlers` 束） | `SystemSpis.of(context)` 三件齐（`AndroidDataStore`/`JdkZipArchiver`/`AndroidSystemSettings`）；**生产拼装待装配层拓扑决策** |
+| a11y | `A11yNamespaceHandler`（只依赖 `:domain`） | 生产已接（`device/AutoScriptAccessibilityService` + `A11yServiceHolder` + `SystemA11yBridge`：`AndroidUiTree`/`AndroidGestureInput`；服务未连桥如实 `ERR_SERVICE_DISABLED`） |
+| screen | `ScreenNamespaceHandler` + `ScreenshotSource`（333ms 节流/会话/分类错误） | a11y 截图路径生产已接（`AndroidFrameProducer` 经 `SystemA11yBridge`）；MediaProjection 高清会话仍待（换 producer 即插，§9.2） |
+| 系统五个 | `SystemNamespaces`（五个 handler） | `SystemSpis.of(context)` 给四件（`shell`/`device`/`app`/`floatingWindow`）；`dialogs` 生产已接（`AndroidDialogHost` + `device` 子包 `SystemDialogOps` 住本模块，构造在 `PlatformWiring.of`） |
+| 存储三个（§9.6） | `DatastoreNamespaceHandler` / `ZipNamespaceHandler` / `SettingsNamespaceHandler`（三个独立注入缝，不入 `systemHandlers` 束） | `SystemSpis.of(context)` 三件齐（`AndroidDataStore`/`JdkZipArchiver`/`AndroidSystemSettings`）；生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂独立缝） |
 | 通知 | `NotificationNamespaceHandler`（独立注入缝 `notificationHandler`；参数口径在本层，`POST_NOTIFICATIONS` 门禁在 SPI） | `SystemSpis.Bundle.notification` = `AndroidNotificationPoster`+`NotificationOps`（默认 channel 归实现，契约不暴露 `channelId`） |
+| 剪贴板 | `ClipboardNamespaceHandler`（独立注入缝 `clipboardHandler`；读空裸 `null`、写侧无门禁） | `SystemSpis.Bundle.clipboard` = `AndroidClipboard`+`ClipboardOps`（与 a11y 剪贴板同口径 `coerceToText`）；生产已接（同存储三件） |
 
 ## 尚未实现（别在文档里写成「差不多能用」）
 
-`AccessibilityService` 真实现、MediaProjection 会话真实现、root/Shizuku 输入通道（§9.3 P1）。
+MediaProjection 高清会话真实现、root/Shizuku 输入通道（§9.3 P1）。
