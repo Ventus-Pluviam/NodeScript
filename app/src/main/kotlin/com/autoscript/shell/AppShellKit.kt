@@ -285,6 +285,10 @@ object AppShellKit {
      * @param sensorsHandler `sensors` 命名空间实现（§12.2，经 `CapabilityNamespaces.sensors` 转接）；
      *   同 datastore 独立缝（P0 名单无运行时门禁，判据在 SPI，不入 [SystemHandlers]）；
      *   null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
+     * @param imagesHandler `images` 命名空间实现（§9.2，经 `CapabilityNamespaces.images` 转接）；
+     *   同 datastore 独立缝（图像面无共担门禁，`decode`/`matchTemplate`/`findImage`/`release`
+     *   四方法判据在 SPI，不入 [SystemHandlers]）；
+     *   null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param powerManagerHandler `power_manager` 命名空间实现（§8.7，由 Application 从
      *   `foregroundKeeper()` 账本现建 `PowerManagerNamespaceHandler(...).mount()` 后传入）；
      *   同 datastore 独立缝，不入 [SystemHandlers]；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
@@ -307,6 +311,7 @@ object AppShellKit {
         notificationHandler: NamespaceHandler? = null,
         clipboardHandler: NamespaceHandler? = null,
         sensorsHandler: NamespaceHandler? = null,
+        imagesHandler: NamespaceHandler? = null,
         powerManagerHandler: NamespaceHandler? = null,
         systemHandlers: SystemHandlers? = null,
         /**
@@ -415,6 +420,7 @@ object AppShellKit {
             notificationHandler = notificationHandler,
             clipboardHandler = clipboardHandler,
             sensorsHandler = sensorsHandler,
+            imagesHandler = imagesHandler,
             powerManagerHandler = powerManagerHandler,
             systemHandlers = systemHandlers,
         )

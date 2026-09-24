@@ -309,13 +309,38 @@ internal fun BridgeRequestLite.requiredStrList(
     return v.items.map { (it as? A11yBridgeJson.Value.S)?.v ?: throw IllegalArgumentException("$key 必须是字符串数组") }
 }
 
-internal fun BridgeRequestLite.requiredRef(o: Map<String, A11yBridgeJson.Value>): HandleRef {
-    val v = o["ref"] ?: throw IllegalArgumentException("缺 ref 字段")
-    if (v !is A11yBridgeJson.Value.Obj) throw IllegalArgumentException("ref 必须是对象")
+/** 必填数字（JSON 数字原文 → Double；缺键/非数字 → IllegalArgumentException）。
+ * 置信度/阈值这类非整数量走它（optLong 只认整数，会悄悄把 `0.9` 挡成参数错）。 */
+internal fun BridgeRequestLite.requiredDouble(
+    o: Map<String, A11yBridgeJson.Value>,
+    key: String,
+): Double {
+    val v = o[key] ?: throw IllegalArgumentException("缺数字字段 $key")
+    return rawDouble(v, key)
+}
+
+/** 数字原文 → Double（拒绝 NaN/Infinity：wire 上送不着，实现侧也不该拿到）。 */
+private fun rawDouble(v: A11yBridgeJson.Value, key: String): Double {
+    if (v !is A11yBridgeJson.Value.N) throw IllegalArgumentException("字段 $key 必须是数字")
+    val d = v.raw.toDoubleOrNull() ?: throw IllegalArgumentException("字段 $key 不是数字: ${v.raw}")
+    if (!d.isFinite()) throw IllegalArgumentException("字段 $key 必须是有限数字")
+    return d
+}
+
+internal fun BridgeRequestLite.requiredRef(o: Map<String, A11yBridgeJson.Value>): HandleRef =
+    requiredRef(o, "ref")
+
+/** 句柄字段：键可配（一处请求带两个句柄时 —— `images.matchTemplate` 的 haystack/needle）。 */
+internal fun BridgeRequestLite.requiredRef(
+    o: Map<String, A11yBridgeJson.Value>,
+    key: String,
+): HandleRef {
+    val v = o[key] ?: throw IllegalArgumentException("缺 $key 字段")
+    if (v !is A11yBridgeJson.Value.Obj) throw IllegalArgumentException("$key 必须是对象")
     val refId = (v.fields["refId"] as? A11yBridgeJson.Value.N)?.raw?.toLongOrNull()
-        ?: throw IllegalArgumentException("缺数字 ref.refId")
+        ?: throw IllegalArgumentException("缺数字 $key.refId")
     val gen = (v.fields["generation"] as? A11yBridgeJson.Value.N)?.raw?.toLongOrNull()
-        ?: throw IllegalArgumentException("缺数字 ref.generation")
+        ?: throw IllegalArgumentException("缺数字 $key.generation")
     return HandleRef(refId, gen)
 }
 

@@ -1,6 +1,7 @@
 package com.autoscript.shell
 
 import android.content.Context
+import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.system.DialogHost
 import com.autoscript.platform.capabilities.AndroidDialogHost
@@ -42,8 +43,9 @@ import com.autoscript.platform.system.SystemSpis
 object PlatformWiring {
 
     /**
-     * `AppShellKit.assemble` 的能力注入束：六个独立缝（存储/通知/剪贴板/传感器面，§12.2 接线表）
-     * + 五命名空间束（共担门禁的系统面）。形状与 assemble 的参数一一对应，少一层猜。
+     * `AppShellKit.assemble` 的能力注入束：七条独立缝（存储/通知/剪贴板/传感器/图像面，
+     * §12.2 接线表）+ 五命名空间束（共担门禁的系统面）。形状与 assemble 的参数一一对应，
+     * 少一层猜。
      */
     data class Injection(
         val a11yHandler: NamespaceHandler,
@@ -55,13 +57,24 @@ object PlatformWiring {
         val notificationHandler: NamespaceHandler,
         val clipboardHandler: NamespaceHandler,
         val sensorsHandler: NamespaceHandler,
+        /**
+         * `images` 独立缝（§9.2）：[ImageAnalyzer] 的真实现还等在 `:bridge:image` 的
+         * native 管线上（P1）——**这里刻意缺省 null**（生产桥回 `ERR_NOT_IMPLEMENTED`，
+         * 脚本拿不到一个看不见像素的假分析器）。字段在束里是为了与其余六条同形（图像面是第七条）：
+         * 真实现到位时只改 [inject] 一行 + `of` 的构造，`Injection` 形状不必动。
+         */
+        val imagesHandler: NamespaceHandler? = null,
     )
 
     /**
      * SPI 束 → 注入束（纯转接：不解释 payload、不吞错误、不做权限判断）。
      * [dialogs] 缺省 null = 未提供（桥如实 ERR_NOT_IMPLEMENTED）；生产由 [of] 传真宿主。
      */
-    fun inject(spis: SystemSpis.Bundle, dialogs: DialogHost? = null): Injection = Injection(
+    fun inject(
+        spis: SystemSpis.Bundle,
+        dialogs: DialogHost? = null,
+        images: ImageAnalyzer? = null,
+    ): Injection = Injection(
         // 树+动作同一个实例（句柄注册表共享，同 InMemoryUiTree 双身份形态）；
         // 事件流缺省 A11yEventRing.shared（服务 push / 树读同一环）。
         a11yHandler = a11yHandler(),
@@ -80,6 +93,9 @@ object PlatformWiring {
         notificationHandler = CapabilityNamespaces.notification(spis.notification),
         clipboardHandler = CapabilityNamespaces.clipboard(spis.clipboard),
         sensorsHandler = CapabilityNamespaces.sensors(spis.sensors),
+        // §9.2 图像面：真实现（:bridge:image native 管线，P1）未到位前生产侧不喂 ——
+        // 桥对 images.* 如实 ERR_NOT_IMPLEMENTED，绝不塞一个看不见像素的假分析器。
+        imagesHandler = images?.let { CapabilityNamespaces.images(it) },
     )
 
     /** a11y 装配（[CapabilityNamespaces.a11y] 形状转接；实现在 :platform:capabilities）。 */

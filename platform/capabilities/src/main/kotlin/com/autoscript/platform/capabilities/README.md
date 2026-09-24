@@ -1,6 +1,7 @@
 # :platform:capabilities —— 能力命名空间语义层
 
-> 设计章节：`docs/framework-design.md` §9.1–9.4 / §12.2 / §12.3。
+> 设计章节：`docs/framework-design.md` §9.1–9.4 / §12.2 / §12.3
+> （§9.2 图像分析面 = `ImagesNamespaceHandler`，本模块第七个桥面）。
 > 本文件只记**本模块内部**的分层约定与「真实现怎么接」；跨模块契约以 `:domain` 为准。
 
 ## 分层（§12.2「分两层」的上面那层）
@@ -10,9 +11,10 @@ JS facade (bridge/js/src/a11y.ts …)
         │  bridge invoke('a11y','findOne',…)
         ▼
 handler 语义层 ── 本模块  A11yNamespaceHandler / ScreenNamespaceHandler / SystemNamespaces
+                         ImagesNamespaceHandler（图像面，单独成文件——无共担门禁）
         │  参数校验 / 信封编码 / 错误码分类（无 Android 接触面）
         ▼
-SPI 契约 ────── :domain  UiNodeTreeReader / UiActionExecutor / InputProvider / FrameSource / SystemContracts
+SPI 契约 ────── :domain  UiNodeTreeReader / UiActionExecutor / InputProvider / FrameSource / ImageAnalyzer / SystemContracts
         ▲
         │  实现（两处，别混）
 内存可测形态 ──── 本模块  InMemoryUiTree / InMemoryInputProvider / ScreenshotSource(FrameProducer 缝)
@@ -20,7 +22,7 @@ Android 真实现 ── :platform:system（SystemSpis.of）与 `device/` 的无
 ```
 
 挂载发生在装配层：`CapabilityNamespaces.*` 把 handler 折成 `:domain` 的
-`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，系统/存储/传感器面另有 `datastoreHandler`/`zipHandler`/`settingsHandler`/`notificationHandler`/`clipboardHandler`/`sensorsHandler` 六条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
+`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，系统/存储/传感器面另有 `datastoreHandler`/`zipHandler`/`settingsHandler`/`notificationHandler`/`clipboardHandler`/`sensorsHandler`/`imagesHandler` 七条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
 
 ## 铁律在本模块的落点
 
@@ -52,7 +54,10 @@ Android 真实现 ── :platform:system（SystemSpis.of）与 `device/` 的无
 | 通知 | `NotificationNamespaceHandler`（独立注入缝 `notificationHandler`；参数口径在本层，`POST_NOTIFICATIONS` 门禁在 SPI） | `SystemSpis.Bundle.notification` = `AndroidNotificationPoster`+`NotificationOps`（默认 channel 归实现，契约不暴露 `channelId`） |
 | 剪贴板 | `ClipboardNamespaceHandler`（独立注入缝 `clipboardHandler`；读空裸 `null`、写侧无门禁） | `SystemSpis.Bundle.clipboard` = `AndroidClipboard`+`ClipboardOps`（与 a11y 剪贴板同口径 `coerceToText`）；生产已接（同存储三件） |
 | 传感器 | `SensorsNamespaceHandler`（独立注入缝 `sensorsHandler`；拉取式游标 `drain`，`on('change')` 只是 facade 节流轮询；delay 缺省 `NORMAL`） | `SystemSpis.Bundle.sensors` = `AndroidSensorSource`+`SensorOps`（P0 只做 motion/environment 名单；未知名→`ERR_NOT_SUPPORTED`、系统拒收→`ERR_SERVICE_DISABLED`）；生产已接（同存储三件） |
+| 图像面（§9.2） | `ImagesNamespaceHandler`（独立注入缝 `imagesHandler`；`decode`/`matchTemplate`/`findImage`/`release` 四方法，阈值一个键 `threshold`、域 `[0,1]`，未匹配回裸 `null` 不是异常；**单独成文件、刻意不住 `SystemNamespaces.kt`** —— 那五个共担 OVERLAY/ROOT/ADB_INPUT 门禁组，图像面没有门禁） | **生产刻意留 null**：真实现等 `:bridge:image` 的 native 管线（P1），`PlatformWiring.Injection.imagesHandler` 缺省 null → 桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`，绝不塞一个看不见像素的假分析器。帧表自管（`ScreenshotSource` 同套纪律：单调 refId + generation 恒 1 + `Mutex` 串行闸），`HandleRegistry` 住 `:bridge:java`、本模块黑名单碰不到 |
 
 ## 尚未实现（别在文档里写成「差不多能用」）
 
-MediaProjection 高清会话真实现、root/Shizuku 输入通道（§9.3 P1）。
+MediaProjection 高清会话真实现、root/Shizuku 输入通道（§9.3 P1）、
+`images` 的 native 分析面（`:bridge:image` 的 `findColor`/`matchTemplate` + OpenCV 静态链接，
+§9.2 —— 桥面四方法与 `:domain` `ImageAnalyzer` SPI 已就位，缺的是能看见像素的实现）。

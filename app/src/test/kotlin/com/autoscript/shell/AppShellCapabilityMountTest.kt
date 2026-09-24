@@ -64,6 +64,7 @@ class AppShellCapabilityMountTest {
             notificationHandler = map["notification"],
             clipboardHandler = map["clipboard"],
             sensorsHandler = map["sensors"],
+            imagesHandler = map["images"],
             // S8.7: power_manager drives the ledger straight; tests feed a keeper on demand.
             powerManagerHandler = keeper?.let { PowerManagerNamespaceHandler(it.wakeLocks(), it).mount() },
         )
@@ -142,6 +143,19 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 images：decode 回帧体、findImage 命中体。可达性替身（像素语义归 :bridge:image）。 */
+    private val fakeImages = NamespaceHandler { request ->
+        when (request.method) {
+            "decode" -> BridgeResponse.Ok(request.id, """{"ref":{"refId":1,"generation":1},"width":1080,"height":2400}""")
+            "findImage", "matchTemplate" -> BridgeResponse.Ok(
+                request.id,
+                """{"x":12,"y":34,"width":100,"height":50,"confidence":0.97}""",
+            )
+            "release" -> BridgeResponse.Ok(request.id, "true")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeImages only decode/findImage/matchTemplate/release")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -156,6 +170,7 @@ class AppShellCapabilityMountTest {
             "a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm,
             "datastore" to fakeDatastore, "zip" to fakeZip, "settings" to fakeSettings,
             "notification" to fakeNotification, "clipboard" to fakeClipboard, "sensors" to fakeSensors,
+            "images" to fakeImages,
         )
         s.use {
             val a11yResp = s.router.dispatch(
@@ -206,6 +221,12 @@ class AppShellCapabilityMountTest {
             )
             assertEquals("{\"refId\":1,\"generation\":1}", (sensorResp as BridgeResponse.Ok).payload)
 
+            // images：decode 回帧三字段（可达性替身；真语义在 capabilities 侧测）
+            val imgResp = s.router.dispatch(
+                BridgeRequest(12, "images", "decode", """{"path":"/sdcard/icon.png"}""", 5_000),
+            )
+            assertEquals("{\"ref\":{\"refId\":1,\"generation\":1},\"width\":1080,\"height\":2400}", (imgResp as BridgeResponse.Ok).payload)
+
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
                 BridgeRequest(3, "console", "log", """{"level":"log","text":"hi"}""", 5_000),
@@ -255,8 +276,13 @@ class AppShellCapabilityMountTest {
 
             val sensorResp = s.router.dispatch(BridgeRequest(9, "sensors", "register", "{\"name\":\"accelerometer\"}", 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (sensorResp as BridgeResponse.Err).errorCode, "sensors 独立缝缺省同样不伪造")
+            val imgResp = s.router.dispatch(
+                BridgeRequest(10, "images", "decode", """{"path":"/sdcard/icon.png"}""", 5_000),
+            )
+            assertEquals("ERR_NOT_IMPLEMENTED", (imgResp as BridgeResponse.Err).errorCode, "images 独立缝缺省同样不伪造")
+
             val powerResp = s.router.dispatch(
-                BridgeRequest(10, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
+                BridgeRequest(11, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
             )
             assertEquals("ERR_NOT_IMPLEMENTED", (powerResp as BridgeResponse.Err).errorCode, "power_manager 独立缝缺省同样不伪造")
         }
