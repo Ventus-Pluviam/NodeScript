@@ -5,6 +5,7 @@ import com.autoscript.domain.storage.DataStore
 import com.autoscript.domain.storage.SystemSettings
 import com.autoscript.domain.storage.ZipArchiver
 import com.autoscript.domain.system.AppLauncher
+import com.autoscript.domain.system.Clipboard
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.FloatingWindowHost
 import com.autoscript.domain.system.NotificationPoster
@@ -23,7 +24,7 @@ import com.autoscript.domain.system.ShellExecutor
  * **`dialogs` 仍不在此造**（理由从"待 P2"变成"分层归属"）：`DialogHost` 实现按
  * domain KDoc 约定住 `:platform:capabilities`（`AndroidDialogHost` 编排 +
  * `SystemDialogOps` 设备面），而平台模块之间没有依赖边 —— 构造归装配层
- * `PlatformWiring.of`（同 `overlayAvailable` 参数一并传入）。本类八件不变。
+ * `PlatformWiring.of`（同 `overlayAvailable` 参数一并传入）。本类九件不变。
  *
  * 构造点在装配层（持有 `Context` 的 Android 侧）；本类不做权限判断（§9.5：
  * 门禁在 `PermissionFacade`，先判后取）。
@@ -31,7 +32,7 @@ import com.autoscript.domain.system.ShellExecutor
 object SystemSpis {
 
     /**
-     * 本模块当前能提供的八件（见 [Bundle] 字段注释）。
+     * 本模块当前能提供的九件（见 [Bundle] 字段注释）。
      * `overlayAvailable` 缺省恒假 —— 悬浮窗走 `TYPE_APPLICATION_OVERLAY`；
      * a11y 服务在跑时由上层传 `{ true }` 换成 `TYPE_ACCESSIBILITY_OVERLAY`。
      */
@@ -52,11 +53,12 @@ object SystemSpis {
             zip = JdkZipArchiver(),
             settings = AndroidSystemSettings(SettingsSystemOps(app)),
             notification = AndroidNotificationPoster(NotificationOps(app)),
+            clipboard = AndroidClipboard(ClipboardOps(app)),
         )
     }
 
     /**
-     * 八个 SPI 实现（`dialogs` 缺位，见 [SystemSpis] 的 KDoc）。
+     * 九个 SPI 实现（`dialogs` 缺位，见 [SystemSpis] 的 KDoc）。
      * 字段声明成 SPI 类型而非具体类：上层只该看见 `:domain` 的契约。
      *
      * `datastore` 是 SPI 束的成员、**不是** `systemHandlers` 束的成员：
@@ -72,5 +74,6 @@ object SystemSpis {
         val zip: ZipArchiver,
         val settings: SystemSettings,
         val notification: NotificationPoster,
+        val clipboard: Clipboard,
     )
 }

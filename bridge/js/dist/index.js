@@ -28,6 +28,7 @@ const datastore_1 = require("./datastore");
 const zip_1 = require("./zip");
 const settings_1 = require("./settings");
 const notification_1 = require("./notification");
+const clipboard_1 = require("./clipboard");
 const power_1 = require("./power");
 /** workManager 命名空间（scheduler 面：每日/一次性/cron 排期工具函数，运行态挂全局任务表）。 */
 exports.workManagerNS = { daily: workManager_1.daily, once: workManager_1.once, cron: workManager_1.cron, fromInput: workManager_1.fromInput, nextFireAfter: workManager_1.nextFireAfter, nextCronFireAfter: workManager_1.nextCronFireAfter, createTimedTask: workManager_1.createTimedTask, cancelTask: workManager_1.cancelTask, listTasks: workManager_1.listTasks };
@@ -50,6 +51,7 @@ exports.auto = {
     get zip() { return zip_1.zip; },
     get settings() { return settings_1.settings; },
     get notification() { return notification_1.notification; },
+    get clipboard() { return clipboard_1.clipboard; },
     get power() { return power_1.power; },
     get envelope() { return bridge_1.BridgeEnvelope; },
     /** 安装桥宿主（单例；重复安装抛错）。 */

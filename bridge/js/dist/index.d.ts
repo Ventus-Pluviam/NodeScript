@@ -21,6 +21,7 @@ import { datastore } from './datastore';
 import { zip } from './zip';
 import { settings } from './settings';
 import { notification } from './notification';
+import { clipboard } from './clipboard';
 import { power } from './power';
 import { InvokeHandler } from './bridge';
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload };
@@ -56,6 +57,7 @@ export declare const auto: {
     readonly zip: typeof zip;
     readonly settings: typeof settings;
     readonly notification: typeof notification;
+    readonly clipboard: typeof clipboard;
     readonly power: typeof power;
     readonly envelope: typeof BridgeEnvelope;
     /** 安装桥宿主（单例；重复安装抛错）。 */

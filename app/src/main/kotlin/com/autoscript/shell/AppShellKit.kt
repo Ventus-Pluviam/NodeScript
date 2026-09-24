@@ -279,6 +279,8 @@ object AppShellKit {
      *   null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param notificationHandler `notification` 命名空间实现（§12.2，经 `CapabilityNamespaces.notification` 转接）；
      *   同 datastore 独立缝（`POST_NOTIFICATIONS` 判据在 SPI，不入 [SystemHandlers]）；
+     * @param clipboardHandler `clipboard` 命名空间实现（§12.2，经 `CapabilityNamespaces.clipboard` 转接）；
+     *   同 datastore 独立缝（剪贴板无门禁，判据在 SPI，不入 [SystemHandlers]）；
      *   null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param powerManagerHandler `power_manager` 命名空间实现（§8.7，由 Application 从
      *   `foregroundKeeper()` 账本现建 `PowerManagerNamespaceHandler(...).mount()` 后传入）；
@@ -300,6 +302,7 @@ object AppShellKit {
         zipHandler: NamespaceHandler? = null,
         settingsHandler: NamespaceHandler? = null,
         notificationHandler: NamespaceHandler? = null,
+        clipboardHandler: NamespaceHandler? = null,
         powerManagerHandler: NamespaceHandler? = null,
         systemHandlers: SystemHandlers? = null,
         /**
@@ -406,6 +409,7 @@ object AppShellKit {
             zipHandler = zipHandler,
             settingsHandler = settingsHandler,
             notificationHandler = notificationHandler,
+            clipboardHandler = clipboardHandler,
             powerManagerHandler = powerManagerHandler,
             systemHandlers = systemHandlers,
         )

@@ -244,6 +244,7 @@ class AppShellApplication : Application(), HostSummary {
                 zipHandler = wiring.zipHandler,
                 settingsHandler = wiring.settingsHandler,
                 notificationHandler = wiring.notificationHandler,
+                clipboardHandler = wiring.clipboardHandler,
                 // §8.7 脚本电源面：账本是 foregroundKeeper() 持有的进程级单例（`onCreate`
                 // 先于装配起，见 [onCreate]），现建 handler 喂独立缝 —— 脚本锁与框架锁
                 // 同一本账，引用计数共存，框架 stop 只放框架自己的那一份。

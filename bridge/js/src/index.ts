@@ -22,6 +22,7 @@ import { datastore } from './datastore'
 import { zip } from './zip'
 import { settings } from './settings'
 import { notification } from './notification'
+import { clipboard } from './clipboard'
 import { power } from './power'
 import { InvokeHandler } from './bridge'
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload }
@@ -49,6 +50,7 @@ export const auto = {
   get zip(): typeof zip { return zip },
   get settings(): typeof settings { return settings },
   get notification(): typeof notification { return notification },
+  get clipboard(): typeof clipboard { return clipboard },
   get power(): typeof power { return power },
   get envelope(): typeof BridgeEnvelope { return BridgeEnvelope },
 

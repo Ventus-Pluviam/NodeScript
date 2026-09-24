@@ -204,6 +204,14 @@ class AppShell(
              */
             notificationHandler: NamespaceHandler? = null,
             /**
+             * `clipboard` 命名空间实现（§12.2 剪贴板面）：同 [datastoreHandler] 的**独立**缝 ——
+             * 剪贴板无门禁（读受限是系统的 null 答案、写不受限，判据在 SPI 自己身上），
+             * 与五命名空间不共担，故也不入 [SystemHandlers]。实现经
+             * `:platform:capabilities` 的 `CapabilityNamespaces.clipboard(clipboard)` 转接；
+             * null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`（不伪造可用）。
+             */
+            clipboardHandler: NamespaceHandler? = null,
+            /**
              * `power_manager` 命名空间实现（§8.7 脚本电源面）：同 [datastoreHandler] 的**独立**缝 ——
              * 电源面无共担门禁（`WAKE_LOCK` 是安装时授予的 normal 权限，判定在账本与系统侧），
              * 不入 [SystemHandlers] 束。生产由 Application 从 `foregroundKeeper()` 的账本现建
@@ -244,6 +252,7 @@ class AppShell(
             if (zipHandler != null) router.register("zip", zipHandler)
             if (settingsHandler != null) router.register("settings", settingsHandler)
             if (notificationHandler != null) router.register("notification", notificationHandler)
+            if (clipboardHandler != null) router.register("clipboard", clipboardHandler)
             if (powerManagerHandler != null) router.register("power_manager", powerManagerHandler)
             systemHandlers?.registerAll(router::register)
 

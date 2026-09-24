@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test
  * 覆盖三件事：
  * 1. 注入 `a11y`/`screen`/`npm` 缝 → 请求可达真实逻辑（这里用内存假实现，等价于
  *    `:platform:capabilities` 的真实现与 `:app-service:packager` 的 npm 真实现）；
- * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*`/`power_manager.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
+ * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*`/`clipboard.*`/`power_manager.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
  *    **绝不伪造可用**；
  * 3. `console`/`engines` 与能力缝共存，互不抢占 namespace。
  */
@@ -62,6 +62,7 @@ class AppShellCapabilityMountTest {
             zipHandler = map["zip"],
             settingsHandler = map["settings"],
             notificationHandler = map["notification"],
+            clipboardHandler = map["clipboard"],
             // S8.7: power_manager drives the ledger straight; tests feed a keeper on demand.
             powerManagerHandler = keeper?.let { PowerManagerNamespaceHandler(it.wakeLocks(), it).mount() },
         )
@@ -122,6 +123,15 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 clipboard：getText 空剪贴板裸 null、setText 回 true。可达性替身。 */
+    private val fakeClipboard = NamespaceHandler { request ->
+        when (request.method) {
+            "getText" -> BridgeResponse.Ok(request.id, "null")
+            "setText" -> BridgeResponse.Ok(request.id, "true")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeClipboard only getText/setText")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -135,7 +145,7 @@ class AppShellCapabilityMountTest {
         val s = shell(
             "a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm,
             "datastore" to fakeDatastore, "zip" to fakeZip, "settings" to fakeSettings,
-            "notification" to fakeNotification,
+            "notification" to fakeNotification, "clipboard" to fakeClipboard,
         )
         s.use {
             val a11yResp = s.router.dispatch(
@@ -175,6 +185,11 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(9, "notification", "post", """{"id":1,"text":"跑完了"}""", 5_000),
             )
             assertEquals("true", (notifResp as BridgeResponse.Ok).payload)
+
+            val clipResp = s.router.dispatch(
+                BridgeRequest(10, "clipboard", "getText", null, 5_000),
+            )
+            assertEquals("null", (clipResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -219,8 +234,11 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(7, "notification", "post", """{"id":1,"text":"跑完了"}""", 5_000),
             )
             assertEquals("ERR_NOT_IMPLEMENTED", (notifResp as BridgeResponse.Err).errorCode, "notification 独立缝缺省同样不伪造")
+
+            val clipResp = s.router.dispatch(BridgeRequest(8, "clipboard", "getText", null, 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (clipResp as BridgeResponse.Err).errorCode, "clipboard 独立缝缺省同样不伪造")
             val powerResp = s.router.dispatch(
-                BridgeRequest(8, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
+                BridgeRequest(9, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
             )
             assertEquals("ERR_NOT_IMPLEMENTED", (powerResp as BridgeResponse.Err).errorCode, "power_manager 独立缝缺省同样不伪造")
         }

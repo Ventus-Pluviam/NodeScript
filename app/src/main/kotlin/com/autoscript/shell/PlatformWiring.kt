@@ -42,7 +42,7 @@ import com.autoscript.platform.system.SystemSpis
 object PlatformWiring {
 
     /**
-     * `AppShellKit.assemble` 的能力注入束：四个独立缝（存储/通知面，§12.2 接线表）
+     * `AppShellKit.assemble` 的能力注入束：五个独立缝（存储/通知/剪贴板面，§12.2 接线表）
      * + 五命名空间束（共担门禁的系统面）。形状与 assemble 的参数一一对应，少一层猜。
      */
     data class Injection(
@@ -53,6 +53,7 @@ object PlatformWiring {
         val zipHandler: NamespaceHandler,
         val settingsHandler: NamespaceHandler,
         val notificationHandler: NamespaceHandler,
+        val clipboardHandler: NamespaceHandler,
     )
 
     /**
@@ -76,6 +77,7 @@ object PlatformWiring {
         zipHandler = CapabilityNamespaces.zip(spis.zip),
         settingsHandler = CapabilityNamespaces.settings(spis.settings),
         notificationHandler = CapabilityNamespaces.notification(spis.notification),
+        clipboardHandler = CapabilityNamespaces.clipboard(spis.clipboard),
     )
 
     /** a11y 装配（[CapabilityNamespaces.a11y] 形状转接；实现在 :platform:capabilities）。 */
