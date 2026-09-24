@@ -47,7 +47,7 @@ Node 的 `deps/zlib` 源集跟随 Chromium 的 `BUILD.gn`：`cpu_features.c` 在
 
 ## 13. OpenCV/kleidicv 轨（`build-opencv.sh`，2026-09-25 记账）
 
-与 Node 轨**不共 out/**：产物名、门禁项、可信链校验源都不同（本轨产 `libimgnative.so`，无 `config.gypi`/`libnode.so.<137>` 契约），合目录会让 `check-alignment.sh` 的 Node 专属断言误扫图像产物。两轨共用 NDK zip 与 `ANDROID_API`。
+与 Node 轨**不共 out/**：产物名、门禁项、可信链校验源都不同（本轨产 `libopencv.so`，无 `config.gypi`/`libnode.so.<137>` 契约），合目录会让 `check-alignment.sh` 的 Node 专属断言误扫图像产物。两轨共用 NDK zip 与 `ANDROID_API`。
 
 - **kleidicv 是软降级，必须留审计行，且 OFF 的原因别猜**：`ocv_download` 失败只 WARNING 不 fatal，产物可能悄悄从"带 kleidicv 加速"变成"纯 OpenCV"而**功能不报错、体积缩小**。对策：pin 写死在 `VERSIONS.env`（`KLEIDICV_COMMIT=26.03` + md5），构建时 grep 上游 `hal/kleidicv/kleidicv.cmake` 的两处 pin（上游换 pin 即 die），收尾按 configure 摘要的 `Custom HAL: … KleidiCV (ver …)` 判 ON/OFF，并把**源码是否解包成功**这一独立事实一并写进审计行。**2026-09-24/25 连续两轮教训**（都是我在没读证据时下的结论）：① 首跑报 OFF，我说"gitlab.arm.com 网络不可达"——错，tarball 拉下来了（md5 与 pin 一致）、125 个 `.cpp` 照编、6 个 target 全 `Built`。② 改抓"三个可判读事实"后仍是 OFF，我猜"下了但 OpenCV 没认"——**还是错，其实是采集点错了**：上游 `cmake/OpenCVFindLibsPerf.cmake:218/224` 只 `set(HAVE_KLEIDICV ON)`、**无 CACHE**，`CMakeCache.txt` 里从来不存在 `HAVE_KLEIDICV:BOOL=` 这一项，grep 它必然空手。③ 终局证据（交付 so 实测）：含 42 个 `kleidicv::hal::*` 符号与 `HAL implementation … ==> kleidicv::hal::…` dispatch 串、configure 摘要 `Custom HAL: YES (… KleidiCV (ver 26.03))`、`hal/kleidicv/…/adapters/opencv/kleidicv_hal.cpp.o` 照编 —— **kleidicv 一直是启用的**，两轮 OFF 全是我判错。**可判读性纪律**：ON/OFF 这类判定必须落在"上游真的会写出来的那一处"（这里是 configure 摘要），而不是某个看着像状态、实际没人写的文件；拿不准时先去看产物符号表——产物不会说谎。
 - **kleidicv 不覆盖我们要的算子**（上游 doc 实证）：它加速 add/sub/absdiff/cvtColor/GaussianBlur/Sobel/resize/… 但**不含 `matchTemplate`/`imdecode`**。开着是给未来算子铺路 + 现状不亏，**不要**拿它当找图提速的依据。

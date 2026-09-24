@@ -4,7 +4,7 @@ import com.autoscript.domain.bridge.HandleRef
 
 /**
  * 帧源 SPI（docs/framework-design.md §9.2，已有契约，本文件只补错误分类）。
- * 默认 a11y takeScreenshot（API34 333ms 节流）；会话式走 MediaProjection（Surface→ImageReader→libimgnative.so）。
+ * 默认 a11y takeScreenshot（API34 333ms 节流）；会话式走 MediaProjection（Surface→ImageReader→libopencv.so）。
  * FLAG_SECURE → ERR_SCREEN_LOCKED/ERR_BLACK_FRAME（§8.8），不返回黑图。
  */
 interface FrameSource {

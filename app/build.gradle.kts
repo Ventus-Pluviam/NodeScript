@@ -118,15 +118,16 @@ val prepareEngineNativeLibs = tasks.register("prepareEngineNativeLibs") {
         ndkHome,
         "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so",
     )
-    // libimgnative.so 候选位（§9.2 图像管线）：显式 env → node-runtime-build 出口
+    // libopencv.so 候选位（§9.2 图像管线）：显式 env → node-runtime-build 出口
     // （build-opencv.sh 的 OUT）→ image-native.yml 的 artifact 落点位。
     // 与引擎三件套**同一条选填纪律**：缺位不红（装配侧 JniOps.loadOrNull() 拿不到
     // so 即不喂分析器，桥对 images.* 回 ERR_NOT_IMPLEMENTED），在位才随包。
-    val libimgnativeCandidates = listOfNotNull(
-        System.getenv("LIBIMGNATIVE")?.let { File(it) },
+    // 装载名与文件名必须同为 opencv：JniOps.loadLibrary("opencv") 找的是 libopencv.so。
+    val libopencvCandidates = listOfNotNull(
+        System.getenv("LIBOPENCV")?.let { File(it) },
         rootProject.layout.projectDirectory
-            .file("node-runtime-build/out-opencv/libimgnative.so").asFile,
-        File("/tmp/img-native-out/libimgnative.so"),
+            .file("node-runtime-build/out-opencv/libopencv.so").asFile,
+        File("/tmp/img-opencv-out/libopencv.so"),
     )
     outputs.dir(engineNativeLibsDir)
     outputs.dir(engineAddonAssetsDir)
@@ -171,25 +172,25 @@ val prepareEngineNativeLibs = tasks.register("prepareEngineNativeLibs") {
             )
         }
 
-        // libimgnative.so（§9.2 图像面）：选填件，与引擎三件套同目录同纪律（有就随包，
+        // libopencv.so（§9.2 图像面）：选填件，与引擎三件套同目录同纪律（有就随包，
         // 无则不红 —— 装配侧据此不喂 images 分析器，脚本拿到的是诚实的 NOT_IMPLEMENTED）。
-        val libimg = libimgnativeCandidates.firstOrNull { it.isFile }
+        val libimg = libopencvCandidates.firstOrNull { it.isFile }
         if (libimg != null) {
             if (libimg.length() == 0L) {
                 throw GradleException(
-                    "libimgnative.so 源是 0 字节：${libimg.absolutePath}" +
+                    "libopencv.so 源是 0 字节：${libimg.absolutePath}" +
                         "（空 so 落包 = 运行期 UnsatisfiedLinkError，比缺件更难查）",
                 )
             }
-            libimg.copyTo(File(abiDir, "libimgnative.so"), overwrite = true)
+            libimg.copyTo(File(abiDir, "libopencv.so"), overwrite = true)
             logger.lifecycle(
-                "[engine-natives] libimgnative.so → lib/arm64-v8a/（§9.2 图像面；" +
+                "[engine-natives] libopencv.so → lib/arm64-v8a/（§9.2 图像面；" +
                     "source=${libimg.absolutePath}）",
             )
         } else {
             logger.warn(
-                "[engine-natives] libimgnative.so 未交付（候选位 = node-runtime-build/" +
-                    "out-opencv/ 或 export LIBIMGNATIVE=…）：images.* 运行时如实 " +
+                "[engine-natives] libopencv.so 未交付（候选位 = node-runtime-build/" +
+                    "out-opencv/ 或 export LIBOPENCV=…）：images.* 运行时如实 " +
                     "ERR_NOT_IMPLEMENTED —— 跑 node-runtime-build/scripts/build-opencv.sh " +
                     "或下载 image-native.yml 的 artifact。",
             )

@@ -7,13 +7,13 @@ import com.autoscript.domain.bridge.HandleRef
  * 对标 AutoJsPro v9 `images.matchTemplate/findImage` + `@autojs/opencv`）。
  *
  * 为什么住 `:domain`：与 [FrameSource] / `com.autoscript.domain.system.SensorSource`
- * 同一套理由 —— 真实现要碰 native 管线（`libimgnative.so`，OpenCV 4.x）与
+ * 同一套理由 —— 真实现要碰 native 管线（`libopencv.so`，OpenCV 4.x）与
  * `BitmapFactory`，§6 要求 `:platform:*` 只依赖 `:domain`；「拿什么帧、算什么」
  * 与「像素在哪、谁来遍历」切开，桥面 handler 才是纯 JVM 可测的。
  *
  * **P0 范围钉死在三个操作**（刻意不预支的面，逐条给理由）：
  * - **只有 `decode`/`matchTemplate`/`findImage`**（+ 对称的 [release]）：§9.2 管线图里的
- *   灰度/裁剪/缩放/旋转/找色/特征(ORB) 全在 `libimgnative.so`（P1）—— 那些操作**没有**
+ *   灰度/裁剪/缩放/旋转/找色/特征(ORB) 全在 `libopencv.so`（P1）—— 那些操作**没有**
  *   脚本消费方之前不开桥面。§12.3 文档示例里出现的 `captureScreen()`/`toGrayscale()`
  *   因此同步改写真形态（截图归 `auto.screen`，灰度归 P1 的 native 面）。
  * - **两个匹配方法同一个阈值键 `threshold`**：facade 曾一个发 `tolerance` 一个发

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# AutoScript :node-runtime-build —— OpenCV 4.14.0 静态链接 → libimgnative.so（aarch64-android）
+# AutoScript :node-runtime-build —— OpenCV 4.14.0 静态链接 → libopencv.so（aarch64-android）
 # 用法：构建容器内 `bash scripts/build-opencv.sh`（与 fetch-and-build.sh 同源同门禁）。
 # 职责：下载+校验 → cmake 交叉 configure（静态）→ strip → 16KB/ELF/NEEDED 门禁 → 基表。
 #
 # 与 Node 管线（fetch-and-build.sh）的分工：**不共用 out/** —— 产物名/门禁项都不同
-# （本脚本产 libimgnative.so，不含 config.gypi/libnode.so.<ABI> 契约），共目录会让
+# （本脚本产 libopencv.so，不含 config.gypi/libnode.so.<ABI> 契约），共目录会让
 # check-alignment.sh 的 Node 专属断言误扫。本次交付刻意只做 OpenCV 一条轨，不合并。
 set -euo pipefail
 
@@ -157,11 +157,12 @@ say "kleidicv 状态: $KLEIDI_STATE（源码=$KLEIDI_SRC）"
 say "make -j$(nproc) opencv_imgcodecs（连带 core/imgproc 静态库）"
 cmake --build "$BUILD_DIR" --target opencv_imgcodecs -j"$(nproc)"
 
-# ── 5) 我们的桥面 C++ + 静态链成 libimgnative.so ────────────────────────
+# ── 5) 我们的桥面 C++ + 静态链成 libopencv.so ───────────────────────────
 # 静态 STL：产物不依赖 libc++_shared.so（libnode 那条已有的 NEEDED 归装载面，见
 # engine/node-process/scripts/build-native.sh 同款决定）。
-IMG_LIB="$OUT/libimgnative.so"
-say "链 libimgnative.so（计算核 + 装载面 + 静态 opencv + 静态 STL）"
+# 产物名 = 装载名：Kotlin 侧 System.loadLibrary("opencv") 找的就是 libopencv.so。
+IMG_LIB="$OUT/libopencv.so"
+say "链 libopencv.so（计算核 + 装载面 + 静态 opencv + 静态 STL）"
 CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
 "$CXX" -std=c++17 -fPIC -O2 -Wall -Wextra \
     -Wl,-z,max-page-size=16384 -static-libstdc++ \
@@ -193,8 +194,8 @@ say "16KB/ELF/NEEDED 门禁"
 # ── 8) 基表 + 审计行 ────────────────────────────────────────────────────
 # kleidicv 状态进审计：产物 sha256 之外还要能回答"这个 so 里到底有没有 kleidicv 加速"。
 ( cd "$OUT" && {
-    sha256sum libimgnative.so | tee SHASUMS256
+    sha256sum libopencv.so | tee SHASUMS256
     printf 'build: opencv=%s commit=%s kleidicv_commit=%s kleidicv_state=%s kleidicv_src=%s platform=aarch64-android%s\n' \
         "$OPENCV_VERSION" "$OPENCV_COMMIT" "$KLEIDICV_COMMIT" "$KLEIDI_STATE" "$KLEIDI_SRC" "$ANDROID_API" >> SHASUMS256
   } )
-say "完成。产物: $OUT/libimgnative.so（kleidicv=$KLEIDI_STATE）"
+say "完成。产物: $OUT/libopencv.so（kleidicv=$KLEIDI_STATE）"

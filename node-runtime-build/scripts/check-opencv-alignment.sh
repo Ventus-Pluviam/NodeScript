@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AutoScript libimgnative.so 门禁（docs/framework-design.md §16 硬门禁；§9.2 图像管线）
+# AutoScript libopencv.so 门禁（docs/framework-design.md §16 硬门禁；§9.2 图像管线）
 # 用法: check-opencv-alignment.sh <llvm-readelf路径> <so路径> <clang++路径>
 # 与 Node 的 check-alignment.sh **不共用**（那边断言 libnode.so.<ABI>/config.gypi/node_shared，
 # 这些是 Node 产物契约，放这儿会让纯图像产物误扫）。三条断言全是 §16/§9.2 通用面：

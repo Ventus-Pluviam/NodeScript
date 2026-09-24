@@ -1,16 +1,16 @@
 name: image-native
 
-# libimgnative.so 构建（docs/framework-design.md §9.2 / §16）
+# libopencv.so 构建（docs/framework-design.md §9.2 / §16）
 #
 # 与 ci.yml 的分工：本文件**只**跑 OpenCV 静态链接 + 我们的桥面 C++ → 单个
-# libimgnative.so（arm64-android26），跑 node-runtime-build/scripts/build-opencv.sh
+# libopencv.so（arm64-android26），跑 node-runtime-build/scripts/build-opencv.sh
 # —— 同一脚本也由 node-runtime-build/Dockerfile 的 OpenCV 轨调用，两处同源同门禁。
 # Node 24 那条轨（fetch-and-build.sh → libnode.so）**不经本文件**：体量差一个量级
 # （600MB 源码 + 半小时以上），放进 PR 门会让每次改动都等一轮；libnode 的构建门
 # 由 node-runtime-build/Dockerfile 承担（见 ci.yml 末注）。
 #
 # 产物不随 APK 走：装配侧 app/build.gradle.kts 的 prepareEngineNativeLibs 候选位
-# 含 node-runtime-build/out-opencv/libimgnative.so，本 workflow 的 artifact 是给
+# 含 node-runtime-build/out-opencv/libopencv.so，本 workflow 的 artifact 是给
 # 人下载核验的（16KB 对齐 + NEEDED 白名单在脚本尾部已断言）。
 # 触发面（2026-09-25 修过一次"推了分支却没跑"）：
 # 初版写成 `push: branches:[main]` + `pull_request: paths:`，而 image-native 这类
@@ -40,8 +40,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-imgnative:
-    name: OpenCV 4.14.0 → libimgnative.so（arm64-android26，kleidicv 审计）
+  build-opencv:
+    name: OpenCV 4.14.0 → libopencv.so（arm64-android26，kleidicv 审计）
     runs-on: ubuntu-latest
     timeout-minutes: 90        # OpenCV 全量 configure+编译实测 15–30 分钟；CI 抢不到核时放宽
     env:
@@ -94,7 +94,7 @@ jobs:
             || { echo "解包后无 aarch64-linux-android${API}-clang: $TOOLCHAIN"; exit 1; }
           echo "[OK] NDK 就位: $TOOLCHAIN"
 
-      - name: 编译 libimgnative.so
+      - name: 编译 libopencv.so
         run: |
           # kleidicv 走 gitlab.arm.com 的 release 包：从下方日志的 `kleidicv 状态:`
           # 一行读 ON/OFF（判据是 configure 摘要的 Custom HAL，见脚本 3b 段；软降级不
@@ -106,13 +106,13 @@ jobs:
       - name: 产物审计（16KB LOAD + NEEDED 白名单 + 审计行）
         run: |
           cat "$WORK_DIR/out-opencv/SHASUMS256"
-          ls -l "$WORK_DIR/out-opencv/libimgnative.so"
+          ls -l "$WORK_DIR/out-opencv/libopencv.so"
 
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libimgnative
+          name: libopencv
           path: |
-            work/out-opencv/libimgnative.so
+            work/out-opencv/libopencv.so
             work/out-opencv/SHASUMS256
           if-no-files-found: error

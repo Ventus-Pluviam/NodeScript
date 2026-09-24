@@ -37,7 +37,7 @@ import com.autoscript.platform.system.SystemSpis
  * 桥如实 `ERR_SERVICE_DISABLED`（不伪造可用，也不必等 `onServiceConnected` 才装壳）。
  *
  * **`images` 生产已接**：[of] 构造 `NativeImageAnalyzer.of(JniOps.loadOrNull())`
- * —— `libimgnative.so`（`:bridge:image`，OpenCV 4.14 静态链接）缺位即整条不接，
+ * —— `libopencv.so`（`:bridge:image`，OpenCV 4.14 静态链接）缺位即整条不接，
  * 与 dialogs 同一条"缺件不伪造"纪律。
  *
  * **`dialogs` 生产已接**：[of] 用同一 `overlayAvailable` 构造
@@ -65,7 +65,7 @@ object PlatformWiring {
         val sensorsHandler: NamespaceHandler,
         /**
          * `images` 独立缝（§9.2）：[ImageAnalyzer] 的真实现 = `:bridge:image` 的 native
-         * 管线（`libimgnative.so`，OpenCV 静态链接）+ 本侧 `NativeImageAnalyzer`
+         * 管线（`libopencv.so`，OpenCV 静态链接）+ 本侧 `NativeImageAnalyzer`
          * （`:platform:system`，so 缺位即不构造）。**这里刻意缺省 null**：so 不在
          * （未跑 `build-opencv.sh` 的设备/CI JVM）时桥回 `ERR_NOT_IMPLEMENTED`，
          * 脚本拿不到一个看不见像素的假分析器。字段在束里与其余六条同形（图像面是第七条）。
@@ -101,7 +101,7 @@ object PlatformWiring {
         clipboardHandler = CapabilityNamespaces.clipboard(spis.clipboard),
         sensorsHandler = CapabilityNamespaces.sensors(spis.sensors),
         // §9.2 图像面：生产侧由 [of] 喂 NativeImageAnalyzer（:bridge:image 的
-        // libimgnative.so 到位后）；单测/无 native 时不喂 —— 桥对 images.* 如实
+        // libopencv.so 到位后）；单测/无 native 时不喂 —— 桥对 images.* 如实
         // ERR_NOT_IMPLEMENTED，绝不塞一个看不见像素的假分析器。
         imagesHandler = images?.let { CapabilityNamespaces.images(it) },
     )

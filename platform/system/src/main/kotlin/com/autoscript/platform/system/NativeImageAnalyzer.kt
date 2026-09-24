@@ -12,7 +12,7 @@ import kotlinx.coroutines.withContext
 /**
  * `images` 的宿主侧真实现（docs §9.2；SPI 见 `:domain` 的 [ImageAnalyzer]，
  * 语义层 handler 在 `:platform:capabilities` 的 `ImagesNamespaceHandler`）。
- * 像素计算全在 native（`libimgnative.so`，OpenCV 4.14 静态链接，
+ * 像素计算全在 native（`libopencv.so`，OpenCV 4.14 静态链接，
  * `:bridge:image` 的 `imgnative.cpp`）；本类只做三件**本机 JVM 可测**的事：
  *
  * 1. **句柄发号**：[HandleRef.refId] 单调递增、generation 恒 1（一个文件一个帧，
@@ -185,8 +185,9 @@ class NativeImageAnalyzer(
 }
 
 /**
- * so 装载面（[NativeImageAnalyzer.Ops] 的真机实现）：`System.loadLibrary`
- * + 三个 `external` native 方法。方法名与 `:bridge:image` 的 `images_jni.cc`
+ * so 装载面（[NativeImageAnalyzer.Ops] 的真机实现）：`System.loadLibrary("opencv")`
+ * 装载 `libopencv.so`（`:bridge:image` 产物）+ 三个 `external` native 方法。
+ * 方法名与 `:bridge:image` 的 `images_jni.cc`
  * 的 `Java_com_autoscript_platform_system_NativeImageAnalyzer_*` 对表 ——
  * **换包名/换类名必须同批改那边**（JNI 符号名是字符串约定，编译器不看护）。
  *
@@ -243,7 +244,7 @@ class JniOps : NativeImageAnalyzer.Ops {
          * 抓不到它，这里显式按 Throwable 收。
          */
         fun loadOrNull(): NativeImageAnalyzer.Ops? = try {
-            System.loadLibrary("imgnative")
+            System.loadLibrary("opencv")
             JniOps()
         } catch (_: Throwable) {
             null

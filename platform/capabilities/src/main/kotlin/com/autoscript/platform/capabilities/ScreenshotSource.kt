@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * 本类是 JVM 可测形态：帧内容由 [FrameProducer] 注入（内存假帧）；
  * Android 真实现 [AndroidFrameProducer] 已接（a11y `takeScreenshot`，节流/句柄/
- * 会话语义在本类不变）；MediaProjection ImageReader→libimgnative.so 是后续升级，
+ * 会话语义在本类不变）；MediaProjection ImageReader→libopencv.so 是后续升级，
  * 换 producer 即插。
  *
  * - 333ms 节流（a11y takeScreenshotOfWindow，API34）：同源连续 capture 按

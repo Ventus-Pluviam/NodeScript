@@ -1,4 +1,4 @@
-// bridge/image —— libimgnative.so 的 C++ 面（docs/framework-design.md §9.2）
+// bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
 //   - 只做三件事：decode 一帧、管帧表、按阈值做模板匹配；
@@ -7,7 +7,7 @@
 //     在本文件内就地折叠成状态码，绝不抛过 ABI 边界）。
 //
 // 为什么不是 JNI：这是**纯计算核**，唯一被允许 #include <jni.h> 的是装载侧的
-// images_jni.cc。本文件零 JNI 依赖 → 编进 libimgnative.so 的那一侧与宿主侧
+// images_jni.cc。本文件零 JNI 依赖 → 编进 libopencv.so 的那一侧与宿主侧
 // 编排互不相干，后续要加 host 侧单测也不必捎带 NDK 的 C runtime。
 //
 // 帧表所有权（§9.2）：本 TU 自管 unordered_map<refId, Mat>，单调发号、

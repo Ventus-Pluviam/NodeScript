@@ -1,4 +1,4 @@
-// bridge/image —— libimgnative.so 的装载面（docs/framework-design.md §9.2）
+// bridge/image —— libopencv.so 的装载面（docs/framework-design.md §9.2）
 //
 // 分工（与 imgnative.cpp 的两层切法）：
 //   - imgnative.cpp 是**纯计算核**：extern "C" 三入口（decode/match/release），
