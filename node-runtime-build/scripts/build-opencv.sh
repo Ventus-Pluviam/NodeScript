@@ -9,16 +9,30 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# ROOT_DIR = **仓库**根（不是 node-runtime-build/）。布局判据取**桥面 C++** 的落点（它在仓库根下，Dockerfile 平铺时会落进 /build/，
+# 而 VERSIONS.env 在两种布局里都挨着脚本）：找到 bridge/image/ 的那层即仓库根。
+# 找不到就如实 die —— 不静默 fallback 到 SCRIPT_DIR/..（CI 布局下那是错的一层，
+# 2026-09-24 连红三次：路径错层 / die 未定义 / 又是路径错层）。
+if [ -f "$SCRIPT_DIR/../../bridge/image/build.gradle.kts" ]; then
+    ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"      # 仓库内 / CI（node-runtime-build/scripts/）
+    VERSIONS="$SCRIPT_DIR/../VERSIONS.env"
+elif [ -f "$SCRIPT_DIR/../bridge/image/build.gradle.kts" ]; then
+    ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"          # Dockerfile 平铺（/build/）
+    VERSIONS="$SCRIPT_DIR/../VERSIONS.env"
+else
+    printf '[FATAL] 找不到 bridge/image（仓库根锚点）：既不在 %s 也不在 %s\n' \
+        "$SCRIPT_DIR/../.." "$SCRIPT_DIR/.." >&2
+    exit 1
+fi
 # shellcheck source=../VERSIONS.env
-source "$ROOT_DIR/VERSIONS.env"
+source "$VERSIONS"
 say() { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { printf '\033[1;31m[FATAL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # 桥面 C++ 住**仓库**根的 bridge/image/（Gradle 模块，不在 node-runtime-build 里）。
-# assert 而非默默跳过：CI 的 checkout 布局偶发/镜像平铺会把它指到 node-runtime-build/
-# 下面（2026-09-24 实测 [FATAL] 之前先撞上 "no such file or directory: .../node-runtime-build/
-# bridge/image/src/main/cpp/imgnative.cpp"，症状是 clang 报错而非本 die 的人话）。
+# 两个文件各 assert 一次：缺装载面比缺计算核更难查（so 有、门禁绿、loadLibrary 成功，
+# 首次调 native 方法才 UnsatisfiedLinkError → images.* 全 ERR_NOT_IMPLEMENTED，
+# 症状像"so 没交付"而不像"链接行漏文件"，见 RISKS.md §13）。
 IMG_CPP_DIR="$ROOT_DIR/bridge/image/src/main/cpp"
 [ -f "$IMG_CPP_DIR/imgnative.cpp" ] || die "桥面计算核缺失: $IMG_CPP_DIR/imgnative.cpp"
 [ -f "$IMG_CPP_DIR/images_jni.cc" ] || die "桥面装载面缺失: $IMG_CPP_DIR/images_jni.cc（JNI 符号名 Kotlin 侧与之对表，缺一即不装）"
