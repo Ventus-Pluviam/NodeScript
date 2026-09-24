@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test
  * 覆盖三件事：
  * 1. 注入 `a11y`/`screen`/`npm` 缝 → 请求可达真实逻辑（这里用内存假实现，等价于
  *    `:platform:capabilities` 的真实现与 `:app-service:packager` 的 npm 真实现）；
- * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*`/`clipboard.*`/`power_manager.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
+ * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*`/`clipboard.*`/`sensors.*`/`power_manager.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
  *    **绝不伪造可用**；
  * 3. `console`/`engines` 与能力缝共存，互不抢占 namespace。
  */
@@ -63,6 +63,7 @@ class AppShellCapabilityMountTest {
             settingsHandler = map["settings"],
             notificationHandler = map["notification"],
             clipboardHandler = map["clipboard"],
+            sensorsHandler = map["sensors"],
             // S8.7: power_manager drives the ledger straight; tests feed a keeper on demand.
             powerManagerHandler = keeper?.let { PowerManagerNamespaceHandler(it.wakeLocks(), it).mount() },
         )
@@ -132,6 +133,15 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 sensors：register 回 ref 体、drain 空增量游标回显。可达性替身。 */
+    private val fakeSensors = NamespaceHandler { request ->
+        when (request.method) {
+            "register" -> BridgeResponse.Ok(request.id, "{\"refId\":1,\"generation\":1}")
+            "drain" -> BridgeResponse.Ok(request.id, "{\"first\":0,\"last\":0,\"events\":[]}")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeSensors only register/drain")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -145,7 +155,7 @@ class AppShellCapabilityMountTest {
         val s = shell(
             "a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm,
             "datastore" to fakeDatastore, "zip" to fakeZip, "settings" to fakeSettings,
-            "notification" to fakeNotification, "clipboard" to fakeClipboard,
+            "notification" to fakeNotification, "clipboard" to fakeClipboard, "sensors" to fakeSensors,
         )
         s.use {
             val a11yResp = s.router.dispatch(
@@ -190,6 +200,11 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(10, "clipboard", "getText", null, 5_000),
             )
             assertEquals("null", (clipResp as BridgeResponse.Ok).payload)
+
+            val sensorResp = s.router.dispatch(
+                BridgeRequest(11, "sensors", "register", "{\"name\":\"accelerometer\"}", 5_000),
+            )
+            assertEquals("{\"refId\":1,\"generation\":1}", (sensorResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -237,8 +252,11 @@ class AppShellCapabilityMountTest {
 
             val clipResp = s.router.dispatch(BridgeRequest(8, "clipboard", "getText", null, 5_000))
             assertEquals("ERR_NOT_IMPLEMENTED", (clipResp as BridgeResponse.Err).errorCode, "clipboard 独立缝缺省同样不伪造")
+
+            val sensorResp = s.router.dispatch(BridgeRequest(9, "sensors", "register", "{\"name\":\"accelerometer\"}", 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (sensorResp as BridgeResponse.Err).errorCode, "sensors 独立缝缺省同样不伪造")
             val powerResp = s.router.dispatch(
-                BridgeRequest(9, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
+                BridgeRequest(10, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
             )
             assertEquals("ERR_NOT_IMPLEMENTED", (powerResp as BridgeResponse.Err).errorCode, "power_manager 独立缝缺省同样不伪造")
         }

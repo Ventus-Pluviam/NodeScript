@@ -37,6 +37,7 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 | `AndroidSystemSettings` | `SettingsSystemOps`（`android.provider.Settings`） | 写前 canWrite 门（未授 → ERR_PERMISSION_DENIED 非 false）、已授权仍拒 → ERR_IO、读侧缺失 null 不拿 0/空串冒充、空白键拒 |
 | `AndroidNotificationPoster` | `NotificationOps`（`android.app.NotificationManager`） | 发前 canPost 门（未授 → ERR_PERMISSION_DENIED **非 false** —— 系统被拒时不抛异常直接丢弃，门禁必须在它前面）、空白正文拒、cancel 无回执（契约回 Unit 不编 Boolean）、默认 channel 懒建 |
 | `AndroidClipboard` | `ClipboardOps`（`android.content.ClipboardManager`） | 读空/后台受限 null 原样透传不编错误码、写侧无门禁不设探针、空串是真值（与 a11y 剪贴板同口径 `coerceToText`） |
+| `AndroidSensorSource` | `SensorOps`（`android.hardware.SensorManager`） | 名归一化（大小写/空白/别名收敛）+ 发号（refId 单调递增/generation 恒 1）+ 有界环（超界丢最旧 seq 空洞可见）+ 注销纪律（已知已关幂等/未知跨代 STALE 可分辨）+ 系统事实折叠（未知名或缺席 NOT_SUPPORTED/`start` 拒收 SERVICE_DISABLED 失败不占号） |
 
 真机 ops 实现分别住 `WindowManagerOps.kt` / `PackageManagerOps.kt`（这两个文件里有真
 `WindowManager`/`PackageManager` 调用，本机 JVM 只编译、不执行）。
@@ -56,6 +57,7 @@ Android 调用面**只有一小块**，把它挡在一个可注入的 ops 缝后
 `dialogs` 的 `DialogHost` 实现按 domain KDoc 住 `:platform:capabilities`（`AndroidDialogHost` + `device` 子包 `SystemDialogOps`），构造在 `PlatformWiring.of` —— 生产已接；本模块仍不造 `dialogs`（平台模块间无依赖边）。
 （datastore：`AndroidDataStore` + `SqliteKvOps`；zip：`JdkZipArchiver`；
 settings：`AndroidSystemSettings` + `SettingsSystemOps`；notification：`AndroidNotificationPoster` + `NotificationOps`；
-clipboard：`AndroidClipboard` + `ClipboardOps` —— 入口
-`SystemSpis.Bundle.{datastore,zip,settings,notification,clipboard}`；生产已接
+clipboard：`AndroidClipboard` + `ClipboardOps`；
+sensors：`AndroidSensorSource` + `SensorOps` —— 入口
+`SystemSpis.Bundle.{datastore,zip,settings,notification,clipboard,sensors}`；生产已接
 （`PlatformWiring.of` → `inject` → `installWithFiles` 喂独立缝）。）

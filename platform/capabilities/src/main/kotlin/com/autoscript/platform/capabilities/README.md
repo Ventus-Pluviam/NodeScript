@@ -20,7 +20,7 @@ Android 真实现 ── :platform:system（SystemSpis.of）与 `device/` 的无
 ```
 
 挂载发生在装配层：`CapabilityNamespaces.*` 把 handler 折成 `:domain` 的
-`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，系统/存储面另有 `datastoreHandler`/`zipHandler`/`settingsHandler`/`notificationHandler`/`clipboardHandler` 五条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
+`NamespaceHandler` → `AppShellKit.assemble` 的注入缝（`a11yHandler`/`screenHandler`/`systemHandlers`，系统/存储/传感器面另有 `datastoreHandler`/`zipHandler`/`settingsHandler`/`notificationHandler`/`clipboardHandler`/`sensorsHandler` 六条独立缝，见 `AppShellKit` KDoc）→ `AppShell.assemble`。
 
 ## 铁律在本模块的落点
 
@@ -51,6 +51,7 @@ Android 真实现 ── :platform:system（SystemSpis.of）与 `device/` 的无
 | 存储三个（§9.6） | `DatastoreNamespaceHandler` / `ZipNamespaceHandler` / `SettingsNamespaceHandler`（三个独立注入缝，不入 `systemHandlers` 束） | `SystemSpis.of(context)` 三件齐（`AndroidDataStore`/`JdkZipArchiver`/`AndroidSystemSettings`）；生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂独立缝） |
 | 通知 | `NotificationNamespaceHandler`（独立注入缝 `notificationHandler`；参数口径在本层，`POST_NOTIFICATIONS` 门禁在 SPI） | `SystemSpis.Bundle.notification` = `AndroidNotificationPoster`+`NotificationOps`（默认 channel 归实现，契约不暴露 `channelId`） |
 | 剪贴板 | `ClipboardNamespaceHandler`（独立注入缝 `clipboardHandler`；读空裸 `null`、写侧无门禁） | `SystemSpis.Bundle.clipboard` = `AndroidClipboard`+`ClipboardOps`（与 a11y 剪贴板同口径 `coerceToText`）；生产已接（同存储三件） |
+| 传感器 | `SensorsNamespaceHandler`（独立注入缝 `sensorsHandler`；拉取式游标 `drain`，`on('change')` 只是 facade 节流轮询；delay 缺省 `NORMAL`） | `SystemSpis.Bundle.sensors` = `AndroidSensorSource`+`SensorOps`（P0 只做 motion/environment 名单；未知名→`ERR_NOT_SUPPORTED`、系统拒收→`ERR_SERVICE_DISABLED`）；生产已接（同存储三件） |
 
 ## 尚未实现（别在文档里写成「差不多能用」）
 

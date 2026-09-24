@@ -25,6 +25,9 @@ import com.autoscript.domain.system.FloatingWindowHost
 import com.autoscript.domain.system.FloatingWindowSpec
 import com.autoscript.domain.system.NotificationPoster
 import com.autoscript.domain.system.NotificationSpec
+import com.autoscript.domain.system.SensorDelay
+import com.autoscript.domain.system.SensorEventBatch
+import com.autoscript.domain.system.SensorSource
 import com.autoscript.domain.system.ShellExecutor
 import com.autoscript.domain.system.ShellMode
 import com.autoscript.domain.system.ShellResult
@@ -43,7 +46,7 @@ import org.junit.jupiter.api.Test
  * [PlatformWiring.inject] 是 `SystemSpis.Bundle` → `AppShellKit.assemble` 注入束的
  * 纯转接（[PlatformWiring.of] 只多一步 `Context` → Bundle）。本测试用假 SPI 走**同一条
  * 拼装路径**，经 `AppShell.router` 真分发验三件事：
- * 1. 五条独立缝（datastore/zip/settings/notification/clipboard）+ 五命名空间束接通，
+ * 1. 六条独立缝（datastore/zip/settings/notification/clipboard/sensors）+ 五命名空间束接通，
  *    handler 是 `CapabilityNamespaces` 的真转接（协议解释权在平台侧，装配只挂载）；
  * 2. `dialogs`：inject 缺省不传 → null → 如实 `ERR_NOT_IMPLEMENTED`；传真宿主
  *    → 经 `CapabilityNamespaces.dialogs` 真转接到 `DialogHost`（生产 of() 传真宿主）；
@@ -95,6 +98,25 @@ class PlatformWiringTest {
         }
     }
 
+    private class FakeSensors : SensorSource {
+        val live = mutableSetOf<Long>()
+        var nextId = 1L
+        override fun isSupported(name: String): Boolean = name == "accelerometer"
+        override suspend fun register(name: String, delay: SensorDelay): HandleRef {
+            val id = nextId++
+            live += id
+            return HandleRef(id, 1)
+        }
+        override suspend fun unregister(ref: HandleRef) {
+            live -= ref.refId
+        }
+        override suspend fun unregisterAll() {
+            live.clear()
+        }
+        override suspend fun drain(ref: HandleRef, sinceSeq: Long, max: Int): SensorEventBatch =
+            SensorEventBatch(sinceSeq, sinceSeq, emptyList())
+    }
+
     private class FakeNotification : NotificationPoster {
         val posted = mutableListOf<NotificationSpec>()
         override fun canPost(): Boolean = true
@@ -122,6 +144,7 @@ class PlatformWiringTest {
         settings = FakeSettings(),
         notification = FakeNotification(),
         clipboard = FakeClipboard(),
+        sensors = FakeSensors(),
     )
 
     // ── 装壳（与 AppShellSystemMountTest 同一骨架，注入束换成 PlatformWiring 的）──
@@ -148,6 +171,7 @@ class PlatformWiringTest {
         settingsHandler = wiring.settingsHandler,
         notificationHandler = wiring.notificationHandler,
         clipboardHandler = wiring.clipboardHandler,
+        sensorsHandler = wiring.sensorsHandler,
         a11yHandler = wiring.a11yHandler,
         screenHandler = wiring.screenHandler,
     )
@@ -204,7 +228,7 @@ class PlatformWiringTest {
     }
 
     @Test
-    fun `存储通知剪贴板五条独立缝经真 handler 落到假 SPI`() = runBlocking {
+    fun `存储通知剪贴板传感六条独立缝经真 handler 落到假 SPI`() = runBlocking {
         val spis = bundle()
         val wiring = PlatformWiring.inject(spis)
 
@@ -233,6 +257,19 @@ class PlatformWiringTest {
             assertEquals("\"hello\"", okPayload(dispatch(s, "clipboard", "getText", null)))
             assertEquals("true", okPayload(dispatch(s, "clipboard", "setText", "{\"text\":\"\"}")))
             assertEquals("\"\"", okPayload(dispatch(s, "clipboard", "getText", null)))
+
+            // sensors：register 发号 + drain 空增量游标回显（语义归 platform:system 侧测）
+            val regPayload = okPayload(dispatch(s, "sensors", "register", "{\"name\":\"accelerometer\"}"))
+            assertTrue(regPayload.contains("refId"), "register 回 ref 体，实际 $regPayload")
+            assertEquals("true", okPayload(dispatch(s, "sensors", "isSupported", "{\"name\":\"accelerometer\"}")))
+            val drainPayload = okPayload(
+                dispatch(s, "sensors", "drain", "{\"ref\":{\"refId\":1,\"generation\":1},\"sinceSeq\":0}"),
+            )
+            assertTrue(
+                drainPayload.contains("\"first\":0") && drainPayload.contains("\"events\":[]"),
+                "空增量游标回显，实际 $drainPayload",
+            )
+            assertEquals("true", okPayload(dispatch(s, "sensors", "unregisterAll", null)))
 
             // zip：compress 参数原样到假归档器
             assertInstanceOf(

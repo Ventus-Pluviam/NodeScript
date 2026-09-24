@@ -13,6 +13,7 @@ import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DialogHost
 import com.autoscript.domain.system.FloatingWindowHost
 import com.autoscript.domain.system.NotificationPoster
+import com.autoscript.domain.system.SensorSource
 import com.autoscript.domain.storage.DataStore
 import com.autoscript.domain.storage.SystemSettings
 import com.autoscript.domain.storage.ZipArchiver
@@ -171,6 +172,19 @@ object CapabilityNamespaces {
      */
     fun clipboard(clipboard: Clipboard): NamespaceHandler {
         val handler = ClipboardNamespaceHandler(clipboard)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /**
+     * `sensors` 命名空间（§12.2 传感器面）：`isSupported`/`register`/`unregister`/
+     * `unregisterAll`/`drain` 五方法。参数即 [SensorSource] SPI 实现（测试传内存替身，
+     * 真机传 `:platform:system` 的 `AndroidSensorSource`）。同 datastore/zip/settings/
+     * notification/clipboard：**独立注入缝** `AppShell.assemble` 的 `sensorsHandler`，
+     * 不入 `systemHandlers` 束 —— P0 名单无运行时门禁（未知名→`ERR_NOT_SUPPORTED`、
+     * 系统拒收→`ERR_SERVICE_DISABLED`，判据在 SPI 自己身上）。
+     */
+    fun sensors(sensors: SensorSource): NamespaceHandler {
+        val handler = SensorsNamespaceHandler(sensors)
         return lite { request -> handler.handle(request) }
     }
 }

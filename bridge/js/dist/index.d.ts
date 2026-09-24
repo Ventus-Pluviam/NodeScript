@@ -22,6 +22,7 @@ import { zip } from './zip';
 import { settings } from './settings';
 import { notification } from './notification';
 import { clipboard } from './clipboard';
+import { sensors } from './sensors';
 import { power } from './power';
 import { InvokeHandler } from './bridge';
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload };
@@ -58,6 +59,7 @@ export declare const auto: {
     readonly settings: typeof settings;
     readonly notification: typeof notification;
     readonly clipboard: typeof clipboard;
+    readonly sensors: typeof sensors;
     readonly power: typeof power;
     readonly envelope: typeof BridgeEnvelope;
     /** 安装桥宿主（单例；重复安装抛错）。 */
