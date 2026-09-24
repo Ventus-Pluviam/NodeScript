@@ -21,6 +21,22 @@ HERE=bridge/image/test/cpp
   printf '[FATAL] 找不到 OpenCV 源码：%s（先按 build-opencv.sh 的 commit 拉一份）\n' "$OCV_SRC" >&2
   exit 1
 }
+# commit 对表：VERSIONS.env 是 build-opencv.sh 与本脚本共用的 pin 源。host 侧跑到
+# 另一个 commit 上，"同 commit 的语义门禁"这句话就不成立 —— 抓不到 SOUP 的漂移，
+# 只会安静地拿另一版 OpenCV 的判读下结论。缺 .git（tarball 解包）时跳过，如实告知。
+if [ -d "$OCV_SRC/.git" ]; then
+  WANT="$(sed -n 's/^OPENCV_COMMIT=//p' node-runtime-build/VERSIONS.env)"
+  GOT="$(git -C "$OCV_SRC" rev-parse HEAD 2>/dev/null || echo '<detached-or-unknown>')"
+  [ "$GOT" = "$WANT" ] || {
+    printf '[FATAL] OpenCV commit 漂移：%s != %s（host 门槛的判据必须与 libopencv.so 同源）\n' \
+      "$GOT" "$WANT" >&2
+    printf '       切过去：git -C %s checkout %s\n' "$OCV_SRC" "$WANT" >&2
+    exit 1
+  }
+  printf '[pin] OpenCV @ %s（与 VERSIONS.env 一致）\n' "${GOT:0:12}"
+else
+  printf '[WARN] %s 无 .git，跳过 commit 对表（tarball 解包无从校验）\n' "$OCV_SRC" >&2
+fi
 command -v cmake >/dev/null || { printf '[FATAL] 缺 cmake\n' >&2; exit 1; }
 command -v g++ >/dev/null || { printf '[FATAL] 缺 g++\n' >&2; exit 1; }
 
