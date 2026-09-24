@@ -11,6 +11,8 @@ import com.autoscript.platform.capabilities.AndroidUiTree
 import com.autoscript.platform.capabilities.CapabilityNamespaces
 import com.autoscript.platform.capabilities.ScreenshotSource
 import com.autoscript.platform.capabilities.device.SystemDialogOps
+import com.autoscript.platform.system.JniOps
+import com.autoscript.platform.system.NativeImageAnalyzer
 import com.autoscript.platform.system.SystemSpis
 
 /**
@@ -33,6 +35,10 @@ import com.autoscript.platform.system.SystemSpis
  *   换 producer 即插）；
  * 二者都走 `SystemA11yBridge` —— 装配期即可注入（连接态在调用期判定），服务未连 =
  * 桥如实 `ERR_SERVICE_DISABLED`（不伪造可用，也不必等 `onServiceConnected` 才装壳）。
+ *
+ * **`images` 生产已接**：[of] 构造 `NativeImageAnalyzer.of(JniOps.loadOrNull())`
+ * —— `libimgnative.so`（`:bridge:image`，OpenCV 4.14 静态链接）缺位即整条不接，
+ * 与 dialogs 同一条"缺件不伪造"纪律。
  *
  * **`dialogs` 生产已接**：[of] 用同一 `overlayAvailable` 构造
  * `AndroidDialogHost(SystemDialogOps(...))`（实现住 :platform:capabilities ——
@@ -58,10 +64,11 @@ object PlatformWiring {
         val clipboardHandler: NamespaceHandler,
         val sensorsHandler: NamespaceHandler,
         /**
-         * `images` 独立缝（§9.2）：[ImageAnalyzer] 的真实现还等在 `:bridge:image` 的
-         * native 管线上（P1）——**这里刻意缺省 null**（生产桥回 `ERR_NOT_IMPLEMENTED`，
-         * 脚本拿不到一个看不见像素的假分析器）。字段在束里是为了与其余六条同形（图像面是第七条）：
-         * 真实现到位时只改 [inject] 一行 + `of` 的构造，`Injection` 形状不必动。
+         * `images` 独立缝（§9.2）：[ImageAnalyzer] 的真实现 = `:bridge:image` 的 native
+         * 管线（`libimgnative.so`，OpenCV 静态链接）+ 本侧 `NativeImageAnalyzer`
+         * （`:platform:system`，so 缺位即不构造）。**这里刻意缺省 null**：so 不在
+         * （未跑 `build-opencv.sh` 的设备/CI JVM）时桥回 `ERR_NOT_IMPLEMENTED`，
+         * 脚本拿不到一个看不见像素的假分析器。字段在束里与其余六条同形（图像面是第七条）。
          */
         val imagesHandler: NamespaceHandler? = null,
     )
@@ -93,8 +100,9 @@ object PlatformWiring {
         notificationHandler = CapabilityNamespaces.notification(spis.notification),
         clipboardHandler = CapabilityNamespaces.clipboard(spis.clipboard),
         sensorsHandler = CapabilityNamespaces.sensors(spis.sensors),
-        // §9.2 图像面：真实现（:bridge:image native 管线，P1）未到位前生产侧不喂 ——
-        // 桥对 images.* 如实 ERR_NOT_IMPLEMENTED，绝不塞一个看不见像素的假分析器。
+        // §9.2 图像面：生产侧由 [of] 喂 NativeImageAnalyzer（:bridge:image 的
+        // libimgnative.so 到位后）；单测/无 native 时不喂 —— 桥对 images.* 如实
+        // ERR_NOT_IMPLEMENTED，绝不塞一个看不见像素的假分析器。
         imagesHandler = images?.let { CapabilityNamespaces.images(it) },
     )
 
@@ -114,12 +122,23 @@ object PlatformWiring {
      * `overlayAvailable` 缺省 `{ false }`：悬浮窗/对话框先走 `TYPE_APPLICATION_OVERLAY`；
      * a11y 服务在跑时由调用方改传 `{ true }`（语义见 [SystemSpis.of]）——
      * 同一个探针喂给悬浮窗与对话框两条路，不各读各的。
+     *
+     * `imageAnalyzer` 缺省 `NativeImageAnalyzer.of(JniOps.loadOrNull())`：so 缺位 →
+     * null → 图像面不注入（见 [Injection.imagesHandler]）。**默认值在装配期求值**，
+     * 单测可传 null/替身绕过 native —— 同一函数真假可注入，不绑死构造。
      */
-    fun of(context: Context, overlayAvailable: () -> Boolean = { false }): Injection {
+    fun of(
+        context: Context,
+        overlayAvailable: () -> Boolean = { false },
+        imageAnalyzer: ImageAnalyzer? = NativeImageAnalyzer.of(JniOps.loadOrNull()),
+    ): Injection {
         val app = context.applicationContext
         return inject(
             SystemSpis.of(context, overlayAvailable),
             dialogs = AndroidDialogHost(SystemDialogOps(app, overlayAvailable), overlayAvailable),
+            // §9.2 图像面真实现（native 管线到位后接上）：so 缺位 → 构造回 null →
+            // 不喂分析器，桥对 images.* 如实 ERR_NOT_IMPLEMENTED（凑数防线）。
+            images = imageAnalyzer,
         )
     }
 }

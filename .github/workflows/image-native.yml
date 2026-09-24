@@ -12,9 +12,19 @@ name: image-native
 # 产物不随 APK 走：装配侧 app/build.gradle.kts 的 prepareEngineNativeLibs 候选位
 # 含 node-runtime-build/out-opencv/libimgnative.so，本 workflow 的 artifact 是给
 # 人下载核验的（16KB 对齐 + NEEDED 白名单在脚本尾部已断言）。
+# 触发面（2026-09-25 修过一次"推了分支却没跑"）：
+# 初版写成 `push: branches:[main]` + `pull_request: paths:`，而 image-native 这类
+# 长生命周期分支既不在 main、又还没有 PR → **一步都不跑**（gh token 无该私仓权限，
+# 开不了 PR 也就触发不了）。故 push 与 PR **都不限分支**，靠 paths 过滤把构建
+# 限定在"真的动了图像构建面"的提交上 —— 路径过滤才是轻量的来源，不是分支白名单。
 on:
   push:
-    branches: [main]
+    paths:
+      - 'node-runtime-build/VERSIONS.env'
+      - 'node-runtime-build/scripts/build-opencv.sh'
+      - 'node-runtime-build/scripts/check-opencv-alignment.sh'
+      - 'bridge/image/**'
+      - '.github/workflows/image-native.yml'
   pull_request:
     paths:
       - 'node-runtime-build/VERSIONS.env'
@@ -34,6 +44,11 @@ jobs:
     name: OpenCV 4.14.0 → libimgnative.so（arm64-android26，kleidicv 审计）
     runs-on: ubuntu-latest
     timeout-minutes: 90        # OpenCV 全量 configure+编译实测 15–30 分钟；CI 抢不到核时放宽
+    env:
+      # 全 job 共用一个 WORK_DIR：build-opencv.sh 按 $WORK/{src,ndk,out-opencv,build-opencv}
+      # 布局走，而"产物审计"步骤也要读同一个 OUT —— 只在构建步骤里设 env 的话，
+      # 后续步骤的 $WORK 是空的（审计步骤会安静地 ls 到空路径然后失败在 artifact 上）。
+      WORK_DIR: ${{ github.workspace }}/work
     steps:
       - uses: actions/checkout@v4
 
@@ -58,8 +73,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake ninja-build git python3
 
       - name: 编译 libimgnative.so
-        env:
-          WORK_DIR: ${{ github.workspace }}/work
         run: |
           # kleidicv 走 gitlab.arm.com 的 release 包：CI 首次跑须从下方日志的
           # `kleidicv 状态:` 一行读 ON/OFF（软降级不 fatal，结论也写进 SHASUMS256 审计行）。
@@ -69,8 +82,8 @@ jobs:
 
       - name: 产物审计（16KB LOAD + NEEDED 白名单 + 审计行）
         run: |
-          cat "$WORK/work/out-opencv/SHASUMS256"
-          ls -l "$WORK/work/out-opencv/libimgnative.so"
+          cat "$WORK_DIR/out-opencv/SHASUMS256"
+          ls -l "$WORK_DIR/out-opencv/libimgnative.so"
 
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
