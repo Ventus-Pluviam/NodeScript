@@ -1041,8 +1041,11 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 
 > **APK 体积预算是本表唯一已被实测推翻的条目（2026-09-25 记账）**：`:engine:node-process` 侧 jniLibs 三件套
 > `libnoden.so` + `libnode.so` + `libc++_shared.so` 实测未压缩合计已 ≈81MB（APK 压缩安装后另计）；
-> `libopencv.so` 是 OpenCV 4.14 `core+imgproc+imgcodecs` 静态链接，仅按 `BUILD_LIST` 裁剪（kleidicv 默认 ON），
-> 未压缩再添一个数量级相当的份额。因此「≤ 40MB release」**当前不成立**，三条选项供 §18 决策：
+> `libopencv.so` 是 OpenCV 4.14 `core+imgproc+imgcodecs` 静态链接（kleidicv 已启用，四件套共 4 个静态库），
+> 仅按 `BUILD_LIST` 裁剪，**未压缩实测 6,328,916 B = 6.0 MiB**（占三件套 81MB 的 7.8%）——
+> 早前"再添一个数量级相当的份额"是不成立的推断，实测不是同一量级。因此超支**全在引擎三件套**，
+> 图像面不是 §15 超支的原因；据此 (c)「继续裁 OpenCV 面」的性价比极低（最多省 6MB，且已是最小可用集），
+> 三条选项供 §18 决策：
 > (a) 接受超支并在能力中心明示安装体积（最省事，代价是转化率）；
 > (b) 按需分发 —— 引擎/图像两条 native 轨改走首次启动下载或 Play 动态交付（`libopencv.so` 无 exec 需求，
 > 可整轨后移；`libnode.so` 有 exec 硬需求，动它要先解决 §19 的落位链）；
