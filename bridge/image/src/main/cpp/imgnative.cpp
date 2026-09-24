@@ -1,7 +1,8 @@
 // bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
-//   - 只做四件事：decode 一帧、管帧表、按阈值做模板匹配、按容差找色；
+//   - 只做五件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
+//     按阈值做模板匹配、按容差找色；
 //   - 不做路径策略、不发桥请求、不碰 Kotlin 侧句柄号（发号归桥面 handler）；
 //   - 跨语言接触面全部 extern "C"：无 C++ 名修饰，无异常穿越（cv::Exception
 //     在本文件内就地折叠成状态码，绝不抛过 ABI 边界）。
@@ -76,8 +77,33 @@ int imgnative_decode(const char* path, int64_t* out_ref, int32_t* out_w, int32_t
 
     // 解码失败就地折叠成状态码：cv::Exception 不过 ABI 边界（见文件头）。
     try {
-        cv::Mat mat = cv::imread(p, cv::IMREAD_COLOR);
+        // IMREAD_UNCHANGED（不是 IMREAD_COLOR）：保留下游要判定的 A 通道。
+        // 合同写的是四分量 [r,g,b,a]，而 IMREAD_COLOR 会把任何来源一律压成
+        // **3 通道 BGR**（alpha 被丢掉）—— 那后面 findColor 的 a 分量就只能
+        // 拿固定值糊过去，等于契约里有一个分量从来不参与判定。
+        cv::Mat mat = cv::imread(p, cv::IMREAD_UNCHANGED);
         if (mat.empty()) return IMG_ERR_IO;
+
+        // 归一成 4 通道 BGRA：3 通道补一个恒 255 的 alpha（不透明，符合
+        // "没存 alpha 的图就是全不透明"的常识），1 通道铺成三份同值 + 255，
+        // 16 位深压回 8 位（契约分量域是 [0,255]）。浅拷贝优先 —— cvtColor
+        // 需要连续内存，先归置再转；已经在 4 通道 8 位的那一档**一个字节都不动**
+        // （截图/PNG 主路径不付转换代价）。
+        if (mat.depth() != CV_8U) {
+            cv::Mat narrowed;
+            mat.convertTo(narrowed, CV_8U, mat.depth() == CV_16U ? 1.0 / 256.0 : 1.0);
+            mat = narrowed;
+        }
+        if (mat.channels() == 4) {
+            // 已在目标形态：可能非连续（ROI/子矩阵），这里 decode 出来的是整帧，
+            // imread 给的就是连续块，无需处理。
+        } else if (mat.channels() == 3) {
+            cv::cvtColor(mat, mat, cv::COLOR_BGR2BGRA);
+        } else if (mat.channels() == 1) {
+            cv::cvtColor(mat, mat, cv::COLOR_GRAY2BGRA);
+        } else {
+            return IMG_ERR_IO;   // 通道数不在已知集合内：不猜着补
+        }
 
         const std::lock_guard<std::mutex> lk(g_mu);
         const int64_t ref = g_next_ref++;
@@ -196,6 +222,10 @@ int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
         // 索引域是**视图内** 0..rw/0..rh，命中坐标要加回 roi 左上角才是全帧坐标。
         const cv::Mat view = (*f)(roi);
         if (view.empty()) return IMG_ERR_INVALID_PARAM;
+        // 帧恒 4 通道 8 位（decode 归一）；不成立 = 帧表被塞进了非归一帧
+        // （帧表是本 TU 私有的，正常路径只经 decode 进）—— 如实报 IO，
+        // 不让 Vec4b 越界读下一行的字节糊过去。
+        if (view.channels() != 4 || view.depth() != CV_8U) return IMG_ERR_IO;
 
         // 下界/上界夹在 0..255：目标色贴边时（0 或 255）容差仍成立，不溢出成负数。
         // cv::Scalar 四个分量的顺序是 B,G,R,A（OpenCV 的通道序），所以 R/G/B 要
@@ -226,8 +256,10 @@ int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
 
         // findNonZero 给 N×1 的 (x,y) 点列（单通道 CV_32SC2）；只取第一个 ——
         // 没有命中（上面已判）与命中多个取哪个，是两个问题：多个命中时**回第一个
-        // 不排序**（扫描序 = 视图内的行主序，稳定可复现；按距离/面积排序会是
-        // 另一套没在契约里出现的策略，脚本要自己再筛）。
+        // 不排序**（顺序 = OpenCV 点列的**列主序**：y 不变、x 从 0 扫到 w，
+        // 再进下一行。这不是"离左上角最近"，严格说 (y=0,x=w-1) 会排在
+        // (y=1,x=0) 前面 —— 稳定可复现就够了；按距离/面积排序会是另一套没在
+        // 契约里出现的策略，脚本要自己再筛）。
         cv::Mat points;
         cv::findNonZero(mask, points);
         if (points.empty() || points.total() == 0) return IMG_ERR_IO;
@@ -237,6 +269,8 @@ int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
         // Vec4b 的通道序是 **B,G,R,A**（OpenCV 的三通道基序是 BGR），所以回包的
         // R/G/B 要从 2/1/0 号位取 —— 分量序只在这两处（Scalar 下界、Vec4b 回读）
         // 解释，各写一次且互指，别改成"顺手按 0,1,2 命名"。
+        // 帧在 decode 时已归一成 4 通道（见上），所以这里的 Vec4b 取像素永不会
+        // 读到第 4 通道以外的字节 —— 换成 3 通道帧它会静默读进下一行的首字节。
         const cv::Vec4b px = view.at<cv::Vec4b>(p);
         *out_x = roi.x + p.x;
         *out_y = roi.y + p.y;
