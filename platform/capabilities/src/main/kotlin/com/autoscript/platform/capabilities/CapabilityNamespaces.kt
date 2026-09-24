@@ -1,6 +1,7 @@
 package com.autoscript.platform.capabilities
 
 import com.autoscript.domain.automation.FrameSource
+import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.automation.InputProvider
 import com.autoscript.domain.automation.UiActionExecutor
 import com.autoscript.domain.automation.UiEventStream
@@ -185,6 +186,18 @@ object CapabilityNamespaces {
      */
     fun sensors(sensors: SensorSource): NamespaceHandler {
         val handler = SensorsNamespaceHandler(sensors)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /**
+     * `images` 命名空间（§9.2 图像面）：`decode`/`matchTemplate`/`findImage`/`release`
+     * 四方法。参数即 [ImageAnalyzer] SPI 实现（测试传假分析器，真机传
+     * `:bridge:image` 的 native 管线）。同 datastore/zip/settings/notification/clipboard/
+     * sensors：**独立注入缝** `AppShell.assemble` 的 `imagesHandler`，不入
+     * `systemHandlers` 束 —— 图像面无共担门禁（文件缺失/句柄失效判据在 SPI 自己身上）。
+     */
+    fun images(analyzer: ImageAnalyzer): NamespaceHandler {
+        val handler = ImagesNamespaceHandler(analyzer)
         return lite { request -> handler.handle(request) }
     }
 }

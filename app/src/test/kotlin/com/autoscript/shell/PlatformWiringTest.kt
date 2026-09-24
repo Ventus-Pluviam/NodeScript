@@ -3,9 +3,13 @@ package com.autoscript.shell
 import com.autoscript.appservice.scheduler.core.InMemoryIntentLog
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
+import com.autoscript.domain.automation.ImageAnalyzer
+import com.autoscript.domain.automation.ImageFrame
+import com.autoscript.domain.automation.ImageMatch
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.HandleRef
+import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineRunReceipt
 import com.autoscript.domain.engine.EngineRunRequest
@@ -46,7 +50,7 @@ import org.junit.jupiter.api.Test
  * [PlatformWiring.inject] 是 `SystemSpis.Bundle` → `AppShellKit.assemble` 注入束的
  * 纯转接（[PlatformWiring.of] 只多一步 `Context` → Bundle）。本测试用假 SPI 走**同一条
  * 拼装路径**，经 `AppShell.router` 真分发验三件事：
- * 1. 六条独立缝（datastore/zip/settings/notification/clipboard/sensors）+ 五命名空间束接通，
+ * 1. 七条独立缝（datastore/zip/settings/notification/clipboard/sensors/images）+ 五命名空间束接通，
  *    handler 是 `CapabilityNamespaces` 的真转接（协议解释权在平台侧，装配只挂载）；
  * 2. `dialogs`：inject 缺省不传 → null → 如实 `ERR_NOT_IMPLEMENTED`；传真宿主
  *    → 经 `CapabilityNamespaces.dialogs` 真转接到 `DialogHost`（生产 of() 传真宿主）；
@@ -117,6 +121,33 @@ class PlatformWiringTest {
             SensorEventBatch(sinceSeq, sinceSeq, emptyList())
     }
 
+    /** 假分析器：decode 回一帧（宽高固定），匹配结果由用例指定。 */
+    private class FakeImageAnalyzer(
+        var hit: ImageMatch? = ImageMatch(12, 34, 100, 50, 0.97),
+        var failWith: AutojsException? = null,
+    ) : ImageAnalyzer {
+        val decoded = mutableListOf<String>()
+        val released = mutableListOf<HandleRef>()
+        override suspend fun decode(path: String): ImageFrame {
+            failWith?.let { throw it }
+            decoded += path
+            return ImageFrame(HandleRef(999, 1), 640, 480)
+        }
+        override suspend fun release(handle: HandleRef) {
+            released += handle
+        }
+        override suspend fun matchTemplate(
+            haystack: HandleRef,
+            needle: HandleRef,
+            threshold: Double,
+        ): ImageMatch? = hit
+        override suspend fun findImage(
+            haystack: HandleRef,
+            needle: HandleRef,
+            threshold: Double,
+        ): ImageMatch? = hit
+    }
+
     private class FakeNotification : NotificationPoster {
         val posted = mutableListOf<NotificationSpec>()
         override fun canPost(): Boolean = true
@@ -172,6 +203,7 @@ class PlatformWiringTest {
         notificationHandler = wiring.notificationHandler,
         clipboardHandler = wiring.clipboardHandler,
         sensorsHandler = wiring.sensorsHandler,
+        imagesHandler = wiring.imagesHandler,
         a11yHandler = wiring.a11yHandler,
         screenHandler = wiring.screenHandler,
     )
@@ -270,6 +302,29 @@ class PlatformWiringTest {
                 "空增量游标回显，实际 $drainPayload",
             )
             assertEquals("true", okPayload(dispatch(s, "sensors", "unregisterAll", null)))
+
+            // images：inject 收假分析器 → 独立缝接通（decode 真宽高 + 命中体），
+            // 未注入时桥对 images.* 如实 ERR_NOT_IMPLEMENTED（生产侧刻意不喂）
+            val analyzer = FakeImageAnalyzer()
+            val wired = PlatformWiring.inject(bundle(), images = analyzer)
+            shell(wired).use { s ->
+                val frame = okPayload(dispatch(s, "images", "decode", """{"path":"/sdcard/icon.png"}"""))
+                assertTrue(
+                    frame.contains("\"refId\":1") && frame.contains("\"width\":640") && frame.contains("\"height\":480"),
+                    "decode 回帧三字段（宽高是文件真值），实际 $frame",
+                )
+                assertEquals(listOf("/sdcard/icon.png"), analyzer.decoded)
+                assertEquals(
+                    "true",
+                    okPayload(dispatch(s, "images", "release", """{"ref":{"refId":1,"generation":1}}""")),
+                )
+                assertEquals(listOf<Long>(1L), analyzer.released.map { it.refId })
+            }
+            assertEquals(
+                "ERR_NOT_IMPLEMENTED",
+                errCode(dispatch(shell(PlatformWiring.inject(bundle())), "images", "decode", "{}")),
+                "生产 inject 不喂分析器 → 独立缝缺省同样不伪造（真实现等 :bridge:image，P1）",
+            )
 
             // zip：compress 参数原样到假归档器
             assertInstanceOf(

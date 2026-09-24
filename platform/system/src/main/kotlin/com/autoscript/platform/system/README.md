@@ -61,3 +61,10 @@ clipboard：`AndroidClipboard` + `ClipboardOps`；
 sensors：`AndroidSensorSource` + `SensorOps` —— 入口
 `SystemSpis.Bundle.{datastore,zip,settings,notification,clipboard,sensors}`；生产已接
 （`PlatformWiring.of` → `inject` → `installWithFiles` 喂独立缝）。）
+
+**`images` 的图像分析面不住本模块**：SPI 是 `:domain` 的 `ImageAnalyzer`，桥处理器
+`ImagesNamespaceHandler` 住 `:platform:capabilities`（§12.2 第七条独立缝），而真实现要
+`libimgnative.so`（OpenCV 静态链接，`:bridge:image`，§9.2 P1）—— 所以
+`SystemSpis.Bundle` 里**没有** `images` 字段，`PlatformWiring.inject(images = ...)`
+是独立的可选参数。生产侧刻意不喂（桥回 `ERR_NOT_IMPLEMENTED`），等 native 管线到位
+再在 `PlatformWiring.of` 里构造一行。

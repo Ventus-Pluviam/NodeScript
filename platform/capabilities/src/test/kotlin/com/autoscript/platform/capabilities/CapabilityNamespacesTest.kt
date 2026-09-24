@@ -1,6 +1,10 @@
 package com.autoscript.platform.capabilities
 
+import com.autoscript.domain.automation.ImageAnalyzer
+import com.autoscript.domain.automation.ImageFrame
+import com.autoscript.domain.automation.ImageMatch
 import com.autoscript.domain.automation.ScreenSnapshot
+import com.autoscript.domain.bridge.HandleRef
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.core.ErrorCode
@@ -158,5 +162,64 @@ class CapabilityNamespacesTest {
         )
         assertEquals(ErrorCode.ERR_NOT_FOUND.code, unknownSession.errorCode)
         Unit                                           // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    @Test
+    fun `images 挂载缝透传命中体与 null（不折叠成 NOT_FOUND）`() = runBlocking {
+        val handler = CapabilityNamespaces.images(FakeImageAnalyzer())
+
+        // 先 decode 一帧拿真句柄（handler 自管发号：refId 从 1 起）
+        val decoded = assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            handler.handle(BridgeRequest(8, "images", "decode", """{"path":"/sdcard/icon.png"}""", 5_000)),
+        )
+        val ref = (A11yBridgeJson.decodeObject(decoded.payload!!)["ref"] as A11yBridgeJson.Value.Obj).fields
+        val haystack = """{"refId":${(ref["refId"] as A11yBridgeJson.Value.N).raw},"generation":1}"""
+        val needle = haystack
+
+        val hit = assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            handler.handle(
+                BridgeRequest(9, "images", "findImage", """{"haystack":$haystack,"needle":$needle,"threshold":0.9}""", 5_000),
+            ),
+        )
+        val o = A11yBridgeJson.decodeObject(hit.payload!!)
+        assertEquals("12", (o["x"] as A11yBridgeJson.Value.N).raw, "命中体逐字段透传")
+        assertEquals(9L, hit.id)
+
+        // 换一个恒未命中的假分析器：未匹配是答案 —— 裸 null，不折叠成 ERR_NOT_FOUND
+        // （新 handler 自管自己的帧表，同一 ref 数字要重新 decode 才在场）
+        val missing = CapabilityNamespaces.images(FakeImageAnalyzer(result = null))
+        missing.handle(
+            BridgeRequest(9, "images", "decode", """{"path":"/sdcard/screen.png"}""", 5_000),
+        )
+        val miss = assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            missing.handle(
+                BridgeRequest(10, "images", "matchTemplate", """{"haystack":$haystack,"needle":$needle,"threshold":0.9}""", 5_000),
+            ),
+        )
+        assertEquals("null", miss.payload, "未匹配是答案：裸 null，不折叠成 ERR_NOT_FOUND")
+
+        val unknown = assertInstanceOf(
+            BridgeResponse.Err::class.java,
+            handler.handle(BridgeRequest(11, "images", "toGrayscale", "{}", 5_000)),
+        )
+        assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED.code, unknown.errorCode, "未开桥面的操作不猜")
+        assertEquals(11L, unknown.id)
+        Unit
+    }
+
+    /** 假图像分析器：两帧恒命中 / 恒未命中由用例指定（像素语义归 :bridge:image，这里只测转接）。 */
+    private class FakeImageAnalyzer(
+        private val result: ImageMatch? = ImageMatch(12, 34, 100, 50, 0.97),
+    ) : ImageAnalyzer {
+        override suspend fun decode(path: String): ImageFrame = ImageFrame(HandleRef(1, 1), 1080, 2400)
+
+        override suspend fun release(handle: HandleRef) = Unit
+
+        override suspend fun matchTemplate(haystack: HandleRef, needle: HandleRef, threshold: Double): ImageMatch? = result
+
+        override suspend fun findImage(haystack: HandleRef, needle: HandleRef, threshold: Double): ImageMatch? = result
     }
 }

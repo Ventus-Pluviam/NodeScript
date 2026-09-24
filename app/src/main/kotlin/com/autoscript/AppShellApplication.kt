@@ -246,6 +246,10 @@ class AppShellApplication : Application(), HostSummary {
                 notificationHandler = wiring.notificationHandler,
                 clipboardHandler = wiring.clipboardHandler,
                 sensorsHandler = wiring.sensorsHandler,
+                // §9.2 图像面：`images` 独立缝。真实现（:bridge:image 的 native 管线）P1
+                // 才到位，当前 wiring.imagesHandler = null → 桥对 images.* 如实回
+                // ERR_NOT_IMPLEMENTED（脚本拿不到假分析器，见 PlatformWiring.Injection）。
+                imagesHandler = wiring.imagesHandler,
                 // §8.7 脚本电源面：账本是 foregroundKeeper() 持有的进程级单例（`onCreate`
                 // 先于装配起，见 [onCreate]），现建 handler 喂独立缝 —— 脚本锁与框架锁
                 // 同一本账，引用计数共存，框架 stop 只放框架自己的那一份。

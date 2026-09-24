@@ -220,6 +220,14 @@ class AppShell(
              */
             sensorsHandler: NamespaceHandler? = null,
             /**
+             * `images` 命名空间实现（§9.2 图像面）：同 [datastoreHandler] 的**独立**缝 ——
+             * 图像面无共担门禁（读图是应用私有目录内的 IO、匹配是纯计算；文件缺失/句柄失效
+             * 判据在 SPI 自己身上），与五命名空间不共担，故也不入 [SystemHandlers]。实现经
+             * `:platform:capabilities` 的 `CapabilityNamespaces.images(analyzer)` 转接；
+             * null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`（不伪造可用）。
+             */
+            imagesHandler: NamespaceHandler? = null,
+            /**
              * `power_manager` 命名空间实现（§8.7 脚本电源面）：同 [datastoreHandler] 的**独立**缝 ——
              * 电源面无共担门禁（`WAKE_LOCK` 是安装时授予的 normal 权限，判定在账本与系统侧），
              * 不入 [SystemHandlers] 束。生产由 Application 从 `foregroundKeeper()` 的账本现建
@@ -261,6 +269,7 @@ class AppShell(
             if (settingsHandler != null) router.register("settings", settingsHandler)
             if (notificationHandler != null) router.register("notification", notificationHandler)
             if (clipboardHandler != null) router.register("clipboard", clipboardHandler)
+            if (imagesHandler != null) router.register("images", imagesHandler)
             if (sensorsHandler != null) router.register("sensors", sensorsHandler)
             if (powerManagerHandler != null) router.register("power_manager", powerManagerHandler)
             systemHandlers?.registerAll(router::register)
