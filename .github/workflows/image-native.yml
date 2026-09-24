@@ -1,0 +1,82 @@
+name: image-native
+
+# libimgnative.so 构建（docs/framework-design.md §9.2 / §16）
+#
+# 与 ci.yml 的分工：本文件**只**跑 OpenCV 静态链接 + 我们的桥面 C++ → 单个
+# libimgnative.so（arm64-android26），跑 node-runtime-build/scripts/build-opencv.sh
+# —— 同一脚本也由 node-runtime-build/Dockerfile 的 OpenCV 轨调用，两处同源同门禁。
+# Node 24 那条轨（fetch-and-build.sh → libnode.so）**不经本文件**：体量差一个量级
+# （600MB 源码 + 半小时以上），放进 PR 门会让每次改动都等一轮；libnode 的构建门
+# 由 node-runtime-build/Dockerfile 承担（见 ci.yml 末注）。
+#
+# 产物不随 APK 走：装配侧 app/build.gradle.kts 的 prepareEngineNativeLibs 候选位
+# 含 node-runtime-build/out-opencv/libimgnative.so，本 workflow 的 artifact 是给
+# 人下载核验的（16KB 对齐 + NEEDED 白名单在脚本尾部已断言）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'node-runtime-build/VERSIONS.env'
+      - 'node-runtime-build/scripts/build-opencv.sh'
+      - 'node-runtime-build/scripts/check-opencv-alignment.sh'
+      - 'bridge/image/**'
+      - '.github/workflows/image-native.yml'
+  workflow_dispatch:
+
+concurrency:
+  # 同一分支重复触发时取消上一次（构建 20 分钟级，串行等待没有信息量）。
+  group: image-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-imgnative:
+    name: OpenCV 4.14.0 → libimgnative.so（arm64-android26，kleidicv 审计）
+    runs-on: ubuntu-latest
+    timeout-minutes: 90        # OpenCV 全量 configure+编译实测 15–30 分钟；CI 抢不到核时放宽
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 NDK r28c（sdkmanager 同源 zip 校验由脚本做）
+        run: |
+          # runner 自带 cmdline-tools：直调 sdkmanager（不用 android-actions/setup-android ——
+          # 新 license 时卡交互确认，jumpy-porcupine 的 PR CI 已实测红在这步）。
+          VERSION_CODE="$(sed -n 's/^NDK_VERSION_CODE=//p' node-runtime-build/VERSIONS.env)"
+          [ -n "$VERSION_CODE" ] || { echo "VERSIONS.env 缺 NDK_VERSION_CODE"; exit 1; }
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;$VERSION_CODE"
+          # 脚本从 $WORK/ndk/android-ndk-$NDK_VERSION 找 NDK（与 Node 管线同一布局）。
+          # sdkmanager 落到 ndk/<VERSION_CODE>/，故按目录语义软链到版本名那层。
+          NDK_DIR="${ANDROID_SDK_ROOT}/ndk"
+          NDK_VER="$(sed -n 's/^NDK_VERSION=//p' node-runtime-build/VERSIONS.env)"
+          ln -sfn "$NDK_DIR/$VERSION_CODE" "$NDK_DIR/android-ndk-$NDK_VER"
+          ls -l "$NDK_DIR"
+
+      - name: 安装编译期依赖（cmake + ninja + git + python3）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build git python3
+
+      - name: 编译 libimgnative.so
+        env:
+          WORK_DIR: ${{ github.workspace }}/work
+        run: |
+          # kleidicv 走 gitlab.arm.com 的 release 包：CI 首次跑须从下方日志的
+          # `kleidicv 状态:` 一行读 ON/OFF（软降级不 fatal，结论也写进 SHASUMS256 审计行）。
+          bash node-runtime-build/scripts/build-opencv.sh 2>&1 | tee /tmp/build-opencv.log
+          grep -q '完成。产物' /tmp/build-opencv.log || { echo "构建日志无完成行"; exit 1; }
+          grep 'kleidicv 状态:' /tmp/build-opencv.log
+
+      - name: 产物审计（16KB LOAD + NEEDED 白名单 + 审计行）
+        run: |
+          cat "$WORK/work/out-opencv/SHASUMS256"
+          ls -l "$WORK/work/out-opencv/libimgnative.so"
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libimgnative
+          path: |
+            work/out-opencv/libimgnative.so
+            work/out-opencv/SHASUMS256
+          if-no-files-found: error
