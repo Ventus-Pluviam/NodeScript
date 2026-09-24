@@ -81,8 +81,8 @@ grep -qF "$KLEIDICV_MD5" "$OCV_SRC/hal/kleidicv/kleidicv.cmake" \
 # AVIF/FFMPEG/V4L/1394/TBB/OPENCL/OPENVX/PROTOBUF/ITT…）。
 # WITH_KLEIDICV 保持**默认 ON**（AArch64+Android 默认开，见 VERSIONS.env 选型注记）：
 #   覆盖 add/sub/absdiff/multiply/cvtColor/GaussianBlur/Sobel/medianBlur/resize/… 不含
-#   matchTemplate，开着不亏且给 P1 算子铺路；下载失败是软降级（不 fatal），首次跑
-#   须核对下方 CMakeCache 的 HAVE_KLEIDICV 并把结论写进 SHASUMS256 审计行。
+#   matchTemplate，开着不亏且给 P1 算子铺路；下载失败是软降级（不 fatal），ON/OFF 由
+#   下方 3b 段从 configure 摘要判定并写进 SHASUMS256 审计行。
 # CPU_BASELINE=DETECT / CPU_DISPATCH 交给 toolchain 默认（AArch64 → NEON_DOTPROD 等），
 # 不手写 -march 把 armv8.2 指令烤进基线（minSdk 26 设备要能跑）。
 BUILD_DIR="$WORK/build-opencv"
@@ -90,6 +90,12 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 say "cmake configure（BUILD_LIST=$OPENCV_BUILD_LIST, kleidicv=$KLEIDICV_COMMIT）"
 
+# configure 输出落盘： kleidicv 的 ON/OFF 判据是摘要里的 `Custom HAL: … KleidiCV (ver …)`
+# 一行，而那不是 CMakeCache 能回答的（见 3b 段注释）。同时也让"配置改了但摘要看着没变"
+# 这类问题有据可查。**pipefail 闭环**：`cmake … 2>&1 | tee` 的退出码取管道最后一条
+# 命令，而 set -o pipefail 让 cmake 自己的退出码也能传给 set -e —— 配置失败在这里就停，
+# 不会走到 3b 段把"没配完的 configure.log"当成 kleidicv=OFF 的证据。
+CONFIGURE_LOG="$BUILD_DIR/configure.log"
 cmake -S "$OCV_SRC" -B "$BUILD_DIR" \
     -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a \
@@ -114,45 +120,38 @@ cmake -S "$OCV_SRC" -B "$BUILD_DIR" \
     -DBUILD_ZLIB=ON -DBUILD_JPEG=ON -DBUILD_PNG=ON \
     -DOPENCV_ENABLE_NONFREE=OFF \
     -DENABLE_CONFIG_VERIFICATION=OFF \
-    -DOPENCV_WARNINGS_ARE_ERRORS=OFF
+    -DOPENCV_WARNINGS_ARE_ERRORS=OFF 2>&1 | tee "$CONFIGURE_LOG"
 
-# ── 3b) kleidicv 审计行：ON/OFF 都记下来（软降级不 fatal，但必须可查）────
-# **不要把 OFF 归因成网络**（2026-09-24 实测教训）：那一次 tarball 其实拉下来了
-# （同 pin md5 与 VERSIONS.env 一致、125 个 .cpp 照编、6 个 target 全 Built），
-# 但 CMakeCache 的 HAVE_KLEIDICV 仍是 OFF —— 是 OpenCV 侧的 cache/判定问题，
-# 不是 gitlab.arm.com 不可达。故这里把三个**可判读的事实**分别报出来
-# （缓存值 / 3rdparty 源码是否在场 / 编译产物是否在场），不下结论：
-#   cache=ON, src=有, lib=有  → 真启用
-#   cache=OFF, src=有, lib=有 → 源码编了但 OpenCV 没认（就是上次那状，下一步去
-#                               hal/kleidicv/kleidicv.cmake 的判定条件里查）
-#   cache=OFF, src=无         → 下载真失败（3rdparty 目录空），此时才谈网络
+# ── 3b) kleidicv 审计行：软降级不 fatal，但必须可查───────────────────────
+# **判定源不是 CMakeCache**（2026-09-25 定位教训，此前两处错判都源于此）：
+#   上游 cmake/OpenCVFindLibsPerf.cmake:218/224 只 `set(HAVE_KLEIDICV ON)`，
+#   **没有 CACHE BOOL**，所以 CMakeCache.txt 里从来不存在 `HAVE_KLEIDICV:BOOL=`
+#   这一项 —— grep 它永远 grep 不到，脚本会稳定地报 OFF（"采集点错"伪装成"没启用"）。
+#   可用的证据按可靠度排列：
+#     a. configure 摘要的 `Custom HAL: YES (… KleidiCV (ver …))`
+#        —— 只有调过 add_subdirectory(hal/kleidicv) 才会出现，最贴近"启用了"。
+#     b. configure 摘要的 `Custom HAL: …` 里没有 KleidiCV → 真关。
+#     c. debug 信息 `Enable KleidiCV acceleration` 只在 -DOPENCV_CMAKE_DEBUG_MESSAGES=ON 才打。
+# 另报一件**独立事实**：解包后的源码在场与否（下载/校验这一环的单独证据，
+# 与"OpenCV 认不认它"是两回事，别混为一谈）。
 KLEIDI_SRC_DIR="$BUILD_DIR/3rdparty/kleidicv/kleidicv-$KLEIDICV_COMMIT"
-KLEIDI_LIB_DIR="$BUILD_DIR/3rdparty/lib/arm64-v8a"
-KLEIDI_STATE="OFF"
-# 先判文件在不在，**不要** `X="$(sed … /dev/null 2>&-)"`：本脚本 set -e + pipefail，
-# 文件缺失时 sed 的非零退出会顺着命令替换把整个脚本带走（本机实测 exit 2），
-# 那时连 WARN 都印不出来 —— 恰恰是最需要它的场景。
-KLEIDI_CACHE="(无 CMakeCache.txt)"
-if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
-    KLEIDI_CACHE="$(sed -n 's/^HAVE_KLEIDICV:BOOL=//p' "$BUILD_DIR/CMakeCache.txt")"
-    [ -n "$KLEIDI_CACHE" ] || KLEIDI_CACHE="(cache 无此项)"
-fi
 KLEIDI_SRC="无"
-[ -d "$KLEIDI_SRC_DIR/kleidicv/src" ] && KLEIDI_SRC="有"
-KLEIDI_LIB="无"
-[ -f "$KLEIDI_LIB_DIR/libkleidicv.a" ] && KLEIDI_LIB="有"
-if [ "$KLEIDI_CACHE" = "ON" ]; then
+[ -f "$KLEIDI_SRC_DIR/adapters/opencv/CMakeLists.txt" ] && KLEIDI_SRC="有"
+KLEIDI_STATE="OFF"
+# `if grep … 2>/dev/null` 而非裸 grep：set -e + pipefail 下 configure.log 缺失时
+# grep 的非零退出会带走整个脚本；configure 失败本就该由 cmake 那步的退出码报，
+# 这里只做采集，不该抢先生死。
+if grep -q 'KleidiCV (ver' "$CONFIGURE_LOG" 2>/dev/null; then
     KLEIDI_STATE="ON"
 else
-    printf '\033[1;33m[WARN]\033[0m kleidicv 未启用（cache=%s, 源码=%s, 静态库=%s）—— 已记入审计行\n' \
-        "$KLEIDI_CACHE" "$KLEIDI_SRC" "$KLEIDI_LIB" >&2
-    # 源码在场而 cache 非 ON = OpenCV 没认它：这是判定问题，值得把它的判定源摊开
+    printf '\033[1;33m[WARN]\033[0m kleidicv 未启用（configure 摘要的 Custom HAL 里没有 KleidiCV）\n' >&2
     if [ "$KLEIDI_SRC" = "有" ]; then
-        printf '       判定源：%s（ocv_update 的 pin 与 hal 的判定条件都在这一个文件里）\n' \
-            "$OCV_SRC/hal/kleidicv/kleidicv.cmake" >&2
+        printf '       但源码在位（下载成功）：判定失败点在上游\n' \
+            '       cmake/OpenCVFindLibsPerf.cmake 的 WITH_KLEIDICV 分支，不在网络\n' >&2
     fi
 fi
-say "kleidicv 状态: $KLEIDI_STATE（cache=$KLEIDI_CACHE, 源码=$KLEIDI_SRC, 静态库=$KLEIDI_LIB）"
+# 这一行是 image-native.yml 与人工核对共用的锚点，别改字面（grep 'kleidicv 状态:'）。
+say "kleidicv 状态: $KLEIDI_STATE（源码=$KLEIDI_SRC）"
 
 # ── 4) 只编 imgcodecs 连带 core/imgproc（BUILD_LIST 已裁，不会捎带别的模块）
 say "make -j$(nproc) opencv_imgcodecs（连带 core/imgproc 静态库）"
@@ -195,7 +194,7 @@ say "16KB/ELF/NEEDED 门禁"
 # kleidicv 状态进审计：产物 sha256 之外还要能回答"这个 so 里到底有没有 kleidicv 加速"。
 ( cd "$OUT" && {
     sha256sum libimgnative.so | tee SHASUMS256
-    printf 'build: opencv=%s commit=%s kleidicv_commit=%s kleidicv_state=%s platform=aarch64-android%s\n' \
-        "$OPENCV_VERSION" "$OPENCV_COMMIT" "$KLEIDICV_COMMIT" "$KLEIDI_STATE" "$ANDROID_API" >> SHASUMS256
+    printf 'build: opencv=%s commit=%s kleidicv_commit=%s kleidicv_state=%s kleidicv_src=%s platform=aarch64-android%s\n' \
+        "$OPENCV_VERSION" "$OPENCV_COMMIT" "$KLEIDICV_COMMIT" "$KLEIDI_STATE" "$KLEIDI_SRC" "$ANDROID_API" >> SHASUMS256
   } )
 say "完成。产物: $OUT/libimgnative.so（kleidicv=$KLEIDI_STATE）"

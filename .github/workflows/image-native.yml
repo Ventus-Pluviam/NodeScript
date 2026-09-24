@@ -96,8 +96,9 @@ jobs:
 
       - name: 编译 libimgnative.so
         run: |
-          # kleidicv 走 gitlab.arm.com 的 release 包：CI 首次跑须从下方日志的
-          # `kleidicv 状态:` 一行读 ON/OFF（软降级不 fatal，结论也写进 SHASUMS256 审计行）。
+          # kleidicv 走 gitlab.arm.com 的 release 包：从下方日志的 `kleidicv 状态:`
+          # 一行读 ON/OFF（判据是 configure 摘要的 Custom HAL，见脚本 3b 段；软降级不
+          # fatal，结论也写进 SHASUMS256 审计行）。上面 tee 那份 log 也是 grep 的源。
           bash node-runtime-build/scripts/build-opencv.sh 2>&1 | tee /tmp/build-opencv.log
           grep -q '完成。产物' /tmp/build-opencv.log || { echo "构建日志无完成行"; exit 1; }
           grep 'kleidicv 状态:' /tmp/build-opencv.log
