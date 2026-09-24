@@ -1,5 +1,6 @@
 package com.autoscript.platform.system
 
+import com.autoscript.domain.automation.ColorHit
 import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.automation.ImageMatch
 import com.autoscript.domain.bridge.HandleRef
@@ -56,6 +57,29 @@ class NativeImageAnalyzerTest {
             matchCalls += Triple(haystack, needle, threshold)
             status[0] = matchStatus
             return if (matchStatus == 0) matchResult else null
+        }
+
+        var colorResult: ColorHit? = null
+        var colorStatus = 0
+        data class ColorCall(
+            val frame: Long,
+            val color: IntArray,
+            val tolerance: Int,
+            val region: IntArray?,
+        )
+
+        val colorCalls = mutableListOf<ColorCall>()
+
+        override fun color(
+            nativeFrame: Long,
+            color: IntArray,
+            tolerance: Int,
+            region: IntArray?,
+            status: IntArray,
+        ): ColorHit? {
+            colorCalls += ColorCall(nativeFrame, color, tolerance, region)
+            status[0] = colorStatus
+            return if (colorStatus == 0) colorResult else null
         }
 
         override fun release(nativeRef: Long): Int {
@@ -179,6 +203,76 @@ class NativeImageAnalyzerTest {
     fun `空白路径先拒（contract 的 IllegalArgumentException）`() {
         val t = runCatching { runBlocking { analyzer.decode("   ") } }.exceptionOrNull()
         assertInstanceOf(IllegalArgumentException::class.java, t)
+        Unit
+    }
+
+    // ── findColor（§9.2 P1 第一个算子）────────────────────────────────────
+    // 三条口径：域 require 折叠 INVALID_PARAM、x=-1 视为未命中、status=4 原码对表。
+
+    @Test
+    fun `findColor 域越界在这层 require（不放进 native）`() = runBlocking {
+        val f = analyzer.decode("/x.png")
+        val bad = listOf<Pair<String, suspend () -> Unit>>(
+            "color 三分量" to { analyzer.findColor(f.handle, listOf(1, 2, 3), 0, null) },
+            "分量 256" to { analyzer.findColor(f.handle, listOf(256, 0, 0, 255), 0, null) },
+            "分量 -1" to { analyzer.findColor(f.handle, listOf(-1, 0, 0, 255), 0, null) },
+            "tolerance 256" to { analyzer.findColor(f.handle, listOf(0, 0, 0, 255), 256, null) },
+            "tolerance -1" to { analyzer.findColor(f.handle, listOf(0, 0, 0, 255), -1, null) },
+            "region 三元组" to { analyzer.findColor(f.handle, listOf(0, 0, 0, 255), 0, listOf(0, 0, 0)) },
+        )
+        for ((why, call) in bad) {
+            val t = runCatching { call() }.exceptionOrNull()
+            assertInstanceOf(IllegalArgumentException::class.java, t, why)
+        }
+        assertTrue(ops.colorCalls.isEmpty(), "域错一次 native 调用都不发")
+        Unit
+    }
+
+    @Test
+    fun `findColor 把 refId 译成本机帧号，色与区域原样到 native`() = runBlocking {
+        val f = analyzer.decode("/x.png")
+        ops.colorResult = ColorHit(7, 8, 9, 10, 11, 255)
+        val hit = analyzer.findColor(f.handle, listOf(1, 2, 3, 255), 12, listOf(10, 20, 30, 40))
+        assertEquals(ColorHit(7, 8, 9, 10, 11, 255), hit)
+        assertEquals(1, ops.colorCalls.size)
+        val call = ops.colorCalls.single()
+        assertEquals(100L, call.frame, "native 收到它自己发的帧号")
+        assertEquals(listOf(1, 2, 3, 255), call.color.toList(), "四分量原序 r,g,b,a")
+        assertEquals(12, call.tolerance, "tolerance 原样")
+        assertEquals(listOf(10, 20, 30, 40), call.region?.toList(), "region 原样")
+        Unit
+    }
+
+    @Test
+    fun `findColor 的 x=-1 视为未命中回 null（不是 (0,0) 假命中）`() = runBlocking {
+        val f = analyzer.decode("/x.png")
+        ops.colorResult = null      // JniOps 见到 x<0 就折成 null（哨兵在那一层解释）
+        ops.colorStatus = 0
+        assertNull(analyzer.findColor(f.handle, listOf(0, 0, 0, 255), 0, null), "扫过了、没有")
+        Unit
+    }
+
+    @Test
+    fun `findColor 的 status=4 原码对表 INVALID_PARAM`() = runBlocking {
+        val f = analyzer.decode("/x.png")
+        ops.colorStatus = 4
+        ops.colorResult = null
+        val t = runCatching { analyzer.findColor(f.handle, listOf(0, 0, 0, 255), 0, null) }
+            .exceptionOrNull()
+        assertInstanceOf(AutojsException::class.java, t)
+        assertEquals("ERR_INVALID_PARAM", codeOf(t!!), "区域不在帧内扫过 0 像素 → 参数错，不折叠成 IO")
+        Unit
+    }
+
+    @Test
+    fun `findColor 用已释放的帧 STALE 且不碰 native`() = runBlocking {
+        val f = analyzer.decode("/x.png")
+        analyzer.release(f.handle)
+        val t = runCatching { analyzer.findColor(f.handle, listOf(0, 0, 0, 255), 0, null) }
+            .exceptionOrNull()
+        assertInstanceOf(AutojsException::class.java, t)
+        assertEquals("ERR_STALE_HANDLE", codeOf(t!!))
+        assertTrue(ops.colorCalls.isEmpty(), "帧已死，一次找色都不发")
         Unit
     }
 

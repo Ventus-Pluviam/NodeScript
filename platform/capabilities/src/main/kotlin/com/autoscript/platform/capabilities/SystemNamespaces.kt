@@ -344,6 +344,32 @@ internal fun BridgeRequestLite.requiredRef(
     return HandleRef(refId, gen)
 }
 
+/** 必填整数数组（JSON 数字数组 → List<Int>；缺键/非数组/非整数元素即抛）。
+ * `images findColor` 的 color/region 走它：分量是原生侧的域（0..255），非整数
+ * 由本层折 `ERR_INVALID_PARAM`，不把 `1.5` 这种值悄悄截给 native。 */
+internal fun BridgeRequestLite.requiredIntList(
+    o: Map<String, A11yBridgeJson.Value>,
+    key: String,
+): List<Int> {
+    val v = o[key] ?: throw IllegalArgumentException("缺 $key 字段")
+    if (v !is A11yBridgeJson.Value.Arr) throw IllegalArgumentException("$key 必须是数组")
+    return v.items.map { item ->
+        val n = item as? A11yBridgeJson.Value.N
+            ?: throw IllegalArgumentException("$key 必须是数字数组")
+        val i = n.raw.toIntOrNull() ?: throw IllegalArgumentException("$key 元素不是整数: ${n.raw}")
+        i
+    }
+}
+
+/** 可选整数数组：缺键/JSON `null` → null；在场即按 [requiredIntList] 同一口径解析。 */
+internal fun BridgeRequestLite.optIntList(
+    o: Map<String, A11yBridgeJson.Value>,
+    key: String,
+): List<Int>? = when (val v = o[key]) {
+    null, is A11yBridgeJson.Value.Null -> null
+    else -> requiredIntList(o, key)
+}
+
 /** 枚举字段：缺省/`null` 走 [fallback]；未知字面量拒绝（拼错即报错，不静默套默认）。 */
 internal fun <T> BridgeRequestLite.enumOrNull(
     o: Map<String, A11yBridgeJson.Value>,

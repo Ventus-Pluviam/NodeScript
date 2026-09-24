@@ -3,6 +3,7 @@ package com.autoscript.shell
 import com.autoscript.appservice.scheduler.core.InMemoryIntentLog
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
+import com.autoscript.domain.automation.ColorHit
 import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.automation.ImageFrame
 import com.autoscript.domain.automation.ImageMatch
@@ -146,6 +147,18 @@ class PlatformWiringTest {
             needle: HandleRef,
             threshold: Double,
         ): ImageMatch? = hit
+
+        var colorHit: ColorHit? = ColorHit(7, 8, 10, 20, 30, 255)
+        val colorCalls = mutableListOf<List<Int>>()
+        override suspend fun findColor(
+            haystack: HandleRef,
+            color: List<Int>,
+            tolerance: Int,
+            region: List<Int>?,
+        ): ColorHit? {
+            colorCalls += color
+            return colorHit
+        }
     }
 
     private class FakeNotification : NotificationPoster {
@@ -314,12 +327,27 @@ class PlatformWiringTest {
                     "decode 回帧三字段（宽高是文件真值），实际 $frame",
                 )
                 assertEquals(listOf("/sdcard/icon.png"), analyzer.decoded)
+                // findColor：同一独立缝第五方法的端到端（见缝即通，假分析器给出固定命中）。
+                // 必须在 release 之前打 —— 帧放了就打不到了（帧纪律）
+                val hitPayload = okPayload(
+                    dispatch(
+                        s, "images", "findColor",
+                        """{"haystack":{"refId":1,"generation":1},"color":[10,20,30,255],"tolerance":5}""",
+                    ),
+                )
+                assertTrue(
+                    hitPayload.contains("\"x\":7") && hitPayload.contains("\"r\":10"),
+                    "findColor 回 {x,y,r,g,b,a}，实际 $hitPayload",
+                )
+                assertEquals(listOf(listOf(10, 20, 30, 255)), analyzer.colorCalls)
                 assertEquals(
                     "true",
                     okPayload(dispatch(s, "images", "release", """{"ref":{"refId":1,"generation":1}}""")),
                 )
                 assertEquals(listOf<Long>(1L), analyzer.released.map { it.refId })
             }
+
+
             assertEquals(
                 "ERR_NOT_IMPLEMENTED",
                 errCode(dispatch(shell(PlatformWiring.inject(bundle())), "images", "decode", "{}")),

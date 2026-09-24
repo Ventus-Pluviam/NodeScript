@@ -1,7 +1,7 @@
 // bridge/image —— libopencv.so 的装载面（docs/framework-design.md §9.2）
 //
 // 分工（与 imgnative.cpp 的两层切法）：
-//   - imgnative.cpp 是**纯计算核**：extern "C" 三入口（decode/match/release），
+//   - imgnative.cpp 是**纯计算核**：extern "C" 四入口（decode/match/release/color），
 //     零 JNI、可单独进 host 侧单测 —— 帧表（unordered_map<refId, Mat>）与
 //     状态码折折叠都在那一侧；
 //   - 本文件是**装载面**：全仓图像侧唯一 #include <jni.h> 的文件，只做
@@ -21,7 +21,9 @@
 
 #include <cstdint>
 
-// ── 装载面只引计算核的三个入口（imgnative.cpp 的 extern "C"，声明在此）──
+// ── 装载面只引计算核的四个入口（imgnative.cpp 的 extern "C"，声明在此）──
+// 装载面与计算核**共持同一份状态码表**（文件头 0/1/2/3/4，Kotlin 侧再对一次）；
+// 加/改状态码必须三处同批，别只改一处。
 extern "C" {
 int imgnative_decode(const char* path, int64_t* out_ref, int32_t* out_w, int32_t* out_h);
 int imgnative_match(int64_t haystack, int64_t needle, double threshold,
@@ -29,6 +31,11 @@ int imgnative_match(int64_t haystack, int64_t needle, double threshold,
                     int32_t* out_w, int32_t* out_h,
                     double* out_conf, int32_t* out_match);
 int imgnative_release(int64_t ref);
+int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
+                    const int32_t* region,
+                    int32_t* out_x, int32_t* out_y,
+                    int32_t* out_r, int32_t* out_g, int32_t* out_b, int32_t* out_a,
+                    int64_t* out_scanned);
 }
 
 extern "C" {
@@ -99,6 +106,70 @@ JNIEXPORT jint JNICALL
 Java_com_autoscript_platform_system_NativeImageAnalyzer_releaseNative(
     JNIEnv* /*env*/, jobject /*thiz*/, jlong native_ref) {
     return static_cast<jint>(imgnative_release(static_cast<int64_t>(native_ref)));
+}
+
+
+// ── color：在某帧（或帧内区域）里找一个"与目标色相近"的像素。
+// 回 jlong[6]{x, y, r, g, b, a}；**未命中回长度 6 而 x = -1**（扫过了、没有 ——
+// 与未匹配同一条纪律；不是 conf=0 那种会被误读成"匹上了但很差"的形状）；
+// 失败回 null + *outStatus。入参的 int[]（color 四分量 / region 四元组）走 JNI
+// 数组直达，不经过 JSON：分量是原生侧的域（0..255），在装载面多绕一层字符串
+// 往返只会多一个漂移面。
+JNIEXPORT jlongArray JNICALL
+Java_com_autoscript_platform_system_NativeImageAnalyzer_colorNative(
+    JNIEnv* env, jobject /*thiz*/, jlong frame,
+    jintArray color, jint tolerance, jintArray region, jobject out_status) {
+    jintArray status_arr = static_cast<jintArray>(out_status);
+    jint status = 0;
+    jlongArray result = nullptr;
+
+    if (color == nullptr) {
+        status = 4;   // ERR_INVALID_PARAM：分量数组都不在，无从谈起色
+    } else {
+        jint c[4] = {0, 0, 0, 0};
+        env->GetIntArrayRegion(color, 0, 4, c);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();   // 长度 <4 的数组：如实按参数错，不让异常穿边界
+            status = 4;
+        } else {
+            jint r[4] = {0, 0, 0, 0};
+            jboolean has_region = JNI_FALSE;
+            if (region != nullptr) {
+                env->GetIntArrayRegion(region, 0, 4, r);
+                if (env->ExceptionCheck()) {
+                    env->ExceptionClear();
+                    status = 4;
+                } else {
+                    has_region = JNI_TRUE;
+                }
+            }
+            if (status == 0) {
+                int32_t ox = -1, oy = 0, orr = 0, og = 0, ob = 0, oa = 0;  // x 哨兵 -1 = 未命中
+                int64_t scanned = 0;
+                const int rc = imgnative_color(
+                    static_cast<int64_t>(frame), c, static_cast<int32_t>(tolerance),
+                    has_region == JNI_TRUE ? r : nullptr,
+                    &ox, &oy, &orr, &og, &ob, &oa, &scanned);
+                if (rc != 0) {
+                    status = rc;
+                } else if (scanned == 0) {
+                    // 扫过 0 像素（空区域）：不是"没有这个色"，是"没有可扫的面" ——
+                    // 与"扫过了但没有"必须分开，否则脚本会把空区域当成找过色。
+                    status = 4;
+                } else {
+                    // 命中与否由 x 分（-1 = 未命中）：扫描序稳定，0,0 是合法的第一
+                    // 个像素坐标，不能拿它当"没有"的哨兵。
+                    const jlong hit[6] = {static_cast<jlong>(ox), static_cast<jlong>(oy),
+                                          static_cast<jlong>(orr), static_cast<jlong>(og),
+                                          static_cast<jlong>(ob), static_cast<jlong>(oa)};
+                    result = env->NewLongArray(6);
+                    if (result != nullptr) env->SetLongArrayRegion(result, 0, 6, hit);
+                }
+            }
+        }
+    }
+    if (status_arr != nullptr) env->SetIntArrayRegion(status_arr, 0, 1, &status);
+    return result;
 }
 
 }  // extern "C"

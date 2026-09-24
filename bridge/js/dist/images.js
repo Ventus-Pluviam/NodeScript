@@ -3,7 +3,7 @@
  * 截图与图像命名空间（docs/framework-design.md §9.2 / §8.8 / §12.2）：
  * screen.capture() → FrameSource 句柄（分类错误而非黑图：锁屏/FLAG_SECURE/
  * 无窗口/节流一律抛 ERR_*，见 Kotlin ScreenPolicy）；
- * images.decode/matchTemplate/findImage/release 走 native 分析面（§12.2 第七条独立缝，
+ * images.decode/matchTemplate/findImage/findColor/release 走 native 分析面（§12.2 第七条独立缝，
  * Kotlin 对偶 `ImagesNamespaceHandler` + `:domain` `ImageAnalyzer`）。
  *
  * **两张桥面别混**：`screen.*` 是截图帧源（句柄由 `ScreenshotSource` 发号，`recycle`
@@ -129,6 +129,32 @@ exports.images = {
             haystack: haystack.ref,
             needle: needle.ref,
             threshold: opts.threshold ?? 0.9,
+        }, { ttl: opts.timeout ?? 10_000 });
+        return payload;
+    },
+    /**
+     * 找色（`findColor`，§9.2 native 面第一个 P1 算子；§7.7 承诺 `findColor` 1080p < 10ms）：
+     * 在 `haystack` 帧（或其 `region` 子矩形）里找**第一个**与 `color` 的**每个分量**
+     * 差都不超过 `tolerance` 的像素，回它的全帧坐标与实际像素分量。
+     *
+     * 与 `matchTemplate` 的分界：那是"整块图案在哪"，这是"这个色在哪"—— 找色不问
+     * 图案、形状、连通性，只看分量是否落在容差带内（native `inRange` 的逐分量包含语义）。
+     *
+     * **未命中是答案不是异常**：回 `null`（扫过了、没有），不编 `ERR_NOT_FOUND`。
+     * 但**"扫过 0 像素"**（空区域/region 越界）是 `ERR_INVALID_PARAM` —— 那不是"没有"，
+     * 是"根本没找"，混成 `null` 会让脚本把空区域当成搜过一遍。
+     *
+     * 参数域（越界一律 `ERR_INVALID_PARAM` 且一次 native 调用都不发）：
+     * `color` 恒四分量 `[r,g,b,a]`（**R,G,B,A 序**，与 Android `0xAARRGGBB` 同序），
+     * 各 `[0,255]`；`tolerance` `[0,255]`（逐分量，非欧氏距离）；`region` 给了必须四元组
+     * 且整体落在帧内（不静默裁剪 —— 半截区域在帧外时"帧外的像素"没有答案）。
+     */
+    async findColor(haystack, color, tolerance, opts = {}) {
+        const payload = await runtime_1.runtimeBridge.invoke('images', 'findColor', {
+            haystack: haystack.ref,
+            color,
+            tolerance,
+            region: opts.region,
         }, { ttl: opts.timeout ?? 10_000 });
         return payload;
     },

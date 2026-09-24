@@ -1,5 +1,6 @@
 package com.autoscript.platform.capabilities
 
+import com.autoscript.domain.automation.ColorHit
 import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.automation.ImageFrame
 import com.autoscript.domain.automation.ImageMatch
@@ -74,6 +75,28 @@ class ImagesNamespaceHandlerTest {
             matches += Triple(haystack, needle, threshold)
             return matchResult
         }
+
+        class ColorCall(
+            val haystack: HandleRef,
+            val color: List<Int>,
+            val tolerance: Int,
+            val region: List<Int>?,
+        )
+
+        val colorCalls = mutableListOf<ColorCall>()
+        var colorResult: ColorHit? = null
+        var colorFail: AutojsException? = null
+
+        override suspend fun findColor(
+            haystack: HandleRef,
+            color: List<Int>,
+            tolerance: Int,
+            region: List<Int>?,
+        ): ColorHit? {
+            colorFail?.let { throw it }
+            colorCalls += ColorCall(haystack, color, tolerance, region)
+            return colorResult
+        }
     }
 
     private val fake = FakeAnalyzer()
@@ -105,6 +128,23 @@ class ImagesNamespaceHandlerTest {
     /** 匹配载荷（`haystack`/`needle` 各持一个 ref 信封 + 统一键 `threshold`）。 */
     private fun matchJson(haystack: HandleRef, needle: HandleRef, threshold: String): String =
         """{"haystack":{"refId":${haystack.refId},"generation":${haystack.generation}},"needle":{"refId":${needle.refId},"generation":${needle.generation}},"threshold":$threshold}"""
+
+    /** 找色载荷：`haystack` ref 信封 + 目标色 `color` + 容差 `tolerance` + 可选 `region`。
+     *  `region` 形参传 Kotlin `null` = **不发这个键**，传 `"null"` = 发 JSON null
+     *  （两者在契约里同义，用例里必须都能表达）。 */
+    private fun findColorJson(
+        haystack: HandleRef,
+        color: String,
+        tolerance: String,
+        region: String? = null,
+    ): String {
+        val tail = if (region == null) "" else ",\"region\":" + region
+        return """{"haystack":{"refId":${haystack.refId},"generation":${haystack.generation}},"color":$color,"tolerance":$tolerance$tail}"""
+    }
+
+    /** 域越界用例专用：自己拼信封（refId 1 不必真在场——域校验在帧号检查之前）。 */
+    private fun findColorJsonRaw(refEnvelope: String, color: String, tolerance: String, region: String = ""): String =
+        """{"haystack":$refEnvelope,"color":$color,"tolerance":$tolerance$region}"""
 
     @Test
     fun `decode 发 path 回帧句柄 + 文件真宽高`() = runBlocking {
@@ -247,6 +287,100 @@ class ImagesNamespaceHandlerTest {
             errCode(call("findImage", matchJson(haystack, needle, "0.9"))),
         )
         assertTrue(fake.matches.isEmpty(), "帧已死，一次匹配都不发")
+        Unit
+    }
+
+    // ── findColor（§9.2 P1 第一个算子；§7.7/§15 承诺"找色 < 10ms"）────────────
+    // 三条口径单独钉：wire 形状、域校验零 SPI、帧句柄。
+    // 第四条（"扫过了没有" vs "区域扫过 0 像素"）在 native 层，见 imgnative.cpp。
+
+    @Test
+    fun `findColor 发 haystack+color+tolerance 回六字段命中`() = runBlocking {
+        fake.colorResult = ColorHit(120, 340, 18, 52, 86, 255)
+        val haystack = decodeFrame("/sdcard/screen.png")
+
+        val payload = ok(call("findColor", findColorJson(haystack, "[18,52,86,255]", "10")))
+        val o = A11yBridgeJson.decodeObject(payload)
+        assertEquals("120", (o["x"] as A11yBridgeJson.Value.N).raw)
+        assertEquals("340", (o["y"] as A11yBridgeJson.Value.N).raw)
+        assertEquals("18", (o["r"] as A11yBridgeJson.Value.N).raw, "回的是实际像素值，不是请求的目标色")
+        assertEquals("52", (o["g"] as A11yBridgeJson.Value.N).raw)
+        assertEquals("86", (o["b"] as A11yBridgeJson.Value.N).raw)
+        assertEquals("255", (o["a"] as A11yBridgeJson.Value.N).raw)
+        assertEquals(1, fake.colorCalls.size, "命中了也如实记一次 SPI 调用")
+        Unit
+    }
+
+    @Test
+    fun `findColor 未命中回裸 null（扫过了、没有）`() = runBlocking {
+        fake.colorResult = null
+        val haystack = decodeFrame()
+        assertEquals(
+            "null",
+            ok(call("findColor", findColorJson(haystack, "[0,0,0,255]", "0"))),
+            "扫过一遍没这个色 = null（答案），不编 ERR_NOT_FOUND",
+        )
+        Unit
+    }
+
+    @Test
+    fun `findColor 的 region 可选：缺键与 JSON null 都等于全帧`() = runBlocking {
+        fake.colorResult = ColorHit(5, 6, 1, 2, 3, 4)
+        val haystack = decodeFrame()
+
+        ok(call("findColor", findColorJson(haystack, "[1,2,3,4]", "0", null)))
+        ok(call("findColor", findColorJson(haystack, "[1,2,3,4]", "0", "null")))
+        ok(call("findColor", findColorJson(haystack, "[1,2,3,4]", "0", "[10,20,30,40]")))
+
+        assertEquals(3, fake.colorCalls.size, "三次都该到 SPI：$fake.colorCalls")
+        assertEquals(null, fake.colorCalls[0].region, "缺 region 键 = null（native 按全帧扫）")
+        assertEquals(null, fake.colorCalls[1].region, "region:null 与缺键同义，不是参数错")
+        assertEquals(listOf(10, 20, 30, 40), fake.colorCalls[2].region, "给了就原样四元组到 SPI")
+        Unit
+    }
+
+    @Test
+    fun `findColor 参数域越界拒收且不碰 SPI`() = runBlocking {
+        val hj = """{"refId":1,"generation":1}"""
+        val bad = listOf(
+            "color 三分量" to findColorJsonRaw(hj, "[1,2,3]", "0"),
+            "color 五分量" to findColorJsonRaw(hj, "[1,2,3,4,5]", "0"),
+            "分量 256" to findColorJsonRaw(hj, "[256,2,3,4]", "0"),
+            "分量 -1" to findColorJsonRaw(hj, "[1,-1,3,4]", "0"),
+            "tolerance 256" to findColorJsonRaw(hj, "[1,2,3,4]", "256"),
+            "tolerance -1" to findColorJsonRaw(hj, "[1,2,3,4]", "-1"),
+            "region 三元组" to findColorJsonRaw(hj, "[1,2,3,4]", "0", "[1,2,3]"),
+            "缺 color" to """{"haystack":$hj,"tolerance":0}""",
+            "缺 tolerance" to """{"haystack":$hj,"color":[1,2,3,4]}""",
+            "缺 haystack" to """{"color":[1,2,3,4],"tolerance":0}""",
+        )
+        for ((why, payload) in bad) {
+            assertEquals("ERR_INVALID_PARAM", errCode(call("findColor", payload)), why)
+        }
+        assertTrue(fake.colorCalls.isEmpty(), "参数错一次 SPI 调用都不发（域内/域外都先在本层判）")
+        Unit
+    }
+
+    @Test
+    fun `findColor 用已释放的帧 ERR_STALE_HANDLE`() = runBlocking {
+        val haystack = decodeFrame("/sdcard/screen.png")
+        assertEquals("true", ok(call("release", refJson(haystack))))
+        assertEquals(
+            "ERR_STALE_HANDLE",
+            errCode(call("findColor", findColorJson(haystack, "[1,2,3,4]", "0"))),
+        )
+        assertTrue(fake.colorCalls.isEmpty(), "帧已死，一次找色都不发")
+        Unit
+    }
+
+    @Test
+    fun `findColor 的 SPI 错误原码透传`() = runBlocking {
+        val haystack = decodeFrame()
+        fake.colorFail = AutojsException(ErrorCode.ERR_STALE_HANDLE, "帧已释放")
+        assertEquals(
+            "ERR_STALE_HANDLE",
+            errCode(call("findColor", findColorJson(haystack, "[1,2,3,4]", "0"))),
+        )
         Unit
     }
 
