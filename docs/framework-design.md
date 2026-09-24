@@ -944,7 +944,7 @@ const name = await auto.dialogs.prompt('输入名字', { mode: 'auto' });
 // shell / root 能力（分级成 DENIED 时抛 ERR_PERMISSION_DENIED）
 const out = await auto.shell(`pm list packages`);
 
-// 图片分析（原生 addon）：v9 的 fromFile 是 decode 的别名；toGrayscale/crop/pixel
+// 图片分析（native 面）：v9 的 fromFile 是 decode 的别名；toGrayscale/crop/rotate/pixel
 // 仍归 §9.2 native 面（P1），接口期两侧都不提供 —— 宿主如实 ERR_NOT_IMPLEMENTED
 const found = await auto.images.matchTemplate(img, await auto.images.fromFile('part.png'), { threshold: 0.85 });
 // 找色（P1 第一个算子）：null = 扫过了、没有；ERR_INVALID_PARAM = 根本没找（空区域）
