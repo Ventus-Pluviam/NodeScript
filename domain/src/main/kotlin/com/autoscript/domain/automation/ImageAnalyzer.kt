@@ -21,7 +21,7 @@ import com.autoscript.domain.bridge.HandleRef
  *   `找色 < 10ms` **却没有任何实现在背后**—— 预算表不是愿望清单，先还这笔账。
  *   落地范围刻意窄：单色 + 逐分量容差 + 可选区域 + 回第一个命中，见该方法 KDoc。
  * - **两个匹配方法同一个阈值键 `threshold`**：facade 曾一个发 `tolerance` 一个发
- *   `threshold` —— 同一个 opencv 概念（TM_CCORR_NORMED 得分 ≥ 阈值即命中）两个键名，
+ *   `threshold` —— 同一个 opencv 概念（TM_CCOEFF_NORMED 得分 ≥ 阈值即命中）两个键名，
  *   两侧 mock 各自自洽所以漂移没被抓到。契约侧钉死一个名字，宿主不认的键不静默丢弃。
  * - **阈值域 [0,1]**（越界 → `ERR_INVALID_PARAM`，handler 校验；实现不再各自宽严不一）；
  *   置信度同域，与阈值可直接比较（不同实现的方法差异是实现细节，域是契约）。
@@ -67,6 +67,12 @@ interface ImageAnalyzer {
 
     /**
      * 模板匹配：在 [haystack] 里找 [needle]，得分 ≥ [threshold] 即命中。
+     *
+     * 得分是 **TM_CCOEFF_NORMED**（相关系数，自带亮度归一）。已知代价，脚本作者该知道：
+     * **方差≈0 的模板**（纯色块/没有纹理的图）会让整个结果面恒 1.0 —— 不是"到处都匹配"，
+     * 是"得分在这个模板上没有区分度"。此时命中的坐标稳定可复现但不唯一，别把它当"就是这块"。
+     * 要区分"就是这块"请拿带纹理的模板，或改用 [findColor] 后自己核对邻域。
+     *
      * @throws com.autoscript.domain.core.AutojsException `ERR_STALE_HANDLE` 任一帧已死。
      */
     suspend fun matchTemplate(haystack: HandleRef, needle: HandleRef, threshold: Double): ImageMatch?

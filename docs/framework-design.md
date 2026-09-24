@@ -283,8 +283,18 @@ class AutojsError extends Error {
 | 无障碍 `find → click` | 200ms 内 p60 / ~10ms 树读 | 紧凑索引树 + 按需属性 + 句柄（不全量序列化） |
 | `captureScreen → findImage` | < 1s 且一次截图两次匹配 < 700ms | 屏幕帧→native 0 拷贝，模板匹配在 `libopencv.so` |
 | `findColor`（单人独立子图 1080p） | < 10ms | native 遍历（`cv::inRange` 逐分量包含 + `findNonZero` 取首个；ROI 是浅视图不拷像素；kleidicv 覆盖 `inRange` 面） |
-| `matchTemplate` 1080p | < 40ms | OpenCV TM_CCORR_NORMED + 降采样 |
+| `matchTemplate` 1080p | < 40ms | OpenCV TM_CCOEFF_NORMED（实测它、不是早前写的 CCORR：见下注）|
 | 紧凑树构建/传输 | < 15ms / 数十 KB | 预聚合属性，代价解析放"取用即取" |
+
+> **`TM_CCOEFF_NORMED` 而不是 `TM_CCORR_NORMED`（2026-09-25 实测改口径，非抄来的）**：
+> `imgnative_match` 一直用 CCOEFF，早前本表与 `:domain` KDoc 两处写成 CCORR —— 名字漂移
+> 谁都没炸，因为真实纹理模板下两者都能拿 1.0。差别在**画面里没有模板**时（host 静态库实测）：
+> CCORR_NORMED 的 max 仍有 **+0.955**（阈值 0.9 直接误判命中），CCOEFF_NORMED 的 max 只有
+> **+0.599**（正确判未命中）。相关系数自带亮度归一，对抗画面里的均匀亮块伪阳性；
+> 这也是"两个匹配方法同一个阈值键"敢统一到 `[0,1]` 的前提。
+> 代价钉在这儿：CCOEFF 对**方差≈0 的模板**（纯色块）会给出恒 1.0 的结果面，实测 14651/14651
+> 个位置全满分 —— 那类请求的命中坐标稳定但不唯一，脚本要按 `threshold` 高就把结果当"就是这块"
+> 会踩空。这是 opencv 口径，不是我们能修的，先在契约里写明。
 
 ### 7.8 :bridge:native 落地契约（v24.21.0 + NDK r28c 实证，CI 构建前置）
 
