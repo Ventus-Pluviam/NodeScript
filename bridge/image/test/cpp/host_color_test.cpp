@@ -13,10 +13,15 @@
 // 跑法见 test/cpp/run-host-tests.sh（OpenCV 4.14.0 按 build-opencv.sh 同款
 // commit 固定，kleidicv OFF —— host 是 x86_64，那条加速面只在 aarch64 上）。
 #include <cassert>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -61,10 +66,25 @@ Hit run(int64_t frame, std::vector<int32_t> color, int32_t tol, const int32_t* r
     return h;
 }
 
+/** mkdir -p（POSIX；host 侧不需要 <filesystem> 的 C++17 跨平台叙事）。 */
+void ensure_dir(const std::string& path) {
+    const int rc = ::mkdir(path.c_str(), 0755);
+    // 已存在不算失败：两次跑同一个 PID 前缀的概率低，但真撞上时不该在这里炸。
+    if (rc != 0 && errno != EEXIST) {
+        std::fprintf(stderr, "[FATAL] 建不了临时目录 %s: %s\n", path.c_str(), std::strerror(errno));
+        std::exit(97);
+    }
+}
+
 }  // namespace
 
 int main() {
-    const std::string dir = "/tmp/imgtest";
+    // 自建临时目录：imwrite 到不存在的目录**静默返回 false**（不抛），后续每一条
+    // 断言会以一种跟根因八竿子打不着的方式红（decode rc=2 / 宽高 0x0 / 分量全 0）。
+    // CI 上就是这么红的：runner 上没有 /tmp/imgtest，本机有我上次调试留下的。
+    // 顺带用 PID 后缀，两个测试并行跑不互相盖对方的 PNG。
+    const std::string dir = "/tmp/imgtest-" + std::to_string(getpid());
+    ensure_dir(dir);
 
     // ── 一张 4×3、4 通道的 PNG：A 恒 255，BGR 三个色块 ────────────────────
     //   (0,0)=PureBlue  (1,0)=PureGreen (2,0)=PureRed  (3,0)=Gray

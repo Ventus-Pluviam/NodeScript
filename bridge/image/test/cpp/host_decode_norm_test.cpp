@@ -5,9 +5,14 @@
 // 回归锚点：**IMREAD_COLOR 那条老路**会把任何来源压成 3 通道 BGR，alpha 丢掉，
 // 于是 Vec4b 的第 4 字节静默读进下一行像素 —— 回给脚本的 a 是垃圾，
 // tolerance 对 a 的判定也是垃圾。这一段就是把那条路焊死不让回来。
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -28,8 +33,20 @@ static int findit(int64_t ref, int32_t r, int32_t g, int32_t b, int32_t a, int32
     out[0] = x; out[1] = y; out[2] = orr; out[3] = og; out[4] = ob; out[5] = oa; out[6] = (int32_t)sc;
     return 0;
 }
+void ensure_dir(const std::string& path) {
+    const int rc = ::mkdir(path.c_str(), 0755);
+    if (rc != 0 && errno != EEXIST) {
+        std::fprintf(stderr, "[FATAL] 建不了临时目录 %s: %s\n", path.c_str(), std::strerror(errno));
+        std::exit(97);
+    }
+}
+
 int main() {
-    const std::string d = "/tmp/imgtest";
+    // 自建临时目录（PID 后缀）：imwrite 到不存在的目录静默返回 false，
+    // 之后的断言会以"跟根因八竿子打不着"的方式红 —— CI runner 上没有 /tmp/imgtest
+    // 就是这么全红的（本机有上次调试留下的目录所以看不见）。见 host_color_test 同段。
+    const std::string d = "/tmp/imgtest-" + std::to_string(getpid());
+    ensure_dir(d);
 
     // 1) 灰度 PNG：归一后 r=g=b=灰度值、a=255（不透明常识）
     {
