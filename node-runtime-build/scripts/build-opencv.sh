@@ -12,6 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../VERSIONS.env
 source "$ROOT_DIR/VERSIONS.env"
+say() { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
+die() { printf '\033[1;31m[FATAL]\033[0m %s\n' "$*" >&2; exit 1; }
+
 # 桥面 C++ 住**仓库**根的 bridge/image/（Gradle 模块，不在 node-runtime-build 里）。
 # assert 而非默默跳过：CI 的 checkout 布局偶发/镜像平铺会把它指到 node-runtime-build/
 # 下面（2026-09-24 实测 [FATAL] 之前先撞上 "no such file or directory: .../node-runtime-build/
@@ -20,7 +23,8 @@ IMG_CPP_DIR="$ROOT_DIR/bridge/image/src/main/cpp"
 [ -f "$IMG_CPP_DIR/imgnative.cpp" ] || die "桥面计算核缺失: $IMG_CPP_DIR/imgnative.cpp"
 [ -f "$IMG_CPP_DIR/images_jni.cc" ] || die "桥面装载面缺失: $IMG_CPP_DIR/images_jni.cc（JNI 符号名 Kotlin 侧与之对表，缺一即不装）"
 
-WORK="${WORK_DIR:?WORK_DIR 未设置}"
+WORK="${WORK_DIR:?WORK_DIR 未设置}"   # 本管线唯一的"从外面带进来的目录"约定：
+                                      # Dockerfile 与 image-native.yml 都注入同一个值
 OCV_SRC="$WORK/src/opencv"
 OUT="$WORK/out-opencv"
 NDK_DIR="$WORK/ndk/android-ndk-$NDK_VERSION"
@@ -30,9 +34,6 @@ TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
 : "${OPENCV_COMMIT:?VERSIONS.env 缺 OPENCV_COMMIT}"
 : "${KLEIDICV_COMMIT:?VERSIONS.env 缺 KLEIDICV_COMMIT}"
 : "${KLEIDICV_MD5:?VERSIONS.env 缺 KLEIDICV_MD5}"
-
-say() { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
-die() { printf '\033[1;31m[FATAL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 mkdir -p "$WORK/src" "$OUT"
 
