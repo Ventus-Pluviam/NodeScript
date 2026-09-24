@@ -194,7 +194,7 @@ class NativeImageAnalyzer(
  * 抛 `UnsatisfiedLinkError`，由 [NativeImageAnalyzer.of] 的捕获转成"不注入"。
  * 装载只做一次（对象只在装配期建一次，`frames` 表随进程存活）。
  */
-internal class JniOps : NativeImageAnalyzer.Ops {
+class JniOps : NativeImageAnalyzer.Ops {
 
     private external fun decodeNative(path: String, status: IntArray): LongArray?
 
