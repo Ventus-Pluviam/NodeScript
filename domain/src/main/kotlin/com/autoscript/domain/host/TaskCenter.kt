@@ -62,10 +62,11 @@ data class ScheduledTaskRow(
 /**
  * 调度计划（`TimedSchedule` 的呈现侧对偶；三态一一对应，字段名取用户能懂的那个）。
  *
- * [Cron] 仍留在契约里而不是删掉：`TimedSchedule.Cron` 在 P1 之前**算不出下一跳**
- * （`nextFireAfter` 回 null），但注册表里可能真的存着这样一条（未来版本写的文件、
- * 或用户手改的 `tasks.jsonl`）。装作它不存在会让那条任务从列表里凭空消失 ——
- * 呈现层的责任是如实说"这是 cron，本版还没落地排期"。
+ * [Cron] 仍留在契约里而不是删掉：`TimedSchedule.Cron` 多数时候算得出下一跳
+ * （`nextFireAfter` 经调度器的 `CronTab`），但注册表里可能躺着不可能日期
+ * （如 2 月 30 号，从无命中回 null）或用户手改坏掉的行（非法回 null）。
+ * 装作它不存在会让那条任务从列表里凭空消失 —— 呈现层的责任是如实说表达式本身，
+ * 下一跳为 null 时不显示时间（见 [ScheduledTaskRow.nextFireAtMillis] 两义）。
  */
 sealed interface ScheduleSpec {
     /** 相对登记时刻的延迟（一次性）。 */
@@ -74,7 +75,7 @@ sealed interface ScheduleSpec {
     /** 每日定点。 */
     data class Daily(val hourOfDay: Int, val minuteOfHour: Int) : ScheduleSpec
 
-    /** cron 表达式（P1 未落地；本版算不出下一跳）。 */
+    /** cron 表达式（5 字段 `分 时 日 月 周`；不可能日期/非法行算不出下一跳）。 */
     data class Cron(val expr: String) : ScheduleSpec
 }
 
@@ -144,9 +145,9 @@ data class RecoveryRow(
  * `:app` 的 `TaskCenterOps.toScheduledTask` —— 桥与 UI 两个登记入口过**同一套**映射，
  * DTO 保持纯数据（呈现层测试不必背校验语义）。
  *
- * @property schedule 只该给 Once/Daily：[ScheduleSpec.Cron] 在 P1 排期落地前由装配层
- *   **如实拒绝**（与桥侧 `ERR_NOT_IMPLEMENTED` 同一口径 —— 登记一条算不出下一跳、
- *   看起来却"在册"的任务是把问题推迟到用户看不见的地方）。
+ * @property schedule 三态都可给：[ScheduleSpec.Cron] 由装配层经调度器的 `CronTab.parse`
+ *   校验（与桥侧 `workManager.create` 同一口径）—— 非法表达式登记时即拒；
+ *   不可能日期是合法表达式，登记放行、排期回 null 留名不续排。
  * @property id null = 登记时由服务端分配（与桥侧一致；空串同样当没给）。
  * @property timezoneId null = 系统默认时区（Daily 的 DST 边界靠它，见 `TimedSchedule.nextFireAfter`）。
  * @property enabled 缺省 true（本版操作面**没有**启停开关 —— 该字段只为与

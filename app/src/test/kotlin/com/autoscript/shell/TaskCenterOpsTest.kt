@@ -17,8 +17,9 @@ import java.time.ZoneId
  * 两侧各测** —— 任何一侧单改（放行 cron / 放宽空串）另一侧先红。
  *
  * 为什么值得测：每一格错了都不会崩 —— 只会登记出一条用户以为在排期、实际不跑的
- * 任务（空 scriptPath / 负延迟 / 越界钟点），或把 P1 未落地的 cron 静默收下
- * （列表里"在册"却永远算不出下一跳）。全是静默地不对。
+ * 任务（空 scriptPath / 负延迟 / 越界钟点 / 非法 cron 表达式）。全是静默地不对。
+ * 不可能日期（如 2 月 30 号）是**合法**表达式：登记放行、排期回 null 留名不续排，
+ * 与停用任务同一诚实口径 —— 本测试钉住这条线。
  */
 class TaskCenterOpsTest {
 
@@ -93,12 +94,40 @@ class TaskCenterOpsTest {
     }
 
     @Test
-    fun `cron 如实拒绝 —— P1 未落地不登记在册却不排期的任务`() {
-        val e = assertThrows(IllegalArgumentException::class.java) {
-            TaskCenterOps.toScheduledTask(reg(schedule = ScheduleSpec.Cron("0 7 * * *")))
+    fun `cron 合法放行 —— 表达式 trim 后进调度器`() {
+        val task = TaskCenterOps.toScheduledTask(reg(schedule = ScheduleSpec.Cron("  0 7 * * 1  ")))
+        assertEquals(TimedSchedule.Cron("0 7 * * 1"), task.schedule)
+    }
+
+    @Test
+    fun `cron 非法拒绝 —— 消息点名哪一段`() {
+        for (bad in listOf("61 9 * * *", "0 9 * *", "0 9 * * FOO", "0 24 * * *", "")) {
+            val e = assertThrows(IllegalArgumentException::class.java) {
+                TaskCenterOps.toScheduledTask(reg(schedule = ScheduleSpec.Cron(bad)))
+            }
+            assertTrue(e.message!!.contains("cron"), "「$bad」消息点名 cron：${e.message}")
         }
-        assertTrue(e.message!!.contains("cron"), "消息点名 cron：${e.message}")
-        assertTrue(e.message!!.contains("P1"), "消息点名 P1 未落地：${e.message}")
+    }
+
+    @Test
+    fun `cron 不可能日期是合法表达式 —— 登记放行，下一跳留名不续排`() {
+        // 2 月没有 30 号：CronTab.parse 放行（形状合法），nextFireAfter 回 null。
+        val task = TaskCenterOps.toScheduledTask(reg(schedule = ScheduleSpec.Cron("0 0 30 2 *")))
+        assertEquals(TimedSchedule.Cron("0 0 30 2 *"), task.schedule, "登记放行：不是形状错")
+        assertEquals(
+            null, task.schedule.nextFireAfter(1_000_000L, ZoneId.systemDefault()),
+            "排期算不出：rearmFor 按留名不续排处理（与停用任务同一口径）",
+        )
+    }
+
+    @Test
+    fun `cron 与桥侧同口径 —— 两侧非法样本一致拒绝`() {
+        // 与 WorkManagerNamespaceHandlerTest 的 cron 样本同源：任一侧单改先红。
+        for (bad in listOf("61 9 * * *", "0 9 * * FOO")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                TaskCenterOps.toScheduledTask(reg(schedule = ScheduleSpec.Cron(bad)))
+            }
+        }
     }
 
     @Test

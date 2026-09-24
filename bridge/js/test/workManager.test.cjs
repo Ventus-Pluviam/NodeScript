@@ -3,6 +3,8 @@
  * workManager 桥面测试（§8.6/§9.6 脚本建任务链路 + Kotlin WorkManagerNamespaceHandler）：
  * JS facade 的 wire 形状（create/cancel/list 载荷）与 Kotlin 侧解析器逐字段对齐；
  * 用 mock 宿主验证"发的出去、回的来能解析"。Kotlin 真语义由 WorkManagerNamespaceHandlerTest 覆盖。
+ * mock 宿主对 cron 只做形状门（kind==='cron' 须带非空 expr，否则 ERR_INVALID_PARAM）——
+ * 段内合法性（范围/名字/步长）是宿主 CronTab.parse 的事，mock 不复述第二套校验。
  */
 const assert = require('node:assert/strict')
 const { test } = require('node:test')
@@ -23,7 +25,9 @@ function installMockWorkManager() {
       if (!p || !p.name || !p.projectId || !p.scriptPath || !p.schedule) {
         err('ERR_INVALID_PARAM', '缺字段'); return undefined
       }
-      if (p.schedule.kind === 'cron') { err('ERR_NOT_IMPLEMENTED', 'cron P1 未落地'); return undefined }
+      if (p.schedule.kind === 'cron' && (!p.schedule.expr || typeof p.schedule.expr !== 'string')) {
+        err('ERR_INVALID_PARAM', 'cron 需要字符串 expr'); return undefined
+      }
       const id = p.id || `srv-${tasks.size + 1}`
       tasks.set(id, { ...p, id })
       ok(JSON.stringify({ id })); return undefined
@@ -48,12 +52,24 @@ test('workManager 桥：create → list → cancel 全链路', async () => {
   assert.deepEqual(await auto.workManager.listTasks(), [])
 })
 
-test('workManager 桥：cron 如实拒绝（P1 未落地不伪装）', async () => {
+test('workManager 桥：cron 登记放行（wire 形状 kind+expr）', async () => {
+  // mock 宿主由本文件首个用例安装（RuntimeBridge 单例禁重复 install），这里直接复用。
+  const { id } = await auto.workManager.createTimedTask({
+    name: 'n', projectId: 'p', scriptPath: 'a.js',
+    schedule: auto.workManager.cron('0 9 * * 1'),
+  })
+  assert.ok(id, '服务端回 id')
+  const listed = await auto.workManager.listTasks()
+  assert.strictEqual(listed[listed.length - 1].schedule.kind, 'cron')
+  assert.strictEqual(await auto.workManager.cancelTask(id), true)
+})
+
+test('workManager 桥：cron 缺 expr 被拒（形状门）', async () => {
   await assert.rejects(
     auto.workManager.createTimedTask({
       name: 'n', projectId: 'p', scriptPath: 'a.js',
-      schedule: { kind: 'cron', expr: '0 9 * * *' },
+      schedule: { kind: 'cron' },
     }),
-    (e) => e.code === 'ERR_NOT_IMPLEMENTED',
+    (e) => e.code === 'ERR_INVALID_PARAM',
   )
 })

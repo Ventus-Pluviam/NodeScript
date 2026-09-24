@@ -114,9 +114,10 @@ class TaskCenterStateTest {
             ScheduleText.describe(ScheduleSpec.Once(45)),
         )
         assertEquals("每天 07:05", ScheduleText.describe(ScheduleSpec.Daily(7, 5)))
-        assertTrue(
-            ScheduleText.describe(ScheduleSpec.Cron("0 7 * * *")).contains("尚未落地排期"),
-            "Cron 本版算不出下一跳：如实说，不让它看起来和每日任务一样正常",
+        assertEquals(
+            "cron 表达式「0 7 * * *」",
+            ScheduleText.describe(ScheduleSpec.Cron("0 7 * * *")),
+            "Cron 只说表达式本身：下一跳可能算不出（2 月 30 号/坏行回 null），那时不显示时间",
         )
     }
 

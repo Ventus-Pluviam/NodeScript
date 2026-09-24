@@ -19,7 +19,8 @@ import org.junit.jupiter.api.Test
 /**
  * `workManager` 桥面验证（§8.6/§9.6 定时 API 的脚本建任务链路）：
  * JS `auto.workManager.createTimedTask` 发桥调用 → 本 handler 登记 Scheduler
- * （直写注册表）→ `cancel` 撤销 → `list` 列举。cron 如实拒绝（P1 未落地）。
+ * （直写注册表）→ `cancel` 撤销 → `list` 列举。cron 表达式校验与 UI 侧 Ops
+ * 同口径（校验出处都是调度器的 `CronTab.parse`，两侧各测）。
  */
 class WorkManagerNamespaceHandlerTest {
 
@@ -88,13 +89,32 @@ class WorkManagerNamespaceHandlerTest {
     }
 
     @Test
-    fun `cron 如实拒绝，非法载荷 INVALID_PARAM，未知方法 NOT_IMPLEMENTED`() = runBlocking {
-        val (h, _) = handler()
-        assertEquals(
-            "ERR_NOT_IMPLEMENTED",
-            errCode(h, "create", """{"name":"n","projectId":"p","scriptPath":"a.js","schedule":{"kind":"cron","expr":"0 9 * * *"}}"""),
-            "cron P1 未落地：拒绝不伪装",
+    fun `cron 合法放行非法 INVALID_PARAM —— 与 UI 侧 Ops 同口径`() = runBlocking {
+        val (h, s) = handler()
+        val created = ok(
+            h, "create",
+            """{"id":"c1","name":"n","projectId":"p","scriptPath":"a.js","schedule":{"kind":"cron","expr":"0 9 * * 1"}}""",
         )
+        assertTrue(created!!.contains("c1"), "合法 cron 登记：$created")
+        assertEquals(listOf("c1"), s.tasks().map { it.id })
+        val listed = ok(h, "list", null)!!
+        assertTrue(listed.contains("cron") && listed.contains("0 9 * * 1"), "list 同形状回显：$listed")
+        assertEquals(
+            "ERR_INVALID_PARAM",
+            errCode(h, "create", """{"name":"n","projectId":"p","scriptPath":"a.js","schedule":{"kind":"cron","expr":"61 9 * * *"}}"""),
+            "非法 cron → INVALID_PARAM（与 Ops 侧样本同源）",
+        )
+        assertEquals(
+            "ERR_INVALID_PARAM",
+            errCode(h, "create", """{"name":"n","projectId":"p","scriptPath":"a.js","schedule":{"kind":"cron"}}"""),
+            "缺 expr → INVALID_PARAM",
+        )
+        Unit
+    }
+
+    @Test
+    fun `非法载荷 INVALID_PARAM，未知方法 NOT_IMPLEMENTED`() = runBlocking {
+        val (h, _) = handler()
         assertEquals(
             "ERR_INVALID_PARAM",
             errCode(h, "create", """{"name":"n","projectId":"p"}"""),

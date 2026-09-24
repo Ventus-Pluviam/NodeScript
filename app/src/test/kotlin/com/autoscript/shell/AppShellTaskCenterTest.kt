@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.time.ZoneId
 
 /**
  * 任务中心读口的**装配侧**验证（[AppShellKit.AssembledShell.taskCenter]）——
@@ -22,7 +23,7 @@ import java.nio.file.Path
  *
  * 单元级的映射规则在 [TaskCenterReadTest]；这里钉的是只有装配层才定的三件事：
  * 1. 取数来源是壳自己的寄存器（`scheduler.tasks()` + `archive`），停用任务**不问下一跳**；
- * 2. Cron 算不出下一跳时如实 null（不兜底）；
+ * 2. Cron 下一跳走调度数学（合法表达式算得出；不可能日期/坏行才如实 null，不兜底）；
  * 3. 恢复账由调用方经参数给入（`BootRecovery` 的账），没跑过就是 null。
  */
 class AppShellTaskCenterTest {
@@ -85,16 +86,27 @@ class AppShellTaskCenterTest {
     }
 
     @Test
-    fun `Cron 算不出下一跳如实 null —— 排期形态还在`() = runBlocking {
+    fun `Cron 合法算出下一跳 —— 不可能日期才如实 null`() = runBlocking {
         val s = kit()
         s.use { assembled ->
+            // 周日 1970-01-11 之后最近的周一 09:00：合法 cron 与调度数学同值。
+            val before = System.currentTimeMillis()
             assembled.shell.scheduler.schedule(
-                ScheduledTask("c", "cron 任务", "p1", "a.js", TimedSchedule.Cron("0 7 * * *")),
+                ScheduledTask("c", "cron 任务", "p1", "a.js", TimedSchedule.Cron("0 9 * * 1"), timezone = ZoneId.of("UTC")),
             )
             val row = assembled.taskCenter().tasks.single()
             assertTrue(row.enabled)
-            assertEquals(ScheduleSpec.Cron("0 7 * * *"), row.schedule, "任务不因算不出下一跳就从列表消失")
-            assertNull(row.nextFireAtMillis, "P1 未落地：不编一个时间（呈现层会说「尚未落地排期」）")
+            assertEquals(ScheduleSpec.Cron("0 9 * * 1"), row.schedule)
+            val next = row.nextFireAtMillis
+            requireNotNull(next) { "合法 cron 必须算得出下一跳" }
+            assertTrue(next > before, "下一跳严格晚于登记时刻：$next")
+
+            assembled.shell.scheduler.schedule(
+                ScheduledTask("impossible", "二月三十", "p1", "b.js", TimedSchedule.Cron("0 0 30 2 *"), timezone = ZoneId.of("UTC")),
+            )
+            val rows = assembled.taskCenter().tasks.associateBy { it.id }
+            assertNull(rows["impossible"]!!.nextFireAtMillis, "不可能日期：不编一个时间（留名不续排）")
+            assertEquals(ScheduleSpec.Cron("0 0 30 2 *"), rows["impossible"]!!.schedule, "任务不因算不出下一跳就从列表消失")
         }
         Unit
     }

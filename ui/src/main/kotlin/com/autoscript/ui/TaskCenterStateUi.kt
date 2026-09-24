@@ -184,15 +184,16 @@ data class RecoveryRowState(
  *
  * 为什么这层要自己写文案而不复用调度器的 `toString`：数据类的 `toString` 是调试形态
  * （`Daily(hourOfDay=7, minuteOfHour=5)`），而这里的每一句都对应"用户能不能一次读懂
- * 这条任务什么时候跑"。Cron 单独一句是因为**本版算不出它的下一跳**（P1 未落地）——
- * 如实说"还没落地排期"，比让它看起来和每日任务一样正常要诚实。
+ * 这条任务什么时候跑"。Cron 单独一句是因为它的下一跳**可能算不出**
+ * （不可能日期如 2 月 30 号、或注册表手改坏掉的行回 null 留名不续排）——
+ * 那时下一跳不显示（见 [TaskRowState.nextFireText]），文案只说表达式本身。
  */
 object ScheduleText {
 
     fun describe(spec: ScheduleSpec): String = when (spec) {
         is ScheduleSpec.Once -> "延迟 ${duration(spec.delaySeconds * 1000)}后执行一次"
         is ScheduleSpec.Daily -> "每天 ${hhmm(spec.hourOfDay, spec.minuteOfHour)}"
-        is ScheduleSpec.Cron -> "cron 表达式「${spec.expr}」（本版尚未落地排期）"
+        is ScheduleSpec.Cron -> "cron 表达式「${spec.expr}」"
     }
 
     /** 绝对时刻（本地时区，`MM-dd HH:mm`）—— 下一跳与执行起点共用同一格式。 */

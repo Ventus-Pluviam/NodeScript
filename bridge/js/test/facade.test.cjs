@@ -99,6 +99,28 @@ test('workManager 排期：daily 钟点 + once 相对延迟', () => {
   assert.throws(() => auto.workManager.once(-1), RangeError)
 })
 
+test('workManager 排期：cron 本地预览与宿主同值（每日九点/每周一/不可能日期 null）', () => {
+  // 锚点：D0 = 1970-01-11（周日）。断言一律用本地墙钟构造期望 —— nextFireAfter
+  //（daily 与 cron 镜像都是）按本地 Date 算，写死 UTC epoch 会在非 UTC 时区红。
+  const d0 = Date.UTC(1970, 0, 11, 0, 0, 0, 0)
+  const mon9Local = new Date(1970, 0, 12, 9, 0, 0, 0).getTime() // 周一 09:00（本地）
+  assert.strictEqual(
+    auto.workManager.nextFireAfter(auto.workManager.cron('0 9 * * *'), d0),
+    auto.workManager.nextFireAfter(auto.workManager.daily(9, 0), d0),
+    'cron 每日九点与 daily 同值',
+  )
+  assert.strictEqual(auto.workManager.nextFireAfter(auto.workManager.cron('0 9 * * 1'), d0), mon9Local)
+  assert.strictEqual(auto.workManager.nextFireAfter(auto.workManager.cron('0 9 * * mon'), d0), mon9Local)
+  assert.strictEqual(auto.workManager.nextFireAfter(auto.workManager.cron('0 0 30 2 *'), d0), null)
+  assert.strictEqual(
+    auto.workManager.nextFireAfter(auto.workManager.fromInput({ on: 'cron', expr: '0 9 * * 1' }), d0),
+    mon9Local,
+    'fromInput cron 分支',
+  )
+  assert.throws(() => auto.workManager.cron('0 9 * *'), RangeError)
+  assert.throws(() => auto.workManager.cron(42), RangeError)
+})
+
 test('新增 §10.8 错误码同步（:domain 已加目录）', () => {
   for (const c of [
     'ERR_NPM_SPAWN_BLOCKED',

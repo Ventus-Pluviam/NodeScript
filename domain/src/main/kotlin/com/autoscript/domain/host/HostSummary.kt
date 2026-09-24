@@ -66,7 +66,7 @@ interface HostSummary {
      *
      * 挂起：登记先落盘再动内存/闹钟（`Scheduler.schedule` 的 store-first 纪律）——
      * 落盘失败**抛**，此时内存/闹钟未动，不会出现"界面说登记成功、重启后却没了"。
-     * 其余失败同理抛（壳未装配 / 入参校验不过 / cron P1 未落地），`:ui` 如实显示原因。
+     * 其余失败同理抛（壳未装配 / 入参校验不过 / 非法 cron 表达式），`:ui` 如实显示原因。
      *
      * @return 分配到的任务 id（入参 [TaskRegistration.id] 为空时服务端 UUID）。
      */

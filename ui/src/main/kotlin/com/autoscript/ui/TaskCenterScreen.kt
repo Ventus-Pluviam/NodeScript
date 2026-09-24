@@ -43,7 +43,7 @@ import com.autoscript.domain.host.ScreenRequirement
  * - 挂起中（[TaskCenterState.opInFlight]）全部操作按钮禁用 —— 立即执行要挂到
  *   本次执行结算（排队 10s + 脚本超时），不禁用就会双击双投；
  * - 取消走一次确认对话框（误触成本 = 手工重登记全部字段）；
- * - 表单只给 once/daily 两态（cron 装配层反正会拒，给入口才是骗）；语义校验
+ * - 表单给 once/daily/cron 三态（cron 表达式格，缺省 `0 9 * * *`）；语义校验
  *   （空串/越界）由 `:app` 闸门统一裁决，原文进 [TaskCenterState.opError]。
  */
 @Composable
@@ -220,15 +220,19 @@ private fun RegistrationBlock(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = { onChange(form.copy(once = true)) },
+                    onClick = { onChange(form.copy(kind = ScheduleKind.ONCE)) },
                     enabled = enabled,
-                ) { Text(if (form.once) "· 一次" else "一次") }
+                ) { Text(if (form.kind == ScheduleKind.ONCE) "· 一次" else "一次") }
                 Button(
-                    onClick = { onChange(form.copy(once = false)) },
+                    onClick = { onChange(form.copy(kind = ScheduleKind.DAILY)) },
                     enabled = enabled,
-                ) { Text(if (!form.once) "· 每日" else "每日") }
+                ) { Text(if (form.kind == ScheduleKind.DAILY) "· 每日" else "每日") }
+                Button(
+                    onClick = { onChange(form.copy(kind = ScheduleKind.CRON)) },
+                    enabled = enabled,
+                ) { Text(if (form.kind == ScheduleKind.CRON) "· cron" else "cron") }
             }
-            if (form.once) {
+            if (form.kind == ScheduleKind.ONCE) {
                 OutlinedTextField(
                     value = form.delaySecondsText,
                     onValueChange = { onChange(form.copy(delaySecondsText = it)) },
@@ -237,7 +241,7 @@ private fun RegistrationBlock(
                     enabled = enabled,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            } else {
+            } else if (form.kind == ScheduleKind.DAILY) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = form.hourText,
@@ -256,6 +260,15 @@ private fun RegistrationBlock(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+            } else {
+                OutlinedTextField(
+                    value = form.cronText,
+                    onValueChange = { onChange(form.copy(cronText = it)) },
+                    label = { Text("cron 表达式（分 时 日 月 周，如 0 9 * * *）") },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (screen in ScreenRequirement.entries) {
