@@ -260,7 +260,7 @@ class PlatformWiringTest {
     }
 
     @Test
-    fun `存储通知剪贴板传感六条独立缝经真 handler 落到假 SPI`() = runBlocking {
+    fun `存储通知剪贴板传感图像七条独立缝经真 handler 落到假 SPI`() = runBlocking {
         val spis = bundle()
         val wiring = PlatformWiring.inject(spis)
 

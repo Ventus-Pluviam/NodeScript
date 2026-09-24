@@ -60,7 +60,7 @@ object PlatformWiring {
         /**
          * `images` 独立缝（§9.2）：[ImageAnalyzer] 的真实现还等在 `:bridge:image` 的
          * native 管线上（P1）——**这里刻意缺省 null**（生产桥回 `ERR_NOT_IMPLEMENTED`，
-         * 脚本拿不到一个看不见像素的假分析器）。字段在束里是为了与其余六条同形：
+         * 脚本拿不到一个看不见像素的假分析器）。字段在束里是为了与其余六条同形（图像面是第七条）：
          * 真实现到位时只改 [inject] 一行 + `of` 的构造，`Injection` 形状不必动。
          */
         val imagesHandler: NamespaceHandler? = null,
