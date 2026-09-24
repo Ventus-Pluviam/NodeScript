@@ -12,7 +12,7 @@ import { runtimeBridge } from './runtime';
 import { a11y } from './a11y';
 import { engines } from './engines';
 import { BridgeEnvelope } from './bridge';
-import { daily, once, fromInput, nextFireAfter, TimedSchedule, createTimedTask, cancelTask, listTasks, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee } from './workManager';
+import { daily, once, cron, fromInput, nextFireAfter, nextCronFireAfter, TimedSchedule, TimedScheduleInput, createTimedTask, cancelTask, listTasks, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee } from './workManager';
 import { screen, images } from './images';
 import { npm } from './npm';
 import { consoleSink } from './console';
@@ -21,15 +21,20 @@ import { datastore } from './datastore';
 import { zip } from './zip';
 import { settings } from './settings';
 import { notification } from './notification';
+import { clipboard } from './clipboard';
+import { sensors } from './sensors';
+import { power } from './power';
 import { InvokeHandler } from './bridge';
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload };
-export type { ErrPayload, TimedSchedule, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee };
-/** workManager 命名空间（scheduler 面：P0 每日/一次性排期工具函数，运行态挂全局任务表）。 */
+export type { ErrPayload, TimedSchedule, TimedScheduleInput, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee };
+/** workManager 命名空间（scheduler 面：每日/一次性/cron 排期工具函数，运行态挂全局任务表）。 */
 export declare const workManagerNS: {
     daily: typeof daily;
     once: typeof once;
+    cron: typeof cron;
     fromInput: typeof fromInput;
     nextFireAfter: typeof nextFireAfter;
+    nextCronFireAfter: typeof nextCronFireAfter;
     createTimedTask: typeof createTimedTask;
     cancelTask: typeof cancelTask;
     listTasks: typeof listTasks;
@@ -53,6 +58,9 @@ export declare const auto: {
     readonly zip: typeof zip;
     readonly settings: typeof settings;
     readonly notification: typeof notification;
+    readonly clipboard: typeof clipboard;
+    readonly sensors: typeof sensors;
+    readonly power: typeof power;
     readonly envelope: typeof BridgeEnvelope;
     /** 安装桥宿主（单例；重复安装抛错）。 */
     install(handler: InvokeHandler): void;

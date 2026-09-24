@@ -22,7 +22,7 @@
 - `:bridge:java` — Kotlin Router / RequestRegistry(TTL) / HandleRegistry(generation) / EventBus（§7）
 - `:bridge:native` — C++ N-API addon 控制面 + libnode.so 装载（§7，CI 构建）
 - `:bridge:image` — C++ 图像管线 libimgnative.so（OpenCV 4.x，§9.2，CI 构建）
-- `:engine:node-process` — :nodeN 进程宿主：`NodeProcessEngine`（Kotlin spawn，实现 `:domain` 的 `ScriptEngine`）+ main.cpp（§5/§7.8；`.so`/APK 侧仍 CI 构建）
+- `:engine:node-process` — :nodeN 进程宿主：`NodeProcessEngine`（Kotlin spawn，实现 `:domain` 的 `ScriptEngine`）+ main.cpp（§5/§7.8；addon `.so` 本机 NDK 可交叉编译验证，APK `assembleDebug` 本机可直跑）
 - `:engine:sandbox` — QuickJS 宿主进程（P1）
 - `:platform:capabilities` — a11y/截图/输入/悬浮窗/系统/存储（§9.1–9.4）
 - `:platform:system` — overlay/通知/datastore/shell/zip/设备信息（§9.6）
@@ -38,6 +38,7 @@
 
 - 本机已配置 Android SDK：`/root/android-sdk`（platform-35 + build-tools 35 + platform-tools；`local.properties` 指 `sdk.dir`，已 gitignore），JDK 17 = `/root/develop/claude/tools/jdk-17.0.17+10`。**CI 同款 `./gradlew …` 命令可本机直跑**（12 个测试任务 2026-09-23 实测全绿）——CI 仍是权威门，但本机已能同源复现。`tools/jvm-test*` 旁路保留作快速门；**注意其结构性盲区**：kotlinc 直跑的 `java.*` 来自 JDK（有 `Process.pid` 等），AGP 来自 android.jar 桩面（没有）——新增 `java.*` 较新 API 必须过 gradle（首跑即抓出四处）。
 - **CI 验证门**：`.github/workflows/ci.yml` —— JVM 单测（12 个模块：`:domain`、`:bridge:java`、`:app-service:{runtime,scheduler,script-repo,permission-center,packager}`、`:platform:{capabilities,system}`、`:engine:node-process`、`:ui`、`:app`）+ archUnit + `bridge/js` 的 npm test，跑在 ubuntu-latest（JDK 17 + Gradle 8.9 + Android SDK license）。Android assemble 走后续 `node-runtime-build/Dockerfile`。
+- **可用 GitHub Actions 跑远端 CI**：远端 `origin` = `git@github.com:Ventus-Pluviam/NodeScript.git`（私有仓，SSH 可推）。`ci.yml` 在 `push→main` 与 `pull_request` 时触发——把分支 `git push origin <分支>` 后开 PR 即跑全套门（JVM 单测 + archUnit + npm test），不用等合入 main 才知道红绿。本机 `gh` token 若无该私仓权限（`gh pr create` 报 404/解析不到仓库），用 push 后远端打印的 PR 链接手动开 PR；看不到 runs 输出时以本机 `./gradlew` 同源复现为准。**不要为触发 CI 直推 main**。
 - **本机自测旁路**：`tools/jvm-test.sh [--android-jar] <main-src-roots> <test-src-root>` 单模块编译+跑测；`tools/jvm-test-all.sh [模块名...]` 全模块驱动（逐模块最小依赖）。`--android-jar` 补一份**编译期** android.jar 桩，供 `:app`/`:platform:system` 这类含 `android.*` 源码的模块本机验证——运行期 android stub 会抛异常，所以这些模块的单测必须把 Android 接触面挡在可注入 ops 缝后（写法见 `platform/system/README.md`）。**这是提速旁路，不是权威**：`./gradlew`（AGP/资源/Manifest 合并）本机已可直跑（见本节首条），CI 仍是最终门。**`:ui` 不入旁路**（compose/`@Composable` 没有裸 kotlinc 配方）——它的门 = `./gradlew :ui:testDebugUnitTest`（CI 任务表已列）。详见 `docs/framework-design.md` §6 末。
 
 ## 协作纪律（子 agent 必须遵守）
@@ -55,4 +56,4 @@
   `PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH`，
   直接调 `aarch64-linux-android26-clang(++)`（API 26 = minSdk 冻结值）。
 - 本机只做 **C++ 交叉编译验证**（`bridge/native` 的 addon `.so` 能编出 arm64 ELF）；
-  APK/AGP assemble 仍走 CI（无 Android SDK）。
+  APK/AGP `assembleDebug` 本机可直跑（已有 SDK，2026-09-24 已实测出包）；真机红测与生产签名管线仍走 CI。

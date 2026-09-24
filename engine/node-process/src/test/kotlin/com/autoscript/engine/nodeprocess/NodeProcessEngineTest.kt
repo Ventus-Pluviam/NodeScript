@@ -103,6 +103,7 @@ class NodeProcessEngineTest {
         libnode: Path? = null,
         addon: Path? = null,
         socket: String? = null,
+        bridgeDist: Path? = null,
         grace: Long = 3_000,
     ): NodeProcessEngine {
         // 只有走默认才铺哑文件：预检缺位案显式传"不存在的路径"、PATH 名案传相对名 —— 都原样不动。
@@ -118,6 +119,7 @@ class NodeProcessEngineTest {
                 libnodePath = libnode,
                 addonPath = addon,
                 hostSocketName = socket,
+                bridgeDistPath = bridgeDist,
                 stopGraceMillis = grace,
             ),
             launcher,
@@ -159,7 +161,9 @@ class NodeProcessEngineTest {
         val launcher = FakeLauncher()
         val lib = dir.resolve("libnode.so"); Files.write(lib, ByteArray(0))
         val addon = dir.resolve("addon.node"); Files.write(addon, ByteArray(0))
-        val e = engine(launcher, libnode = lib, addon = addon, socket = "as-sock-1")
+        val dist = dir.resolve("bridge-dist"); Files.createDirectories(dist)
+        Files.write(dist.resolve("bootstrap.js"), "boot".toByteArray())
+        val e = engine(launcher, libnode = lib, addon = addon, socket = "as-sock-1", bridgeDist = dist)
         val receipt = runBlocking { e.execute(request(nonce = "n-7", args = listOf("x", "y"))) }
 
         val scriptAbs = files.resolve("scripts/p1/a.js")
@@ -175,6 +179,7 @@ class NodeProcessEngineTest {
         assertEquals("as-sock-1", env[NodeProcessEngine.ENV_HOST_SOCKET])
         assertEquals("n-7", env[NodeProcessEngine.ENV_RUN_NONCE])
         assertEquals(receipt.runId.toString(), env[NodeProcessEngine.ENV_RUN_ID], "runId 随 env 下传（§8.4 心跳身份）")
+        assertEquals(dist.toString(), env[NodeProcessEngine.ENV_BRIDGE_DIST], "dist 落位根随 env 下传（§12.4 打包入口 attachNative 的 dist 来源）")
         assertEquals(4242, receipt.pid, "pid 快照 = spawn 瞬间子进程 pid（§8.4 看门狗锚点）")
         assertEquals(receipt.runId, receipt.handle.refId)
         assertEquals(1, receipt.handle.generation)
@@ -191,7 +196,29 @@ class NodeProcessEngineTest {
         assertFalse(NodeProcessEngine.ENV_RUN_NONCE in env, "nonce 缺省不注入")
         assertFalse(NodeProcessEngine.ENV_LIBNODE in env)
         assertFalse(NodeProcessEngine.ENV_BRIDGE_ADDON in env)
+        assertFalse(NodeProcessEngine.ENV_BRIDGE_DIST in env, "dist 缺省不注入（同 addon 选填纪律）")
         assertTrue(NodeProcessEngine.ENV_RUN_ID in env, "RUN_ID 恒注入")
+    }
+
+    @Test
+    fun `dist 注入按 bootstrap 在位与否降级——配置了但没落位不注入`() {
+        writeScript()
+        // 有 bootstrap.js → 注入
+        val withBoot = dir.resolve("dist-ok"); Files.createDirectories(withBoot)
+        Files.write(withBoot.resolve("bootstrap.js"), "x".toByteArray())
+        val l1 = FakeLauncher()
+        runBlocking { engine(l1, bridgeDist = withBoot).execute(request()) }
+        assertEquals(withBoot.toString(), l1.lastEnv!![NodeProcessEngine.ENV_BRIDGE_DIST])
+
+        // 目录在但缺 bootstrap.js（半量部署/坏资产）→ 不注入（main.cpp 据 env 缺失打 stderr，
+        // 而不是拿坏路径去 require）
+        val noBoot = dir.resolve("dist-empty"); Files.createDirectories(noBoot)
+        val l2 = FakeLauncher()
+        runBlocking { engine(l2, bridgeDist = noBoot).execute(request()) }
+        assertFalse(
+            NodeProcessEngine.ENV_BRIDGE_DIST in l2.lastEnv!!,
+            "缺 bootstrap.js = 降级不注入（选填件不杀执行，见 NodeEngineConfig KDoc）",
+        )
     }
 
     @Test
@@ -291,5 +318,18 @@ class NodeProcessEngineTest {
         assertTrue(ex.message!!.contains("5555"), "${ex.message}")
         assertEquals(1, zombie.destroyForciblyCalls, "拒绝前先强杀，不留野进程")
         assertEquals(1, launcher.spawnCount, "拒绝的那次绝不 spawn 第二个进程")
+    }
+
+    @Test
+    fun `addon 注入按文件在位与否降级——配置了但没落位不注入`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        val e = engine(launcher, addon = dir.resolve("never-written.node"))
+        runBlocking { e.execute(request()) }
+        val env = launcher.lastEnv!!
+        assertFalse(
+            NodeProcessEngine.ENV_BRIDGE_ADDON in env,
+            "缺文件 = 降级不注入（与 bridgeDistPath 同一条选填纪律；main.cpp 直跑脚本）",
+        )
     }
 }

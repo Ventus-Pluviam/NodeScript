@@ -35,6 +35,86 @@ interface HostSummary {
      * 本读口只把请求转下去 —— 呈现层因此不必（也不许）碰 `Settings`/`Intent`。
      */
     fun openCapabilitySettings(capability: Capability)
+
+    /**
+     * 任务中心快照（§8.6 排期 + §8.5 执行档案/恢复账）。
+     *
+     * 挂起：[TaskCenterSnapshot] 要读两个持久寄存器（注册表 + 运行档案）与恢复账，
+     * 都是 IO/挂起路径（`FileTaskStore.loadAll` / `RunArchive.unfinished`）；
+     * 首屏那份同步的 [shellSummary] 里塞不下它。
+     *
+     * 读失败**抛**（与 [capabilityCenter] 同一条纪律）：`:ui` 据此如实显示「读任务失败」，
+     * 而不是渲染成"一条任务都没有" —— 后者会让用户以为自己的定时任务全没了。
+     */
+    suspend fun taskCenter(): TaskCenterSnapshot
+
+    /**
+     * 控制台快照（§7.3 seq 游标拉取 + §8.3 在途执行两端对照）。
+     *
+     * @param sinceSeq 只回 `seq > sinceSeq` 的行（首读传 0）；快照里的
+     *   [ConsoleSnapshot.nextSeq] 是下次该传的值 —— 游标只进不退，读失败也不清零。
+     * @param maxLines 本批上限（> 0）；拉满时 [ConsoleSnapshot.pageFull] 为 true。
+     *
+     * 读失败**抛**（与 [capabilityCenter]/[taskCenter] 同一条纪律）：`:ui` 据此如实
+     * 显示「读控制台失败」并**保留已读到的行**，而不是把缓冲清成"尚无日志"
+     * —— 一次瞬时失败抹掉用户已经看到的日志，比报错更糟。
+     */
+    suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot
+
+    /**
+     * 登记定时任务（任务中心操作面「登记」；§8.6）。
+     *
+     * 挂起：登记先落盘再动内存/闹钟（`Scheduler.schedule` 的 store-first 纪律）——
+     * 落盘失败**抛**，此时内存/闹钟未动，不会出现"界面说登记成功、重启后却没了"。
+     * 其余失败同理抛（壳未装配 / 入参校验不过 / 非法 cron 表达式），`:ui` 如实显示原因。
+     *
+     * @return 分配到的任务 id（入参 [TaskRegistration.id] 为空时服务端 UUID）。
+     */
+    suspend fun registerTask(registration: TaskRegistration): String
+
+    /**
+     * 取消任务（操作面「取消」）。
+     *
+     * 幂等（与 `Scheduler.cancel` / 桥侧 `workManager.cancel` 同口径）：从未登记的 id
+     * 照样返回 —— 先落 tombstone 再动内存，重复取消无副作用。已投递的 runs 不追回
+     * （追回属执行侧，不在本口）。
+     * 壳未装配**抛**（静默吞掉 = 用户点了取消却什么都没发生，比报错更难查）。
+     */
+    suspend fun cancelTask(taskId: String)
+
+    /**
+     * 立即执行（操作面「立即执行」；触发源 `USER_CLICK`，不受停用守卫限制 ——
+     * 停用任务也能手动跑，见 §8.6 enabled 守卫的豁免名单）。
+     *
+     * 挂起到**本次执行结算**（与闹钟/广播触发同一条 `onTrigger` 路径；排队上限
+     * USER_CLICK 10s + 脚本超时/默认 30s）—— `:ui` 应在挂起期间禁用操作按钮并如实
+     * 显示「执行中」，不要另起计时器猜结束。
+     *
+     * 成败**不由本口回报**（`onTrigger` 恒 Unit；结局在意图日志/控制台）——
+     * UI 文案不得把"调用返回了"说成"脚本跑成功了"。Once 任务触发即终态化出册
+     * （调度器语义），刷新后从列表消失是事实，不是取消。
+     *
+     * 失败抛：任务不存在（可能已被取消）/ 调度已收口（宿主正在停止）/ 壳未装配。
+     * 查无任务在触发**之前**现查 —— `onTrigger` 对查无任务是静默 return，
+     * 不查就会把 no-op 呈现成"已触发"。
+     */
+    suspend fun runTaskNow(taskId: String)
+
+    /**
+     * 停止一次**在途**执行（控制台「停止」按钮 / engines.exec 的 cancel 回调入口；
+     * §12.3 + §8.2 池四步 quiesce）。
+     *
+     * 按 runId 精确停止（`RuntimeController.stop(runId)` → 池四步 quiesce，
+     * `TimedOut` 已由池 kill 兜底）：已结算/从未存在 → **false**（`AlreadyGone` 的
+     * 诚实投影，不抛 —— 在途表本来就没有它，不是失败），真停走 → **true**
+     * （`StoppedClean`/`StoppedTimeout` 都算"停过了"，后者在池侧已兜底）。
+     * 壳未装配**抛**（静默 false = 用户点了停止却什么都没发生，比报错更难查）。
+     *
+     * 与 `Scheduler.stopLastRun` 的分工：那是"最近一次投递"的单槽位快捷口
+     * （调度侧持有，恢复重投会覆盖）；本口是"指定 runId"的精确口（在途表持有，
+     * 不受调度单槽覆盖影响）。控制台在途块按行给停止按钮，走本口不走单槽口。
+     */
+    suspend fun stopRun(runId: Long): Boolean
 }
 
 /**

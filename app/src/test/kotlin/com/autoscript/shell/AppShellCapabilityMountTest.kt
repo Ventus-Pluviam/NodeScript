@@ -17,6 +17,7 @@ import com.autoscript.domain.engine.StopResult
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -26,7 +27,7 @@ import org.junit.jupiter.api.Test
  * 覆盖三件事：
  * 1. 注入 `a11y`/`screen`/`npm` 缝 → 请求可达真实逻辑（这里用内存假实现，等价于
  *    `:platform:capabilities` 的真实现与 `:app-service:packager` 的 npm 真实现）；
- * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
+ * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*`/`clipboard.*`/`sensors.*`/`power_manager.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
  *    **绝不伪造可用**；
  * 3. `console`/`engines` 与能力缝共存，互不抢占 namespace。
  */
@@ -41,7 +42,10 @@ class AppShellCapabilityMountTest {
         override suspend fun status(): EngineStatus = EngineStatus.STOPPED
     }
 
-    private fun shell(vararg handlers: Pair<String, NamespaceHandler>): AppShell {
+    private fun shell(
+        vararg handlers: Pair<String, NamespaceHandler>,
+        keeper: ForegroundKeeper? = null,
+    ): AppShell {
         val map = handlers.toMap()
         return AppShell.assemble(
             engineFactory = { id -> MountFakeEngine(id) },
@@ -58,6 +62,10 @@ class AppShellCapabilityMountTest {
             zipHandler = map["zip"],
             settingsHandler = map["settings"],
             notificationHandler = map["notification"],
+            clipboardHandler = map["clipboard"],
+            sensorsHandler = map["sensors"],
+            // S8.7: power_manager drives the ledger straight; tests feed a keeper on demand.
+            powerManagerHandler = keeper?.let { PowerManagerNamespaceHandler(it.wakeLocks(), it).mount() },
         )
     }
 
@@ -116,6 +124,24 @@ class AppShellCapabilityMountTest {
         }
     }
 
+    /** 内存假 clipboard：getText 空剪贴板裸 null、setText 回 true。可达性替身。 */
+    private val fakeClipboard = NamespaceHandler { request ->
+        when (request.method) {
+            "getText" -> BridgeResponse.Ok(request.id, "null")
+            "setText" -> BridgeResponse.Ok(request.id, "true")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeClipboard only getText/setText")
+        }
+    }
+
+    /** 内存假 sensors：register 回 ref 体、drain 空增量游标回显。可达性替身。 */
+    private val fakeSensors = NamespaceHandler { request ->
+        when (request.method) {
+            "register" -> BridgeResponse.Ok(request.id, "{\"refId\":1,\"generation\":1}")
+            "drain" -> BridgeResponse.Ok(request.id, "{\"first\":0,\"last\":0,\"events\":[]}")
+            else -> BridgeResponse.Err(request.id, "ERR_NOT_IMPLEMENTED", "FakeSensors only register/drain")
+        }
+    }
+
     /** 内存假 npm：实现 list 一个轻操作 + install 回 Ok（真实现语义的最小替身）。 */
     private val fakeNpm = NamespaceHandler { request ->
         when (request.method) {
@@ -129,7 +155,7 @@ class AppShellCapabilityMountTest {
         val s = shell(
             "a11y" to fakeA11y, "screen" to fakeScreen, "npm" to fakeNpm,
             "datastore" to fakeDatastore, "zip" to fakeZip, "settings" to fakeSettings,
-            "notification" to fakeNotification,
+            "notification" to fakeNotification, "clipboard" to fakeClipboard, "sensors" to fakeSensors,
         )
         s.use {
             val a11yResp = s.router.dispatch(
@@ -169,6 +195,16 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(9, "notification", "post", """{"id":1,"text":"跑完了"}""", 5_000),
             )
             assertEquals("true", (notifResp as BridgeResponse.Ok).payload)
+
+            val clipResp = s.router.dispatch(
+                BridgeRequest(10, "clipboard", "getText", null, 5_000),
+            )
+            assertEquals("null", (clipResp as BridgeResponse.Ok).payload)
+
+            val sensorResp = s.router.dispatch(
+                BridgeRequest(11, "sensors", "register", "{\"name\":\"accelerometer\"}", 5_000),
+            )
+            assertEquals("{\"refId\":1,\"generation\":1}", (sensorResp as BridgeResponse.Ok).payload)
 
             // 能力缝接入不影响既有命名空间：console/engines 仍在位
             val consoleResp = s.router.dispatch(
@@ -213,6 +249,16 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(7, "notification", "post", """{"id":1,"text":"跑完了"}""", 5_000),
             )
             assertEquals("ERR_NOT_IMPLEMENTED", (notifResp as BridgeResponse.Err).errorCode, "notification 独立缝缺省同样不伪造")
+
+            val clipResp = s.router.dispatch(BridgeRequest(8, "clipboard", "getText", null, 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (clipResp as BridgeResponse.Err).errorCode, "clipboard 独立缝缺省同样不伪造")
+
+            val sensorResp = s.router.dispatch(BridgeRequest(9, "sensors", "register", "{\"name\":\"accelerometer\"}", 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (sensorResp as BridgeResponse.Err).errorCode, "sensors 独立缝缺省同样不伪造")
+            val powerResp = s.router.dispatch(
+                BridgeRequest(10, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
+            )
+            assertEquals("ERR_NOT_IMPLEMENTED", (powerResp as BridgeResponse.Err).errorCode, "power_manager 独立缝缺省同样不伪造")
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
@@ -235,4 +281,52 @@ class AppShellCapabilityMountTest {
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
+
+    private class FakeWakeLock(var acquireOk: Boolean = true) : WakeLockOps {
+        override var held: Boolean = false
+        override fun acquire(): Boolean {
+            if (!acquireOk) return false
+            held = true
+            return true
+        }
+        override fun release(): Boolean {
+            held = false
+            return true
+        }
+    }
+
+    private class FakeClock(var now: Long = 0L) : com.autoscript.domain.core.Clock {
+        override fun nowMillis(): Long = now
+    }
+
+    @Test
+    fun `喂 keeper 后 power_manager 全链路可达`() = runBlocking {
+        val fg = object : ForegroundOps {
+            override var foregroundRunning: Boolean = true
+            override fun startService(): Boolean = true
+            override fun stopService(): Boolean = true
+            override fun activateForeground(): Boolean = true
+            override fun deactivateForeground(): Boolean = true
+        }
+        val ledger = WakeLockLedger(FakeWakeLock(), FakeClock())
+        val keeper = ForegroundKeeper(fg, ledger, FakeClock(), tickMillis = 60 * 60 * 1000L)
+        keeper.start()
+        val s = shell(keeper = keeper)
+        s.use {
+            val acq = it.router.dispatch(
+                BridgeRequest(1, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
+            )
+            val ok = assertInstanceOf(BridgeResponse.Ok::class.java, acq)
+            assertTrue(ok.payload!!.contains("script-"), "token 服务端分配：" + ok.payload)
+            val st = it.router.dispatch(BridgeRequest(2, "power_manager", "status", null, 5_000))
+            val stOk = assertInstanceOf(BridgeResponse.Ok::class.java, st)
+            assertTrue(stOk.payload!!.contains("holders"), "status 双值：" + stOk.payload)
+            // 未注入的别的缝不受影响
+            val a11yResp = it.router.dispatch(BridgeRequest(3, "a11y", "findOne", "{}", 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (a11yResp as BridgeResponse.Err).errorCode)
+        }
+
+        Unit
+    }
+
 }

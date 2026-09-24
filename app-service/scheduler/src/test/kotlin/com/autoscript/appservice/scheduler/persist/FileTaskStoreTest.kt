@@ -36,6 +36,18 @@ class FileTaskStoreTest {
         )
 
     @Test
+    fun `cron 表达式往返 —— 注册表不丢排期形态`() {
+        val cron = ScheduledTask("c1", "名-c1", "p", "c1.js", TimedSchedule.Cron("0 9 * * 1"))
+        FileTaskStore(dir).use { store ->
+            store.put(cron)
+            assertEquals(cron, store.loadAll().single())
+        }
+        FileTaskStore(dir).use { reopened ->
+            assertEquals(cron, reopened.loadAll().single(), "重启重建：cron 行同样回来")
+        }
+    }
+
+    @Test
     fun `put 后 loadAll 全字段往返`() {
         FileTaskStore(dir).use { store ->
             store.put(once("t1"))

@@ -2,6 +2,7 @@ package com.autoscript.appservice.scheduler.core
 
 import com.autoscript.domain.core.Clock
 import kotlinx.coroutines.runBlocking
+import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -52,6 +53,38 @@ class SchedulerTest {
         scheduler.onTrigger("t1") // 不应再有动作（Once 末次）
         assertEquals(1, provider.fires.size)
         assertEquals(1, dispatched.size)
+    }
+
+    @Test
+    fun `Cron 任务：登记即注册首跳，TIMED 触发后自推进`() = runBlocking {
+        val provider = RecordingProvider()
+        val scheduler = testScheduler(provider)
+        // now=1_000_000（周四 1970-01-01 00:16:40 UTC）：最近周一 09:00 是 1-05。
+        scheduler.schedule(
+            ScheduledTask("c1", "周一", "p", "cron.js", TimedSchedule.Cron("0 9 * * 1"), timezone = ZoneId.of("UTC")),
+        )
+        val firstFire = provider.fires.single().first
+        val expect = TimedSchedule.Cron("0 9 * * 1").nextFireAfter(now, ZoneId.of("UTC"))
+        requireNotNull(expect)
+        assertEquals(expect, firstFire, "首跳走调度数学唯一出处（与 Daily 同一条 rearmFor）")
+
+        now = firstFire + 1_000
+        scheduler.onTrigger("c1", scheduledAtMillis = firstFire)
+        assertEquals(2, provider.fires.size, "Cron 触发后应续排下一轮")
+        assertEquals(1, dispatched.size, "USER_CLICK 之外只投一次")
+        Unit
+    }
+
+    @Test
+    fun `Cron 不可能日期：登记留名但不续排闹钟`() = runBlocking {
+        val provider = RecordingProvider()
+        val scheduler = testScheduler(provider)
+        scheduler.schedule(
+            ScheduledTask("cx", "二月三十", "p", "cron.js", TimedSchedule.Cron("0 0 30 2 *"), timezone = ZoneId.of("UTC")),
+        )
+        assertTrue(provider.fires.isEmpty(), "算不出下一跳：留名不续排（与停用任务同一口径）")
+        assertEquals(listOf("cx"), scheduler.tasks().map { it.id }, "任务仍在册，不从列表消失")
+        Unit
     }
 
     @Test

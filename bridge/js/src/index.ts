@@ -13,7 +13,7 @@ import { runtimeBridge } from './runtime'
 import { a11y } from './a11y'
 import { engines } from './engines'
 import { BridgeEnvelope } from './bridge'
-import { daily, once, fromInput, nextFireAfter, TimedSchedule, createTimedTask, cancelTask, listTasks, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee } from './workManager'
+import { daily, once, cron, fromInput, nextFireAfter, nextCronFireAfter, TimedSchedule, TimedScheduleInput, createTimedTask, cancelTask, listTasks, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee } from './workManager'
 import { screen, images } from './images'
 import { npm } from './npm'
 import { consoleSink } from './console'
@@ -22,12 +22,15 @@ import { datastore } from './datastore'
 import { zip } from './zip'
 import { settings } from './settings'
 import { notification } from './notification'
+import { clipboard } from './clipboard'
+import { sensors } from './sensors'
+import { power } from './power'
 import { InvokeHandler } from './bridge'
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload }
-export type { ErrPayload, TimedSchedule, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee }
+export type { ErrPayload, TimedSchedule, TimedScheduleInput, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee }
 
-/** workManager 命名空间（scheduler 面：P0 每日/一次性排期工具函数，运行态挂全局任务表）。 */
-export const workManagerNS = { daily, once, fromInput, nextFireAfter, createTimedTask, cancelTask, listTasks }
+/** workManager 命名空间（scheduler 面：每日/一次性/cron 排期工具函数，运行态挂全局任务表）。 */
+export const workManagerNS = { daily, once, cron, fromInput, nextFireAfter, nextCronFireAfter, createTimedTask, cancelTask, listTasks }
 
 /** 命名空间根对象：挂各类能力；`install` 由 bootstrap/宿主在引擎就绪时注入桥 handler。 */
 export const auto = {
@@ -48,6 +51,9 @@ export const auto = {
   get zip(): typeof zip { return zip },
   get settings(): typeof settings { return settings },
   get notification(): typeof notification { return notification },
+  get clipboard(): typeof clipboard { return clipboard },
+  get sensors(): typeof sensors { return sensors },
+  get power(): typeof power { return power },
   get envelope(): typeof BridgeEnvelope { return BridgeEnvelope },
 
   /** 安装桥宿主（单例；重复安装抛错）。 */

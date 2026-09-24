@@ -5,8 +5,12 @@ import android.os.Process
 import android.util.Log
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.host.TaskCenterSnapshot
+import com.autoscript.domain.host.TaskRegistration
+import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.permission.Capability
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
 import com.autoscript.engine.nodeprocess.NodeProcessEngine
 import com.autoscript.shell.AlarmDispatch
@@ -29,6 +33,7 @@ import com.autoscript.shell.CapabilityCenterRead
 import com.autoscript.shell.ForegroundHost
 import com.autoscript.shell.ForegroundKeeper
 import com.autoscript.shell.PlatformWiring
+import com.autoscript.shell.PowerManagerNamespaceHandler
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
 import com.autoscript.shell.ScreenGateAndroid
@@ -190,6 +195,13 @@ class AppShellApplication : Application(), HostSummary {
                             hostBinary = nativeDir.resolve("libnoden.so"),
                             libnodePath = nativeDir.resolve("libnode.so"),
                             hostSocketName = bridge?.socketName,
+                            // facade 落位根（§12.4）：引擎按 bootstrap.js 在位与否决定
+                            // 注入与否（选填纪律）—— 这里只给"应该在哪"，落位归 assemble。
+                            bridgeDistPath = ScriptPaths.autoModuleRoot(filesDir),
+                            // addon 落位（§19 交付轨）：同一条选填纪律 —— 引擎按文件在位
+                            // 决定注入与否，这里只给"应该在哪"，落位归 assemble（assets→
+                            // BridgeAddonDeploy）。文件从没落过 = 不注入，脚本照跑。
+                            addonPath = ScriptPaths.bridgeAddonFile(filesDir),
                         ),
                     )
                 },
@@ -205,6 +217,24 @@ class AppShellApplication : Application(), HostSummary {
                         appContext.assets, projectId,
                     ).readScripts()
                 },
+                // facade dist（§12.4 资产交付轨）：`assets/bridge-dist/` 全量读成扁平 map。
+                // 枚举或任一读失败 = 整体空 map（**宁可这次不落，不可半量落**：半量 + 孤儿
+                // 清理会把"读失败那个文件"当成旧版删掉）—— bridgeDistReport 如实为空。
+                bridgeDist = try {
+                    val names = appContext.assets.list("bridge-dist")?.toList() ?: emptyList()
+                    names.associateWith { name ->
+                        appContext.assets.open("bridge-dist/$name").use { it.readBytes() }
+                    }
+                } catch (_: Exception) {
+                    emptyMap()
+                },
+                // bridge addon（§19 交付轨）：单文件资产，没货 = null（不注入的诚实缺省，
+                // 不是"空文件注入"）。读失败与没货同形 —— 引擎侧缺文件降级，不半装。
+                bridgeAddon = try {
+                    appContext.assets.open("bridge-addon/bridge_native.node").use { it.readBytes() }
+                } catch (_: Exception) {
+                    null
+                },
                 // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
                 // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，
                 // 不 import 任何 com.autoscript.platform..（ArchitectureTest 看住）。
@@ -214,6 +244,15 @@ class AppShellApplication : Application(), HostSummary {
                 zipHandler = wiring.zipHandler,
                 settingsHandler = wiring.settingsHandler,
                 notificationHandler = wiring.notificationHandler,
+                clipboardHandler = wiring.clipboardHandler,
+                sensorsHandler = wiring.sensorsHandler,
+                // §8.7 脚本电源面：账本是 foregroundKeeper() 持有的进程级单例（`onCreate`
+                // 先于装配起，见 [onCreate]），现建 handler 喂独立缝 —— 脚本锁与框架锁
+                // 同一本账，引用计数共存，框架 stop 只放框架自己的那一份。
+                powerManagerHandler = PowerManagerNamespaceHandler(
+                    foregroundKeeper().wakeLocks(),
+                    foregroundKeeper(),
+                ).mount(),
                 systemHandlers = wiring.systemHandlers,
             )
             // accept 开 serve：壳 router 就绪才收（bind 与 start 之间的入连接在内核 backlog
@@ -381,6 +420,86 @@ class AppShellApplication : Application(), HostSummary {
      */
     override fun openCapabilitySettings(capability: Capability) {
         permissionCenter().openSystemSettings(capability)
+    }
+
+    /**
+     * 任务中心快照（[HostSummary] 的生产实现，§8.6/§8.5）。
+     *
+     * **壳没装好就抛**（不返回空快照）：空快照长得像"一条任务都没有"，而用户看到的会是
+     * 自己的定时任务凭空消失 —— 那是比"读失败"严重得多的谎。抛出去由 `:ui` 如实显示，
+     * 文案里点名"壳未装配"（与首屏的 `ShellSummary.shellReady` 是同一条事实的两种说法：
+     * 首屏答"装配到哪一步了"，这里答"所以任务读不到"）。
+     *
+     * 读的是 [AppShellKit.AssembledShell.taskCenter]（壳自己持有的两个寄存器），
+     * 不让 UI 另开一份 `FileTaskStore`/`FileRunArchive`（第二个实例 = 写侧两份视图）。
+     * 恢复账取 [recoverySnapshot]（[BootRecovery] 的账）：它答的是"重启后那些遗留任务
+     * 怎么样了"，与任务列表是两件事，分列在快照里。
+     */
+    override suspend fun taskCenter(): TaskCenterSnapshot {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：任务与执行记录暂不可读")
+        return built.taskCenter { recoverySnapshot() }
+    }
+
+    /**
+     * 控制台快照（§7.3 seq 游标拉取）。
+     *
+     * **壳没装好就抛**（与 [taskCenter] 同一条纪律）：返回一份空快照长得像"暂无日志"，
+     * 而事实是"根本没读到" —— 用户会以为脚本安静地什么都没输出。
+     *
+     * 读的是 [AppShellKit.AssembledShell.consoleView]（壳持有的收集器与在途表），
+     * 不让 UI 另开收集器（第二个收集器收不到桥上的行）。
+     */
+    override suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：控制台暂不可读")
+        return built.consoleView(sinceSeq, maxLines)
+    }
+
+    /**
+     * 登记任务（[HostSummary] 的生产实现，§8.6 操作面「登记」）。
+     *
+     * **壳没装好就抛**（与 [taskCenter]/[console] 同一条纪律）：静默返回一个"假 id"
+     * 会让用户以为任务已入册 —— 那是比报错严重得多的谎。
+     * 写的是壳自己持有的调度器（store-first 落盘），不让 UI 另开 `FileTaskStore`。
+     */
+    override suspend fun registerTask(registration: TaskRegistration): String {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：任务不可登记")
+        return built.registerTask(registration)
+    }
+
+    /**
+     * 取消任务（[HostSummary] 的生产实现，§8.6 操作面「取消」）。
+     * 壳没装好就抛（同 [registerTask]）；幂等语义在 `Scheduler.cancel`。
+     */
+    override suspend fun cancelTask(taskId: String) {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：任务不可取消")
+        built.cancelTask(taskId)
+    }
+
+    /**
+     * 立即执行（[HostSummary] 的生产实现，§8.6 操作面「立即执行」，`USER_CLICK`）。
+     * 壳没装好就抛；任务不存在/调度已收口由 [AppShellKit.AssembledShell.runTaskNow]
+     * 现查后抛（`onTrigger` 对两者静默 return，不查会把 no-op 呈现成"已触发"）。
+     */
+    override suspend fun runTaskNow(taskId: String) {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法立即执行")
+        built.runTaskNow(taskId)
+    }
+
+    /**
+     * 停止一次在途执行（[HostSummary] 的生产实现，§8.2 池四步 quiesce）。
+     * 壳没装好就抛（同 [runTaskNow]）；已结算/从未存在回 false（在途表无此 run，
+     * 不是失败）；真停走回 true。读的是 [AppShellKit.AssembledShell.stopRun]
+     * （壳持有的在途表），不另开第二个 `RuntimeController`。
+     */
+    override suspend fun stopRun(runId: Long): Boolean {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法停止执行")
+        return built.stopRun(runId)
     }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */

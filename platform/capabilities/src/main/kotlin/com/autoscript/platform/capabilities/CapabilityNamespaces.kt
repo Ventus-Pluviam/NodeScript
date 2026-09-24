@@ -8,10 +8,12 @@ import com.autoscript.domain.automation.UiNodeTreeReader
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.system.AppLauncher
+import com.autoscript.domain.system.Clipboard
 import com.autoscript.domain.system.DeviceInfoProvider
 import com.autoscript.domain.system.DialogHost
 import com.autoscript.domain.system.FloatingWindowHost
 import com.autoscript.domain.system.NotificationPoster
+import com.autoscript.domain.system.SensorSource
 import com.autoscript.domain.storage.DataStore
 import com.autoscript.domain.storage.SystemSettings
 import com.autoscript.domain.storage.ZipArchiver
@@ -160,11 +162,36 @@ object CapabilityNamespaces {
         val handler = NotificationNamespaceHandler(poster)
         return lite { request -> handler.handle(request) }
     }
+
+    /**
+     * `clipboard` 命名空间（§12.2 系统剪贴板面）：`getText`/`setText` 两方法。
+     * 参数即 [Clipboard] SPI 实现（测试传内存替身，真机传 `:platform:system` 的
+     * `AndroidClipboard`）。同 datastore/zip/settings/notification：**独立注入缝**
+     * `AppShell.assemble` 的 `clipboardHandler`，不入 `systemHandlers` 束 ——
+     * 剪贴板无门禁（读受限是系统的 null 答案、写不受限，判据在 SPI 自己身上）。
+     */
+    fun clipboard(clipboard: Clipboard): NamespaceHandler {
+        val handler = ClipboardNamespaceHandler(clipboard)
+        return lite { request -> handler.handle(request) }
+    }
+
+    /**
+     * `sensors` 命名空间（§12.2 传感器面）：`isSupported`/`register`/`unregister`/
+     * `unregisterAll`/`drain` 五方法。参数即 [SensorSource] SPI 实现（测试传内存替身，
+     * 真机传 `:platform:system` 的 `AndroidSensorSource`）。同 datastore/zip/settings/
+     * notification/clipboard：**独立注入缝** `AppShell.assemble` 的 `sensorsHandler`，
+     * 不入 `systemHandlers` 束 —— P0 名单无运行时门禁（未知名→`ERR_NOT_SUPPORTED`、
+     * 系统拒收→`ERR_SERVICE_DISABLED`，判据在 SPI 自己身上）。
+     */
+    fun sensors(sensors: SensorSource): NamespaceHandler {
+        val handler = SensorsNamespaceHandler(sensors)
+        return lite { request -> handler.handle(request) }
+    }
 }
 
 /**
  * [BridgeRequestLite] 形状的 handler → 桥信封的字段级转接（本文件私有）。
- * 系统侧五个与存储/通知面四个（§9.6/§12.2）共用；同 [NamespaceHandler] 缝，无逻辑。
+ * 系统侧五个与存储/通知/剪贴板面五个（§9.6/§12.2）共用；同 [NamespaceHandler] 缝，无逻辑。
  */
 private inline fun lite(crossinline handle: suspend (BridgeRequestLite) -> ResponseLite): NamespaceHandler =
     NamespaceHandler { request ->

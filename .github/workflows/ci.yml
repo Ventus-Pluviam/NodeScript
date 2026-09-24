@@ -15,8 +15,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      # Android SDK：无 visual/emulator，仅提供 AGP 所需的 SDK 组件 + license 接受，供 Gradle 配置期使用
-      - uses: android-actions/setup-android@v3
+      # Android SDK：runner 自带 cmdline-tools（不用 android-actions/setup-android：
+      # 该 action 在 Google 新增 license 时卡交互确认挂掉，jumpy-porcupine 的 PR CI 已实测红在这步）。
+      # 直调 sdkmanager 非交互装 AGP 所需组件（compileSdk/targetSdk 35 系，见 gradle/libs.versions.toml）。
+      - name: 安装 Android SDK 组件（platform-35 + build-tools）
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:

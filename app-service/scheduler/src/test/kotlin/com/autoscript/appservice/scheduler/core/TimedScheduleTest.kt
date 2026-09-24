@@ -2,7 +2,6 @@ package com.autoscript.appservice.scheduler.core
 
 import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 class TimedScheduleTest {
@@ -43,7 +42,10 @@ class TimedScheduleTest {
     }
 
     @Test
-    fun `Cron P1 占位返回 null 不外溢`() {
-        assertNull(TimedSchedule.Cron("0 9 * * *").nextFireAfter(d0, utc))
+    fun `Cron P1 已落地：每日九点与 Daily 同值`() {
+        // cron 细则归 CronTabTest；这里只钉"接线不断"（Cron 分支不再恒 null）。
+        val daily = TimedSchedule.Daily(9, 30)
+        assertEquals(daily.nextFireAfter(at(8, 0), utc), TimedSchedule.Cron("30 9 * * *").nextFireAfter(at(8, 0), utc))
+        assertEquals(daily.nextFireAfter(at(10, 0), utc), TimedSchedule.Cron("30 9 * * *").nextFireAfter(at(10, 0), utc))
     }
 }

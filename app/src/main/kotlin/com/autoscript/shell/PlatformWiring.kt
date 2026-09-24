@@ -21,7 +21,7 @@ import com.autoscript.platform.system.SystemSpis
  * `ArchitectureTest` 的「平台实现只许装配包碰」把这条钉死。
  *
  * 分两步是刻意的：
- * - [of] 是**唯一碰 Android 的一步**（`Context` → `SystemSpis.of` 八件 SPI）；
+ * - [of] 是**唯一碰 Android 的一步**（`Context` → `SystemSpis.of` 九件 SPI）；
  * - [inject] 是纯转接（SPI 束 → handler 束，零 Android 触点）→ JVM 可单测，
  *   真假实现共用同一条拼装路径，不给"测试走另一套装配"留门。
  *
@@ -42,7 +42,7 @@ import com.autoscript.platform.system.SystemSpis
 object PlatformWiring {
 
     /**
-     * `AppShellKit.assemble` 的能力注入束：四个独立缝（存储/通知面，§12.2 接线表）
+     * `AppShellKit.assemble` 的能力注入束：六个独立缝（存储/通知/剪贴板/传感器面，§12.2 接线表）
      * + 五命名空间束（共担门禁的系统面）。形状与 assemble 的参数一一对应，少一层猜。
      */
     data class Injection(
@@ -53,6 +53,8 @@ object PlatformWiring {
         val zipHandler: NamespaceHandler,
         val settingsHandler: NamespaceHandler,
         val notificationHandler: NamespaceHandler,
+        val clipboardHandler: NamespaceHandler,
+        val sensorsHandler: NamespaceHandler,
     )
 
     /**
@@ -76,6 +78,8 @@ object PlatformWiring {
         zipHandler = CapabilityNamespaces.zip(spis.zip),
         settingsHandler = CapabilityNamespaces.settings(spis.settings),
         notificationHandler = CapabilityNamespaces.notification(spis.notification),
+        clipboardHandler = CapabilityNamespaces.clipboard(spis.clipboard),
+        sensorsHandler = CapabilityNamespaces.sensors(spis.sensors),
     )
 
     /** a11y 装配（[CapabilityNamespaces.a11y] 形状转接；实现在 :platform:capabilities）。 */
@@ -89,7 +93,7 @@ object PlatformWiring {
         CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer()))
 
     /**
-     * 生产入口：`Context` → [SystemSpis.of] 八件 + DialogHost 构造（本类是唯一同时
+     * 生产入口：`Context` → [SystemSpis.of] 十件 + DialogHost 构造（本类是唯一同时
      * 碰得到两个平台模块与 overlay 实况的装配点）→ [inject]。
      * `overlayAvailable` 缺省 `{ false }`：悬浮窗/对话框先走 `TYPE_APPLICATION_OVERLAY`；
      * a11y 服务在跑时由调用方改传 `{ true }`（语义见 [SystemSpis.of]）——

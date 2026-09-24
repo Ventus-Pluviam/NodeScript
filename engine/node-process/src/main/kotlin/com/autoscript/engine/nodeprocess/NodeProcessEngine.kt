@@ -44,6 +44,14 @@ data class NodeEngineConfig(
      * 桥调用如实 `ERR_ENGINE_STOPPED`，不悬挂）。
      */
     val hostSocketName: String? = null,
+    /**
+     * `AUTOSCRIPT_BRIDGE_DIST`（§12.4 资产交付轨，选填）：facade dist 落位根
+     * （生产 = `ScriptPaths.autoModuleRoot(filesDir)`）。给则**仅当** `bootstrap.js` 在位
+     * 才注入 —— 与 addon 同一条选填纪律：配置了但资产没落位 = 降级为不注入，
+     * main.cpp 打 stderr 如实说「facade 未接入」，脚本本体照跑（不为锦上添花杀执行）。
+     * 缺省 null = 不注入（单测/桌面不经资产部署的路径）。
+     */
+    val bridgeDistPath: Path? = null,
     /** 四步 quiesce 的排空窗口（§8.3）：`stop()` SIGTERM 后等这么久，未退则 TimedOut 交池 kill 兜底。 */
     val stopGraceMillis: Long = 3_000,
 )
@@ -147,6 +155,10 @@ class NodeProcessEngine(
         config.libnodePath?.let { env[ENV_LIBNODE] = it.toString() }
         addonEffective?.let { env[ENV_BRIDGE_ADDON] = it.toString() }
         config.hostSocketName?.let { env[ENV_HOST_SOCKET] = it }
+        // facade dist 同 addon 的选填纪律：配置了但 bootstrap.js 没落位 = 不注入
+        // （main.cpp 由此得知"没 dist 可 attach"并打 stderr，而不是注入一个坏路径）。
+        config.bridgeDistPath?.takeIf { Files.isRegularFile(it.resolve("bootstrap.js")) }
+            ?.let { env[ENV_BRIDGE_DIST] = it.toString() }
         // 执行体身份（§8.5 幂等键 + §8.4 心跳打点）：runId/runNonce 随 env 下传，
         // JS 侧（bootstrap/脚本）读 process.env 即可 startHeartbeat(runId) —— 不再另造 argv 通道。
         env[ENV_RUN_ID] = runId.toString()
@@ -216,7 +228,8 @@ class NodeProcessEngine(
         /**
          * `AUTOSCRIPT_LIBNODE`（§7.8 main.cpp 必填）/ `AUTOSCRIPT_BRIDGE_ADDON`（选填）/
          * `AUTOSCRIPT_HOST_SOCKET`（选填，离线缺省）/ `AUTOSCRIPT_RUN_ID`（§8.4 心跳打点身份）/
-         * `AUTOSCRIPT_RUN_NONCE`（§8.5 执行体幂等键）—— 与 main.cpp 头注释、docs §7.8 同名三处，
+         * `AUTOSCRIPT_RUN_NONCE`（§8.5 执行体幂等键）/ `AUTOSCRIPT_BRIDGE_DIST`（§12.4
+         * facade 落位根，选填）—— 与 main.cpp 头注释、docs §7.8 同名三处，
          * 改名必须三处同批（与 ErrCode 目录同一漂移纪律）。
          */
         const val ENV_LIBNODE = "AUTOSCRIPT_LIBNODE"
@@ -224,6 +237,7 @@ class NodeProcessEngine(
         const val ENV_HOST_SOCKET = "AUTOSCRIPT_HOST_SOCKET"
         const val ENV_RUN_ID = "AUTOSCRIPT_RUN_ID"
         const val ENV_RUN_NONCE = "AUTOSCRIPT_RUN_NONCE"
+        const val ENV_BRIDGE_DIST = "AUTOSCRIPT_BRIDGE_DIST"
 
         /** 强杀后的收尸等待：只防僵尸残留，不承担语义（语义在 kill 已发即完成）。 */
         private const val KILL_REAP_MILLIS = 1_000L

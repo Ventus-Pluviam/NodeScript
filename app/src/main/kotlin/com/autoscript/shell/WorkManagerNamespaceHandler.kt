@@ -1,5 +1,6 @@
 package com.autoscript.shell
 
+import com.autoscript.appservice.scheduler.core.CronTab
 import com.autoscript.appservice.scheduler.core.ScheduledTask
 import com.autoscript.appservice.scheduler.core.Scheduler
 import com.autoscript.appservice.scheduler.core.ScreenGuarantee
@@ -25,7 +26,8 @@ import java.time.ZoneId
  * - `create`：`{id?,name,projectId,scriptPath,schedule:{kind,...},screen?,args?,
  *   scriptTimeoutMillis?,timezone?,enabled?}` → Ok `{"id":"…"}`。
  *   `schedule.kind` = `once`（`delaySeconds`）/`daily`（`hourOfDay`+`minuteOfHour`）；
- *   `cron` → Err ERR_NOT_IMPLEMENTED（P1 未落地，如实拒绝不伪装成定时）；
+ *   `cron`（`expr`，5 字段 `分 时 日 月 周`）→ 非法表达式 Err INVALID_PARAM
+ *   （校验出处 [CronTab.parse]，与 UI 侧 `TaskCenterOps` 同口径）；
  *   `screen` 缺省 `ANY`；`timezone` 缺省系统默认；`enabled` 缺省 true；
  *   `id` 缺省服务端分配（UUID）。
  * - `cancel`：`{id}` → Ok `true`（幂等：从未登记的 id 照样 true，与 `Scheduler.cancel` 一致）。
@@ -126,9 +128,18 @@ class WorkManagerNamespaceHandler(private val scheduler: Scheduler) {
                 (f["minuteOfHour"] as? WmJson.Value.N)?.raw?.toIntOrNull()
                     ?: throw IllegalArgumentException("daily 需要 minuteOfHour"),
             )
-            "cron" -> throw AutojsException(
-                ErrorCode.ERR_NOT_IMPLEMENTED, "cron 排期 P1 未落地（见 §8.6）：只接受 once/daily",
-            )
+            "cron" -> {
+                // CronTab.parse 是唯一校验出处（与 UI 侧 Ops 同口径）：非法表达式抛
+                // IllegalArgumentException → handle 折叠为 ERR_INVALID_PARAM。
+                val expr = (f["expr"] as? WmJson.Value.S)?.v
+                    ?: throw IllegalArgumentException("cron 需要字符串 expr")
+                try {
+                    CronTab.parse(expr)
+                } catch (e: IllegalArgumentException) {
+                    throw IllegalArgumentException("cron 表达式非法：${e.message}")
+                }
+                TimedSchedule.Cron(expr.trim())
+            }
             else -> throw IllegalArgumentException("schedule.kind 非法（once/daily/cron）")
         }
         // TimedSchedule.Daily 的 init require 负责越界拒绝（hour 0..23/minute 0..59），

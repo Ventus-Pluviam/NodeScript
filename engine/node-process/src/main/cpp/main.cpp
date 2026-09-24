@@ -9,6 +9,10 @@
 //  AUTOSCRIPT_RUN_ID         本次执行的 runId（spawn 侧注入，NodeProcessEngine 同名 env）——
 //                            本文件**透传不消费**：JS 侧读 process.env 打心跳（§8.4）。
 //  AUTOSCRIPT_RUN_NONCE      §8.5 执行体幂等键（同上：透传，JS 读 process.env）。
+//  AUTOSCRIPT_BRIDGE_DIST    facade dist 落位根（选填，§12.4 资产交付轨）—— 给则
+//                            引导脚本 require($DIST/bootstrap.js).attachNative({addon})
+//                            把 runtimeBridge 接上（脚本 require('auto') 即有桥）；
+//                            不给 = facade 未接入，stderr 提示、脚本照跑（选填件不杀执行）。
 //  AUTOSCRIPT_HOST_SOCKET    :main 的 unix socket 地址（选填）—— 给则必须连上
 //                            （连不上 = exit 3，不静默降级：生产由 :main spawn 并带上，
 //                            缺失只应出现在离线调试）；不给 = 离线跑，桥调用如实抛
@@ -64,16 +68,25 @@ constexpr const char kNodeStartSymbol[] = "_ZN4node5StartEiPPc";
 // WatchdogPolicy.heartbeatIntervalMillis 同源）。unref 定时器不吊住事件循环（脚本跑完即退，
 // §5.3 同款纪律，对齐 bridge/js startHeartbeat）。reqId 用 **-seq 负数命名空间**：心跳响应
 // 由 addon 直接回包，JS 消费面（facade `attachNative` → runtimeBridge.handleResponse，
-// §12.4 接入面 1 —— bridge/js 已落，设备侧待打包入口调用）装上后，迟到的心跳响应
-// 撞不上任何在途正数 id（handleResponse 查不到即丢），不会错结算别的请求。
-// 无 RUN_ID（非 spawn 起的裸 noden）→ 不打点；离线无 fd 时 invoke 抛错被 beat 吞掉
+// §12.4 接入面 1）装上后，迟到的心跳响应撞不上任何在途正数 id（handleResponse 查不到
+// 即丢），不会错结算别的请求。
+// 无 RUN_ID（非 spawn 起的裸 noden）→ 不打点；离线无 fd 时 invoke抛错被 beat 吞掉
 // （心跳失败不炸脚本 —— JS 侧 startHeartbeat 同款纪律）。
+// 打包入口接线（§12.4 资产交付轨，2026-09-24）：AUTOSCRIPT_BRIDGE_DIST 在位 →
+// require($DIST/bootstrap.js).attachNative({addon: a}) —— setup（TSF 结算面）先就位、
+// install 把 addon.invoke 注入 runtimeBridge，脚本随后 require('auto') 即有桥。
+// 传 {addon: a} 复用本引导已 require 的同一实例（模块缓存本就同份，显式传免得
+// NativeBootstrap 再走一遍 env require）。dist 缺/require 抛错 = 如实 stderr、脚本照跑
+// （桥调用点 ERR_ENGINE_STOPPED —— 选填件不杀执行，与 addon 缺位同纪律）。
 constexpr const char kBootstrap[] =
     "const a=require(process.env.AUTOSCRIPT_BRIDGE_ADDON);"
     "if(process.env.AUTOSCRIPT_SOCK_FD)a.setSocketFd(+process.env.AUTOSCRIPT_SOCK_FD);"
     "const rid=+process.env.AUTOSCRIPT_RUN_ID;"
     "if(rid>0){let seq=0;setInterval(()=>{seq++;"
     "try{a.invoke('engines','heartbeat',JSON.stringify({runId:rid,seq}),-seq,2000)}catch(e){}},500).unref();}"
+    "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
+    "if(d)require(d+\"/bootstrap.js\").attachNative({addon:a})"
+    "}catch(e){console.error('bridge-dist attachNative 未接上: '+(e&&e.message||e))}"
     "require(process.argv[1]);";
 
 // 连 :main 的 unix socket；成功返回 fd，失败 -1（errno 保留给调用方打印）。
@@ -185,6 +198,13 @@ int main(int argc, char** argv) {
   //    运行中的 isolate 等于 UAF，进程退出由内核回收映射。──────────────────────────
   const char* addon_path = std::getenv("AUTOSCRIPT_BRIDGE_ADDON");
   bool preload_addon = (addon_path != nullptr && addon_path[0] != '\0');
+  // facade 未接入要说出来（选填不杀执行，但"require('auto') 会解析不到"不能静默）：
+  // addon 在、dist 不在 = 半接线形态（桥数据面 addon 侧活着、JS 消费面没装）。
+  if (preload_addon && std::getenv("AUTOSCRIPT_BRIDGE_DIST") == nullptr) {
+    std::fprintf(stderr,
+                 ":nodeN AUTOSCRIPT_BRIDGE_DIST 未注入：facade 未接入，require('auto') 将失败"
+                 "（dist 随包/落位见 §12.4 资产交付轨；脚本本体照跑）\n");
+  }
   std::vector<char*> node_argv;
   node_argv.push_back(argv[0]);  // argv[0] = 可执行名（node 惯例）
   static char flag_e[] = "-e";
