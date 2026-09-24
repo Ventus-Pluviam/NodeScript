@@ -117,13 +117,42 @@ cmake -S "$OCV_SRC" -B "$BUILD_DIR" \
     -DOPENCV_WARNINGS_ARE_ERRORS=OFF
 
 # ── 3b) kleidicv 审计行：ON/OFF 都记下来（软降级不 fatal，但必须可查）────
+# **不要把 OFF 归因成网络**（2026-09-24 实测教训）：那一次 tarball 其实拉下来了
+# （同 pin md5 与 VERSIONS.env 一致、125 个 .cpp 照编、6 个 target 全 Built），
+# 但 CMakeCache 的 HAVE_KLEIDICV 仍是 OFF —— 是 OpenCV 侧的 cache/判定问题，
+# 不是 gitlab.arm.com 不可达。故这里把三个**可判读的事实**分别报出来
+# （缓存值 / 3rdparty 源码是否在场 / 编译产物是否在场），不下结论：
+#   cache=ON, src=有, lib=有  → 真启用
+#   cache=OFF, src=有, lib=有 → 源码编了但 OpenCV 没认（就是上次那状，下一步去
+#                               hal/kleidicv/kleidicv.cmake 的判定条件里查）
+#   cache=OFF, src=无         → 下载真失败（3rdparty 目录空），此时才谈网络
+KLEIDI_SRC_DIR="$BUILD_DIR/3rdparty/kleidicv/kleidicv-$KLEIDICV_COMMIT"
+KLEIDI_LIB_DIR="$BUILD_DIR/3rdparty/lib/arm64-v8a"
 KLEIDI_STATE="OFF"
-if grep -q '^HAVE_KLEIDICV:BOOL=ON' "$BUILD_DIR/CMakeCache.txt"; then
+# 先判文件在不在，**不要** `X="$(sed … /dev/null 2>&-)"`：本脚本 set -e + pipefail，
+# 文件缺失时 sed 的非零退出会顺着命令替换把整个脚本带走（本机实测 exit 2），
+# 那时连 WARN 都印不出来 —— 恰恰是最需要它的场景。
+KLEIDI_CACHE="(无 CMakeCache.txt)"
+if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+    KLEIDI_CACHE="$(sed -n 's/^HAVE_KLEIDICV:BOOL=//p' "$BUILD_DIR/CMakeCache.txt")"
+    [ -n "$KLEIDI_CACHE" ] || KLEIDI_CACHE="(cache 无此项)"
+fi
+KLEIDI_SRC="无"
+[ -d "$KLEIDI_SRC_DIR/kleidicv/src" ] && KLEIDI_SRC="有"
+KLEIDI_LIB="无"
+[ -f "$KLEIDI_LIB_DIR/libkleidicv.a" ] && KLEIDI_LIB="有"
+if [ "$KLEIDI_CACHE" = "ON" ]; then
     KLEIDI_STATE="ON"
 else
-    printf '\033[1;33m[WARN]\033[0m HAVE_KLEIDICV 非 ON（软降级：gitlab.arm.com 不可达？）—— 已记入审计行\n' >&2
+    printf '\033[1;33m[WARN]\033[0m kleidicv 未启用（cache=%s, 源码=%s, 静态库=%s）—— 已记入审计行\n' \
+        "$KLEIDI_CACHE" "$KLEIDI_SRC" "$KLEIDI_LIB" >&2
+    # 源码在场而 cache 非 ON = OpenCV 没认它：这是判定问题，值得把它的判定源摊开
+    if [ "$KLEIDI_SRC" = "有" ]; then
+        printf '       判定源：%s（ocv_update 的 pin 与 hal 的判定条件都在这一个文件里）\n' \
+            "$OCV_SRC/hal/kleidicv/kleidicv.cmake" >&2
+    fi
 fi
-say "kleidicv 状态: $KLEIDI_STATE"
+say "kleidicv 状态: $KLEIDI_STATE（cache=$KLEIDI_CACHE, 源码=$KLEIDI_SRC, 静态库=$KLEIDI_LIB）"
 
 # ── 4) 只编 imgcodecs 连带 core/imgproc（BUILD_LIST 已裁，不会捎带别的模块）
 say "make -j$(nproc) opencv_imgcodecs（连带 core/imgproc 静态库）"
