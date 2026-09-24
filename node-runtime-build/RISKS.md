@@ -45,6 +45,18 @@ Node 的 `deps/zlib` 源集跟随 Chromium 的 `BUILD.gn`：`cpu_features.c` 在
 
 `tools/v8_gypfiles/v8.gyp` 的 arm64 段按 OS 分 trap-handler 实现文件（native-posix / x64-simulator），但两个条件的 OS 列表都没有 `android`；而 host-x64 + target-arm64 + `V8_OS_LINUX`（含 Android）时 `V8_TRAP_HANDLER_SUPPORTED=true`，`handler-outside.cc` 的桩被裁 —— mksnapshot 终链悬空双符号（`v8_internal_simulator_ProbeMemory` + `RegisterDefaultTrapHandler()`）。修法见 `fetch-and-build.sh` §3c（两条件行各加 `android`，行号 assert 防漂移）。上游 GN 路径无此缺口，是 gyp 独有。
 
-## 13. 全量 make 会捎带 cctest（API 26 无 aligned_alloc）
+## 13. OpenCV/kleidicv 轨（`build-opencv.sh`，2026-09-25 记账）
+
+与 Node 轨**不共 out/**：产物名、门禁项、可信链校验源都不同（本轨产 `libimgnative.so`，无 `config.gypi`/`libnode.so.<137>` 契约），合目录会让 `check-alignment.sh` 的 Node 专属断言误扫图像产物。两轨共用 NDK zip 与 `ANDROID_API`。
+
+- **kleidicv 是软降级，必须留审计行**：下载源是 gitlab.arm.com 的 release 包，CI 网络可达性不受我们控制。`ocv_download` 失败只 WARNING 不 fatal，于是产物可能悄悄从"带 kleidicv 加速"变成"纯 OpenCV"而**功能不报错、体积缩小**。对策：pin 写死在 `VERSIONS.env`（`KLEIDICV_COMMIT=26.03` + md5），构建时 grep 上游 `hal/kleidicv/kleidicv.cmake` 的两处 pin（上游换 pin 即 die），收尾按 `CMakeCache.txt` 的 `HAVE_KLEIDICV` 把 ON/OFF 写进 `SHASUMS256` 旁审计行 —— 只 sha256 回答不了"这个 so 里到底有没有加速面"。
+- **kleidicv 不覆盖我们要的算子**（上游 doc 实证）：它加速 add/sub/absdiff/cvtColor/GaussianBlur/Sobel/resize/… 但**不含 `matchTemplate`/`imdecode`**。开着是给未来算子铺路 + 现状不亏，**不要**拿它当找图提速的依据。
+- **arm64 的 `matchTemplate` 实际走通用 C**：carotene 的 NEON 入口门槛 `width>=8 && width*height<=256`（4.8/4.14 逐字节相同）—— 正常按钮模板即超出；4.14 起入口改走 `cv_hal_matchTemplate`，但 `hal_ni_matchTemplate` 仍是 `CV_HAL_ERROR_NOT_IMPLEMENTED` 死桩；imgproc 的 `NEON_DOTPROD` dispatch 条目为空。性能预期按通用实现估（1080p 模板匹配 < 40ms 是 §15 预算，未被本节推翻）。
+- **静态链接是硬要求**：产物 NEEDED 白名单只许 `libc/libdl/libm/liblog/libc++_shared`，出现 `libopencv_*.so` 即门禁失败 —— 否则等于把 OpenCV 共享库推给装载面（版本漂移必崩）。格式库 `libjpeg-turbo`/`libpng`/`zlib` 走 `BUILD_JPEG/BUILD_PNG/BUILD_ZLIB=ON` 树内源码，不找宿主 sysroot。
+- **装载面漏编 = 静悄悄没有图分析**（2026-09-24 CI 实证）：终链行只列 `imgnative.cpp`（纯计算核）时，so 编得过、门禁全绿（16KB/NEEDED/ELF 与装载面无关），但**没有 `Java_com_autoscript_platform_system_*` 符号** → Kotlin `System.loadLibrary` 照常成功（so 存在、能解析），首次调用 native 方法才 `UnsatisfiedLinkError` → `JniOps.loadOrNull()` 回 null → 桥对 `images.*` 回 `ERR_NOT_IMPLEMENTED`。**症状像"so 没交付"而不是"链接行漏文件"**，最难查的一类。故终链行必须同时列 `imgnative.cpp` + `images_jni.cc`，脚本头部对两个文件各 assert 一次。
+- **OpenCV commit pin + 首次跑未验证声明**：`OPENCV_COMMIT` 按 SHA 固定（不用浮动 tag），构建时 rev-parse 复核。与 Node 轨同样：本管线交付时未在本环境实跑过全链，首次真实验证 = Actions（`image-native.yml`）/ Docker；偏差按一次提交修正。
+- **体积**：`core+imgproc+imgcodecs` 静态链接进 APK 的代价见 §15 已记账（该预算条目唯一被实测推翻的一项），后续若按需分发，本轨无 exec 需求、可整轨后移。
+
+## 14. 全量 make 会捎带 cctest（API 26 无 aligned_alloc）
 
 顶层 `make`（含 `make node`）的默认依赖图含 `cctest`，其 `test_crypto_clienthello.cc` 用 `aligned_alloc`（bionic API 28+，`ANDROID_API=26` 头文件不暴露）确定性断链。`node`/`libnode.so` 不依赖它。CI 全链（`fetch-and-build.sh` §5）如命中，应点名编 `libnode` + `node` 目标（`make -C out BUILDTYPE=Release libnode node`）而非裸 `make`；或升 `ANDROID_API>=28`（牵动 minSdk，以升级纪律另议）。

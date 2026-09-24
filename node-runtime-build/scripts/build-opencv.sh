@@ -12,6 +12,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../VERSIONS.env
 source "$ROOT_DIR/VERSIONS.env"
+# 桥面 C++ 住**仓库**根的 bridge/image/（Gradle 模块，不在 node-runtime-build 里）。
+# assert 而非默默跳过：CI 的 checkout 布局偶发/镜像平铺会把它指到 node-runtime-build/
+# 下面（2026-09-24 实测 [FATAL] 之前先撞上 "no such file or directory: .../node-runtime-build/
+# bridge/image/src/main/cpp/imgnative.cpp"，症状是 clang 报错而非本 die 的人话）。
+IMG_CPP_DIR="$ROOT_DIR/bridge/image/src/main/cpp"
+[ -f "$IMG_CPP_DIR/imgnative.cpp" ] || die "桥面计算核缺失: $IMG_CPP_DIR/imgnative.cpp"
+[ -f "$IMG_CPP_DIR/images_jni.cc" ] || die "桥面装载面缺失: $IMG_CPP_DIR/images_jni.cc（JNI 符号名 Kotlin 侧与之对表，缺一即不装）"
 
 WORK="${WORK_DIR:?WORK_DIR 未设置}"
 OCV_SRC="$WORK/src/opencv"
@@ -111,7 +118,7 @@ cmake --build "$BUILD_DIR" --target opencv_imgcodecs -j"$(nproc)"
 # 静态 STL：产物不依赖 libc++_shared.so（libnode 那条已有的 NEEDED 归装载面，见
 # engine/node-process/scripts/build-native.sh 同款决定）。
 IMG_LIB="$OUT/libimgnative.so"
-say "链 libimgnative.so（静态 opencv + 静态 STL）"
+say "链 libimgnative.so（计算核 + 装载面 + 静态 opencv + 静态 STL）"
 CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
 "$CXX" -std=c++17 -fPIC -O2 -Wall -Wextra \
     -Wl,-z,max-page-size=16384 -static-libstdc++ \
@@ -121,7 +128,8 @@ CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
     -I "$OCV_SRC/modules/imgcodecs/include" \
     -I "$BUILD_DIR" \
     -o "$IMG_LIB" \
-    "$ROOT_DIR/bridge/image/src/main/cpp/imgnative.cpp" \
+    "$IMG_CPP_DIR/imgnative.cpp" \
+    "$IMG_CPP_DIR/images_jni.cc" \
     -L"$BUILD_DIR/lib/arm64-v8a" -L"$BUILD_DIR/3rdparty/lib/arm64-v8a" \
     -lopencv_imgcodecs -lopencv_imgproc -lopencv_core \
     -llibjpeg-turbo -llibpng -lzlib \
