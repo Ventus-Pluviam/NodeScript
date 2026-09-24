@@ -17,6 +17,7 @@ import com.autoscript.domain.engine.StopResult
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -26,7 +27,7 @@ import org.junit.jupiter.api.Test
  * 覆盖三件事：
  * 1. 注入 `a11y`/`screen`/`npm` 缝 → 请求可达真实逻辑（这里用内存假实现，等价于
  *    `:platform:capabilities` 的真实现与 `:app-service:packager` 的 npm 真实现）；
- * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
+ * 2. 不注入 → 桥对 `a11y.*`/`screen.*`/`npm.*`/`power_manager.*` 如实回 ERR_NOT_IMPLEMENTED（§7.5 Router 契约），
  *    **绝不伪造可用**；
  * 3. `console`/`engines` 与能力缝共存，互不抢占 namespace。
  */
@@ -41,7 +42,10 @@ class AppShellCapabilityMountTest {
         override suspend fun status(): EngineStatus = EngineStatus.STOPPED
     }
 
-    private fun shell(vararg handlers: Pair<String, NamespaceHandler>): AppShell {
+    private fun shell(
+        vararg handlers: Pair<String, NamespaceHandler>,
+        keeper: ForegroundKeeper? = null,
+    ): AppShell {
         val map = handlers.toMap()
         return AppShell.assemble(
             engineFactory = { id -> MountFakeEngine(id) },
@@ -58,6 +62,8 @@ class AppShellCapabilityMountTest {
             zipHandler = map["zip"],
             settingsHandler = map["settings"],
             notificationHandler = map["notification"],
+            // S8.7: power_manager drives the ledger straight; tests feed a keeper on demand.
+            powerManagerHandler = keeper?.let { PowerManagerNamespaceHandler(it.wakeLocks(), it).mount() },
         )
     }
 
@@ -213,6 +219,10 @@ class AppShellCapabilityMountTest {
                 BridgeRequest(7, "notification", "post", """{"id":1,"text":"跑完了"}""", 5_000),
             )
             assertEquals("ERR_NOT_IMPLEMENTED", (notifResp as BridgeResponse.Err).errorCode, "notification 独立缝缺省同样不伪造")
+            val powerResp = s.router.dispatch(
+                BridgeRequest(8, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
+            )
+            assertEquals("ERR_NOT_IMPLEMENTED", (powerResp as BridgeResponse.Err).errorCode, "power_manager 独立缝缺省同样不伪造")
         }
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
@@ -235,4 +245,52 @@ class AppShellCapabilityMountTest {
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
     }
+
+    private class FakeWakeLock(var acquireOk: Boolean = true) : WakeLockOps {
+        override var held: Boolean = false
+        override fun acquire(): Boolean {
+            if (!acquireOk) return false
+            held = true
+            return true
+        }
+        override fun release(): Boolean {
+            held = false
+            return true
+        }
+    }
+
+    private class FakeClock(var now: Long = 0L) : com.autoscript.domain.core.Clock {
+        override fun nowMillis(): Long = now
+    }
+
+    @Test
+    fun `喂 keeper 后 power_manager 全链路可达`() = runBlocking {
+        val fg = object : ForegroundOps {
+            override var foregroundRunning: Boolean = true
+            override fun startService(): Boolean = true
+            override fun stopService(): Boolean = true
+            override fun activateForeground(): Boolean = true
+            override fun deactivateForeground(): Boolean = true
+        }
+        val ledger = WakeLockLedger(FakeWakeLock(), FakeClock())
+        val keeper = ForegroundKeeper(fg, ledger, FakeClock(), tickMillis = 60 * 60 * 1000L)
+        keeper.start()
+        val s = shell(keeper = keeper)
+        s.use {
+            val acq = it.router.dispatch(
+                BridgeRequest(1, "power_manager", "acquire", "{\"timeoutMillis\":60000}", 5_000),
+            )
+            val ok = assertInstanceOf(BridgeResponse.Ok::class.java, acq)
+            assertTrue(ok.payload!!.contains("script-"), "token 服务端分配：" + ok.payload)
+            val st = it.router.dispatch(BridgeRequest(2, "power_manager", "status", null, 5_000))
+            val stOk = assertInstanceOf(BridgeResponse.Ok::class.java, st)
+            assertTrue(stOk.payload!!.contains("holders"), "status 双值：" + stOk.payload)
+            // 未注入的别的缝不受影响
+            val a11yResp = it.router.dispatch(BridgeRequest(3, "a11y", "findOne", "{}", 5_000))
+            assertEquals("ERR_NOT_IMPLEMENTED", (a11yResp as BridgeResponse.Err).errorCode)
+        }
+
+        Unit
+    }
+
 }

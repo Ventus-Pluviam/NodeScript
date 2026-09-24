@@ -22,6 +22,7 @@ import { datastore } from './datastore'
 import { zip } from './zip'
 import { settings } from './settings'
 import { notification } from './notification'
+import { power } from './power'
 import { InvokeHandler } from './bridge'
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload }
 export type { ErrPayload, TimedSchedule, TimedScheduleInput, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee }
@@ -48,6 +49,7 @@ export const auto = {
   get zip(): typeof zip { return zip },
   get settings(): typeof settings { return settings },
   get notification(): typeof notification { return notification },
+  get power(): typeof power { return power },
   get envelope(): typeof BridgeEnvelope { return BridgeEnvelope },
 
   /** 安装桥宿主（单例；重复安装抛错）。 */

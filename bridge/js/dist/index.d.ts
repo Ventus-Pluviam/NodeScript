@@ -21,6 +21,7 @@ import { datastore } from './datastore';
 import { zip } from './zip';
 import { settings } from './settings';
 import { notification } from './notification';
+import { power } from './power';
 import { InvokeHandler } from './bridge';
 export { ErrCode, AutojsError, NotFoundError, ERROR_CODES, errFromPayload };
 export type { ErrPayload, TimedSchedule, TimedScheduleInput, CreateTimedTaskInput, TimedTaskInfo, ScreenGuarantee };
@@ -55,6 +56,7 @@ export declare const auto: {
     readonly zip: typeof zip;
     readonly settings: typeof settings;
     readonly notification: typeof notification;
+    readonly power: typeof power;
     readonly envelope: typeof BridgeEnvelope;
     /** 安装桥宿主（单例；重复安装抛错）。 */
     install(handler: InvokeHandler): void;

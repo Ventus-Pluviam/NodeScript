@@ -33,6 +33,7 @@ import com.autoscript.shell.CapabilityCenterRead
 import com.autoscript.shell.ForegroundHost
 import com.autoscript.shell.ForegroundKeeper
 import com.autoscript.shell.PlatformWiring
+import com.autoscript.shell.PowerManagerNamespaceHandler
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
 import com.autoscript.shell.ScreenGateAndroid
@@ -243,6 +244,13 @@ class AppShellApplication : Application(), HostSummary {
                 zipHandler = wiring.zipHandler,
                 settingsHandler = wiring.settingsHandler,
                 notificationHandler = wiring.notificationHandler,
+                // §8.7 脚本电源面：账本是 foregroundKeeper() 持有的进程级单例（`onCreate`
+                // 先于装配起，见 [onCreate]），现建 handler 喂独立缝 —— 脚本锁与框架锁
+                // 同一本账，引用计数共存，框架 stop 只放框架自己的那一份。
+                powerManagerHandler = PowerManagerNamespaceHandler(
+                    foregroundKeeper().wakeLocks(),
+                    foregroundKeeper(),
+                ).mount(),
                 systemHandlers = wiring.systemHandlers,
             )
             // accept 开 serve：壳 router 就绪才收（bind 与 start 之间的入连接在内核 backlog

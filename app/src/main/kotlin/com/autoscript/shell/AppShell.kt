@@ -204,6 +204,15 @@ class AppShell(
              */
             notificationHandler: NamespaceHandler? = null,
             /**
+             * `power_manager` 命名空间实现（§8.7 脚本电源面）：同 [datastoreHandler] 的**独立**缝 ——
+             * 电源面无共担门禁（`WAKE_LOCK` 是安装时授予的 normal 权限，判定在账本与系统侧），
+             * 不入 [SystemHandlers] 束。生产由 Application 从 `foregroundKeeper()` 的账本现建
+             * `PowerManagerNamespaceHandler(...).mount()` 后传入（与 `workManager` 恒挂载不同 ——
+             * 调度器是本壳自建的，账本是 Application 持有的进程级单例）；
+             * null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`（不伪造可用）。
+             */
+            powerManagerHandler: NamespaceHandler? = null,
+            /**
              * `dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个命名空间实现（§9.4/§9.6）。
              * 与 [a11yHandler] 同一注入缝，但合成一个参数而非五个：五个命名空间在 §12.2
              * 的 JS facade（`extras.ts`）里是一个整体，且共一批能力门禁（OVERLAY /
@@ -235,6 +244,7 @@ class AppShell(
             if (zipHandler != null) router.register("zip", zipHandler)
             if (settingsHandler != null) router.register("settings", settingsHandler)
             if (notificationHandler != null) router.register("notification", notificationHandler)
+            if (powerManagerHandler != null) router.register("power_manager", powerManagerHandler)
             systemHandlers?.registerAll(router::register)
 
             val dispatcher = ControllerRunDispatcher(controller, screenGate)
