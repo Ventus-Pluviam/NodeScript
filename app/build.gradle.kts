@@ -50,7 +50,15 @@ android {
     }
     testOptions {
         unitTests {
-            all { it.useJUnitPlatform() }
+            all {
+                it.useJUnitPlatform()
+                // P0 回环（P0LoopbackTest）拉真 npm 进程：CI 走 -PskipNpmE2E 排除
+                // （与 :app-service:packager 的 HostNodeNpmE2ETest 同一条纪律；
+                // 本机闭环不带该 flag 即跑）。
+                if (project.hasProperty("skipNpmE2E")) {
+                    it.exclude("**/P0LoopbackTest*")
+                }
+            }
         }
     }
 }
