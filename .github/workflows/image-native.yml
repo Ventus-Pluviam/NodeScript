@@ -7,7 +7,8 @@ name: image-native
 # —— 同一脚本也由 node-runtime-build/Dockerfile 的 OpenCV 轨调用，两处同源同门禁。
 # Node 24 那条轨（fetch-and-build.sh → libnode.so）**不经本文件**：体量差一个量级
 # （600MB 源码 + 半小时以上），放进 PR 门会让每次改动都等一轮；libnode 的构建门
-# 由 node-runtime-build/Dockerfile 承担（见 ci.yml 末注）。
+# 由 .github/workflows/node-slice.yml 承担（动了 Node 构建面才跑 + workflow_dispatch，
+# runner 直跑同一脚本；Dockerfile 只是发布封装，见 ci.yml 末注）。
 #
 # 两个 job 的分工：host-image-semantics 先跑（判读对，快），build-opencv 后跑
 # （aarch64 出得了、过 16KB/NEEDED 门禁，慢）。判读先红就不用等构建那一轮。

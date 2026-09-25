@@ -27,7 +27,9 @@ mkdir -p "$DL" "$SRC" "$OUT"
 NODE_TARBALL="node-$NODE_VERSION.tar.xz"
 if [ ! -f "$DL/$NODE_TARBALL" ]; then
     say "下载 Node $NODE_VERSION ..."
-    curl -fsS --retry 3 -o "$DL/$NODE_TARBALL" \
+    # 断点续传：tarball 约 30MB+，失败重试用 -C - 接着写（curl --retry 3 只重试
+    # 连接，写了一半的文件默认截断重来；-C - 让服务端按已有字节续传，已完整即秒过）。
+    curl -fsS -C - --retry 3 -o "$DL/$NODE_TARBALL" \
         "https://nodejs.org/dist/$NODE_VERSION/$NODE_TARBALL"
 else
     say "复用已下载 $DL/$NODE_TARBALL"
