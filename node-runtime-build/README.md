@@ -73,7 +73,11 @@ ls out-opencv/    # libopencv.so  SHASUMS256（旁带 kleidicv ON/OFF 审计行�
 - 裁剪：`BUILD_LIST=core,imgproc,imgcodecs`；格式库 `libjpeg-turbo`/`libpng`/`zlib` 走树内源码（`BUILD_*=ON`），无外部下载。
 - `WITH_KLEIDICV` 保持**默认 ON**（AArch64+Android 默认开）——它**不含 `matchTemplate`/`imdecode`**，是给未来算子铺路；下载失败软降级，结论写进审计行。**已在启用中**（2026-09-25 复核：交付 so 内含 `kleidicv::hal::*` 42 个符号与 `HAL implementation … ==> kleidicv::hal::…` dispatch 串）。ON/OFF 的判据是 configure 摘要的 `Custom HAL: … KleidiCV (ver …)`，**不是** `CMakeCache.txt` 的 `HAVE_KLEIDICV`（上游只 `set` 普通变量、无 CACHE，cache 里没这一项）。
 - 编译面：`imgnative.cpp`（纯计算核，零 JNI）+ `images_jni.cc`（装载面，全仓唯一 `#include <jni.h>`）两个 .cpp 一起链进同一个 so —— **只编计算核会得到一个没有 JNI 入口的 so**（2026-09-24 CI 实测：链接行不含装载面时产物缺 `Java_com_autoscript_platform_system_NativeImageAnalyzer_*`，Kotlin 侧 `loadOrNull()` 只会回 null，症状是"图分析全 NOT_IMPLEMENTED"而非编译错误）。脚本头部对两个源文件各做一次存在 assert。
-- 门禁（`check-opencv-alignment.sh`）：16KB LOAD 对齐 + AArch64/ET_DYN + **NEEDED 白名单（不许 `libopencv_*.so` = 静态链接的验收点）**。
+- 门禁（`check-opencv-alignment.sh`）：16KB LOAD 对齐 + AArch64/ET_DYN + **NEEDED 白名单（不许 `libopencv_*.so` = 静态链接的验收点）** + **JNI 符号面**
+  （`Java_com_autoscript_platform_system_NativeImageAnalyzer_{decode,match,release,color}Native` 四个逐个在场）——
+  最后这条 2026-09-25 补：JNI 符号名是字符串约定，Kotlin 的 `external fun` 与 `images_jni.cc` 之间没有编译器看护，
+  改包名/类名漏一处照样编得过、前三条照样绿，要到真机 dlopen 才以 `UnsatisfiedLinkError` 现形（本机已吃过一次近失：
+  手边那份产物早于 findColor 提交 87 分钟、`colorNative` 0 个，前三条一条都不红）。
 - 交付位：`app/build.gradle.kts` 的 `prepareEngineNativeLibs` 候选位含 `node-runtime-build/out-opencv/libopencv.so`（或 `export LIBOPENCV=…`）；**缺位只 warn 不 fail**（"选填纪律"与 addon 同）—— so 不在时 `images.*` 桥如实 `ERR_NOT_IMPLEMENTED`，不塞内存替身。
 
 ## 风险与决策记录
