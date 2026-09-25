@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 /**
  * `images` 宿主侧真实现的语义测试（§9.2）。native 替身住内存（[FakeOps]）——
@@ -86,6 +87,22 @@ class NativeImageAnalyzerTest {
             released += nativeRef
             return releaseStatus
         }
+
+        // §18-8(b)：截屏帧与 decode 帧共用一条 native 发号口（同一个 g_next_ref）
+        var ingestResult: Triple<Long, Int, Int>? = null
+        var ingestStatus = 0
+        val ingestCalls = mutableListOf<Triple<ByteArray, Int, Int>>()
+        override fun ingest(
+            rgba: ByteArray,
+            width: Int,
+            height: Int,
+            status: IntArray,
+        ): Triple<Long, Int, Int>? {
+            ingestCalls += Triple(rgba, width, height)
+            status[0] = ingestStatus
+            if (ingestStatus != 0) return null
+            return ingestResult ?: Triple(nextNativeRef++, width, height)
+        }
     }
 
     private val ops = FakeOps()
@@ -97,7 +114,7 @@ class NativeImageAnalyzerTest {
     fun `decode 发号 + native 帧号进对照表（宽高是 native 真值）`() = runBlocking {
         ops.decodeResult = Triple(100L, 1080, 2400)
         val f = analyzer.decode("/sdcard/screen.png")
-        assertEquals(1L, f.handle.refId, "refId 从 1 起（handler 侧同一起点，但两边账本独立）")
+        assertEquals(1L, f.handle.refId, "refId 从 1 起（handler 已不再自管发号，这里就是唯一号段）")
         assertEquals(1L, f.handle.generation, "一个文件一个帧，generation 恒 1")
         assertEquals(1080, f.width)
         assertEquals(2400, f.height)
@@ -273,6 +290,44 @@ class NativeImageAnalyzerTest {
         assertInstanceOf(AutojsException::class.java, t)
         assertEquals("ERR_STALE_HANDLE", codeOf(t!!))
         assertTrue(ops.colorCalls.isEmpty(), "帧已死，一次找色都不发")
+        Unit
+    }
+
+    // ── ingest（§18-8(b) 发号侧归一：截屏帧进同一张帧表）───────────────────
+
+    @Test
+    fun `ingest 与 decode 同号段——两帧互认靠的是同一个 nextRefId`() = runBlocking {
+        val shot = analyzer.ingest(8, 8, ByteArray(8 * 8 * 4))
+        assertEquals(1L, shot.handle.refId, "截屏帧从 1 起，与 decode 同一段")
+        assertEquals(8, shot.width)
+        assertEquals(8, shot.height)
+
+        val icon = analyzer.decode("/sdcard/icon.png")
+        assertEquals(2L, icon.handle.refId, "decode 继续往下发号（不是各发各的 1）")
+
+        assertEquals(1, ops.ingestCalls.size)
+        assertEquals(8 * 8, ops.ingestCalls[0].second * ops.ingestCalls[0].third, "尺寸原样到 native")
+        Unit
+    }
+
+    @Test
+    fun `ingest 尺寸先拒——不合紧密 RGBA 的字节数一次 native 都不发`() = runBlocking {
+        assertThrows<IllegalArgumentException> { runBlocking { analyzer.ingest(0, 4, ByteArray(0)) } }
+        assertThrows<IllegalArgumentException> { runBlocking { analyzer.ingest(2, 2, ByteArray(15)) } }
+        assertThrows<IllegalArgumentException> { runBlocking { analyzer.ingest(3, 3, ByteArray(35)) } }
+        assertTrue(ops.ingestCalls.isEmpty(), "字节数不符在本层 require，不落到 JNI")
+        Unit
+    }
+
+    @Test
+    fun `ingest 的 native 状态码原码对表（拒收不占号段）`() = runBlocking {
+        ops.ingestStatus = 4
+        val e = assertThrows<AutojsException> { runBlocking { analyzer.ingest(2, 2, ByteArray(16)) } }
+        assertEquals("ERR_INVALID_PARAM", codeOf(e))
+        ops.ingestStatus = 0
+
+        val ok = analyzer.ingest(2, 2, ByteArray(16))
+        assertEquals(1L, ok.handle.refId, "拒收那次没占号段（nextRefId 没推进）")
         Unit
     }
 

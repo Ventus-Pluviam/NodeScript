@@ -30,7 +30,6 @@ import com.autoscript.domain.automation.UiBounds
 import com.autoscript.domain.automation.WindowScope
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
-import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CompletableDeferred
 
 /**
@@ -72,9 +71,6 @@ class AutoScriptAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() = Unit
 }
-
-/** 帧 JPEG 质量（P0 像素只做存活证明 + 未来像素面的原料，90 兼顾体积与可读）。 */
-private const val JPEG_QUALITY = 90
 
 /** 设备面 [A11yBridge]：窗口根/手势/剪贴板/截图直通系统 API。 */
 @Suppress("DEPRECATION") // AccessibilityWindowInfo.root API33 起弃用（改 activeChild），P0 取根语义不变
@@ -204,7 +200,19 @@ private class ServiceBridge(private val service: AccessibilityService) : A11yBri
             ?: windows.firstOrNull()?.id
     }
 
-    /** ScreenshotResult → 实际尺寸 JPEG 字节（HardwareBuffer 用完即关，Bitmap 拷软后压缩）。 */
+    /**
+     * ScreenshotResult → 实际尺寸**紧密打包 RGBA**（`width*height*4`，R,G,B,A 序）——
+     * [ProducedFrame] 的像素契约面，`ScreenshotSource` 拿到 analyzer 后直送
+     * `ImageAnalyzer.ingest`（§18-8(b) 帧表共用）。HardwareBuffer 用完即关。
+     *
+     * **为什么走 `getPixels(int[])` 而不是 `copyPixelsToBuffer`**：后者的字节序是
+     * Skia 底层缓冲的原样拷贝，文档没承诺通道序（`ARGB_8888` 是**配置名**，
+     * 不等于缓冲字节就是 R,G,B,A）—— 靠猜写出来的契约一旦猜反，findColor 的
+     * r/b 互换在四道门下全绿（那正是 host_ingest_test 专杀的形态）。`getPixels`
+     * 回的是**文档钉死**的打包 int `0xAARRGGBB`（与 `Color.argb` 同序），拆包出
+     * 的 RGBA 不依赖任何平台实现细节。代价是一份 `IntArray` 中间量（1080×2400
+     * ≈ 10MB，截图本就有 333ms 节流，瞬态翻倍可接受）—— 换确定性，值。
+     */
     private fun frameOf(result: AccessibilityService.ScreenshotResult): ProducedFrame {
         val buffer = result.hardwareBuffer
             ?: throw AutojsException(ErrorCode.ERR_IO, "截图结果无 HardwareBuffer")
@@ -219,15 +227,24 @@ private class ServiceBridge(private val service: AccessibilityService) : A11yBri
             } finally {
                 hardware.recycle()
             }
-            val out = ByteArrayOutputStream()
+            val out = ByteArray(width * height * 4)
             try {
-                if (!software.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) {
-                    throw AutojsException(ErrorCode.ERR_IO, "帧压缩失败")
+                if (width <= 0 || height <= 0) {
+                    throw AutojsException(ErrorCode.ERR_IO, "截图尺寸非法 ${width}x$height")
+                }
+                val argb = IntArray(width * height)
+                software.getPixels(argb, 0, width, 0, 0, width, height)
+                var o = 0
+                for (p in argb) {
+                    out[o++] = (p shr 16).toByte()   // R（0xAARRGGBB 的 16-23 位）
+                    out[o++] = (p shr 8).toByte()    // G
+                    out[o++] = p.toByte()            // B
+                    out[o++] = (p shr 24).toByte()   // A
                 }
             } finally {
                 software.recycle()
             }
-            return ProducedFrame(out.toByteArray(), width, height)
+            return ProducedFrame(out, width, height)
         } finally {
             buffer.close()
         }

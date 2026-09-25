@@ -1,7 +1,8 @@
 // bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
-//   - 只做十件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
+//   - 只做十一件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、
+//     ingest 一屏已在内存的 RGBA 像素（§18-8(b) 截屏帧进同一帧表）、管帧表、
 //     按阈值做模板匹配、按容差找色、取灰度信息面（**产出新帧**）、
 //     按区域取子图（**产出新帧**）、按尺寸缩放（**产出新帧**）、
 //     按角度旋转（**产出新帧**）、ORB 特征匹配（**不产出帧，只回坐标**）；
@@ -102,6 +103,48 @@ bool resolve_region(const cv::Mat& frame, const int32_t* region, cv::Rect* out) 
 }  // namespace
 
 extern "C" {
+
+// ── ingest：已在内存的 RGBA 紧排像素 → 一帧（§18 第 8 项 (b)：截屏帧进 images 帧表）──
+//
+// 为什么存在：`screen.capture()` 出的帧与 `images.decode` 出的帧要**共用一个帧表**
+// （2026-09-25 拍板 (b)），发号侧归一到本 TU 的 g_next_ref —— 截屏帧落进同一张表，
+// 脚本拿它直接当 findImage 的 haystack，反过来 release 也走同一个号段。
+//
+// 与 decode 的分界：decode 从**文件**读（fopen 探活 + imread），本入口的像素**已经在
+// 堆上**（Android `Bitmap.getPixels(int[])` 打包出的 RGBA 紧排）—— 不落盘、不经 JPEG
+// 往返（(a)/(c) 两条出路各砍掉的正是精度与性能口径，见 §18 第 8 项）。
+//
+// 通道序：入参是 **R,G,B,A**（Android ARGB_8888 的在内存序），进帧表时 swizzle 成
+// 帧表不变式的 **B,G,R,A**（与 decode 归一后的形态一致 —— 帧表里两种来源的帧必须
+// 同形态，否则 imgnative_color 的 Vec4b 回读会按错位解释）。cvtColor 会**另开缓冲**，
+// 所以本函数不持有调用方的字节（`source` 只是读视图）—— 与"帧表是所有权表"一致。
+//
+// 校验：宽高非正 / 出参空指针 → INVALID_PARAM（原生调用方的错，不猜不补零）。
+// 字节数由调用方保证（Kotlin 侧 `rgba.size == w*h*4` 先拒，JNI 转发前再核一次）——
+// 本层拿的是裸指针，长度不可知，这里如实按"信任已核长度"处理。
+int imgnative_ingest(const uint8_t* source, int32_t width, int32_t height,
+                     int64_t* out_ref, int32_t* out_w, int32_t* out_h) {
+    if (source == nullptr) return IMG_ERR_INVALID_PARAM;
+    if (width <= 0 || height <= 0) return IMG_ERR_INVALID_PARAM;
+    if (out_ref == nullptr || out_w == nullptr || out_h == nullptr) return IMG_ERR_INVALID_PARAM;
+
+    try {
+        // 非拥有视图（step = width*4 紧排）：cvtColor 立刻拷进自有缓冲，视图随即失效。
+        const cv::Mat rgba(height, width, CV_8UC4, const_cast<uint8_t*>(source));
+        cv::Mat bgra;
+        cv::cvtColor(rgba, bgra, cv::COLOR_RGBA2BGRA);
+
+        const std::lock_guard<std::mutex> lk(g_mu);
+        const int64_t ref = g_next_ref++;
+        auto [it, _] = g_frames.emplace(ref, std::move(bgra));
+        *out_ref = ref;
+        *out_w = it->second.cols;
+        *out_h = it->second.rows;
+        return IMG_OK;
+    } catch (const cv::Exception&) {
+        return IMG_ERR_IO;
+    }
+}
 
 // ── decode：文件 → 一帧（不缩放不裁剪，内容 opaque）────────────────────────
 // width/height 出参是**帧真尺寸**（桥面随回包给脚本做坐标换算）。

@@ -11,6 +11,7 @@ import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.HandleRef
 import com.autoscript.domain.core.AutojsException
+import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineRunReceipt
 import com.autoscript.domain.engine.EngineRunRequest
@@ -129,12 +130,27 @@ class PlatformWiringTest {
     ) : ImageAnalyzer {
         val decoded = mutableListOf<String>()
         val released = mutableListOf<HandleRef>()
+        private var nextRefId = 1L
+        private val live = mutableSetOf<Long>()
         override suspend fun decode(path: String): ImageFrame {
             failWith?.let { throw it }
             decoded += path
-            return ImageFrame(HandleRef(999, 1), 640, 480)
+            val id = nextRefId++
+            live += id
+            return ImageFrame(HandleRef(id, 1), 640, 480)
+        }
+        // §18-8(b)：inject 把同一个 analyzer 同时喂给 images 与 screen，
+        // 截屏帧从这条口进同一张表（这里只验转接，不碰像素）。
+        override suspend fun ingest(width: Int, height: Int, rgba: ByteArray): ImageFrame {
+            val id = nextRefId++
+            live += id
+            return ImageFrame(HandleRef(id, 1), width, height)
         }
         override suspend fun release(handle: HandleRef) {
+            if (handle.generation != 1L || handle.refId !in live) {
+                throw AutojsException(ErrorCode.ERR_STALE_HANDLE, "帧 ${handle.refId} 不在场")
+            }
+            live -= handle.refId
             released += handle
         }
         override suspend fun matchTemplate(

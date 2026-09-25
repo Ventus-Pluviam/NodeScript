@@ -6,10 +6,12 @@
  * images.decode/matchTemplate/findImage/findColor/release 走 native 分析面（§12.2 第七条独立缝，
  * Kotlin 对偶 `ImagesNamespaceHandler` + `:domain` `ImageAnalyzer`）。
  *
- * **两张桥面别混**：`screen.*` 是截图帧源（句柄由 `ScreenshotSource` 发号，`recycle`
- * 归它自己）；`images.*` 是图像分析面（句柄由 `decode` 从**文件**发号，`release` 归它）。
- * 两者句柄互不通用 —— 拿 `screen.capture()` 的帧去 `images.findImage()` 只会得到
- * `ERR_STALE_HANDLE`（handler 的说法：这张帧不在我的在场面表里）。
+ * **两 namespace 一张帧表**（§18 第 8 项 (b) 2026-09-25 拍板，"帧不通用"那条纪律取消）：
+ * 发号侧归一到宿主的 `ImageAnalyzer`，`screen.capture()` 的帧经 `ingest` 进的就是
+ * `images.decode()` 那张表 —— 于是 `images.findImage(screenFrame, decodeFrame)` 通、
+ * `images.release(screenFrame)` 也通。**释放入口仍是两个**（`frame.recycle()` 按来源
+ * 各打各的 namespace），但打进去是同一张表、同一个"已释放"事实：放过的帧在任一
+ * 侧再用都是 `ERR_STALE_HANDLE`。
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.images = exports.screen = void 0;
@@ -87,14 +89,13 @@ exports.images = {
      * （脚本要拿它做坐标换算）。路径不得空白；文件缺失/不是合法图片由宿主原码透传
      * （`ERR_FILE_NOT_FOUND`/`ERR_IO`，不折叠成参数错）。
      *
-     * **路径写绝对路径**（2026-09-25 实测记账，见 §18 第 9 项）：`:domain` 契约写着
-     * 「路径解析由实现定」，但**四层里没有一层解析路径** —— 计算核直接 `fopen`/`imread`，
+     * **路径写绝对路径**（§18 第 9 项 2026-09-25 已拍板：只收绝对路径）：**四层里没有一层解析路径** —— 计算核直接 `fopen`/`imread`，
      * 于是相对路径按**宿主进程 CWD** 解析，而 so 载在 `:main` 里、那个进程的 CWD 是 `/`。
      * `decode('part.png')` 会去根目录找一个并不存在的文件，**回 `ERR_FILE_NOT_FOUND`
-     * 且报的路径是对的** —— 看起来像"文件真的不在"，不像"口径没定"。
-     * 基准解析（项目根/filesDir）拍板前，别写相对路径。
+     * 且报的路径是对的** —— 看起来像"文件真的不在"，不像"口径没定"。别写相对路径。
      *
      * 帧是**文件侧**的句柄：`recycle()` 打 `images/release`（不是 `screen/recycle`）。
+     * 两个入口通到同一张表，放过的帧两边都认得"已释放"。
      */
     async decode(path, opts = {}) {
         const raw = (await runtime_1.runtimeBridge.invoke('images', 'decode', { path }, {
@@ -116,7 +117,8 @@ exports.images = {
     },
     /**
      * 模板匹配（`matchTemplate`）：在 `haystack` 帧里找 `needle` 帧，置信度 ≥ `threshold` 即命中。
-     * **两帧都必须是 `images.decode` 出来的句柄**（`screen.capture()` 的帧不通用 → STALE）。
+     * **两帧只要是同一张表里的在场句柄就行** —— `screen.capture()` 的帧可以直接当
+     * haystack（§18-8(b) 两 namespace 共用帧表）。
      *
      * 未匹配**不是异常**：回 `null`（图里没有达到阈值的位置）。帧已释放 →
      * `ERR_STALE_HANDLE`；阈值缺省 `0.9`（v9 同名默认值；域 `[0,1]` 之外 →

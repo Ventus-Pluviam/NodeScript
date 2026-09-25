@@ -61,6 +61,27 @@ interface ImageAnalyzer {
     suspend fun decode(path: String): ImageFrame
 
     /**
+     * 把一帧**已在内存里的像素**登记进帧表，回发句柄（§18 第 8 项 (b) 2026-09-25 拍板：
+     * 截屏帧与 `decode` 帧**共用一个帧表**，"帧不通用"那条纪律取消）。
+     *
+     * 这是 `screen.capture()` 的落点：**发号侧归一** —— 本方法与 [decode] 共用同一号段
+     * （同一个实现的同一张表），于是 `screen.capture()` 出的句柄可以直接当
+     * `images.findImage()` 的 haystack，反过来 `images.release()` 也能放掉一帧截屏。
+     *
+     * 像素契约：[rgba] 是**紧密打包**的 `width * height * 4` 字节，通道序 **R,G,B,A**
+     * （Android `Bitmap.getPixels(int[])` 的 `0xAARRGGBB` 逐像素打包出的 R,G,B,A ——
+     * 不猜 `copyPixelsToBuffer` 的字节序。那是屏幕上已经存在的像素，不落盘、
+     * 不经 JPEG 往返，保住 §7.7「屏幕帧→native」与
+     * findColor「按分量精确夹」两条承诺）。进帧表时只做一次通道序 swizzle（→ BGRA，
+     * 帧表不变式），并拷出自有缓冲（不持有调用方的 `ByteArray`）。
+     *
+     * @throws IllegalArgumentException 尺寸非正，或字节数与尺寸不符（调用方的错，
+     *   实现不猜也不补零）。
+     * @throws com.autoscript.domain.core.AutojsException `ERR_IO` native 拒收。
+     */
+    suspend fun ingest(width: Int, height: Int, rgba: ByteArray): ImageFrame
+
+    /**
      * 显式释放帧句柄（幂等；JS `FrameSource.recycle` 对偶）。
      * @throws com.autoscript.domain.core.AutojsException `ERR_STALE_HANDLE` 未知/跨代句柄。
      */

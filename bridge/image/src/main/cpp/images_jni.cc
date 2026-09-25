@@ -26,6 +26,8 @@
 // 加/改状态码必须三处同批，别只改一处。
 extern "C" {
 int imgnative_decode(const char* path, int64_t* out_ref, int32_t* out_w, int32_t* out_h);
+int imgnative_ingest(const uint8_t* source, int32_t width, int32_t height,
+                     int64_t* out_ref, int32_t* out_w, int32_t* out_h);
 int imgnative_match(int64_t haystack, int64_t needle, double threshold,
                     int32_t* out_x, int32_t* out_y,
                     int32_t* out_w, int32_t* out_h,
@@ -66,6 +68,54 @@ Java_com_autoscript_platform_system_NativeImageAnalyzer_decodeNative(
     }
     // GetStringUTFChars 失败（OOME）：status 留 0 但 result 仍 null ——
     // Kotlin 侧"null + status 0"判为 JNI 自身失败（不猜成某个 ERR_*）。
+    if (status_arr != nullptr) env->SetIntArrayRegion(status_arr, 0, 1, &status);
+    return result;
+}
+
+// ── ingest：已在内存的 RGBA 紧排像素 → 一帧（§18-8(b) 截屏帧进 images 帧表）。
+// 回 jlong[3]{nativeRef, width, height}（与 decodeNative 同形）；失败回 null + *outStatus。
+// 字节数在这一层核（Kotlin 侧也核过一次 —— 两处判据必须一致，否则"谁在撒谎"分不清）：
+// 长度 < width*height*4 = 参数错（不越读调用方的数组）。
+JNIEXPORT jlongArray JNICALL
+Java_com_autoscript_platform_system_NativeImageAnalyzer_ingestNative(
+    JNIEnv* env, jobject /*thiz*/, jbyteArray rgba, jint width, jint height,
+    jobject out_status) {
+    jintArray status_arr = static_cast<jintArray>(out_status);
+    jint status = 0;
+    jlongArray result = nullptr;
+
+    if (rgba == nullptr || width <= 0 || height <= 0) {
+        status = 4;   // ERR_INVALID_PARAM
+    } else {
+        const jsize len = env->GetArrayLength(rgba);
+        const int64_t need = static_cast<int64_t>(width) * static_cast<int64_t>(height) * 4;
+        if (len < need) {
+            status = 4;   // 字节数与尺寸不符：不越读
+        } else {
+            // GetByteArrayRegion 拷进 JNI 侧临时缓冲（不 pin 调用方数组）：cvtColor
+            // 会再拷一次进帧表，多这一跳换"不持锁读 Java 堆"，非热点路径可接受。
+            jbyte* buf = env->GetByteArrayElements(rgba, nullptr);
+            if (buf == nullptr) {
+                status = 3;   // OOME：如实 IO，不猜
+            } else {
+                int64_t native_ref = 0;
+                int32_t w = 0, h = 0;
+                const int rc = imgnative_ingest(
+                    reinterpret_cast<const uint8_t*>(buf),
+                    static_cast<int32_t>(width), static_cast<int32_t>(height),
+                    &native_ref, &w, &h);
+                env->ReleaseByteArrayElements(rgba, buf, JNI_ABORT);
+                if (rc == 0) {
+                    jlong triple[3] = {static_cast<jlong>(native_ref), static_cast<jlong>(w),
+                                       static_cast<jlong>(h)};
+                    result = env->NewLongArray(3);
+                    if (result != nullptr) env->SetLongArrayRegion(result, 0, 3, triple);
+                } else {
+                    status = rc;
+                }
+            }
+        }
+    }
     if (status_arr != nullptr) env->SetIntArrayRegion(status_arr, 0, 1, &status);
     return result;
 }
