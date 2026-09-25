@@ -974,10 +974,11 @@ const name = await auto.dialogs.prompt('输入名字', { mode: 'auto' });
 const out = await auto.shell(`pm list packages`);
 
 // 图片分析（native 面）：v9 的 fromFile 是 decode 的别名；toGrayscale/crop/rotate/pixel
-// 仍归 §9.2 native 面（P1），接口期两侧都不提供 —— 宿主如实 ERR_NOT_IMPLEMENTED
-const found = await auto.images.matchTemplate(img, await auto.images.fromFile('part.png'), { threshold: 0.85 });
+// 仍归 §9.2 native 面（P1），接口期两侧都不提供 —— 宿主如实 ERR_NOT_IMPLEMENTED。
+// 注意 haystack 也用 shot 而不是 img：两帧都必须出自 images.decode（见上一段）。
+const found = await auto.images.matchTemplate(shot, await auto.images.fromFile('part.png'), { threshold: 0.85 });
 // 找色（P1 第一个算子）：null = 扫过了、没有；ERR_INVALID_PARAM = 根本没找（空区域）
-const px = await auto.images.findColor(img, [18, 52, 86, 255], 10, { region: [0, 0, 540, 2400] });
+const px = await auto.images.findColor(shot, [18, 52, 86, 255], 10, { region: [0, 0, 540, 2400] });
 
 // 依赖管理（Promise + 事件流；跨进程路由到全局安装会话，绝不阻塞脚本事件循环）
 const handle = await auto.npm.install('axios', { timeout: 60_000 }); // → {handleId, projectId, enqueuedAtMillis}
