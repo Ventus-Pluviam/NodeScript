@@ -69,7 +69,7 @@ LIBS=(-L"$BUILD/lib" -L"$BUILD/3rdparty/lib"
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 failed=0
-for t in host_color_test host_decode_norm_test host_match_test host_gray_test host_crop_test host_resize_test; do
+for t in host_color_test host_decode_norm_test host_match_test host_gray_test host_crop_test host_resize_test host_rotate_test; do
   printf '[cc] %s\n' "$t"
   g++ -std=c++17 -O2 -Wall -Wextra "${INC[@]}" -o "$OUT/$t" \
     "$HERE/$t.cpp" bridge/image/src/main/cpp/imgnative.cpp "${LIBS[@]}"

@@ -1,9 +1,10 @@
 // bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
-//   - 只做八件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
+//   - 只做九件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
 //     按阈值做模板匹配、按容差找色、取灰度信息面（**产出新帧**）、
-//     按区域取子图（**产出新帧**）、按尺寸缩放（**产出新帧**）；
+//     按区域取子图（**产出新帧**）、按尺寸缩放（**产出新帧**）、
+//     按角度旋转（**产出新帧**）；
 //   - 不做路径策略、不发桥请求、不碰 Kotlin 侧句柄号（发号归桥面 handler）；
 //   - 跨语言接触面全部 extern "C"：无 C++ 名修饰，无异常穿越（cv::Exception
 //     在本文件内就地折叠成状态码，绝不抛过 ABI 边界）。
@@ -26,6 +27,7 @@
 //   4 = ERR_INVALID_PARAM（参数关系不成立：颜色分量越界 / 容差越界 /
 //     区域不在帧内 / 区域扫过 0 像素）—— handler 也已先做域校验，这里是
 //     原生调用方（无桥面）或两处判据漂移时的兜底，绝不放一个默认色过去。
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
@@ -52,7 +54,7 @@ constexpr int IMG_ERR_INVALID_PARAM = 4;
 /** `color` 未命中的 x 哨兵（0,0 是合法首像素坐标，不能拿它当"没有"）。 */
 constexpr int32_t IMG_MISS = -1;
 
-// 调用方必须已持 g_mu（七个入口的帧表段都在锁内）。
+// 调用方必须已持 g_mu（八个入口的帧表段都在锁内）。
 cv::Mat* find_locked(int64_t ref) {
     auto it = g_frames.find(ref);
     return it == g_frames.end() ? nullptr : &it->second;
@@ -397,6 +399,99 @@ int imgnative_resize(int64_t frame, int32_t dst_w, int32_t dst_h,
         if (out.empty()) return IMG_ERR_IO;   // 正常路径不可达（尺寸已判正）
         // resize 不动通道数：归一帧进、归一帧出 —— 断言一次，免得将来换插值/后端
         // 时静默掉通道（Vec4b 回读越字节读的教训见 decode 那段）。
+        if (!frame_is_normalized(out)) return IMG_ERR_IO;
+
+        const int64_t ref = g_next_ref++;
+        auto [it, _] = g_frames.emplace(ref, std::move(out));
+        *out_ref = ref;
+        *out_w = it->second.cols;
+        *out_h = it->second.rows;
+        return IMG_OK;
+    } catch (const cv::Exception&) {
+        return IMG_ERR_IO;
+    }
+}
+
+// ── rotate：按角度绕帧中心旋转到**新的一帧**（§9.2 管线里的"旋转"）。
+//
+// **桥面此刻同样不对脚本开这个方法**（`:domain ImageAnalyzer` 五方法里没有它，
+// `ImagesNamespaceHandler` 也不认 `rotate`）：与 gray/crop/resize 同一条纪律 ——
+// 先落计算核 + host 语义门，等真出现消费方再开桥面。旋转在脚本侧也是可选操作：
+// 模板匹配本身不转模板（TM_CCOEFF_NORMED 没有旋转不变性），"把画面转正再匹配"
+// 是调用方显式要的变换，不是匹配内部顺手做的。
+//
+// 入参契约：`degrees` 是**逆时针角度**（与 OpenCV `getRotationMatrix2D` 的正方向
+// 一致 —— 文档原话 "positive values mean counter-clockwise"）。顺/逆时针是调用方
+// 最容易写反的一处，所以 host 断言用 5×5 数字帧的 90°/180°/270° 三组精确行
+// 把方向钉死（转反了行内容整行对不上，不是差一两个像素的事）。
+//
+// 画布是 **expand**（包住旋转后的整图），不是"保持源帧尺寸"：保持尺寸会把转出
+// 画布的像素静默裁掉 —— 那是另一种语义（"旋转裁剪"），调用方想要它可以先 rotate
+// 再 crop（两个算子都在了）。expand 的尺寸公式是包络公式：
+// bw = round(|w·cosθ| + |h·sinθ|)，bh = round(|w·sinθ| + |h·cosθ|)
+// （4×2 转 90° → 2×4，5×5 转 30° → 7×7，host 侧都钉了；0°/360° 回原尺寸）。
+//
+// 旋转中心是**帧中心**（((w-1)/2, (h-1)/2)），不是原点也不是 (w/2, h/2)：
+// 奇尺寸下中心恰好落在中心像素上（5×5 → (2,2)），旋转 90°/180°/270° 时采样点
+// 落在整数格点上 —— host 断言能写"整行精确相等"而不必留容差。偶尺寸没有中心
+// 像素，半像素偏移不可避免（那是 warpAffine 逆映射采样的事实，不是 bug）。
+//
+// 插值固定 `INTER_LINEAR`、越界填充固定 `BORDER_REPLICATE`（复制边缘），都不做
+// 入参（与 resize 的"固定 LINEAR"同一条纪律：多一个入参多一个漂移面）。
+// BORDER_REPLICATE 而不是 CONSTANT（黑边）：黑边会在旋转后的画面里造出一圈
+// "画面里从来没有"的颜色 —— findColor 按色找时那圈黑边是假阳性源；复制边缘
+// 造的也是假像素，但至少是画面里出现过的颜色。host 断言用"30° 中心 3×3 是混合值"
+// 把 LINEAR 钉住（NEAREST 在同一点给出另一组值 —— 已用故意 NEAREST 实现验过变红）。
+//
+// 产出帧仍是 4 通道 BGRA：warpAffine 不动通道数，源帧归一则产出自动归一 ——
+// 与 crop/resize 同一条"保持而非重建"，判一次源帧。
+//
+// 拒收是**早退**：失败时三个出参一个字节都不写（与 gray/crop/resize/match 同口径）。
+// 非有限角度（NaN/Inf）→ INVALID_PARAM：三角函数吃掉它们不报错，但出来的矩阵
+// 是垃圾 —— 在入口处拒，比让 warpAffine 抛断言（变 IO 错）更诚实。
+int imgnative_rotate(int64_t frame, double degrees,
+                     int64_t* out_ref, int32_t* out_w, int32_t* out_h) {
+    if (out_ref == nullptr || out_w == nullptr || out_h == nullptr) return IMG_ERR_INVALID_PARAM;
+    if (!std::isfinite(degrees)) return IMG_ERR_INVALID_PARAM;
+    try {
+        const std::lock_guard<std::mutex> lk(g_mu);
+        const cv::Mat* f = find_locked(frame);
+        if (f == nullptr) return IMG_ERR_STALE_HANDLE;
+        if (!frame_is_normalized(*f)) return IMG_ERR_IO;
+
+        // 角度归一到 [0,360)：360° 与 0° 同一幅图（包络公式的 sin/cos 本来也一样，
+        // 但浮点余数会让 360° 的画布差一像素 —— 归一掉，调用方不用自己处理"转一圈")。
+        double a = std::fmod(degrees, 360.0);
+        if (a < 0) a += 360.0;
+
+        static constexpr double kPi = 3.14159265358979323846;
+        const double rad = a * kPi / 180.0;
+        const double c = std::cos(rad), s = std::sin(rad);
+        const int bw = static_cast<int>(std::lround(std::fabs(f->cols * c) + std::fabs(f->rows * s)));
+        const int bh = static_cast<int>(std::lround(std::fabs(f->cols * s) + std::fabs(f->rows * c)));
+        if (bw <= 0 || bh <= 0 || bw > 16384 || bh > 16384) return IMG_ERR_INVALID_PARAM;
+
+        // 帧中心 ((w-1)/2, (h-1)/2)：见上"旋转中心"。
+        const cv::Point2f center((f->cols - 1) / 2.0f, (f->rows - 1) / 2.0f);
+        cv::Mat M = cv::getRotationMatrix2D(center, a, 1.0);
+        // expand 平移：原图四角经 M 变换后的包络原点归零（否则转 90° 的内容偏出画布）。
+        double mnx = 1e100, mny = 1e100, mxx = -1e100, mxy = -1e100;
+        const double xs[4] = {0.0, static_cast<double>(f->cols), 0.0, static_cast<double>(f->cols)};
+        const double ys[4] = {0.0, 0.0, static_cast<double>(f->rows), static_cast<double>(f->rows)};
+        for (int i = 0; i < 4; ++i) {
+            const double nx = M.at<double>(0, 0) * xs[i] + M.at<double>(0, 1) * ys[i] + M.at<double>(0, 2);
+            const double ny = M.at<double>(1, 0) * xs[i] + M.at<double>(1, 1) * ys[i] + M.at<double>(1, 2);
+            if (nx < mnx) mnx = nx;
+            if (nx > mxx) mxx = nx;
+            if (ny < mny) mny = ny;
+            if (ny > mxy) mxy = ny;
+        }
+        M.at<double>(0, 2) -= mnx;
+        M.at<double>(1, 2) -= mny;
+
+        cv::Mat out;
+        cv::warpAffine(*f, out, M, cv::Size(bw, bh), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+        if (out.empty()) return IMG_ERR_IO;   // 正常路径不可达（尺寸已判正）
         if (!frame_is_normalized(out)) return IMG_ERR_IO;
 
         const int64_t ref = g_next_ref++;
