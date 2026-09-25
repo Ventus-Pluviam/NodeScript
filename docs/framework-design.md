@@ -618,7 +618,7 @@ FrameSource (SPI)
   `captureScreen → findImage < 1s` 这条链路**当前脚本走不通**——拿 screen 的帧去
   `images.findImage()` 只有 `ERR_STALE_HANDLE`。而 screen 面既不给 `save()` 也不给
   `pixel()`（拿不到字节），脚本没法自己把屏变成文件。三条出路，入口都在同一处
-  （换 producer 或加一个 `screen.save`），代价不同，**待 §18 决策**：
+  （换 producer 或加一个 `screen.save`），代价不同，**待 §18 第 8 项决策**：
   (a) `screen` 面加 `save(path)`（把 a11y 已产出的 JPEG 字节原样落盘 —— 设备面已经在压
       JPEG 了，只是字节从来没出过 :main；最小改动，且 JPEG 是有损的，`findColor` 的
       分量判定会吃到压缩伪影）；
@@ -1136,7 +1136,7 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 
 ## 18. 开放决策点（留给你的拍板项）
 
-设计已给出默认推荐，但以下六点会实质影响方向，由你决策：
+设计已给出默认推荐，但以下八点会实质影响方向，由你决策：
 
 1. **引擎路线：先 Node-only，还是 P0 就并行 QuickJS 沙箱？**
    推荐「P0 只 Node；QuickJS 沙箱 P1」——沙箱牵扯独立进程、白名单、双引擎 API 对齐三件大事，混进 P0 会把最小闭环拖垮。
@@ -1153,6 +1153,12 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 7. **npm 默认镜像与脚本审批严苛度**（§10 已定案技术路线，这两项是面向用户的策略）：
    - 默认 registry：推荐 `registry.npmmirror.com`（国内实测存活）——若你的目标用户全球分布则改 `npmjs.org` + 可切换。种子缓存与「离线秒装」文案都要绑定默认镜像。
    - 脚本审批默认值：推荐出厂 **global-deny**（全部 install 脚本默认拒绝，人工逐个批准）。代价是与 AutoJsPro 既有的「默认跑脚本」用户习惯不同，新旧用户需要文档/示例适配；若你更看重无缝迁移，可出厂 allow-listed 常用安全包 + 黑名单模式。
+8. **截屏帧与 images 帧的通路**（§9.2 记账的缺口，决定 §7.7 表里 `captureScreen → findImage < 1s` 这条链路什么时候能兑现）：
+   `screen.capture()` 出的帧与 `images.decode` 出的帧**互不通用**（两缝各发各的号，§12.2），且 screen 面既不给 `save()` 也不给 `pixel()`（字节出不了 `:main`），脚本目前**只能自己先落盘再 decode**（§12.3 示例这么写）。三条出路，入口在同一处（换 producer 或加一个 `screen.save`），代价不同：
+   - (a) **`screen` 面加 `save(path)`**：把 a11y 已产出的 JPEG 字节原样落盘。设备面已经在压 JPEG 了，最小改动；代价是**有损**——`findColor` 的分量判定会吃到压缩伪影（§9.2 的契约是按分量精确夹的），"屏幕上这个色还在吗"这类判读会变钝。
+   - (b) **两缝共用一个帧表**（producer 直接把帧写进 `images` 的帧表）：收益是真正的 0 拷贝直连（§7.4 所有权边界仍是每个句柄一份 Mat，变的是**发号那一侧**归谁）；代价是"帧不通用"这条纪律取消，`screen`/`images` 两个命名空间的释放语义要重新对齐（谁 release 谁背 STALE）。
+   - (c) **`images` 面加 `decodeBytes(byte[])`**：屏幕字节不落盘直进 native；代价是 bytes 要过桥，§7.7 的"屏幕帧→native 0 拷贝"这条在**两个维度上**都要重新记账，且 §7.4 的多一路径 = 多一处规格要守。
+   推荐**(b)**：只有它同时保住了"0 拷贝"与"按分量精确判定"两条被契约明确承诺的性质，(a) 切掉的是判读精度、(c) 切掉的是性能口径。若你想先让链路通起来再优化，(a) 可作为过渡但**别写进 §7.7 的买单口径**——那条链路一旦带上一次 JPEG 往返就不叫「屏幕帧→native 0 拷贝」了。
 
 ---
 
