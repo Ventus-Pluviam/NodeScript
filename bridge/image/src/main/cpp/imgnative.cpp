@@ -1,9 +1,9 @@
 // bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
-//   - 只做七件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
+//   - 只做八件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
 //     按阈值做模板匹配、按容差找色、取灰度信息面（**产出新帧**）、
-//     按区域取子图（**产出新帧**）；
+//     按区域取子图（**产出新帧**）、按尺寸缩放（**产出新帧**）；
 //   - 不做路径策略、不发桥请求、不碰 Kotlin 侧句柄号（发号归桥面 handler）；
 //   - 跨语言接触面全部 extern "C"：无 C++ 名修饰，无异常穿越（cv::Exception
 //     在本文件内就地折叠成状态码，绝不抛过 ABI 边界）。
@@ -52,7 +52,7 @@ constexpr int IMG_ERR_INVALID_PARAM = 4;
 /** `color` 未命中的 x 哨兵（0,0 是合法首像素坐标，不能拿它当"没有"）。 */
 constexpr int32_t IMG_MISS = -1;
 
-// 调用方必须已持 g_mu（六个入口的帧表段都在锁内）。
+// 调用方必须已持 g_mu（七个入口的帧表段都在锁内）。
 cv::Mat* find_locked(int64_t ref) {
     auto it = g_frames.find(ref);
     return it == g_frames.end() ? nullptr : &it->second;
@@ -335,6 +335,69 @@ int imgnative_crop(int64_t frame, const int32_t* region,
         // 源帧 release 后即悬垂 —— 见上"为什么必须是新帧"。
         cv::Mat out = (*f)(roi).clone();
         if (out.empty()) return IMG_ERR_IO;   // 正常路径不可达（resolve_region 已保证 w/h > 0）
+
+        const int64_t ref = g_next_ref++;
+        auto [it, _] = g_frames.emplace(ref, std::move(out));
+        *out_ref = ref;
+        *out_w = it->second.cols;
+        *out_h = it->second.rows;
+        return IMG_OK;
+    } catch (const cv::Exception&) {
+        return IMG_ERR_IO;
+    }
+}
+
+// ── resize：按目标尺寸缩放到**新的一帧**（§9.2 管线里的"缩放"）。
+//
+// **桥面此刻同样不对脚本开这个方法**（`:domain ImageAnalyzer` 五方法里没有它，
+// `ImagesNamespaceHandler` 也不认 `resize`）：与 imgnative_gray/crop 同一条纪律 ——
+// 先落计算核 + host 语义门，等真出现消费方再开桥面。缩放在脚本侧也是可选操作：
+// 匹配的模板本来就是按屏上尺寸准备的（matchTemplate 要求模板 ≤ 画面），
+// 只有"同一套模板要跑在不同分辨率设备上"时才需要它。
+//
+// 入参契约：要的是**目标尺寸**（`dst_w` × `dst_h`），不是缩放倍数 —— 倍数是调用方
+// 从"源帧尺寸→目标"自己算出来的浮点，而尺寸的真值只有产出这帧的地方知道
+// （与 gray/crop 的"宽高出参随帧一起回"是同一条纪律：让下游自己推是**猜**）。
+// `dst_w`/`dst_h` 必须都是正数：0 或负数没有对应的像素网格（与 crop 的 w/h <= 0
+// 拒收同层），拒收码同样是 IMG_ERR_INVALID_PARAM。
+//
+// 上限 16384：这不是 OpenCV 的限制，是本层的**配额** —— 16384×16384×4 ≈ 1GB，
+// 再往上就是调用方笔误（比如把字节数当成了宽高）。配额拒收与"尺寸不合法"是
+// 同一个码（调用方能做的事一样：换个尺寸再调），但注释里分开写，免得下一个人
+// 以为 20000 是 OpenCV 吃不下。
+//
+// 插值固定 `INTER_LINEAR`（双线性），不做入参：NEAREST 在放大时是块状马赛克，
+// 在 UI 元素（细线条/文字边缘）上丢信息；CUBIC/LANCZOS 更贵且在本管线的输入
+// （截图/PNG 这类非照片）上没有可证的增益 —— 多一个入参就多一个"选错了静默换
+// 答案"的漂移面。host 断言用"纯色帧任意缩放值不变"和"2×2 四角帧放大四角守恒"
+// 两条把 LINEAR 的可观测行为钉住（NEAREST 在第二条上同样全过，所以另有一条
+// "中心像素是混合值"专杀 NEAREST —— 换插值枚举必红其一）。
+//
+// 产出帧仍是 4 通道 BGRA：resize 不动通道数（INTER_LINEAR 在 4 通道上逐通道做），
+// 源帧归一（下面先问 frame_is_normalized）则产出自动归一 —— 与 crop 同一条
+// "保持而非重建"，判一次源帧。
+//
+// 同尺寸（dst == src 尺寸）是合法调用：语义是"拷一份同尺寸帧"，不走早退 ——
+// 调用方不用先判"要不要调"，尺寸算出来一样就直调，结果仍是独立新帧。
+//
+// 拒收是**早退**：失败时三个出参一个字节都不写（与 gray/crop/match 同口径）。
+int imgnative_resize(int64_t frame, int32_t dst_w, int32_t dst_h,
+                     int64_t* out_ref, int32_t* out_w, int32_t* out_h) {
+    if (out_ref == nullptr || out_w == nullptr || out_h == nullptr) return IMG_ERR_INVALID_PARAM;
+    if (dst_w <= 0 || dst_h <= 0) return IMG_ERR_INVALID_PARAM;
+    if (dst_w > 16384 || dst_h > 16384) return IMG_ERR_INVALID_PARAM;
+    try {
+        const std::lock_guard<std::mutex> lk(g_mu);
+        const cv::Mat* f = find_locked(frame);
+        if (f == nullptr) return IMG_ERR_STALE_HANDLE;
+        if (!frame_is_normalized(*f)) return IMG_ERR_IO;
+
+        cv::Mat out;
+        cv::resize(*f, out, cv::Size(dst_w, dst_h), 0, 0, cv::INTER_LINEAR);
+        if (out.empty()) return IMG_ERR_IO;   // 正常路径不可达（尺寸已判正）
+        // resize 不动通道数：归一帧进、归一帧出 —— 断言一次，免得将来换插值/后端
+        // 时静默掉通道（Vec4b 回读越字节读的教训见 decode 那段）。
+        if (!frame_is_normalized(out)) return IMG_ERR_IO;
 
         const int64_t ref = g_next_ref++;
         auto [it, _] = g_frames.emplace(ref, std::move(out));
