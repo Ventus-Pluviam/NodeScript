@@ -1174,7 +1174,7 @@ offQe();
 
 > **APK 体积预算是本表唯一已被实测推翻的条目（2026-09-25 记账）**：`:engine:node-process` 侧 jniLibs 三件套
 > `libnoden.so` + `libnode.so` + `libc++_shared.so` 实测未压缩合计已 ≈81MB（APK 压缩安装后另计）；
-> `libopencv.so` 是 OpenCV 4.14 `core+imgproc+imgcodecs+features2d+flann` 静态链接（kleidicv 已启用；特征落地前 4 个静态库、6.0 MiB —— 下一次 device 构建后更新此数），
+> `libopencv.so` 是 OpenCV 4.14 `core+imgproc+imgcodecs+features2d+flann` 静态链接（kleidicv=ON；五模块 device 构建实测 **7,298,272 B = 7.0 MiB**（特征落地前 6,328,916 B = 6.0 MiB，增量不足 1MB、+15.3%），占引擎三件套 81MB 的 8.6%）——
 > 仅按 `BUILD_LIST` 裁剪，**未压缩实测 6,328,916 B = 6.0 MiB**（占三件套 81MB 的 7.8%）——
 > 早前"再添一个数量级相当的份额"是不成立的推断，实测不是同一量级。因此超支**全在引擎三件套**，
 > 图像面不是 §15 超支的原因；据此 (c)「继续裁 OpenCV 面」的性价比极低（最多省 6MB，且已是最小可用集），
