@@ -1266,8 +1266,11 @@ offQe();
    推荐**一步到位**：反正脚本绝不能进主进程，单引擎进程的边界与多引擎池完全同构，代价只是「池容量先写死为 1」。避免二次重构。
 3. **分发定位与 Play 态度？**
    推荐完全避开 Play Store（specialUse FGS / SCHEDULE_EXACT_ALARM / MANAGE_EXTERNAL_STORAGE 政策冲突），官网/F-Droid/APK 直下。若你仍想上 Play，需砍掉 specialUse 保活与精确闹钟，P0 范围要变。
+   **已拍板（2026-09-26）：不发行**——非商业化项目、不分发，故 Play 政策冲突面（specialUse FGS / 精确闹钟 / 全盘存储）**根本不存在**，上面那组"若上 Play 要砍什么"的代价不用付，保活与 `SCHEDULE_EXACT_ALARM` 原样保留。落地形态 = 本机自装 APK；Play/F-Droid/官网分发轨不进排期。
 4. **ICU 取舍：全量 ICU（完整 Unicode/时区/国际化，体积 +20MB 级）还是配 `--with-intl=none`（体积小但字符串/时区残缺，自动化和 UI 场景产物不友好）？**
    推荐**全量 ICU + 裁剪为所需 subset**（也可放 assets 按需加载），自动化 app 大量依赖正则/时区/日期格式化。
+   **已拍板（2026-09-26）：只要中文 + 英文**——即 locale 面收成 `{zh, en}`，既不停在 `none`（那样连 `zh-CN` 的 `Intl.*`/`toLocaleString` 都不可用，等于还是残缺），也不背全量的 +20MB。落点是 Node 构建旗标 **`--with-intl=small-icu --with-icu-locales=zh,en`**（`node-runtime-build/scripts/fetch-and-build.sh` 现为 `--with-intl=none`，要改）。
+   跟进（构建轨，Actions 跑，本机不编）：改旗标 → 重编 → 量体积差与 `Intl.DateTimeFormat`/`Intl.Collator` 在 zh/en 上的实测。`node-runtime-build/RISKS.md` §3 记的 "~10MB+" 是 **small-icu 默认面**的估数，`zh,en` 子集实测值待量；体积出来后再回填 §15 的 40MB APK 预算行。副作用要写明：`toLocaleString('ja_JP')` 之类非 zh/en locale 会回落 en —— 脚本作者该知道这不是 bug。
 5. **无障碍服务与脚本进程共享与否的极限形态**：本设计定案「a11y 在 `:main`、脚本在 `:nodeN`」。若未来遇到「无障碍回调海量 + 脚本高频读树」压垮 `:main`，可演进出
    `:accessibility` 第三进程（§9.1 的接口已留好接缝）。P0 不做——保持最少进程数。
 6. **UI 宿主策略**：脚本 UI 用「`:main` 渲染原生 View」还是「脚本自带 WebView（ui_web）」为主？
@@ -1301,7 +1304,7 @@ AutoScript 的骨架可以一句话记住：
 架构的全部取舍都锚定在五条铁律上：脚本不进主进程、跨进程必异步、每次操作有 TTL、teardown 四步 quiesce、依赖单向接缝可替换。这个骨架让「写脚本→跑起来→守护它→定时它→打包走」的 P0 闭环与 AutoJsPro 对整个 API 面的演进式补齐，是同一条路的两个阶段，而不是两个项目。
 
 下一步（建议与后续迭代方向，需你确认后开工）：
-1. 确认 §18 决策点（第 8 项帧通路与第 9 项路径口径已于 2026-09-25 拍板，剩 7 个；或直接采纳推荐默认值）；
+1. 确认 §18 决策点（第 8/9 项 2026-09-25 拍板并已落地，第 3/4 项 2026-09-26 拍板——不发行 / ICU 只要 zh+en，**剩 5 个：1、2、5、6、7**；或直接采纳推荐默认值）；
 2. 在 `:node-runtime-build` 上跑通「Node 24 → 16KB 对齐 libnode.so → 最小 `:node` 进程能执行 `console.log` 并回传」的**垂直切片**——这是全架构的第一块里程碑，也是最硬的一块骨头；
 3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
 4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。
