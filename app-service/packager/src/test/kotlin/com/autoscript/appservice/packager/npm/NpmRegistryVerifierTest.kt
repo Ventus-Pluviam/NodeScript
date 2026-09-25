@@ -49,11 +49,13 @@ class NpmRegistryVerifierTest {
         }
     }
 
+    /** [p] = 首选的 packument、[s] = 第二意见的。出厂首选是官方（§18 第 7 项），
+     *  于是 p 挂官方站、s 挂镜像站 —— 参数名跟着角色走，不跟着站名走。 */
     private fun verifier(p: String?, s: String?): NpmRegistryVerifier {
         val src = FakeSource(
             mapOf(
-                "registry.npmmirror.com" to (if (p != null) mapOf("dayjs" to p) else emptyMap()),
-                "registry.npmjs.org" to (if (s != null) mapOf("dayjs" to s) else emptyMap()),
+                "registry.npmjs.org" to (if (p != null) mapOf("dayjs" to p) else emptyMap()),
+                "registry.npmmirror.com" to (if (s != null) mapOf("dayjs" to s) else emptyMap()),
             ),
         )
         return NpmRegistryVerifier(source = src)
@@ -136,7 +138,18 @@ class NpmRegistryVerifierTest {
         v.verify("dayjs", "1.11.23", primary = "https://harbor.example.com/registry/")
         val req = sourceOf(v).requested
         assertTrue(req.contains("https://harbor.example.com/registry/dayjs"), "首选须连调用方给的：$req")
-        assertTrue(req.contains("https://registry.npmjs.org/dayjs"), "第二意见恒为官方（不随首选改）：$req")
+        assertTrue(req.contains("https://registry.npmjs.org/dayjs"), "首选是别家 → 第二意见由官方来比（不同站）：$req")
+    }
+
+    @Test
+    fun `首选被调用方改成镜像 → 第二意见自动换官方（不许自比）`() {
+        // 构造期缺省是官方，若第二意见在构造期就定死成镜像，这一步会变成镜像跟镜像比。
+        val v = verifier(packument("1.11.23", listOf("1.11.23" to I1)), packument("1.11.23", listOf("1.11.23" to I1)))
+        val r = v.verify("dayjs", "1.11.23", primary = NpmRegistryVerifier.MIRROR)
+        assertTrue(r is NpmRegistryVerifier.Verdict.Agreed, "两侧都取到同一 integrity 才算过：$r")
+        val req = sourceOf(v).requested
+        assertTrue(req.contains("https://registry.npmmirror.com/dayjs"), "首选用调用方给的镜像：$req")
+        assertTrue(req.contains("https://registry.npmjs.org/dayjs"), "第二意见自动换官方（两家不同站）：$req")
     }
 
     @Test

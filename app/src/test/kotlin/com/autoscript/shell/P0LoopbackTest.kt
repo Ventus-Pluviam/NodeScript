@@ -96,7 +96,7 @@ class P0LoopbackTest {
         tree.add(InMemoryUiTree.Attrs(text = "确定", clickable = true))
 
         kit(tree).use { assembled ->
-            // 1) 装 axios（真安装：npmmirror 拉包 → journal begin/commit → 原子落位）。
+            // 1) 装 axios（真安装：官方 registry 拉包 → journal begin/commit → 原子落位）。
             val install = assembled.shell.router.dispatch(
                 BridgeRequest(
                     1, "npm", "install",

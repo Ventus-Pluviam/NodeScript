@@ -18,7 +18,7 @@ import java.nio.file.Path
  * 产物经 InstallCoordinator 事务链（journal begin/commit + ATOMIC_MOVE 落位）进 node_modules。
  *
  * 运行条件：宿主机存在 node + npm-cli.js（CI ubuntu-latest 自带；无则跳过）。
- * 网络：默认 registry.npmmirror.com；离线 CI 可在首次跑通后靠 _cacache 复跑。
+ * 网络：默认 registry.npmjs.org（§18 第 7 项出厂官方）；离线 CI 可在首次跑通后靠 _cacache 复跑。
  */
 class HostNodeNpmE2ETest {
 

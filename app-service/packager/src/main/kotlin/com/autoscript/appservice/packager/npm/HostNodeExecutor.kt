@@ -33,7 +33,9 @@ class HostNodeExecutor(
     private val cacheDir: Path,
     private val nodeBin: String = "node",
     private val env: Map<String, String> = emptyMap(),
-    private val registry: String = "https://registry.npmmirror.com",
+    // 与 NpmRegistryVerifier 的首选同源（交叉校验要比的就是实际安装用的那一家）：
+    // 出厂官方，§18 第 7 项 2026-09-26 拍板。
+    private val registry: String = NpmRegistryVerifier.OFFICIAL,
 ) : InstallCoordinator.HeavyOpExecutor {
 
     init {

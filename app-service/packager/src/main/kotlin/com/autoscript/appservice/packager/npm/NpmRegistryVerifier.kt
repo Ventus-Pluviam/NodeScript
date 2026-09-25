@@ -12,7 +12,9 @@ import java.nio.charset.StandardCharsets
  * 是不是官方那份」——一份第三方 lock 把包名指到别处也照样验得过（故另有
  * [LockSigner]）。npmmirror 没有 ECDSA 签名端点，验签这条路走不通；设计给出的
  * 替代是**同一 spec 取两个独立镜像的声明，一致才接受**：两个运营主体不同的镜像
- * 同时被投毒，比投毒一个难得多，而 registry.npmjs.org 是独立的第二意见。
+ * 同时被投毒，比投毒一个难得多。**第二意见必须是另一个运营主体**（出厂首选官方
+ * §18 第 7 项 2026-09-26 拍板，于是镜像来做第二意见；调用方把首选改成镜像时反过来）——
+ * 要的是"两家"，不是"官方那一家"，恒等自比会让交叉校验空转。
  *
  * 校验对象 = packument 的 `dist.integrity`（tarball 的 sha512），即 npm 自己据以
  * 接受内容的那个判据；不「两个镜像各下一份 tarball 比字节」——那要多花一倍的
@@ -24,10 +26,16 @@ import java.nio.charset.StandardCharsets
  * 非 https 来源，一律 [Verdict.Unverifiable] 由调用方显式告知，绝不折成「通过」。
  */
 class NpmRegistryVerifier(
-    /** 首选注册表（本机配置的镜像，缺省 npmmirror，§10.2）。 */
-    private val primary: String = MIRROR,
-    /** 第二意见（npm 官方；与首选镜像运营主体独立，这是交叉校验成立的前提）。 */
-    private val secondary: String = OFFICIAL,
+    /** 首选注册表（出厂**官方**，§18 第 7 项 2026-09-26 拍板；项目 `.npmrc` 会覆盖，§10.2）。 */
+    private val primary: String = OFFICIAL,
+    /**
+     * 第二意见：**与本次首选运营主体不同**（这是交叉校验成立的前提，不是口味）。
+     * 缺省 null = **跟着本次生效的首选现挑**：首选官方 → 镜像，首选非官方（镜像、
+     * 企业源、任意别家）→ 官方。挑在调用期而不是构造期，是因为 [verify] 的
+     * `primary` 每次都可被调用方覆盖（用户 `setRegistry` 后），构造期定死的话
+     * 覆盖成镜像就等于镜像跟镜像比 —— 自己跟自己比也算通过。显式给值则恒用给定值。
+     */
+    private val secondary: String? = null,
     private val source: RegistrySource = HttpRegistrySource(),
 ) : RegistryVerifier {
 
@@ -78,8 +86,8 @@ class NpmRegistryVerifier(
      * [Verdict.Agreed.viaLatestTag]）。
      *
      * @param primary 本次的首选注册表（调用方传自己的当前配置；null = 用构造时的）。
-     *   跨校验的另一半恒为 [secondary]，不随首选变——否则用户把首选也改成 npmjs
-     *   就变成自己跟自己比。
+     *   跨校验的另一半 = [secondary]（给了就恒用它），没给就按本次首选现挑另一个
+     *   运营主体（官方 ↔ 镜像）——两侧同站即自比，自比一律不许。
      * @throws IllegalArgumentException 包名形态非法（含路径/URL 注入企图；调用方按
      *   ERR_INVALID_PARAM 折叠，§7 诚实上报）
      */
@@ -89,33 +97,35 @@ class NpmRegistryVerifier(
         val escaped = escapeName(name)
         val pBase = canonicalRegistry(main)
             ?: return Verdict.Unverifiable(name, "首选注册表不是 https 来源：$main（交叉校验不做明文来源）")
-        val sBase = canonicalRegistry(secondary)
-            ?: return Verdict.Unverifiable(name, "第二意见注册表不是 https 来源：$secondary")
+        // 第二意见跟**本次**首选互补（见构造器 KDoc）：官方 ↔ 镜像，绝不同站。
+        val sec = secondary ?: if (pBase == canonicalRegistry(OFFICIAL)) MIRROR else OFFICIAL
+        val sBase = canonicalRegistry(sec)
+            ?: return Verdict.Unverifiable(name, "第二意见注册表不是 https 来源：$sec")
         val p = resolve(pBase, escaped, name, version)
         val s = resolve(sBase, escaped, name, version)
         if (p == null && s == null) {
-            return Verdict.Unverifiable(name, "两个注册表都取不到 $name 的 packument（主：$main 副：$secondary）")
+            return Verdict.Unverifiable(name, "两个注册表都取不到 $name 的 packument（主：$main 副：$sec）")
         }
         if (p == null) {
             return Verdict.Unverifiable(name, "首选注册表 $main 未返回 $name@${version ?: "latest"} 的 packument")
         }
         if (s == null) {
             // 镜像同步有窗口期：副镜像暂无此版本 ≠ 投毒。如实说「没验成」，不报警也不放行。
-            return Verdict.Unverifiable(name, "第二意见 $secondary 未返回该版本（不可达或尚未同步），无法交叉校验")
+            return Verdict.Unverifiable(name, "第二意见 $sec 未返回该版本（不可达或尚未同步），无法交叉校验")
         }
         if (p.integrity == null || s.integrity == null) {
-            return Verdict.Unverifiable(name, "该版本未提供 dist.integrity（npmmirror=${p.integrity != null} npmjs=${s.integrity != null}），无交叉校验锚点")
+            return Verdict.Unverifiable(name, "该版本未提供 dist.integrity（主=${p.integrity != null} 副=${s.integrity != null}），无交叉校验锚点")
         }
         if (p.version != s.version) {
             return Verdict.Disagreed(
                 name, version, p, s,
-                "$name 两注册表 latest 版本漂移：$main=${p.version} vs $secondary=${s.version}",
+                "$name 两注册表 latest 版本漂移：$main=${p.version} vs $sec=${s.version}",
             )
         }
         if (p.integrity != s.integrity) {
             return Verdict.Disagreed(
                 name, version, p, s,
-                "同一版本 $name@${p.version} 的 dist.integrity 不一致：$main=$p.integrity vs $secondary=$s.integrity",
+                "同一版本 $name@${p.version} 的 dist.integrity 不一致：$main=$p.integrity vs $sec=$s.integrity",
             )
         }
         return Verdict.Agreed(
@@ -134,10 +144,10 @@ class NpmRegistryVerifier(
     }
 
     companion object {
-        /** §10.2 默认镜像（国内实测存活）。 */
+        /** 镜像（国内实测存活；出厂时做**第二意见**，也可被项目 `.npmrc` 提成首选）。 */
         const val MIRROR = "https://registry.npmmirror.com"
 
-        /** 官方注册表（第二意见）。 */
+        /** 官方注册表（**出厂首选**，§18 第 7 项；也是别家首选时的第二意见）。 */
         const val OFFICIAL = "https://registry.npmjs.org"
 
         /** 精确版本（可带 v 前缀）；带范围字符（^~><=* 空格）的都不算精确。 */
