@@ -978,7 +978,10 @@ const out = await auto.shell(`pm list packages`);
 // 仍归 §9.2 native 面（P1），接口期两侧都不提供 —— 宿主如实 ERR_NOT_IMPLEMENTED
 // （灰度已落计算核但桥面未开，"落了一半"是刻意的：脚本侧没人消费它）。
 // 注意 haystack 也用 shot 而不是 img：两帧都必须出自 images.decode（见上一段）。
-const found = await auto.images.matchTemplate(shot, await auto.images.fromFile('part.png'), { threshold: 0.85 });
+// **相对路径眼下不成立**（§18 第 9 项）：四层都不解析路径，相对写法按 :main 的 CWD
+// （= /）走，`fromFile('part.png')` 会回 ERR_FILE_NOT_FOUND 而不是"按项目根找"。
+// 口径拍板前，示例一律写绝对路径。
+const found = await auto.images.matchTemplate(shot, await auto.images.fromFile('/sdcard/part.png'), { threshold: 0.85 });
 // 找色（P1 第一个算子）：null = 扫过了、没有；ERR_INVALID_PARAM = 根本没找（空区域）
 const px = await auto.images.findColor(shot, [18, 52, 86, 255], 10, { region: [0, 0, 540, 2400] });
 
@@ -1139,7 +1142,7 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
 
 ## 18. 开放决策点（留给你的拍板项）
 
-设计已给出默认推荐，但以下八点会实质影响方向，由你决策：
+设计已给出默认推荐，但以下九点会实质影响方向，由你决策：
 
 1. **引擎路线：先 Node-only，还是 P0 就并行 QuickJS 沙箱？**
    推荐「P0 只 Node；QuickJS 沙箱 P1」——沙箱牵扯独立进程、白名单、双引擎 API 对齐三件大事，混进 P0 会把最小闭环拖垮。
@@ -1163,6 +1166,13 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
    - (c) **`images` 面加 `decodeBytes(byte[])`**：屏幕字节不落盘直进 native；代价是 bytes 要过桥，§7.7 的"屏幕帧→native 0 拷贝"这条在**两个维度上**都要重新记账，且 §7.4 的多一路径 = 多一处规格要守。
    推荐**(b)**：只有它同时保住了"0 拷贝"与"按分量精确判定"两条被契约明确承诺的性质，(a) 切掉的是判读精度、(c) 切掉的是性能口径。若你想先让链路通起来再优化，(a) 可作为过渡但**别写进 §7.7 的买单口径**——那条链路一旦带上一次 JPEG 往返就不叫「屏幕帧→native 0 拷贝」了。
 
+9. **`images.decode` 的相对路径口径**（2026-09-25 实测记账，影响 §9.2/§12.3 的示例写法）：
+   `:domain` 的 `ImageAnalyzer.decode` KDoc 写着「路径解析（相对项目根 or filesDir）由实现定」，但**四层里没有任何一层解析路径**（计算核 `std::fopen`/`cv::imread` 直取、装载面与 `NativeImageAnalyzer` 原样透传、handler 只挡空白串）。host 侧实测把这条钉死了：传相对路径时按**进程 CWD** 解析——同一个文件，绝对写法与「chdir 到该目录 + 相对写法」都回 `ERR_IO(3)`（说明相对写法确实命中到了文件），而不存在的相对路径回 `ERR_FILE_NOT_FOUND(2)`。`libopencv.so` 载在 `:main` 进程里，那个进程的 CWD 是 `/`（Android 对 zygote 后代的固定行为），于是脚本写 `images.decode('part.png')` 会在根目录找一个并不存在的文件——**回的是 `ERR_FILE_NOT_FOUND`，且报的路径是对的**，所以看起来像"文件真的不在"，不像"口径没定"。
+   两条出路，代价不同：
+   - (a) **就在契约里写明"路径必须是绝对的"**（示例改成 `/sdcard/...` 或让脚本自己拼 `filesDir`）。零实现改动，代价是 v9 的 `fromFile('part.png')` 这种相对用法在 AutoScript 直接不成立，脚本要改写法。
+   - (b) **在 handler 层加一层基准解析**（相对路径按项目根 / `filesDir` 拼绝对再往下传）。保住 v9 的写法，代价是要定"基准是谁"（项目根？脚本所在目录？filesDir？）——**三选一本身又是一个要拍板的策略**，且 §9.2 的「不做路径策略」那条边界要重画。
+   推荐**(a)**：它把"相对路径"这件事从契约里去掉而不是猜一个基准；真要 (b)，基准得先定死写进契约，别留给实现各自发挥。**当前 §12.3 示例里 `fromFile('part.png')` 就是 (b) 的假设，属于待改的旧写法。**
+
 ---
 
 ## 19. 结语
@@ -1174,7 +1184,7 @@ AutoScript 的骨架可以一句话记住：
 架构的全部取舍都锚定在五条铁律上：脚本不进主进程、跨进程必异步、每次操作有 TTL、teardown 四步 quiesce、依赖单向接缝可替换。这个骨架让「写脚本→跑起来→守护它→定时它→打包走」的 P0 闭环与 AutoJsPro 对整个 API 面的演进式补齐，是同一条路的两个阶段，而不是两个项目。
 
 下一步（建议与后续迭代方向，需你确认后开工）：
-1. 确认 §18 决策点（现为 8 个，最新一条是屏幕帧与 `images` 帧的通路，卡着 §7.7 里 `captureScreen → findImage` 那条线的兑现；或直接采纳推荐默认值）；
+1. 确认 §18 决策点（现为 9 个，最新一条是 `images.decode` 的相对路径口径——当前四层都不解析路径，按进程 CWD 走，示例里的相对写法眼下不成立；或直接采纳推荐默认值）；
 2. 在 `:node-runtime-build` 上跑通「Node 24 → 16KB 对齐 libnode.so → 最小 `:node` 进程能执行 `console.log` 并回传」的**垂直切片**——这是全架构的第一块里程碑，也是最硬的一块骨头；
 3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
 4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。

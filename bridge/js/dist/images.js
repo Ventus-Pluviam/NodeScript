@@ -87,6 +87,13 @@ exports.images = {
      * （脚本要拿它做坐标换算）。路径不得空白；文件缺失/不是合法图片由宿主原码透传
      * （`ERR_FILE_NOT_FOUND`/`ERR_IO`，不折叠成参数错）。
      *
+     * **路径写绝对路径**（2026-09-25 实测记账，见 §18 第 9 项）：`:domain` 契约写着
+     * 「路径解析由实现定」，但**四层里没有一层解析路径** —— 计算核直接 `fopen`/`imread`，
+     * 于是相对路径按**宿主进程 CWD** 解析，而 so 载在 `:main` 里、那个进程的 CWD 是 `/`。
+     * `decode('part.png')` 会去根目录找一个并不存在的文件，**回 `ERR_FILE_NOT_FOUND`
+     * 且报的路径是对的** —— 看起来像"文件真的不在"，不像"口径没定"。
+     * 基准解析（项目根/filesDir）拍板前，别写相对路径。
+     *
      * 帧是**文件侧**的句柄：`recycle()` 打 `images/release`（不是 `screen/recycle`）。
      */
     async decode(path, opts = {}) {
@@ -100,6 +107,9 @@ exports.images = {
      * wire 上仍是 `decode`（两侧同名，不搞两套方法名）。
      *
      * 别名只此一个：`load`/`open`/`read`/`bitmap` 一律不提供 —— 宿主侧同样只认 `decode`。
+     *
+     * v9 的 `fromFile('part.png')` 这种相对写法**在 AutoScript 眼下不成立**（同上：
+     * 无路径解析，按 `:main` 的 CWD 走）。别名保留的是名字，不是相对路径语义。
      */
     async fromFile(path, opts = {}) {
         return exports.images.decode(path, opts);
