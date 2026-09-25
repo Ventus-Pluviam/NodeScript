@@ -71,4 +71,6 @@ OpenCV 静态链接，构建轨 `node-runtime-build/scripts/build-opencv.sh`）�
 所以 `SystemSpis.Bundle` 里**没有** `images` 字段，`PlatformWiring.inject(images = ...)`
 是独立的可选参数：`of` 的缺省值 `JniOps.loadOrNull()` so 缺位即 null → 桥回
 `ERR_NOT_IMPLEMENTED`（**缺件不喂，不凑数**）。Android 接触面照 ops 表挡在
-`JniOps` 后，本模块单测 `NativeImageAnalyzerTest` 注入内存替身跑全部分支。
+`JniOps` 后，本模块单测 `NativeImageAnalyzerTest` 注入内存替身跑全部分支。**像素判读不在本模块也不在 JVM**：
+计算核的语义门在宿主机直链（`bridge/image/test/cpp/run-host-tests.sh`，见 §9.2 末）——
+本 README 的 JVM 侧只证「句柄/错误码/域校验」。
