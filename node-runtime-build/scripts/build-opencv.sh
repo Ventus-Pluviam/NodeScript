@@ -196,7 +196,7 @@ STRIP="$TOOLCHAIN/bin/llvm-strip"
 
 # ── 7) 门禁 ────────────────────────────────────────────────────────────
 say "16KB/ELF/NEEDED 门禁"
-"$SCRIPT_DIR/check-opencv-alignment.sh" "$TOOLCHAIN/bin/llvm-readelf" "$IMG_LIB" "$CXX"
+bash "$SCRIPT_DIR/check-opencv-alignment.sh" "$TOOLCHAIN/bin/llvm-readelf" "$IMG_LIB" "$CXX"
 
 # ── 8) 基表 + 审计行 ────────────────────────────────────────────────────
 # kleidicv 状态进审计：产物 sha256 之外还要能回答"这个 so 里到底有没有 kleidicv 加速"。

@@ -1,0 +1,106 @@
+name: node-slice
+
+# Node 24 垂直切片构建（docs §844 / §19 里程碑：最小 :node 进程 console.log 回传）
+#
+# 与 image-native.yml 的分工：那条跑 libopencv.so（20 分钟级、PR 门 paths 触发）；
+# 本文件跑 fetch-and-build.sh → libnode.so + node（600MB 源码 + 半小时级）。
+# 体量决定了它**不进 PR 默认门**：push paths 只在动了 Node 构建面时触发，
+# 日常靠 workflow_dispatch 手动跑（版本升级回归时点一次）。
+#
+# 手法与 image-native 同源：runner 直跑脚本，不套 Docker —— runner 里再套
+# docker build 要走嵌套虚拟化，慢且日志难读；Dockerfile 仍是发布封装，
+# 调的是同一个脚本（见 Dockerfile 的 RUN 行）。
+#
+# 产物不随 APK 走：out/node 供 adb push 到设备做 §844 垂直切片验证；
+# out/libnode.so.* 是 :bridge:native dlopen 的宿主引擎。artifact 给人下载核验。
+on:
+  push:
+    paths:
+      - 'node-runtime-build/VERSIONS.env'
+      - 'node-runtime-build/scripts/fetch-and-build.sh'
+      - 'node-runtime-build/scripts/check-alignment.sh'
+      - '.github/workflows/node-slice.yml'
+  workflow_dispatch:
+
+concurrency:
+  # 同一分支重复触发时取消上一次（构建半小时级，串行等待没有信息量）。
+  group: node-slice-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-node:
+    name: Node 24 → libnode.so + node（arm64-android26，16KB/平台/ABI 门禁）
+    runs-on: ubuntu-latest
+    timeout-minutes: 180      # Node 全量交叉编译半小时级；CI 抢不到核时放宽
+    env:
+      # 全 job 共用一个 WORK_DIR：fetch-and-build.sh 按 $WORK/{dl,src,ndk,out}
+      # 布局走，而"产物审计/上传"步骤也要读同一个 OUT —— 只在构建步骤里设 env 的话，
+      # 后续步骤的 $WORK 是空的（会安静地 ls 到空路径然后失败在 artifact 上）。
+      WORK_DIR: ${{ github.workspace }}/work
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装编译期依赖（build-essential + curl + unzip + xz + python3）
+        run: |
+          # 不赌 runner 镜像预装：fetch-and-build 要 gcc/g++/ar（host toolset，
+          # 见脚本 §4）、unzip（NDK 解包）、xz（tarball 解包）、python3（§3b/3c 补丁）。
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential curl unzip xz-utils python3
+
+      - name: 安装 NDK r28c（dl.google.com zip + size/sha1 校验，同脚本 §2）
+        run: |
+          # 不借 sdkmanager：fetch-and-build.sh 从 $WORK/ndk/android-ndk-$NDK_VERSION
+          # 找 NDK（与 build-opencv.sh 同一布局），而 sdkmanager 装到
+          # $ANDROID_SDK_ROOT/ndk/<VERSION_CODE>/，目录语义是"版本码"不是"版本名"，
+          # 中间得再软链一层 —— image-native 这层漏过一次，死在工具链探测上。
+          # 改走 zip：与脚本 §2 同源同校验（VERSIONS.env 的 NDK_ZIP_SIZE/NDK_SHA1），
+          # 解包落点即脚本期望的路径。脚本 §2 还会再验一次（复验无害），§3 复用解包。
+          V=node-runtime-build/VERSIONS.env
+          NDK_VERSION="$(sed -n 's/^NDK_VERSION=//p' "$V")"
+          NDK_ZIP_SIZE="$(sed -n 's/^NDK_ZIP_SIZE=//p' "$V")"
+          NDK_SHA1="$(sed -n 's/^NDK_SHA1=//p' "$V")"
+          API="$(sed -n 's/^ANDROID_API=//p' "$V")"
+          [ -n "$NDK_VERSION" ] && [ -n "$NDK_ZIP_SIZE" ] && [ -n "$NDK_SHA1" ] \
+            || { echo "VERSIONS.env 缺 NDK_VERSION/ZIP_SIZE/SHA1"; exit 1; }
+          [ -n "$API" ] || { echo "VERSIONS.env 缺 ANDROID_API"; exit 1; }
+          DL="$WORK_DIR/dl"
+          mkdir -p "$DL" "$WORK_DIR/ndk"
+          ZIP="$DL/android-ndk-${NDK_VERSION}-linux.zip"
+          echo "下载 NDK $NDK_VERSION（约 $((NDK_ZIP_SIZE / 1024 / 1024))MB）…"
+          curl -fsS -C - --retry 3 -o "$ZIP" \
+            "https://dl.google.com/android/repository/$(basename "$ZIP")"
+          echo "校验 size=$NDK_ZIP_SIZE sha1=${NDK_SHA1:0:16}…"
+          actual_size=$(stat -c%s "$ZIP")
+          [ "$actual_size" = "$NDK_ZIP_SIZE" ] || { echo "NDK zip 大小不符: $actual_size"; exit 1; }
+          actual_sha1=$(sha1sum "$ZIP" | awk '{print $1}')
+          [ "$actual_sha1" = "$NDK_SHA1" ] || { echo "NDK sha1 不符: $actual_sha1"; exit 1; }
+          unzip -q "$ZIP" -d "$WORK_DIR/ndk"
+          TOOLCHAIN="$WORK_DIR/ndk/android-ndk-$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64"
+          # 与 fetch-and-build.sh §4 同一探针（aarch64-linux-android$API-clang）
+          [ -x "$TOOLCHAIN/bin/aarch64-linux-android${API}-clang" ] \
+            || { echo "解包后无 aarch64-linux-android${API}-clang: $TOOLCHAIN"; exit 1; }
+          echo "[OK] NDK 就位: $TOOLCHAIN"
+
+      - name: 构建 libnode + node（fetch-and-build.sh 全链）
+        run: |
+          # Node tarball（30MB+）由脚本 §1 自行下载 + 官方 sha256 校验；
+          # 16KB/平台/ABI 门禁在脚本 §7，已是 fatal，无需重复断言。
+          bash node-runtime-build/scripts/fetch-and-build.sh 2>&1 | tee /tmp/node-slice.log
+          grep -q '完成。产物' /tmp/node-slice.log || { echo "构建日志无完成行"; exit 1; }
+
+      - name: 产物审计（基表 + 文件清单）
+        run: |
+          cat "$WORK_DIR/out/SHASUMS256"
+          ls -l "$WORK_DIR/out/node" "$WORK_DIR"/out/libnode.so*
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-slice
+          path: |
+            work/out/node
+            work/out/libnode.so*
+            work/out/SHASUMS256
+            work/out/config.gypi
+            work/out/config.mk
+          if-no-files-found: error

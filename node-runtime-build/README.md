@@ -4,10 +4,10 @@
 
 | 轨 | 脚本 | 产物 | 用途 | CI |
 |---|---|---|---|---|
-| Node 24 | `scripts/fetch-and-build.sh` | `libnode.so.137` + `node` | `:bridge:native` dlopen 宿主引擎、§844 垂直切片 | `Dockerfile`（体量 ~600MB 源码 + 半小时级，不进 PR 门） |
+| Node 24 | `scripts/fetch-and-build.sh` | `libnode.so.137` + `node` | `:bridge:native` dlopen 宿主引擎、§844 垂直切片 | `.github/workflows/node-slice.yml`（体量 ~600MB 源码 + 半小时级：动了 Node 构建面才跑，日常 workflow_dispatch；runner 直跑脚本，Dockerfile 仍是发布封装） |
 | OpenCV 4.14.0 | `scripts/build-opencv.sh` | `libopencv.so` | `:bridge:image` 图像分析管线（JNI 装载，不进 Node） | `.github/workflows/image-native.yml` |
 
-OpenCV 轨 20 分钟级，故单独走 PR 门（改了图像构建面就跑，路径过滤）；Node 轨不进 PR 门，构建门由 Dockerfile 承担。
+OpenCV 轨 20 分钟级，故单独走 PR 门（改了图像构建面就跑，路径过滤）；Node 轨半小时级，也不一样：动了 Node 构建面（VERSIONS.env / fetch-and-build.sh / check-alignment.sh）才跑 node-slice，日常靠 workflow_dispatch 手动点 —— 两种重轨都不进 JVM 单测的默认门。
 
 > 下方「为什么自建」起的各节都是 **Node 轨**视角（冻结版本矩阵里 NDK/ABI 行两轨共用）；
 > OpenCV 轨单列在文末「OpenCV 轨（`libopencv.so`）」，版本矩阵另见 `VERSIONS.env` 的 OpenCV 块与 RISKS §13。
@@ -56,7 +56,7 @@ ls out/          # node  libnode.so.137*  SHASUMS256  config.gypi  config.mk
 ## 升级流程（一次提交，Node 轨）
 
 1. 改 `VERSIONS.env`（新 `NODE_VERSION` / `NODE_SHA256` 取自 `nodejs.org/dist/<v>/SHASUMS256.txt`；必要时一并评估 NDK）。
-2. 跑 Docker 全量重建，门禁 + 基表变化即回归证据。
+2. Actions 点 `node-slice`（workflow_dispatch）全量重建，门禁 + 基表变化即回归证据（Dockerfile 只是发布封装，调同一脚本）。
 3. 交垂直切片验证（§844 里程碑：最小 `:node` 进程 `console.log` 回传）后合入。
 
 OpenCV 轨的升级同纪律但走它自己的门：改 `VERSIONS.env` 的 OpenCV/kleidicv 块 → `image-native.yml` 自动跑（改 `build-opencv.sh` 同触发）→ 看审计行的 kleidicv ON/OFF 与 NEEDED 白名单是否仍成立。

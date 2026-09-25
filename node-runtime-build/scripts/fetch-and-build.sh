@@ -27,7 +27,9 @@ mkdir -p "$DL" "$SRC" "$OUT"
 NODE_TARBALL="node-$NODE_VERSION.tar.xz"
 if [ ! -f "$DL/$NODE_TARBALL" ]; then
     say "下载 Node $NODE_VERSION ..."
-    curl -fsS --retry 3 -o "$DL/$NODE_TARBALL" \
+    # 断点续传：tarball 约 30MB+，失败重试用 -C - 接着写（curl --retry 3 只重试
+    # 连接，写了一半的文件默认截断重来；-C - 让服务端按已有字节续传，已完整即秒过）。
+    curl -fsS -C - --retry 3 -o "$DL/$NODE_TARBALL" \
         "https://nodejs.org/dist/$NODE_VERSION/$NODE_TARBALL"
 else
     say "复用已下载 $DL/$NODE_TARBALL"
@@ -192,7 +194,7 @@ done
 
 # ── 7) 门禁 ──────────────────────────────────────────────────────────────
 say "16KB/ELF/平台/ABI 门禁 ..."
-"$SCRIPT_DIR/check-alignment.sh" "$TOOLCHAIN/bin/llvm-objdump" "$OUT"
+bash "$SCRIPT_DIR/check-alignment.sh" "$TOOLCHAIN/bin/llvm-objdump" "$OUT"
 
 # ── 8) 产物基表（对照 Node SHASUMS256 语义，供发布审计）──────────────────
 (cd "$OUT" && sha256sum node libnode.so* config.gypi config.mk | tee SHASUMS256)
