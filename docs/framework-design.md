@@ -803,12 +803,13 @@ await auto.npm.importOfflineBundle('/sdcard/Download/baseBundle.zip');   // SAF 
 await auto.npm.importTarball('/sdcard/Download/pkg.tgz');
 
 // 审批（人机分离：只能发起请求，人工在 UI 弹卡确认）
-auto.npm.requestApprove('esbuild', { scripts: ['postinstall'] });        // 不直接 approve
+await auto.npm.requestApprove('esbuild', { scripts: ['postinstall'] });  // 不直接 approve；不 await 的话被拒会成 unhandled rejection
 
-// 事件
-auto.npm.on('progress', e => ({ phase: 'download', name: 'axios', percent: 0.4 }));
-auto.npm.on('approval', req => ({ pkg: 'esbuild', scripts: ['postinstall'], projectId }));
-auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], message: '来源未能多镜像交叉校验' }));
+// 事件（三个独立方法，**不是** `on('progress')` —— 那种写法在 facade 上会 TypeError，见 §12.3.2 第 6 条）
+const offP = auto.npm.onProgress(e => console.log(e.phase, e.name, e.percent));
+const offA = auto.npm.onApproval(req => notify('需人工确认', req.pkg));   // ApprovalRequest 六字段，无 scripts
+const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
+// kind: scripts-skipped/trust-downgraded/registry-fallback/low-memory/disk-quota（:domain InstallEvent.Kind 同集）
 
 // 错误码新增：ERR_NPM_*（安装失败/审批被拒/SPAWN_BLOCKED）、ERR_NOT_SUPPORTED（git:依赖）、
 // ERR_REGISTRY_UNAVAILABLE（网络/镜像可诊断）、ERR_DISK_FULL、ERR_NPM_LOWMEM、ERR_NOT_IMPLEMENTED（node-gyp/exec）
@@ -901,7 +902,7 @@ auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], messag
 | `a11y` | `a11y.ts` | `A11yNamespaceHandler`（`:platform:capabilities`）+ `CapabilityNamespaces.a11y(tree, actions, input, events)` 装配缝（树/动作/输入/事件四 SPI）+ **Android 真实现** `AndroidUiTree`/`AndroidGestureInput` 经 `SystemA11yBridge`（`A11yServiceHolder` 连接态） | **生产已接**：`PlatformWiring.inject` → `a11yHandler` → `AppShellApplication.installWithFiles`（服务未连 = 桥如实 `ERR_SERVICE_DISABLED`，装配期即可注入不必等 `onServiceConnected`）；内存实现仍是单测缺省；未注入缝保留 → 仍如实 `ERR_NOT_IMPLEMENTED` |
 | `screen` | `images.ts` | `ScreenNamespaceHandler`（`:platform:capabilities`）+ `ScreenshotSource`（333ms 节流/§8.8 策略预检/句柄记账）+ **Android 真实现** `AndroidFrameProducer`（经 `SystemA11yBridge.takeScreenshot`：API34+ 窗口级、API30–33 显示级、API<30 如实 `ERR_NOT_IMPLEMENTED`；失败码分类 SECURE→BLACK_FRAME/限频→INVALID_PARAM/通道失效→SERVICE_DISABLED/内部→ERR_IO） | **生产已接**：`PlatformWiring.screenHandler` → `AppShellApplication.installWithFiles`（与 a11y 同底：服务未连 = `ERR_SERVICE_DISABLED`）；**回包尺寸 = 系统真值**（`ProducedFrame` 随帧走，不再固定 1080×2400）。MediaProjection 高清会话仍待（换 producer 即插） |
 | `images`（decode/matchTemplate/findImage/findColor/release） | `images.ts` | `ImagesNamespaceHandler.kt`（`:platform:capabilities`，经 `CapabilityNamespaces.images(analyzer)` 转接；SPI = `:domain` `ImageAnalyzer`+`ImageFrame`/`ImageMatch`，真身 = `:platform:system` 的 `NativeImageAnalyzer`/`JniOps` + `:bridge:image` 的 `libopencv.so`，2026-09-25 已接） | **桥面已可挂**：`assemble` 的 `imagesHandler` **独立缝**（同 datastore/zip/settings/notification/clipboard/sensors —— 图像面无共担门禁：读图是应用私有目录内 IO、匹配是纯计算，`ERR_FILE_NOT_FOUND`/`ERR_STALE_HANDLE` 判据在 SPI；不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。**生产侧已喂**（2026-09-25）：`PlatformWiring.of` 构造 `NativeImageAnalyzer.of(JniOps.loadOrNull())` 传 `inject(images = …)` —— so 缺位（未跑 `build-opencv.sh` 的 CI JVM / 无 native 的设备）→ null → 桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`（一个看不见像素的内存分析器只能靠自报坐标假装匹配成功，那比没有更坏 —— 这条防线从"不喂"变成"缺件不喂"，语义不变）。两侧钉子：`ImagesNamespaceHandlerTest` + `images.test.cjs` + `NativeImageAnalyzerTest` |
-| `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | `SystemNamespaces.{Dialogs,Shell,Device,App,FloatingWindow}NamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.{dialogs,shell,device,app,floatingWindow}` 转接） | **生产已接**：`com.autoscript.shell.PlatformWiring.of(context)`（§6 包级例外二）把 `SystemSpis.of` 十件拼成 `systemHandlers` 束 + 七独立缝，`AppShellApplication.installWithFiles` 喂 `AppShellKit.assemble`（七个字段各自可空，未注入仍如实 `ERR_NOT_IMPLEMENTED`；`dialogs` **生产已接** —— `PlatformWiring.of(context)` 构造 `AndroidDialogHost(SystemDialogOps(...))`（实现住 :platform:capabilities，`inject` 单测缺省不传仍 null→`ERR_NOT_IMPLEMENTED`）。SPI 侧 `shell`/`device`/`app`/`floatingWindow` 四件走 `:platform:system` 真实现；JS 双侧契约见 `extras.test.cjs`（mock 宿主验 wire 形状） |
+| `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | `SystemNamespaces.{Dialogs,Shell,Device,App,FloatingWindow}NamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.{dialogs,shell,device,app,floatingWindow}` 转接） | **生产已接**：`com.autoscript.shell.PlatformWiring.of(context)`（§6 包级例外二）把 `SystemSpis.of` 十件拼成 `systemHandlers` 束 + 七独立缝，`AppShellApplication.installWithFiles` 喂 `AppShellKit.assemble`（七个字段各自可空，未注入仍如实 `ERR_NOT_IMPLEMENTED`；`dialogs` **生产已接** —— `PlatformWiring.of(context)` 构造 `AndroidDialogHost(SystemDialogOps(...))`（实现住 :platform:capabilities，`inject` 单测缺省不传仍 null→`ERR_NOT_IMPLEMENTED`）。SPI 侧 `shell`/`device`/`app`/`floatingWindow` 四件走 `:platform:system` 真实现；JS 双侧契约见 `extras.test.cjs`（mock 宿主验 wire 形状）。**实测缺口（2026-09-25，见 §12.3.3）**：`floatingWindow.create` 三处口径没接上 —— facade 收 `{title,width,height}` 却发 `null` payload、handler 的 `create` 要求 payload（真宿主回 `ERR_INVALID_PARAM`）、facade 没有 `close`（handler 有）；`screen.startCapturer` 的 `{width,height}` 同理不生效 |
 | `datastore` | `datastore.ts`（`get/put/remove/contains/keys/clear`；`get` 拆 `{found,value}` 信封：缺失 `undefined` ≠ 存的 JSON `null`） | `DatastoreNamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.datastore(store)` 转接；SPI = `:domain` `DataStore`，测试传 `InMemoryDataStore`） | **已可挂**：`assemble` 的 `datastoreHandler` **独立缝**（不入 `systemHandlers` 束 —— 存储面无共担门禁；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。字节值不过桥（§7.4 side-channel 未接 → `get` 如实 ERR_NOT_IMPLEMENTED）、`transaction` 不上桥（facade 无此方法）；SPI 真身 `:platform:system` `AndroidDataStore`，生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂 `datastoreHandler` 独立缝；`PlatformWiringTest` 同路径真转接覆盖）。双侧钉子：`DatastoreNamespaceHandlerTest` + `datastore.test.cjs` |
 | `zip` | `zip.ts`（`compress`/`extract` 两方法，TTL 缺省 60s） | `ZipNamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.zip(archiver)` 转接；SPI = `:domain` `ZipArchiver`，真身 `:platform:system` `JdkZipArchiver`） | **已可挂**：`assemble` 的 `zipHandler` **独立缝**（同 datastore —— 归档无共担门禁，不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。SPI 错误原码透传不折叠；`unzip` 等未约定别名两侧都不提供。双侧钉子：`ZipNamespaceHandlerTest` + `zip.test.cjs`；归档语义（zip-slip）钉在 `JdkZipArchiverTest` |
 | `settings` | `settings.ts`（`canWrite`/`getString`/`getInt`/`putString`/`putInt` 五方法与 SPI 1:1，读缺失回 `null`；不提供猜型的 `get`/`put`） | `SettingsNamespaceHandler.kt`（`:platform:capabilities`，经 `CapabilityNamespaces.settings(systemSettings)` 转接；SPI = `:domain` `SystemSettings`，真身 `:platform:system` `AndroidSystemSettings`） | **已可挂**：`assemble` 的 `settingsHandler` **独立缝**（同 datastore/zip —— `WRITE_SETTINGS` 判据在 SPI、与五命名空间无共担门禁，不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。双侧钉子：`SettingsNamespaceHandlerTest` + `settings.test.cjs`；授权语义钉在 `AndroidSystemSettingsTest`；生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂 `settingsHandler` 独立缝；`PlatformWiringTest` 同路径覆盖） |
@@ -923,76 +924,171 @@ auto.npm.on('warning', e => ({ kind: 'trust-downgraded', pkgs: ['axios'], messag
 **能力门禁不在 handler 里**：`:app-service:permission-center` 的 `PermissionFacade` 住 `:app-service:*`，而 `:platform:capabilities` 的 archUnit 黑名单含 `com.autoscript.appservice..`（§6）。门禁由装配层在取用这些 handler 之前完成（`ensure(Capability.OVERLAY)` 等），handler 只负责**能力已保证之后的语义**；被拒时由 `PermissionFacade` 抛带引导文案的 `ERR_PERMISSION_DENIED`，handler 侧的分类错误（如句柄过期 `ERR_STALE_HANDLE`、服务未启用 `ERR_SERVICE_DISABLED`）原样透传到 JS。
 
 ### 12.3 关键签名示例（风格示范）
-```ts
-// a11y 选择器（Promise + 超时）
-const btn = await auto.a11y.selector()
-  .text('启动').package('com.example')
-  .timeout(2000).findOne()            // 失败抛 NotFoundError
-await btn.click();                    // UiObject 句柄代理
 
-// 控件监听（一定次数内触发则成功）
+**本节的口径**：下面每一行都在 `bridge/js/dist` 上真跑过（mock 宿主逐字复刻 Kotlin handler 的回包），不是照 §12.2 的命名空间清单手写的。所以这里同时是 **facade 现状的实测记录** —— 已落地与未落地分开写，未落地的一律按**接口期两侧都不提供**处理（宿主如实 `ERR_NOT_IMPLEMENTED`），示例不写"将来会通"的用法。
+
+#### 12.3.1 已落地的调用（照抄可跑）
+
+```ts
+// ── a11y：选择器链（条件之间 AND；findOne 无匹配抛 NotFoundError，findOneOrNull 回 null）
+const btn = await auto.a11y.selector()
+  .text('启动').packageName('com.example')   // 条件名与 :domain UiSelector 1:1（没有 .package() 这种截断别名）
+  .time(2_000)                               // 超时挂在**选择器**上：findOne 未传 timeout 时取它
+  .findOne()
+await btn.click();                           // UiObject 句柄代理：动作经 invoke 回桥（携带 generation 校验）
+await btn.bounds;                            // getter 也是桥调用（一次 invoke）—— 循环里逐节点读属性要先想清楚
+await btn.dispose();                         // void（fire-and-forget；释放失败不抛给脚本）
+
+// 只问"在不在"：无匹配是控制流不是异常 —— findOneOrNull 回 null（其余错误照常抛）
+const maybe = await auto.a11y.selector().text('登录成功').findOneOrNull({ timeout: 5_000 })
+
+// 等到出现为止（回 boolean；超时也回 false，**不抛** NotFoundError）
 const ok = await auto.a11y.waitFor(
   auto.a11y.selector().text('登录成功'),
   { timeout: 10_000, interval: 300 })
 
-// 截图（§9.2：screen 面出帧；帧只归 screen 自己，**不是** images 面的输入）
-const img = await auto.screen.capture();            // screen.* 出的帧
-// 找图：两帧都必须来自 images.decode —— **不能拿 screen 的帧当 haystack**，
-// 两张桥面各发各的号（§12.2 独立缝），拿过去只会 ERR_STALE_HANDLE。
-// 所以"截屏→找图"要先把屏落成文件：screen 面不提供 save/取像素的通道（见 §9.2末）。
-const shot = await auto.images.decode('/sdcard/shot.png');  // ← 屏先落成文件（脚本自己的事，见下注）
-const icon = await auto.images.decode('/sdcard/icon.png');  // images.* 从文件出的帧
-const m = await auto.images.findImage(shot, icon, { threshold: 0.9 });  // null = 没找到（不是异常）
-await icon.recycle();                                // 谁的帧谁来放（images/release）
-await shot.recycle();
-await img.recycle();                                 // screen/recycle
+// 事件流是"拉取式游标"（不是 push 回调）：空增量回 {first:sinceSeq,last:sinceSeq,events:[]}，
+// 调用方以前进游标为准 —— 别拿"这轮 0 条"当"界面没变化"（两者不是同一件事）
+const batch = await auto.a11y.events({ sinceSeq: 0, batch: 32 })
 
-// 定时任务（诚实语义：亮屏+解锁保底契约）
+// 手势：先问能力（false 时走能力中心引导），再派发（通道关门回 false；非法手势抛 ERR_INVALID_PARAM）
+if (await auto.a11y.canPerformGestures()) {
+  await auto.a11y.gesture({
+    strokes: [{ points: [{ x: 540, y: 1800 }, { x: 540, y: 600 }], durationMillis: 300 }],
+  })
+}
+
+// ── screen：截图帧源（句柄归 screen 自己发号）
+const img = await auto.screen.capture();     // 锁屏 ERR_SCREEN_LOCKED / FLAG_SECURE ERR_BLACK_FRAME /
+                                             // 无窗口 ERR_SERVICE_DISABLED / 节流 ERR_INVALID_PARAM（退避重试）
+console.log(img.width, img.height);          // 尺寸是**系统真值**（随帧走，不是固定 1080×2400）
+await img.recycle();                         // 打 screen/recycle
+
+// 会话式（MediaProjection）：open 时即做策略判定，会话内逐帧拉；close 是连接态（二次关 ERR_NOT_FOUND）
+const cap = await auto.screen.startCapturer();
+try {
+  const f1 = await cap.nextFrame();
+  await f1.recycle();
+} finally {
+  await cap.close();
+}
+
+// ── images：图像分析面（**与 screen 是两张桥面**，句柄互不通用，见 12.3.2 第 3 条）
+const shot = await auto.images.decode('/sdcard/shot.png');   // 宽高是**文件真值**
+const icon = await auto.images.decode('/sdcard/icon.png');
+const m = await auto.images.findImage(shot, icon, { threshold: 0.9 });  // null = 没找到（**不是异常**）
+if (m) console.log(m.x, m.y, m.width, m.height, m.confidence);
+
+// matchTemplate 与 findImage 是同一个 opencv 概念的 v9 两名（wire 逐字段相同，宿主同一套校验）
+const m2 = await auto.images.matchTemplate(shot, await auto.images.fromFile('/sdcard/part.png'),
+  { threshold: 0.85 });
+
+// 找色（P1 第一个算子）：null = 扫过了、没有；ERR_INVALID_PARAM = 根本没找（空区域/region 越界）
+const px = await auto.images.findColor(shot, [18, 52, 86, 255], 10, { region: [0, 0, 540, 2400] });
+
+await icon.recycle();                        // 谁的帧谁来放（images/release）
+await shot.recycle();                        // 再放同一帧 → ERR_STALE_HANDLE（不是静默成功）
+
+// ── workManager：定时任务（亮屏+解锁是保底契约；screen 三态显式声明）
 const task = await auto.workManager.createTimedTask({
   name: '早安打卡', projectId: 'p1', scriptPath: 'entry.js',
-  schedule: auto.workManager.cron('0 9 * * 1'), // 每周一 09:00（5 字段；下次触发 auto.workManager.nextFireAfter 预览）
+  schedule: auto.workManager.cron('0 9 * * 1'),   // 5 字段 分 时 日 月 周；每周一 09:00
   timezone: 'Asia/Shanghai',
-  screen: 'SCREEN_ON',                     // SCREEN_ON/ANY/SCREEN_OFF
+  screen: 'SCREEN_ON',                            // SCREEN_ON / ANY / SCREEN_OFF
 });
+// 登记前本地预览下一跳（纯本地排期工具，唯一时序来源；段内合法性仍归宿主 CronTab.parse 裁决）
+const next = auto.workManager.nextFireAfter(auto.workManager.cron('0 9 * * 1'), Date.now());
+await auto.workManager.cancelTask(task.id);       // 幂等：从未登记的 id 照样 true
+const tasks = await auto.workManager.listTasks();
 
-// 脚本电源（限时唤醒锁：CPU 不休眠，不碰屏幕/前台服务）
-const token = await auto.power.acquire(10 * 60_000); // 10 分钟，到期宿主自动收
+// ── power：限时唤醒锁（CPU 不休眠；不碰屏幕亮灭，也不起停前台服务）
+const token = await auto.power.acquire(10 * 60_000);  // 超时**必填**（无期限只属框架保活）；token 服务端分配
 try {
   await longRunningWork();
 } finally {
-  await auto.power.release(token); // 重复放回 false（已过期同理），如实不对账成功
+  await auto.power.release(token);               // 重复放/已过期 → false（如实不对账成功）
+}
+const lock = await auto.power.status();          // {held, holders}；分歧时 held=false 而 holders>0，不折叠
+
+// ── engines：多引擎（池仲裁；超载排队，不静默丢弃）
+const other = await auto.engines.exec({ projectId: 'p1', scriptPath: 'worker.js' });
+const chan = await auto.engines.channel('progress');       // 命名通道**显式打开**（session.channel 恒 null）
+await chan.emit('progress', JSON.stringify({ done: 3 }));  // 载荷是 JSON 字符串，不是对象
+const sub = chan.on('progress', (payload) => console.log('子脚本说', payload), { pollMillis: 500 });
+other.onExit((info) => {                                    // info 是 CrashInfo | null，不是数字退出码
+  console.log(info === null ? '干净结束' : `异常：${info.cause}`);
+  // 外部结算（看门狗/他人 stop）报 {cause:'UNKNOWN'} —— 结算即离表，不把"查不到"伪造成干净结束
+});
+await chan.close(); sub.cancel();
+await other.cancel();                                       // → engines.stop(runId)，池四步 quiesce
+console.log(await auto.engines.poolStats());                // {capacity, free, busy}
+
+// ── dialogs / shell / device / app / floatingWindow
+const name = await auto.dialogs.prompt('输入名字', { mode: 'auto' });  // auto：overlay 可见弹窗，否则通知回调
+const out = await auto.shell.exec('pm list packages');      // shell 是**命名空间对象**，不是可调用函数；
+                                                            // 分级 DENIED 抛 ERR_PERMISSION_DENIED
+console.log(out.code, out.stdout, out.stderr);
+console.log(await auto.device.model(), await auto.device.sdkInt());
+console.log(await auto.app.launch('com.example'), await auto.app.currentPackage());  // false/null 是**诚实答案**
+// floatingWindow.create 的参数面还没接通（见 12.3.3）：眼下**别调它** —— facade 发的 payload 是 null，
+// 而 handler 的 create 要求 payload，真宿主会回 ERR_INVALID_PARAM
+
+// ── datastore / zip / settings / notification / clipboard / sensors（六条独立缝）
+await auto.datastore.put('progress', { chapter: 3 });
+const saved = await auto.datastore.get('progress');         // 缺键 undefined ≠ 存的 JSON null（不折叠）
+await auto.zip.compress('/sdcard/out', '/sdcard/out.zip');  // TTL 缺省 60s（归档可大可慢，5s 默认必超）
+const bright = await auto.settings.getInt('screen_brightness');  // 缺键 null（0 是合法亮度，不拿 0 冒充）
+if (await auto.settings.canWrite()) await auto.settings.putInt('screen_brightness', 128);
+if (await auto.notification.canPost()) {
+  await auto.notification.post({ id: 1, text: '脚本跑完了', title: 'AutoScript' });  // 未授权**抛**，不静默丢弃
+}
+await auto.clipboard.setText('要粘贴的文本');                  // 空串是合法内容，读空回 null
+const sub2 = await auto.sensors.register('accelerometer', { delay: 'UI' });  // 未知名抛 ERR_NOT_SUPPORTED
+if (sub2) {
+  const stop = sub2.on('change', (evs) => console.log(evs[0].values), { intervalMs: 200 });
+  await sub2.unsubscribe(); stop();                          // on 只是节流轮询，不是第二套订阅语义
 }
 
-// 多引擎通信
-const other = await auto.engines.exec({ script: 'worker.js' });
-other.channel('progress').emit({ done: 3 });         // RuntimeChannel
-other.on('exit', (code) => console.log('worker 退出', code));
-
-// dialogs（BAL 安全路径：overlay 可见时弹窗，否则通知回调）
-const name = await auto.dialogs.prompt('输入名字', { mode: 'auto' });
-
-// shell / root 能力（分级成 DENIED 时抛 ERR_PERMISSION_DENIED）
-const out = await auto.shell(`pm list packages`);
-
-// 图片分析（native 面）：v9 的 fromFile 是 decode 的别名；toGrayscale/crop/rotate/pixel
-// 仍归 §9.2 native 面（P1），接口期两侧都不提供 —— 宿主如实 ERR_NOT_IMPLEMENTED
-// （灰度已落计算核但桥面未开，"落了一半"是刻意的：脚本侧没人消费它）。
-// 注意 haystack 也用 shot 而不是 img：两帧都必须出自 images.decode（见上一段）。
-// **相对路径眼下不成立**（§18 第 9 项）：四层都不解析路径，相对写法按 :main 的 CWD
-// （= /）走，`fromFile('part.png')` 会回 ERR_FILE_NOT_FOUND 而不是"按项目根找"。
-// 口径拍板前，示例一律写绝对路径。
-const found = await auto.images.matchTemplate(shot, await auto.images.fromFile('/sdcard/part.png'), { threshold: 0.85 });
-// 找色（P1 第一个算子）：null = 扫过了、没有；ERR_INVALID_PARAM = 根本没找（空区域）
-const px = await auto.images.findColor(shot, [18, 52, 86, 255], 10, { region: [0, 0, 540, 2400] });
-
-// 依赖管理（Promise + 事件流；跨进程路由到全局安装会话，绝不阻塞脚本事件循环）
+// ── npm：跨进程路由到全局安装会话（TTL 绑定，绝不阻塞脚本事件循环）
 const handle = await auto.npm.install('axios', { timeout: 60_000 }); // → {handleId, projectId, enqueuedAtMillis}
+// 回包只代表**已入队**：宿主此刻还不知道会装出什么版本，回猜的版本号就是伪造（§1）
 const installed = await auto.npm.list();                    // 装了什么以 lockfile 为准（含 version）
-await auto.npm.ci({ offline: true });                               // lockfile v3 严格重建（验签后）
-const gap = await auto.npm.offlineGap();                            // 离线闭包缺哪些包（名+尺寸）
-auto.npm.on('progress', e => console.log(e.phase, e.name, e.percent));
-auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审批只能提交请求，绝不脚本直调
+await auto.npm.ci({ offline: true });                       // lockfile v3 严格重建（验签后）
+const gap = await auto.npm.offlineGap();                    // 离线闭包缺哪些包（名+版本+尺寸）
+const report = await auto.npm.audit({ offline: true });     // 键名是 vulns（不是 vulnerabilities）
+auto.npm.onProgress((e) => console.log(e.phase, e.name, e.percent));  // phase: queued/resolve/download/
+                                                                     // reify/post-check/done
+auto.npm.onApproval((req) => notify('需人工确认', req.pkg)); // 只能提交请求，绝不脚本直调（人机分离）
+await auto.npm.requestApprove('evil-pkg', { scripts: ['postinstall'] });  // → {requestId, status:'pending', scripts}
+                                                             // scripts 是**入参回显**（宿主确认收到了这份清单）
+
+// ── console：数据面（可丢包，永不抛给脚本；丢包经 onQueueError 报）
+const offQe = auto.console.onQueueError((e) => console.warn('日志丢了', e.level, e.reason));
+await auto.console.log('普通日志', { a: 1 });               // log/info/warn/error/debug 五档，都回 Promise<void>
+offQe();
 ```
+
+#### 12.3.2 读这段示例时必须知道的六条（每一条都是踩过的坑）
+
+1. **错误面要从 `require('auto')` 具名导入，不在 `auto` 根对象上**：
+   `const { AutojsError, ERROR_CODES } = require('auto')` 成立，`auto.AutojsError` 是 `undefined`（`index.ts` 的具名导出，不挂在命名空间根上）。判错两条路：`e instanceof AutojsError && e.code === 'ERR_FILE_NOT_FOUND'`，或 `e.is('ERR_FILE_NOT_FOUND')`。
+   **`ErrCode` 是 TS `const enum`，运行期不存在**（编译期内联，`dist` 里只剩 `/* ErrCode.NOT_FOUND */` 注释）。所以 `e.code === ErrCode.FILE_NOT_FOUND` 只对 TS 脚本成立；`.js` 脚本用 `ERROR_CODES` 里的字符串字面量。`bridge/js/src` 内部用 `ErrCode` 是因为它整体过 `tsc`，不是"运行期也能拿到"的证据。
+2. **`auto.shell` 是命名空间对象，不是可调用函数**：`await auto.shell('pm list packages')` 当场 `TypeError`（`auto.shell` 是 `{exec, shell}`）。**`shell.shell()` 是别名，wire 上仍是 `shell/exec`**。`auto.a11y.selector().timeout(2000)` 同理——选择器上的超时方法叫 `time()`（`timeout` 只在 `findOne` 的选项里）。
+3. **`screen.*` 与 `images.*` 是两张桥面，句柄互不通用**（§12.2 第七条独立缝 + §9.2 末）：`decode` 的帧 `recycle()` 打 `images/release`，`capture` 的帧打 `screen/recycle`；拿 `screen.capture()` 的帧当 `findImage` 的 haystack 只会得 `ERR_STALE_HANDLE`（handler 的说法：这张帧不在我的在场面表里）。所以"截屏→找图"眼下要先落成文件：screen 面既没有 `save()` 也没有 `pixel()`（字节出不了 `:main`），**落盘是脚本自己的事**（§18 第 8 项的三条出路还没拍板）。
+4. **未命中 / 缺键 / 空结果是答案，不是异常**：`findImage`/`matchTemplate`/`findColor` 未命中回裸 `null`（`findColor` 的 native 侧用 `x = -1` 哨兵，因为 `(0,0)` 是合法首像素）；`findOneOrNull` 回 `null`；`datastore.get` 缺键回 `undefined` 而存的 JSON `null` 回 `null`（两者不折叠）；`settings.getInt`/`clipboard.getText` 缺键回 `null`。**但"扫过 0 像素"（空 region / region 越界）是 `ERR_INVALID_PARAM`** —— 那不是"没有"，是"根本没找"，混成 `null` 会让脚本把空区域当成搜过一遍。
+5. **引擎会话的两个名字都是 v9 的两代形态，别照旧写法**：`engines.exec({projectId, scriptPath})`（不是 `{script}`）；`session.onExit(info => …)` 且 `info` 是 `CrashInfo | null`（不是 `on('exit', code => …)` 的数字码，也没有 `.on` 这个方法）；`session.channel` 恒 `null`，命名通道要 `engines.channel(name)` **显式打开**（隐式建通道会在宿主侧留一条永远没人 drain 的缓冲）。
+6. **npm 的事件订阅名与 §12.2 表格一致，不是 `on('progress')`**：`onProgress`/`onApproval`/`onWarning` 三个独立方法（各有退订返回值）。`on('progress')`/`on('approval')` 在 facade 上**不存在**（会 `TypeError`），wire 上也没有对应方法（§10.8 的示例同批改）。
+
+#### 12.3.3 接口期未落地（示例里故意不写，写了就是撒谎）
+
+- **`images` 的 `toGrayscale`/`crop`/`rotate`/`pixel`**：`fromFile` 是 `decode` 的合法别名（两侧同名 `decode`），其余名字**两侧都没有**。灰度特殊一点：**计算核已落**（`imgnative_gray` + 28 例 host 断言，§9.2 末），但**桥面刻意不开** —— `:domain ImageAnalyzer` 五方法里没有它，handler 不认 `toGrayscale`。落了一半是刻意的：脚本侧还没有消费方。
+- **`engines.stop(runId)` 之外的会话操作**、`npm` 的 `resolveApproval`（人机分离，§10.5）等：刻意不在桥面，脚本调即 `ERR_NOT_IMPLEMENTED`（诚实）。
+- **`floatingWindow.create` 的参数面还没接通**（实测）：facade 忽略 `{title,width,height}` 且 wire 上发 `null`，而 handler 的 `create` 又要求 payload —— 眼下**只回句柄**，窗口的形状参数到不了宿主；且 facade 没有 `close`（handler 有），脚本拿不到关闭口。三处（facade 参数 / handler 的 payload 要求 / facade 缺 close）要一起收口，见 §12.2 接线表的 `floatingWindow` 行。
+- **`screen.startCapturer()` 的 `{width,height}`** 同理：facade 收下、handler 的 `startCapturer` 只 `openSession()` 无参 —— 请求的尺寸不生效（回包尺寸仍是系统真值）。
+
+#### 12.3.4 本节与 §12.2 的分工
+
+§12.2 是**命名空间清单**（有什么、接线到哪、谁注入），§12.3 是**调用形状**（怎么调、回什么、哪里会抛）。两者冲突时以本节为准（本节是实测），并应回来改 §12.2。两处已知的**待拍板缺口**写在 §18，别在本节自行发明口径：第 8 项（截屏帧 ↔ images 帧的通路）与第 9 项（`images.decode` 的相对路径口径 —— 四层都不解析路径，相对写法按 `:main` 的 CWD（= `/`）解析，`fromFile('part.png')` 回 `ERR_FILE_NOT_FOUND` 而报的路径是对的，看起来像"文件真的不在"。**口径拍板前，本节示例一律写绝对路径**）。
 
 ### 12.4 typings 工程
 `:bridge:js` 产出全套 `.d.ts`（@types/auto），IDE 补全不依赖文档站点；d.ts 作为 API 契约的单一事实来源，API 评审以 d.ts diff 为准。
@@ -1171,7 +1267,7 @@ auto.npm.on('approval', req => notify('需人工确认', req.pkg));       // 审
    两条出路，代价不同：
    - (a) **就在契约里写明"路径必须是绝对的"**（示例改成 `/sdcard/...` 或让脚本自己拼 `filesDir`）。零实现改动，代价是 v9 的 `fromFile('part.png')` 这种相对用法在 AutoScript 直接不成立，脚本要改写法。
    - (b) **在 handler 层加一层基准解析**（相对路径按项目根 / `filesDir` 拼绝对再往下传）。保住 v9 的写法，代价是要定"基准是谁"（项目根？脚本所在目录？filesDir？）——**三选一本身又是一个要拍板的策略**，且 §9.2 的「不做路径策略」那条边界要重画。
-   推荐**(a)**：它把"相对路径"这件事从契约里去掉而不是猜一个基准；真要 (b)，基准得先定死写进契约，别留给实现各自发挥。**当前 §12.3 示例里 `fromFile('part.png')` 就是 (b) 的假设，属于待改的旧写法。**
+   推荐**(a)**：它把"相对路径"这件事从契约里去掉而不是猜一个基准；真要 (b)，基准得先定死写进契约，别留给实现各自发挥。**§12.3 已按 (a) 改写（2026-09-25）**：示例里的路径一律绝对（`fromFile('/sdcard/part.png')`），并在那一节写明了相对写法为什么回 `ERR_FILE_NOT_FOUND`。这条拍板只剩"要不要给 (b)"——若给，(b) 的基准要同时改回 §12.3。
 
 ---
 
