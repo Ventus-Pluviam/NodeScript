@@ -95,9 +95,19 @@ int imgnative_decode(const char* path, int64_t* out_ref, int32_t* out_w, int32_t
 
         // 归一成 4 通道 BGRA：3 通道补一个恒 255 的 alpha（不透明，符合
         // "没存 alpha 的图就是全不透明"的常识），1 通道铺成三份同值 + 255，
-        // 16 位深压回 8 位（契约分量域是 [0,255]）。浅拷贝优先 —— cvtColor
-        // 需要连续内存，先归置再转；已经在 4 通道 8 位的那一档**一个字节都不动**
-        // （截图/PNG 主路径不付转换代价）。
+        // 16 位深压回 8 位（契约分量域是 [0,255]）。已经在 4 通道 8 位的那一档
+        // **一个字节都不动**（截图/PNG 主路径不付转换代价）。
+        //
+        // 【2026-09-25 实测更正】此处原先写着"浅拷贝优先 —— cvtColor 需要连续内存，
+        // 先归置再转"，两句都不对，host 侧实测过：
+        //   - cvtColor **能**吃非连续视图（`big(Rect)` 出的 3×2 子图 step=24、
+        //     isContinuous=0，BGRA2GRAY 照常出正确值），不存在"必须先归置"；
+        //   - 真正要小心的是**就地形式**（`cvtColor(m, m, …)`）：同通道数的转换会
+        //     **写穿到父矩阵的缓冲**（实测 `cvtColor(view, view, BGR2RGB)` 把
+        //     big(1,1) 从 10,20,30 改成了 30,20,10），只有改通道数时才另开缓冲。
+        // 本函数不受影响（imread 给的是自有连续块），但**后续按 ROI 产出帧的算子
+        // （crop/rotate 那一类）别在视图上就地 cvtColor** —— 那会静默改掉源帧，
+        // 与 imgnative_gray 注释里"产出新帧不改原帧"是同一条纪律。
         if (mat.depth() != CV_8U) {
             cv::Mat narrowed;
             mat.convertTo(narrowed, CV_8U, mat.depth() == CV_16U ? 1.0 / 256.0 : 1.0);
