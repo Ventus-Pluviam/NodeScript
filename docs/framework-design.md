@@ -613,6 +613,20 @@ FrameSource (SPI)
 - **已落地（Kotlin 侧）**：`ScreenshotSource`（333ms 节流 / generation=1 单帧句柄 / 会话 open-close；`recycle` 已升为 `:domain` `FrameSource` SPI 方法）+ `ScreenNamespaceHandler`（构造只收 `FrameSource` SPI，`capture/recycle/startCapturer/nextFrame/closeSession`）。**Android 真实现已接（§9.2 a11y 截图路径）**：`AndroidFrameProducer` 经 `A11yBridge.{screenSnapshot,takeScreenshot}`（`AutoScriptAccessibilityService` 设备面实现——`ScreenshotResult` HardwareBuffer→软位图→JPEG，**实际尺寸随帧走**（`ProducedFrame`，曾经固定 1080×2400 回包是对 JS 报假尺寸，已除）；配置 `canTakeScreenshot=true` 进 res/xml（AOSP 明示缺它两法都不可用）；失败码分类映射 SECURE→`ERR_BLACK_FRAME`、系统限频→`ERR_INVALID_PARAM`、通道失效/无效窗口→`ERR_SERVICE_DISABLED`、内部错→`ERR_IO`；API34+ `takeScreenshotOfWindow`、API30–33 `takeScreenshot`、API<30 如实 `ERR_NOT_IMPLEMENTED`）。生产装配 `PlatformWiring.screenHandler = CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer()))` → `AppShellApplication.installWithFiles`，与 a11y 同底（`SystemA11yBridge`，服务未连 = `ERR_SERVICE_DISABLED`）；锁屏/无窗口由 `ScreenPolicy` 预检分类，安全窗由回调码兜底（无障碍读不到窗口 FLAG_SECURE，`secureForeground` 预检位恒 false —— 不伪造预检能力，分类结果殊途同归）。**仍缺**：MediaProjection 高清会话（授权 UI + FGS + ImageReader→libopencv.so）——换 producer 即插，语义面不动；P0 会话由同一 a11y 帧源连续截图承接。
 - MediaProjection **会话语义**：`capture()` 一次性授权会话（API34 每会话确认）；`reconnect` 不自动重试授权，由 PermissionCenter 引导用户重授权。
 - **图像分析面（`images`，§12.2 第七条独立缝）已通桥面、已通 native 实现（2026-09-25）**：`:domain` `ImageAnalyzer` SPI（`decode`/`matchTemplate`/`findImage`/`findColor`/`release` 五方法，`ImageFrame{HandleRef,width,height}` / `ImageMatch{x,y,width,height,confidence}` / `ColorHit{x,y,r,g,b,a}`）+ `:platform:capabilities` `ImagesNamespaceHandler`（帧句柄自管发号，与 `ScreenshotSource` 同套纪律）+ JS facade `images.ts`。**P0 刻意不提供内存分析器**：看不见像素的替身只能靠自报坐标假装匹配成功，那比没有更坏 —— so 缺位时 `imagesHandler` 为 null，桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`（2026-09-25 起 native 已接，见下）。**`findColor` 已落地（2026-09-25，P1 第一个算子）**：单色 + 逐分量容差 + 可选区域 + 回第一个命中，四层同改（`imgnative_color` → `colorNative` → `NativeImageAnalyzer.findColor` → `images.findColor`）。两条口径在该层钉死：**未命中是答案**（`x = -1` 哨兵回裸 `null` —— (0,0) 是合法首像素，拿 0 当“没有”会把左上角的命中静悄悄吃掉）；**“扫过 0 像素”是参数错**（`ERR_INVALID_PARAM`，那不是“没有”而是“根本没找”）。灰度/裁剪/缩放/旋转/特征仍归上图 libopencv.so 的 native 面（P1），接口期两侧都不开这些桥面方法。**宿主机语义门禁**：计算核零 JNI（见 imgnative.cpp 文件头），于是 host 侧用**同 commit** 的 OpenCV 4.14.0 静态库直链它、以 x86_64 跑像素断言（`bridge/image/test/cpp/`：`run-host-tests.sh` 一条命令装+编+跑）。这道门存在的理由很实：`imgnative_color` 里有三处判读是「编得过但译反了照样出结论」——Vec4b 回读的通道序（px[2]→r/px[1]→g/px[0]→b，译反只是回包 r/b 互换）、ROI 内坐标+roi 左上角=全帧坐标、以及「扫过了、没有」与「扫过 0 像素」的区分；JVM 522 例与 JS 128 例全绿时它照样能错，而违约金是 hook 不到。**2026-09-25 已实证**：NDK `-fsyntax-only`、JVM、JS 三门全绿之际，这道门抓出 `cv::imread(IMREAD_COLOR)` 把任何来源压成 3 通道 BGR、`at<Vec4b>` 静默读进下一行首字节 —— alpha 分量从来没参与过判定（ASan 也不报）。修法=IMREAD_UNCHANGED + decode 归一成 4 通道 + `imgnative_color` 内通道/深度兜底守卫，`host_decode_norm_test.cpp` 21 例钉死。NDK 交叉 `-fsyntax-only` 与这道 host 门**互不替代**（前者管 aarch64 能编、后者管判读对），真机红测仍是最后一关。它已接进 `.github/workflows/image-native.yml`（job `host-image-semantics`，与 build-opencv 同文件、paths 同源，且**排在构建前面**：判读先红一个 5–10 分钟的，不占满 15–30 分钟的构建槽；OpenCV 按 VERSIONS.env 同 commit 拉取并对表，tarball 会让对表退化成口号）。**native 侧已接**：`libopencv.so` = OpenCV 4.14.0（`core+imgproc+imgcodecs`，`BUILD_JPEG/BUILD_PNG/BUILD_ZLIB=ON` 树内源码、`WITH_KLEIDICV` 默认 ON）静态链接进我们自己的桥面 C++（`imgnative.cpp` 纯计算核：`extern "C"` 四入口、帧表自管、`cv::Exception` 就地折叠）；装载面 `images_jni.cc`（全仓图像侧唯一 `#include <jni.h>`）+ Kotlin `NativeImageAnalyzer`/`JniOps`（住 `:platform:system`，零 android import；`System.loadLibrary` 失败即不构造）。构建在 `node-runtime-build/scripts/build-opencv.sh`（按 commit SHA 固定、kleidicv pin 对表、16KB LOAD/NEEDED 白名单门禁、SHASUMS256 旁 kleidicv ON/OFF 审计行），由 `.github/workflows/image-native.yml` 在 Actions 跑；`PlatformWiring.of` 一行接上（so 缺位 → `ERR_NOT_IMPLEMENTED`，不塞内存替身）。
+- **缺口一条，写在这儿免得反复发现（2026-09-25 记账）**：`screen.capture()` 出的帧与
+  `images.decode` 出的帧**互不通用**（两缝各发各的号，§12.2）。所以 §7.7 表里
+  `captureScreen → findImage < 1s` 这条链路**当前脚本走不通**——拿 screen 的帧去
+  `images.findImage()` 只有 `ERR_STALE_HANDLE`。而 screen 面既不给 `save()` 也不给
+  `pixel()`（拿不到字节），脚本没法自己把屏变成文件。三条出路，入口都在同一处
+  （换 producer 或加一个 `screen.save`），代价不同，**待 §18 决策**：
+  (a) `screen` 面加 `save(path)`（把 a11y 已产出的 JPEG 字节原样落盘 —— 设备面已经在压
+      JPEG 了，只是字节从来没出过 :main；最小改动，且 JPEG 是有损的，`findColor` 的
+      分量判定会吃到压缩伪影）；
+  (b) producer 直接把帧写进 `images` 的帧表（两缝共用一个帧表 = 取消"帧不通用"这条纪律，
+      动的是 §7.4 所有权边界，收益是真正的 0 拷贝直连）；
+  (c) `images` 面加 `decodeBytes(byte[])`（屏幕字节不落盘直进 native —— 但 bytes 要过桥，
+      §7.7 的"0 拷贝"在两个维度上都要重新记账）。
+  在此之前 §12.3 示例已按"屏先落成文件（脚本自己的事）"改写，不再描述一条跑不通的路。
 
 ### 9.3 输入通道（`root_automator` / 手势）
 `InputProvider` SPI 三实现：无障碍手势（默认）/ root `sendevent`（root 设备自选）/ Shizuku-ADB（可代理 dev `${i}` 事件）。统一 `touchDown/Move/Up` + 手势 DSL。root 能力分级进 PermissionCenter，无 root 不降级渲染为禁用（不假装可用）。
@@ -920,11 +934,16 @@ const ok = await auto.a11y.waitFor(
   auto.a11y.selector().text('登录成功'),
   { timeout: 10_000, interval: 300 })
 
-// 截图 + 找图（§9.2：screen 面出帧，images 面分析；两张桥面的帧不通用）
-const img = await auto.screen.capture();            // screen.* 出的帧（recycle 归 screen）
+// 截图（§9.2：screen 面出帧；帧只归 screen 自己，**不是** images 面的输入）
+const img = await auto.screen.capture();            // screen.* 出的帧
+// 找图：两帧都必须来自 images.decode —— **不能拿 screen 的帧当 haystack**，
+// 两张桥面各发各的号（§12.2 独立缝），拿过去只会 ERR_STALE_HANDLE。
+// 所以"截屏→找图"要先把屏落成文件：screen 面不提供 save/取像素的通道（见 §9.2末）。
+const shot = await auto.images.decode('/sdcard/shot.png');  // ← 屏先落成文件（脚本自己的事，见下注）
 const icon = await auto.images.decode('/sdcard/icon.png');  // images.* 从文件出的帧
-const m = await auto.images.findImage(img, icon, { threshold: 0.9 });  // null = 没找到（不是异常）
+const m = await auto.images.findImage(shot, icon, { threshold: 0.9 });  // null = 没找到（不是异常）
 await icon.recycle();                                // 谁的帧谁来放（images/release）
+await shot.recycle();
 await img.recycle();                                 // screen/recycle
 
 // 定时任务（诚实语义：亮屏+解锁保底契约）
