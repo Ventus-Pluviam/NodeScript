@@ -1,8 +1,9 @@
 // bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
-//   - 只做六件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
-//     按阈值做模板匹配、按容差找色、取灰度信息面（**产出新帧**）；
+//   - 只做七件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
+//     按阈值做模板匹配、按容差找色、取灰度信息面（**产出新帧**）、
+//     按区域取子图（**产出新帧**）；
 //   - 不做路径策略、不发桥请求、不碰 Kotlin 侧句柄号（发号归桥面 handler）；
 //   - 跨语言接触面全部 extern "C"：无 C++ 名修饰，无异常穿越（cv::Exception
 //     在本文件内就地折叠成状态码，绝不抛过 ABI 边界）。
@@ -51,7 +52,7 @@ constexpr int IMG_ERR_INVALID_PARAM = 4;
 /** `color` 未命中的 x 哨兵（0,0 是合法首像素坐标，不能拿它当"没有"）。 */
 constexpr int32_t IMG_MISS = -1;
 
-// 调用方必须已持 g_mu（五个入口的帧表段都在锁内）。
+// 调用方必须已持 g_mu（六个入口的帧表段都在锁内）。
 cv::Mat* find_locked(int64_t ref) {
     auto it = g_frames.find(ref);
     return it == g_frames.end() ? nullptr : &it->second;
@@ -59,8 +60,8 @@ cv::Mat* find_locked(int64_t ref) {
 
 /**
  * 帧表不变式：**在场帧恒 4 通道 8 位**（由 decode 归一保证；detail 见
- * imgnative_decode 的归一那段）。产出新帧的算子（`imgnative_gray`，后续
- * crop/resize/rotate 同）必须自己满足它 —— 正因为这一条是可被违反的，
+ * imgnative_decode 的归一那段）。产出新帧的算子（`imgnative_gray`/`imgnative_crop`，
+ * 后续 resize/rotate 同）必须自己满足它 —— 正因为这一条是可被违反的，
  * 才有这个具名谓词：`imgnative_color` 的 `Vec4b` 回读在 3 通道帧上会静默
  * 读进下一行首字节（2026-09-25 实测过那类越字节读），所以进像素前先问一遍。
  */
@@ -76,6 +77,8 @@ bool frame_is_normalized(const cv::Mat& m) { return m.channels() == 4 && m.depth
  *
  * 为什么提出来：找色已经这么判了，而**下一个要区域的算子（裁剪）会需要同一个判据** ——
  * 抄一份就意味着两处判据能漂移（一处宽严不一，脚本按 A 算出来的坐标在 B 上越界）。
+ * 2026-09-25 兑现：`imgnative_crop` 直接复用本函数，没有第二份判据（找色与裁剪对
+ * "区域越界"的回答是同一个码、同一个边界口径 —— `rx + rw == cols` 合法）。
  * 返回 false 时 `out` 不动。
  */
 bool resolve_region(const cv::Mat& frame, const int32_t* region, cv::Rect* out) {
@@ -277,6 +280,73 @@ int imgnative_gray(int64_t frame, int64_t* out_ref, int32_t* out_w, int32_t* out
     }
 }
 
+// ── crop：按区域取子图到**新的一帧**（§9.2 管线里的"裁剪"）。
+//
+// **桥面此刻同样不对脚本开这个方法**（`:domain ImageAnalyzer` 五方法里没有它，
+// `ImagesNamespaceHandler` 也不认 `crop`）：与 imgnative_gray 同一条纪律 ——
+// 先落计算核 + host 语义门，等真出现消费方再开桥面。裁剪在脚本侧本来也是
+// 可选操作：找色已经能在 `region` 上直接限定范围（读路径不产出帧），
+// 只有"要把子图当独立一帧反复用/当模板"时才需要它。
+//
+// 为什么必须是新帧、不能返回一个视图：帧表是**所有权表**（unordered_map 持
+// `Mat` 自己的缓冲），不是视图表。返回 `(*f)(roi)` 这个浅视图的话，源帧一
+// release，脚本手里的"子图"就成了悬垂引用 —— 而它看起来完全正常（尺寸对、
+// 前几帧读得出值），只在源帧被放掉之后才出错。产出帧必须自己持有像素，
+// 所以这里是**拷贝**（clone），不是视图：裁剪的代价就应该是看得见的。
+// （这不与 §9.2 的"0~1 拷贝"冲突：那条说的是**读**路径上的 ROI 浅视图
+// ——imgnative_color 的 `view` 就是浅的；裁剪是**产出**，产出要独立。§7.7
+// 也没有为 crop 承诺 0 拷贝。）
+//
+// 区域判据**复用 resolve_region**（找色那同一个函数，不是抄一份）：于是"越界"
+// 在两处是同一个码、同一个边界口径（`rx + rw == cols` 合法 —— 贴边不算越界）。
+// 上文把它提出来的理由就是这条：抄一份 = 两处判据能漂移，脚本按找色算出来的
+// 坐标在裁剪上越界（或反过来）。
+//
+// 但 `region == nullptr` 在**本算子**是拒收（IMG_ERR_INVALID_PARAM），而不是
+// 按 resolve_region 的缺省解释成"整帧"：裁剪的语义就是"取一个子区域"，
+// 缺区域时唯一的自洽解释是"整帧拷贝"—— 那不是裁剪，是另一个算子（想要整帧
+// 副本就明写整帧区域）。这条判据在 resolve_region **之上**（算子的入参契约），
+// 不改区域合法性那一条；与 imgnative_color 的 `color == nullptr` 拒收同层。
+//
+// 产出帧仍是 4 通道 BGRA：裁剪不动通道数，源帧是归一帧（下面先问 frame_is_normalized）
+// 则产出自动归一 —— 这条不变式是**保持**的，不是重新建立的，但必须显式判一次
+// 源帧：帧表被塞进非归一帧时 clone 出来的子图也非归一，而下游的 Vec4b 回读
+// 会静默读进下一行首字节（那类越字节读 2026-09-25 实测过）。所以不进像素先问。
+//
+// 宽高出参随帧一起回（与 decode/gray 同形）：尺寸真值只有产出这帧的地方知道，
+// 让下游从源帧尺寸和 region 自己推是**猜**。
+//
+// 拒收是**早退**：失败时三个出参一个字节都不写（与 gray/match 同口径）——
+// 调用方只能凭 status 判，别拿 out_ref 的残留值当帧号用。
+int imgnative_crop(int64_t frame, const int32_t* region,
+                   int64_t* out_ref, int32_t* out_w, int32_t* out_h) {
+    if (out_ref == nullptr || out_w == nullptr || out_h == nullptr) return IMG_ERR_INVALID_PARAM;
+    if (region == nullptr) return IMG_ERR_INVALID_PARAM;   // 见上：裁剪必须给区域
+    try {
+        const std::lock_guard<std::mutex> lk(g_mu);
+        const cv::Mat* f = find_locked(frame);
+        if (f == nullptr) return IMG_ERR_STALE_HANDLE;
+        if (!frame_is_normalized(*f)) return IMG_ERR_IO;
+
+        cv::Rect roi;
+        if (!resolve_region(*f, region, &roi)) return IMG_ERR_INVALID_PARAM;
+
+        // clone 而不是 `cv::Mat out = (*f)(roi);`：后者是浅视图（共享源帧缓冲），
+        // 源帧 release 后即悬垂 —— 见上"为什么必须是新帧"。
+        cv::Mat out = (*f)(roi).clone();
+        if (out.empty()) return IMG_ERR_IO;   // 正常路径不可达（resolve_region 已保证 w/h > 0）
+
+        const int64_t ref = g_next_ref++;
+        auto [it, _] = g_frames.emplace(ref, std::move(out));
+        *out_ref = ref;
+        *out_w = it->second.cols;
+        *out_h = it->second.rows;
+        return IMG_OK;
+    } catch (const cv::Exception&) {
+        return IMG_ERR_IO;
+    }
+}
+
 // ── color：在某帧（或其区域）里找"与目标色相近"的像素，回第一个命中的坐标。
 //
 // 未命中**不是错误也不是异常**：status 仍回 IMG_OK，而 out_x 留 -1（调用方据此
@@ -315,6 +385,20 @@ int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
         cv::Mat* f = find_locked(frame);
         if (f == nullptr) return IMG_ERR_STALE_HANDLE;
 
+        // 帧恒 4 通道 8 位（decode 归一）；不成立 = 帧表被塞进了非归一帧
+        // （帧表是本 TU 私有的，正常路径只经 decode/gray 进）—— 如实报 IO，
+        // 不让下面 Vec4b 回读越字节读下一行的字节糊过去。
+        //
+        // 【2026-09-25 实测更正】这句原先问的是 **ROI 视图**（`frame_is_normalized(view)`），
+        // 那是个形式主语：**视图的 channels()/depth() 与父矩阵同解**（父 3 通道的子图
+        // 也是 3 通道 —— host 侧量过），所以视图级判定与帧级判定判的是同一个事实，
+        // 并不存在"漏判"。真问题只在于**主语写法**：谓词的名字与注释都在谈"帧"，
+        // 拿视图去问会让下一个人以为"视图会继承某种归一化"（它不会，也没这回事）。
+        // 判据放在**源帧**上 —— 帧表不变式是关于帧表里的帧的，且它必须在 resolve_region
+        // **之前**：非归一帧上连"某个 region 合不合法"都是另一套尺寸语义，
+        // 先问帧、再量区域，顺序本身就是判据的一部分。
+        if (!frame_is_normalized(*f)) return IMG_ERR_IO;
+
         cv::Rect roi;
         if (!resolve_region(*f, region, &roi)) return IMG_ERR_INVALID_PARAM;
 
@@ -322,10 +406,6 @@ int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
         // 索引域是**视图内** 0..rw/0..rh，命中坐标要加回 roi 左上角才是全帧坐标。
         const cv::Mat view = (*f)(roi);
         if (view.empty()) return IMG_ERR_INVALID_PARAM;
-        // 帧恒 4 通道 8 位（decode 归一）；不成立 = 帧表被塞进了非归一帧
-        // （帧表是本 TU 私有的，正常路径只经 decode/gray 进）—— 如实报 IO，
-        // 不让 Vec4b 越界读下一行的字节糊过去。
-        if (!frame_is_normalized(view)) return IMG_ERR_IO;
 
         // 下界/上界夹在 0..255：目标色贴边时（0 或 255）容差仍成立，不溢出成负数。
         // cv::Scalar 四个分量的顺序是 B,G,R,A（OpenCV 的通道序），所以 R/G/B 要
