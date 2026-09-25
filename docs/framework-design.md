@@ -194,7 +194,7 @@
 | `:domain` | **纯 Kotlin 领域：全部 SPI 接口 + DTO + 状态机 + 领域规则** | 无（std 仅） | 禁 Android 依赖 |
 | `:bridge:java` | Kotlin Router、RequestRegistry(TTL)、HandleRegistry(generation)、EventBus、transports | `:domain` | 禁 UI |
 | `:bridge:native` | C++：N-API addon 控制面（含 JNI glue、TSF 管理、node::Start）、`libnode.so` 装载 | 被引擎宿主进程引用 | 禁 Android 业务 |
-| `:bridge:image` | C++：图像分析管线 addon（独立 so `libopencv.so`，OpenCV 4.14.0 静态链接 + kleidicv，不依赖 node；`imgnative.cpp` 计算核 + `images_jni.cc` 装载面，构建轨 `node-runtime-build/scripts/build-opencv.sh` + `.github/workflows/image-native.yml`） | 被引擎宿主 + `:main` 分析器引用 | — |
+| `:bridge:image` | C++：图像分析管线 addon（独立 so `libopencv.so`，OpenCV 4.14.0 静态链接 + kleidicv，不依赖 node；`imgnative.cpp` 计算核 + `images_jni.cc` 装载面，构建轨 `node-runtime-build/scripts/build-opencv.sh` + `.github/workflows/image-native.yml`；宿主机语义门禁 `bridge/image/test/cpp/`，57 例直链同 commit OpenCV 跑像素断言） | 被引擎宿主 + `:main` 分析器引用 | — |
 | `:bridge:js` | npm workspace：TS facade SDK（`@autojs/*`）、RuntimeChannel、bootstrap loader、d.ts | 仅 npm 依赖 | 禁 Gradle 反向 |
 | `:engine:node-process` | `:nodeN` 进程宿主：**`NodeProcessEngine`（Kotlin spawn：ProcessLauncher 缝 + env 契约 + pid/状态语义，实现 `:domain` 的 `ScriptEngine`）**、main.cpp、Node config、JNI 注册 | `:bridge:native`、`:domain` | 禁 Android SDK UI；Kotlin 侧禁 `com.autoscript.bridge..`/`appservice`/`platform`（ArchitectureTest 量化） |
 | `:engine:sandbox` | QuickJS 宿主进程（P1） | — | — |
