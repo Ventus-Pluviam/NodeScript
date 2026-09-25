@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# AutoScript :node-runtime-build —— OpenCV 4.14.0 静态链接 → libimgnative.so（aarch64-android）
+# AutoScript :node-runtime-build —— OpenCV 4.14.0 静态链接 → libopencv.so（aarch64-android）
 # 用法：构建容器内 `bash scripts/build-opencv.sh`（与 fetch-and-build.sh 同源同门禁）。
 # 职责：下载+校验 → cmake 交叉 configure（静态）→ strip → 16KB/ELF/NEEDED 门禁 → 基表。
 #
 # 与 Node 管线（fetch-and-build.sh）的分工：**不共用 out/** —— 产物名/门禁项都不同
-# （本脚本产 libimgnative.so，不含 config.gypi/libnode.so.<ABI> 契约），共目录会让
+# （本脚本产 libopencv.so，不含 config.gypi/libnode.so.<ABI> 契约），共目录会让
 # check-alignment.sh 的 Node 专属断言误扫。本次交付刻意只做 OpenCV 一条轨，不合并。
 set -euo pipefail
 
@@ -76,13 +76,14 @@ grep -qF "$KLEIDICV_MD5" "$OCV_SRC/hal/kleidicv/kleidicv.cmake" \
     || die "NDK cmake toolchain 缺失: $NDK_DIR/build/cmake/android.toolchain.cmake"
 
 # ── 3) cmake 交叉 configure（静态 + 三条裁剪）───────────────────────────
-# BUILD_LIST=core,imgproc,imgcodecs：imgcodecs 只留 PNG/JPEG（截图与随包资源图就这两种），
+# BUILD_LIST 见 VERSIONS.env（core/imgproc/imgcodecs + features2d/flann for ORB）：
+# imgcodecs 只留 PNG/JPEG（截图与随包资源图就这两种），
 # 其余格式源/壳全 OFF；WITH_* 逐个 OFF 掉我们不开的面（TIFF/WEBP/EXR/JASPER/OPENJPEG/
 # AVIF/FFMPEG/V4L/1394/TBB/OPENCL/OPENVX/PROTOBUF/ITT…）。
 # WITH_KLEIDICV 保持**默认 ON**（AArch64+Android 默认开，见 VERSIONS.env 选型注记）：
 #   覆盖 add/sub/absdiff/multiply/cvtColor/GaussianBlur/Sobel/medianBlur/resize/… 不含
-#   matchTemplate，开着不亏且给 P1 算子铺路；下载失败是软降级（不 fatal），首次跑
-#   须核对下方 CMakeCache 的 HAVE_KLEIDICV 并把结论写进 SHASUMS256 审计行。
+#   matchTemplate，开着不亏且给 P1 算子铺路；下载失败是软降级（不 fatal），ON/OFF 由
+#   下方 3b 段从 configure 摘要判定并写进 SHASUMS256 审计行。
 # CPU_BASELINE=DETECT / CPU_DISPATCH 交给 toolchain 默认（AArch64 → NEON_DOTPROD 等），
 # 不手写 -march 把 armv8.2 指令烤进基线（minSdk 26 设备要能跑）。
 BUILD_DIR="$WORK/build-opencv"
@@ -90,6 +91,12 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 say "cmake configure（BUILD_LIST=$OPENCV_BUILD_LIST, kleidicv=$KLEIDICV_COMMIT）"
 
+# configure 输出落盘： kleidicv 的 ON/OFF 判据是摘要里的 `Custom HAL: … KleidiCV (ver …)`
+# 一行，而那不是 CMakeCache 能回答的（见 3b 段注释）。同时也让"配置改了但摘要看着没变"
+# 这类问题有据可查。**pipefail 闭环**：`cmake … 2>&1 | tee` 的退出码取管道最后一条
+# 命令，而 set -o pipefail 让 cmake 自己的退出码也能传给 set -e —— 配置失败在这里就停，
+# 不会走到 3b 段把"没配完的 configure.log"当成 kleidicv=OFF 的证据。
+CONFIGURE_LOG="$BUILD_DIR/configure.log"
 cmake -S "$OCV_SRC" -B "$BUILD_DIR" \
     -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a \
@@ -114,26 +121,53 @@ cmake -S "$OCV_SRC" -B "$BUILD_DIR" \
     -DBUILD_ZLIB=ON -DBUILD_JPEG=ON -DBUILD_PNG=ON \
     -DOPENCV_ENABLE_NONFREE=OFF \
     -DENABLE_CONFIG_VERIFICATION=OFF \
-    -DOPENCV_WARNINGS_ARE_ERRORS=OFF
+    -DOPENCV_WARNINGS_ARE_ERRORS=OFF 2>&1 | tee "$CONFIGURE_LOG"
 
-# ── 3b) kleidicv 审计行：ON/OFF 都记下来（软降级不 fatal，但必须可查）────
+# ── 3b) kleidicv 审计行：软降级不 fatal，但必须可查───────────────────────
+# **判定源不是 CMakeCache**（2026-09-25 定位教训，此前两处错判都源于此）：
+#   上游 cmake/OpenCVFindLibsPerf.cmake:218/224 只 `set(HAVE_KLEIDICV ON)`，
+#   **没有 CACHE BOOL**，所以 CMakeCache.txt 里从来不存在 `HAVE_KLEIDICV:BOOL=`
+#   这一项 —— grep 它永远 grep 不到，脚本会稳定地报 OFF（"采集点错"伪装成"没启用"）。
+#   可用的证据按可靠度排列：
+#     a. configure 摘要的 `Custom HAL: YES (… KleidiCV (ver …))`
+#        —— 只有调过 add_subdirectory(hal/kleidicv) 才会出现，最贴近"启用了"。
+#     b. configure 摘要的 `Custom HAL: …` 里没有 KleidiCV → 真关。
+#     c. debug 信息 `Enable KleidiCV acceleration` 只在 -DOPENCV_CMAKE_DEBUG_MESSAGES=ON 才打。
+# 另报一件**独立事实**：解包后的源码在场与否（下载/校验这一环的单独证据，
+# 与"OpenCV 认不认它"是两回事，别混为一谈）。
+KLEIDI_SRC_DIR="$BUILD_DIR/3rdparty/kleidicv/kleidicv-$KLEIDICV_COMMIT"
+KLEIDI_SRC="无"
+[ -f "$KLEIDI_SRC_DIR/adapters/opencv/CMakeLists.txt" ] && KLEIDI_SRC="有"
 KLEIDI_STATE="OFF"
-if grep -q '^HAVE_KLEIDICV:BOOL=ON' "$BUILD_DIR/CMakeCache.txt"; then
+# `if grep … 2>/dev/null` 而非裸 grep：set -e + pipefail 下 configure.log 缺失时
+# grep 的非零退出会带走整个脚本；configure 失败本就该由 cmake 那步的退出码报，
+# 这里只做采集，不该抢先生死。
+if grep -q 'KleidiCV (ver' "$CONFIGURE_LOG" 2>/dev/null; then
     KLEIDI_STATE="ON"
 else
-    printf '\033[1;33m[WARN]\033[0m HAVE_KLEIDICV 非 ON（软降级：gitlab.arm.com 不可达？）—— 已记入审计行\n' >&2
+    printf '\033[1;33m[WARN]\033[0m kleidicv 未启用（configure 摘要的 Custom HAL 里没有 KleidiCV）\n' >&2
+    if [ "$KLEIDI_SRC" = "有" ]; then
+        printf '       但源码在位（下载成功）：判定失败点在上游\n' \
+            '       cmake/OpenCVFindLibsPerf.cmake 的 WITH_KLEIDICV 分支，不在网络\n' >&2
+    fi
 fi
-say "kleidicv 状态: $KLEIDI_STATE"
+# 这一行是 image-native.yml 与人工核对共用的锚点，别改字面（grep 'kleidicv 状态:'）。
+say "kleidicv 状态: $KLEIDI_STATE（源码=$KLEIDI_SRC）"
 
-# ── 4) 只编 imgcodecs 连带 core/imgproc（BUILD_LIST 已裁，不会捎带别的模块）
-say "make -j$(nproc) opencv_imgcodecs（连带 core/imgproc 静态库）"
+# ── 4) 编 imgcodecs（连带 core/imgproc）+ features2d（连带 flann）────────
+# target 决定"编出来"：`opencv_imgcodecs` 只连带它的依赖闭包（core/imgproc），
+# features2d/flann 虽在 BUILD_LIST 白名单里但没人编就不落盘 —— CI 实测红过一次
+# （ld.lld: unable to find library -lopencv_features2d）。显式再编一轮。
+say "make -j$(nproc) opencv_imgcodecs opencv_features2d（连带各自依赖闭包）"
 cmake --build "$BUILD_DIR" --target opencv_imgcodecs -j"$(nproc)"
+cmake --build "$BUILD_DIR" --target opencv_features2d -j"$(nproc)"
 
-# ── 5) 我们的桥面 C++ + 静态链成 libimgnative.so ────────────────────────
+# ── 5) 我们的桥面 C++ + 静态链成 libopencv.so ───────────────────────────
 # 静态 STL：产物不依赖 libc++_shared.so（libnode 那条已有的 NEEDED 归装载面，见
 # engine/node-process/scripts/build-native.sh 同款决定）。
-IMG_LIB="$OUT/libimgnative.so"
-say "链 libimgnative.so（计算核 + 装载面 + 静态 opencv + 静态 STL）"
+# 产物名 = 装载名：Kotlin 侧 System.loadLibrary("opencv") 找的就是 libopencv.so。
+IMG_LIB="$OUT/libopencv.so"
+say "链 libopencv.so（计算核 + 装载面 + 静态 opencv + 静态 STL）"
 CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
 "$CXX" -std=c++17 -fPIC -O2 -Wall -Wextra \
     -Wl,-z,max-page-size=16384 -static-libstdc++ \
@@ -141,16 +175,18 @@ CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
     -I "$OCV_SRC/modules/core/include" \
     -I "$OCV_SRC/modules/imgproc/include" \
     -I "$OCV_SRC/modules/imgcodecs/include" \
+    -I "$OCV_SRC/modules/features2d/include" \
+    -I "$OCV_SRC/modules/flann/include" \
     -I "$BUILD_DIR" \
     -o "$IMG_LIB" \
     "$IMG_CPP_DIR/imgnative.cpp" \
     "$IMG_CPP_DIR/images_jni.cc" \
     -L"$BUILD_DIR/lib/arm64-v8a" -L"$BUILD_DIR/3rdparty/lib/arm64-v8a" \
-    -lopencv_imgcodecs -lopencv_imgproc -lopencv_core \
+    -lopencv_features2d -lopencv_flann -lopencv_imgcodecs -lopencv_imgproc -lopencv_core \
     -llibjpeg-turbo -llibpng -lzlib \
     -ldl -lm -llog
 
-# 链接面 = BUILD_LIST 三个模块 + 它们自带的两个格式库（libjpeg-turbo/libpng/zlib，
+# 链接面 = BUILD_LIST 五个模块 + 它们自带的两个格式库（libjpeg-turbo/libpng/zlib，
 # BUILD_JPEG/BUILD_PNG/BUILD_ZLIB=ON 强制走树内源码，不找宿主/交叉 sysroot ——
 # 无外部下载、无系统依赖，产物可复现）。最终的 NEEDED 白名单由下方门禁来验。
 
@@ -165,8 +201,8 @@ say "16KB/ELF/NEEDED 门禁"
 # ── 8) 基表 + 审计行 ────────────────────────────────────────────────────
 # kleidicv 状态进审计：产物 sha256 之外还要能回答"这个 so 里到底有没有 kleidicv 加速"。
 ( cd "$OUT" && {
-    sha256sum libimgnative.so | tee SHASUMS256
-    printf 'build: opencv=%s commit=%s kleidicv_commit=%s kleidicv_state=%s platform=aarch64-android%s\n' \
-        "$OPENCV_VERSION" "$OPENCV_COMMIT" "$KLEIDICV_COMMIT" "$KLEIDI_STATE" "$ANDROID_API" >> SHASUMS256
+    sha256sum libopencv.so | tee SHASUMS256
+    printf 'build: opencv=%s commit=%s kleidicv_commit=%s kleidicv_state=%s kleidicv_src=%s platform=aarch64-android%s\n' \
+        "$OPENCV_VERSION" "$OPENCV_COMMIT" "$KLEIDICV_COMMIT" "$KLEIDI_STATE" "$KLEIDI_SRC" "$ANDROID_API" >> SHASUMS256
   } )
-say "完成。产物: $OUT/libimgnative.so（kleidicv=$KLEIDI_STATE）"
+say "完成。产物: $OUT/libopencv.so（kleidicv=$KLEIDI_STATE）"

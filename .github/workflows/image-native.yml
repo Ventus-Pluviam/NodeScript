@@ -1,16 +1,19 @@
 name: image-native
 
-# libimgnative.so 构建（docs/framework-design.md §9.2 / §16）
+# libopencv.so 构建（docs/framework-design.md §9.2 / §16）
 #
 # 与 ci.yml 的分工：本文件**只**跑 OpenCV 静态链接 + 我们的桥面 C++ → 单个
-# libimgnative.so（arm64-android26），跑 node-runtime-build/scripts/build-opencv.sh
+# libopencv.so（arm64-android26），跑 node-runtime-build/scripts/build-opencv.sh
 # —— 同一脚本也由 node-runtime-build/Dockerfile 的 OpenCV 轨调用，两处同源同门禁。
 # Node 24 那条轨（fetch-and-build.sh → libnode.so）**不经本文件**：体量差一个量级
 # （600MB 源码 + 半小时以上），放进 PR 门会让每次改动都等一轮；libnode 的构建门
 # 由 node-runtime-build/Dockerfile 承担（见 ci.yml 末注）。
 #
+# 两个 job 的分工：host-image-semantics 先跑（判读对，快），build-opencv 后跑
+# （aarch64 出得了、过 16KB/NEEDED 门禁，慢）。判读先红就不用等构建那一轮。
+#
 # 产物不随 APK 走：装配侧 app/build.gradle.kts 的 prepareEngineNativeLibs 候选位
-# 含 node-runtime-build/out-opencv/libimgnative.so，本 workflow 的 artifact 是给
+# 含 node-runtime-build/out-opencv/libopencv.so，本 workflow 的 artifact 是给
 # 人下载核验的（16KB 对齐 + NEEDED 白名单在脚本尾部已断言）。
 # 触发面（2026-09-25 修过一次"推了分支却没跑"）：
 # 初版写成 `push: branches:[main]` + `pull_request: paths:`，而 image-native 这类
@@ -40,8 +43,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-imgnative:
-    name: OpenCV 4.14.0 → libimgnative.so（arm64-android26，kleidicv 审计）
+  # 宿主机语义门禁（docs §9.2）：把 imgnative.cpp 直链进 x86_64 静态 OpenCV 跑像素断言。
+  # 与 build-opencv 的关系不是替代而是分工 —— NDK 那侧证明 aarch64 编得出、过 16KB/NEEDED
+  # 门禁，本 job 证明**判读对**（通道序/ROI 偏移/扫过 vs 扫过 0 像素译反了照样出结论，
+  # 上一处就是这么漏的：三门全绿之际 findColor 的 alpha 从未参与判定）。放在前面：
+  # 它比 OpenCV 全量 configure 快一个量级，判读先红就不用等二十分钟构建。
+  host-image-semantics:
+    name: 图像计算核宿主机语义门禁（x86_64 直链 OpenCV 4.14.0 同 commit）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30        # OpenCV host configure+build 实测 5–10 分钟
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装编译期依赖（cmake + ninja + g++ + git）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ git
+
+      - name: 拉取 OpenCV @ VERSIONS.env 的 commit pin
+        run: |
+          # filter=blob:none + --no-checkout：与 build-opencv.sh 同一手法（省流量，
+          # 又能让 run-host-tests.sh 的 commit 对表有 .git 可查）。不拉 tag/tarball ——
+          # tarball 无从校验 HEAD，对表只能 WARN 跳过，"同 commit"就退化成口号。
+          V=node-runtime-build/VERSIONS.env
+          OPENCV_COMMIT="$(sed -n 's/^OPENCV_COMMIT=//p' "$V")"
+          OPENCV_VERSION="$(sed -n 's/^OPENCV_VERSION=//p' "$V")"
+          [ -n "$OPENCV_COMMIT" ] || { echo "VERSIONS.env 缺 OPENCV_COMMIT"; exit 1; }
+          echo "clone opencv @ $OPENCV_VERSION ($OPENCV_COMMIT)"
+          git clone --filter=blob:none --no-checkout https://github.com/opencv/opencv.git /tmp/ocvpin
+          git -C /tmp/ocvpin -c advice.detachedHead=false checkout "$OPENCV_COMMIT"
+
+      - name: 跑宿主机语义门禁（编译 + 断言）
+        run: bash bridge/image/test/cpp/run-host-tests.sh /tmp/ocvpin
+
+  build-opencv:
+    name: OpenCV 4.14.0 → libopencv.so（arm64-android26，kleidicv 审计）
     runs-on: ubuntu-latest
     timeout-minutes: 90        # OpenCV 全量 configure+编译实测 15–30 分钟；CI 抢不到核时放宽
     env:
@@ -94,10 +130,11 @@ jobs:
             || { echo "解包后无 aarch64-linux-android${API}-clang: $TOOLCHAIN"; exit 1; }
           echo "[OK] NDK 就位: $TOOLCHAIN"
 
-      - name: 编译 libimgnative.so
+      - name: 编译 libopencv.so
         run: |
-          # kleidicv 走 gitlab.arm.com 的 release 包：CI 首次跑须从下方日志的
-          # `kleidicv 状态:` 一行读 ON/OFF（软降级不 fatal，结论也写进 SHASUMS256 审计行）。
+          # kleidicv 走 gitlab.arm.com 的 release 包：从下方日志的 `kleidicv 状态:`
+          # 一行读 ON/OFF（判据是 configure 摘要的 Custom HAL，见脚本 3b 段；软降级不
+          # fatal，结论也写进 SHASUMS256 审计行）。上面 tee 那份 log 也是 grep 的源。
           bash node-runtime-build/scripts/build-opencv.sh 2>&1 | tee /tmp/build-opencv.log
           grep -q '完成。产物' /tmp/build-opencv.log || { echo "构建日志无完成行"; exit 1; }
           grep 'kleidicv 状态:' /tmp/build-opencv.log
@@ -105,13 +142,13 @@ jobs:
       - name: 产物审计（16KB LOAD + NEEDED 白名单 + 审计行）
         run: |
           cat "$WORK_DIR/out-opencv/SHASUMS256"
-          ls -l "$WORK_DIR/out-opencv/libimgnative.so"
+          ls -l "$WORK_DIR/out-opencv/libopencv.so"
 
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libimgnative
+          name: libopencv
           path: |
-            work/out-opencv/libimgnative.so
+            work/out-opencv/libopencv.so
             work/out-opencv/SHASUMS256
           if-no-files-found: error

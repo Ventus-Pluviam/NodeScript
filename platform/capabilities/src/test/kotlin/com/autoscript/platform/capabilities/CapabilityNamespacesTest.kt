@@ -1,5 +1,6 @@
 package com.autoscript.platform.capabilities
 
+import com.autoscript.domain.automation.ColorHit
 import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.automation.ImageFrame
 import com.autoscript.domain.automation.ImageMatch
@@ -221,5 +222,12 @@ class CapabilityNamespacesTest {
         override suspend fun matchTemplate(haystack: HandleRef, needle: HandleRef, threshold: Double): ImageMatch? = result
 
         override suspend fun findImage(haystack: HandleRef, needle: HandleRef, threshold: Double): ImageMatch? = result
+
+        override suspend fun findColor(
+            haystack: HandleRef,
+            color: List<Int>,
+            tolerance: Int,
+            region: List<Int>?,
+        ): ColorHit? = null
     }
 }

@@ -1,5 +1,6 @@
 package com.autoscript.platform.capabilities
 
+import com.autoscript.domain.automation.ColorHit
 import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.automation.ImageMatch
 import com.autoscript.domain.bridge.HandleRef
@@ -20,10 +21,11 @@ import java.util.concurrent.atomic.AtomicLong
  * `SystemNamespaces.kt`：那五个共享一套 OVERLAY/ROOT/ADB_INPUT 门禁组，图像面没有门禁，
  * 混进去只会让「接就五个一起接」的束语义变浑。
  *
- * **三方法 + release**（照抄 `ImageAnalyzer`）：`decode`/`matchTemplate`/`findImage`/`release`。
- * 阈值键**统一叫 `threshold`**（[matchTemplate] 与 [findImage] 同一个 opencv 概念，
- * facade 曾一个发 `tolerance` 一个发 `threshold`，两侧 mock 各自自洽所以漂移没被抓到）；
- * 域 `[0,1]`，越界 → `ERR_INVALID_PARAM` 且**一次 SPI 调用都不发**。
+ * **四方法 + release**（照抄 `ImageAnalyzer`）：`decode`/`matchTemplate`/`findImage`/`release`
+ * + P1 第一个算子 `findColor`。阈值键**统一叫 `threshold`**（[matchTemplate] 与
+ * [findImage] 同一个 opencv 概念，facade 曾一个发 `tolerance` 一个发 `threshold`，
+ * 两侧 mock 各自自洽所以漂移没被抓到）；域 `[0,1]`，越界 → `ERR_INVALID_PARAM` 且
+ * **一次 SPI 调用都不发**。
  *
  * **帧句柄**：`decode` 发号（handler 自管：单调 refId + generation 恒 1，与
  * [ScreenshotSource] 同一套纪律），回包带 `width/height` 真值（脚本要拿它做坐标换算）；
@@ -32,9 +34,11 @@ import java.util.concurrent.atomic.AtomicLong
  * **放过的帧再放**一律 `ERR_STALE_HANDLE`（不提供静默成功的第二次；脚本 `finally`
  * 里补一刀不会炸，是因为帧没放时怎么放都回 `true`）；匹配时任一帧已死 → 同码。
  *
- * **未匹配是答案不是异常**：`matchTemplate`/`findImage` 回 `null`（屏上图里没有达到阈值
- * 的位置），**不编** `ERR_NOT_FOUND`（那是 UiSelector 的语义）；文件缺失是分类错误
- * （`ERR_FILE_NOT_FOUND`），不是 null。
+ * **未匹配是答案不是异常**：`matchTemplate`/`findImage`/`findColor` 回 `null`（屏上图里
+ * 没有达到阈值/容差的位置），**不编** `ERR_NOT_FOUND`（那是 UiSelector 的语义）；文件
+ * 缺失是分类错误（`ERR_FILE_NOT_FOUND`），不是 null。`findColor` 另有一条要分开的口径：
+ * **"扫过了、没有"（null）** 与 **"区域扫过 0 像素"（`ERR_INVALID_PARAM`）** 不是
+ * 一回事 —— 后者连"找过"都算不上，混同会让脚本把空区域当成搜过一遍。
  *
  * SPI 抛的 `AutojsException` 原码透传（不折叠成 `ERR_INVALID_PARAM`）—— 调用方要能
  * 分辨「路径错了」与「图里没有」与「帧已释放」。未知方法 → `ERR_NOT_IMPLEMENTED`
@@ -59,6 +63,7 @@ class ImagesNamespaceHandler(
         "decode" -> decode(request)
         "matchTemplate" -> matchTemplate(request)
         "findImage" -> findImage(request)
+        "findColor" -> findColor(request)
         "release" -> release(request)
         else -> ResponseLite.err(
             request.id,
@@ -154,6 +159,66 @@ class ImagesNamespaceHandler(
         return ResponseLite.Ok(request.id, matchPayload(hit))
     }
 
+    private suspend fun findColor(request: BridgeRequestLite): ResponseLite {
+        val fields = try {
+            request.decodeObject()
+        } catch (e: IllegalArgumentException) {
+            return ResponseLite.err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
+        val ref: HandleRef
+        val color: List<Int>
+        val tolerance: Int
+        val region: List<Int>?
+        try {
+            ref = request.requiredRef(fields, "haystack")
+            color = request.requiredIntList(fields, "color")
+            tolerance = request.requiredDouble(fields, "tolerance").toInt()
+            // region 可选：缺键/JSON null = 全帧；给了就必须四元组（不是就参数错）。
+            region = request.optIntList(fields, "region")
+        } catch (e: IllegalArgumentException) {
+            return ResponseLite.err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
+        // 域校验（与 :domain ImageAnalyzer.findColor KDoc 逐条对齐）：
+        //   color 恒四分量 [r,g,b,a]、各 [0,255]；tolerance [0,255]；region 四元组。
+        // 全部先拒，**一次 SPI 调用都不发**（与阈值域同一条纪律）。
+        if (color.size != 4 || color.any { it < 0 || it > 255 }) {
+            return ResponseLite.err(
+                request.id,
+                ErrorCode.ERR_INVALID_PARAM,
+                "images findColor 的 color 必须 r,g,b,a 四分量且各在 [0,255]，实际 $color",
+            )
+        }
+        if (tolerance < 0 || tolerance > 255) {
+            return ResponseLite.err(
+                request.id,
+                ErrorCode.ERR_INVALID_PARAM,
+                "images findColor 的 tolerance 必须在 [0,255]，实际 $tolerance",
+            )
+        }
+        region?.let { box ->
+            if (box.size != 4) {
+                return ResponseLite.err(
+                    request.id,
+                    ErrorCode.ERR_INVALID_PARAM,
+                    "images findColor 的 region 必须 x,y,w,h 四元组，实际 $box",
+                )
+            }
+        }
+        if (guard.withLock { !live.containsKey(ref.refId) }) {
+            return ResponseLite.err(
+                request.id,
+                ErrorCode.ERR_STALE_HANDLE,
+                "images findColor 的帧句柄已释放（haystack=${ref.refId}）",
+            )
+        }
+        val hit = try {
+            analyzer.findColor(ref, color, tolerance, region)
+        } catch (e: AutojsException) {
+            return ResponseLite.err(request.id, e.error, e.message)
+        }
+        return ResponseLite.Ok(request.id, colorPayload(hit))
+    }
+
     private suspend fun release(request: BridgeRequestLite): ResponseLite {
         val fields = try {
             request.decodeObject()
@@ -191,7 +256,24 @@ class ImagesNamespaceHandler(
         }
     }
 
-    /** 命中 → `{x,y,width,height,confidence}`；未命中 → 裸 `null`（答案，不是异常）。 */
+        /** 命中 → `{x,y,r,g,b,a}`；未命中 → 裸 `null`（答案，不是异常）。 */
+    private fun colorPayload(m: ColorHit?): String =
+        if (m == null) {
+            "null"
+        } else {
+            A11yBridgeJson.encode(
+                mapOf(
+                    "x" to m.x.toLong(),
+                    "y" to m.y.toLong(),
+                    "r" to m.r.toLong(),
+                    "g" to m.g.toLong(),
+                    "b" to m.b.toLong(),
+                    "a" to m.a.toLong(),
+                ),
+            )
+        }
+
+/** 命中 → `{x,y,width,height,confidence}`；未命中 → 裸 `null`（答案，不是异常）。 */
     private fun matchPayload(m: ImageMatch?): String =
         if (m == null) {
             "null"

@@ -2,6 +2,7 @@ package com.autoscript.platform.system
 
 import com.autoscript.domain.automation.ImageAnalyzer
 import com.autoscript.domain.automation.ImageFrame
+import com.autoscript.domain.automation.ColorHit
 import com.autoscript.domain.automation.ImageMatch
 import com.autoscript.domain.bridge.HandleRef
 import com.autoscript.domain.core.AutojsException
@@ -12,17 +13,21 @@ import kotlinx.coroutines.withContext
 /**
  * `images` 的宿主侧真实现（docs §9.2；SPI 见 `:domain` 的 [ImageAnalyzer]，
  * 语义层 handler 在 `:platform:capabilities` 的 `ImagesNamespaceHandler`）。
- * 像素计算全在 native（`libimgnative.so`，OpenCV 4.14 静态链接，
- * `:bridge:image` 的 `imgnative.cpp`）；本类只做三件**本机 JVM 可测**的事：
+ * 像素计算全在 native（`libopencv.so`，OpenCV 4.14 静态链接，
+ * `:bridge:image` 的 `imgnative.cpp`）；本类只做四件**本机 JVM 可测**的事：
  *
  * 1. **句柄发号**：[HandleRef.refId] 单调递增、generation 恒 1（一个文件一个帧，
  *    与 `ScreenshotSource`/`AndroidSensorSource` 同形）；native 帧号 →
  *    refId 的对照表住 [frames]（release 先删表再放 native：脚本侧说放了的帧，
  *    下一次匹配一定 STALE，不会出现"表里在场、native 已不在场"的窗口）。
  * 2. **错误码对表**：native 状态码（`imgnative.cpp` 文件头：0 OK / 1 STALE /
- *    2 FILE_NOT_FOUND / 3 IO）→ [ErrorCode]，**原码透传不折叠**（handler 要求
- *    调用方能分辨"路径错了"与"解码失败"，桥面 KDoc 判据 4）。
- * 3. **native 缺席时的诚实缺位**：so 不在 → [Unavailable]（装配层不喂分析器，
+ *    2 FILE_NOT_FOUND / 3 IO / 4 INVALID_PARAM）→ [ErrorCode]，**原码透传不折叠**
+ *    （handler 要求调用方能分辨"路径错了"与"参数关系不成立"/"解码失败"）。
+ * 3. **findColor 的域与哨兵**：颜色四分量/容差/region 形状在这层 require
+ *    （域错折 `ERR_INVALID_PARAM`，与 matchTemplate 的阈值域同一套纪律）；
+ *    native 回 `x = -1` 视为**未命中（答案）**而不是某个坐标 —— (0,0) 是合法
+ *    首像素，拿 0 当"没有"会把左上角的命中静悄悄吃掉。
+ * 4. **native 缺席时的诚实缺位**：so 不在 → [Unavailable]（装配层不喂分析器，
  *    桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`），**绝不塞内存替身** ——
  *    看不见像素的"内存分析器"只能靠自报坐标假装命中（§9.2 / :domain KDoc）。
  *
@@ -127,11 +132,44 @@ class NativeImageAnalyzer(
         }
     }
 
+    override suspend fun findColor(
+        haystack: HandleRef,
+        color: List<Int>,
+        tolerance: Int,
+        region: List<Int>?,
+    ): ColorHit? {
+        // 域校验与 matchTemplate 同一条纪律：handler 已先拒，这里再兜一次 ——
+        // 两条判据若漂移，宁可在这层炸 ERR_INVALID_PARAM，也不让非法色进 native。
+        require(color.size == 4) { "images findColor 的 color 必须 r,g,b,a 四分量，实际 ${color.size}" }
+        color.forEach { require(it in 0..255) { "颜色分量必须是 [0,255]，实际 $it" } }
+        require(tolerance in 0..255) { "tolerance 必须是 [0,255]，实际 $tolerance" }
+        region?.let {
+            require(it.size == 4) { "region 必须 x,y,w,h 四元组，实际 ${it.size}" }
+        }
+        return withContext(Dispatchers.IO) {
+            val nativeRef = synchronized(guard) {
+                frames[haystack.refId]
+                    ?: throw AutojsException(
+                        ErrorCode.ERR_STALE_HANDLE,
+                        "images findColor 的帧句柄已释放（haystack=${haystack.refId}）",
+                    )
+            }
+            val status = IntArray(1)
+            val hit = ops.color(nativeRef, color.toIntArray(), tolerance, region?.toIntArray(), status)
+            when {
+                hit != null -> hit
+                status[0] == STATUS_OK -> null   // 扫过了、没有（答案，不是异常）
+                else -> throw statusToException(status[0], "findColor haystack=${haystack.refId}")
+            }
+        }
+    }
+
     /** native 状态码 → 分类错误（`imgnative.cpp` 文件头的对表，原码透传）。 */
     private fun statusToException(status: Int, what: String): AutojsException {
         val code = when (status) {
             STATUS_STALE -> ErrorCode.ERR_STALE_HANDLE
             STATUS_FILE_NOT_FOUND -> ErrorCode.ERR_FILE_NOT_FOUND
+            STATUS_INVALID_PARAM -> ErrorCode.ERR_INVALID_PARAM
             else -> ErrorCode.ERR_IO
         }
         return AutojsException(code, "images native 拒绝 $what（status=$status）")
@@ -139,7 +177,7 @@ class NativeImageAnalyzer(
 
     /**
      * native 接触面（README ops 表的本行）：真机 [JniOps]（`System.loadLibrary`
-     * + 三个 external 方法）；单测注入的内存替身**可复现全部语义** ——
+     * + 四个 external 方法）；单测注入的内存替身**可复现全部语义** ——
      * 包括"未命中回 null""句柄已死""解码失败"，不需要真图也不需要 so。
      *
      * 方法不回异常（异常不穿 JNI 边界）：失败一律走 `status` 出参
@@ -161,6 +199,22 @@ class NativeImageAnalyzer(
             status: IntArray,
         ): ImageMatch?
 
+        /**
+         * 找色：在 [nativeFrame]（或其 [region] = x,y,w,h）里找第一个与
+         * [color] = r,g,b,a 分量差各不超过 [tolerance] 的像素。
+         *
+         * 失败一律 null + `status[0]` 非 0（同上两条）；**未命中是 null +
+         * `status[0] == 0` 而 `x = -1`**（哨兵不能取 0 —— (0,0) 是合法首像素，
+         * 拿它当"没有"会把左上角的命中静悄悄吃掉）。
+         */
+        fun color(
+            nativeFrame: Long,
+            color: IntArray,
+            tolerance: Int,
+            region: IntArray?,
+            status: IntArray,
+        ): ColorHit?
+
         /** @return 0 = OK；1 = 未知/已释放的 native 帧号。 */
         fun release(nativeRef: Long): Int
     }
@@ -172,8 +226,10 @@ class NativeImageAnalyzer(
         // native 状态码（与 imgnative.cpp 文件头逐条对表；改必须同批）：0 = OK
         // 不进 [statusToException]；1/2 点名命名，其余非零码一律归 IO（上游加码
         // 时不至于被误读成"只此两种非零"）。
+        const val STATUS_OK = 0
         const val STATUS_STALE = 1
         const val STATUS_FILE_NOT_FOUND = 2
+        const val STATUS_INVALID_PARAM = 4
 
         /**
          * 真机构造：so 缺位 → null（装配层 [SystemSpis] 不喂分析器，桥回
@@ -185,8 +241,9 @@ class NativeImageAnalyzer(
 }
 
 /**
- * so 装载面（[NativeImageAnalyzer.Ops] 的真机实现）：`System.loadLibrary`
- * + 三个 `external` native 方法。方法名与 `:bridge:image` 的 `images_jni.cc`
+ * so 装载面（[NativeImageAnalyzer.Ops] 的真机实现）：`System.loadLibrary("opencv")`
+ * 装载 `libopencv.so`（`:bridge:image` 产物）+ 三个 `external` native 方法。
+ * 方法名与 `:bridge:image` 的 `images_jni.cc`
  * 的 `Java_com_autoscript_platform_system_NativeImageAnalyzer_*` 对表 ——
  * **换包名/换类名必须同批改那边**（JNI 符号名是字符串约定，编译器不看护）。
  *
@@ -206,6 +263,14 @@ class JniOps : NativeImageAnalyzer.Ops {
     ): DoubleArray?
 
     private external fun releaseNative(nativeRef: Long): Int
+
+    private external fun colorNative(
+        frame: Long,
+        color: IntArray,
+        tolerance: Int,
+        region: IntArray?,
+        status: IntArray,
+    ): LongArray?
 
     override fun decode(path: String, status: IntArray): Triple<Long, Int, Int>? {
         val r = decodeNative(path, status)
@@ -236,6 +301,30 @@ class JniOps : NativeImageAnalyzer.Ops {
 
     override fun release(nativeRef: Long): Int = releaseNative(nativeRef)
 
+    /**
+     * color：native 回 jlong[6]{x,y,r,g,b,a}（x = -1 = 扫过未命中，答案）；
+     * null = status 非 0 的分类失败。Kotlin 侧只做数组拆箱，语义不在这层解释。
+     */
+    override fun color(
+        nativeFrame: Long,
+        color: IntArray,
+        tolerance: Int,
+        region: IntArray?,
+        status: IntArray,
+    ): ColorHit? {
+        val r = colorNative(nativeFrame, color, tolerance, region, status)
+        if (r == null || r.size < 6) return null
+        if (r[0] < 0) return null   // 未命中哨兵：扫过了、没有（不是假命中）
+        return ColorHit(
+            x = r[0].toInt(),
+            y = r[1].toInt(),
+            r = r[2].toInt(),
+            g = r[3].toInt(),
+            b = r[4].toInt(),
+            a = r[5].toInt(),
+        )
+    }
+
     companion object {
         /**
          * 装载 so。缺位/体系结构不符返回 null（装配层据此放弃注入）——
@@ -243,7 +332,7 @@ class JniOps : NativeImageAnalyzer.Ops {
          * 抓不到它，这里显式按 Throwable 收。
          */
         fun loadOrNull(): NativeImageAnalyzer.Ops? = try {
-            System.loadLibrary("imgnative")
+            System.loadLibrary("opencv")
             JniOps()
         } catch (_: Throwable) {
             null

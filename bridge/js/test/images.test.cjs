@@ -50,8 +50,8 @@ function installMockImages() {
     }
     return err('ERR_NOT_IMPLEMENTED', `未知 screen 方法: ${method}`)
   }
-  installMockImages.matches = []
-  installMockImages.reset = () => { nextRefId = 1; live.clear(); sizes.clear(); seen.length = 0; installMockImages.matches.length = 0; mock.miss = false; mock.fail = null }
+  installMockImages.colors = []
+  installMockImages.reset = () => { nextRefId = 1; live.clear(); sizes.clear(); seen.length = 0; installMockImages.matches.length = 0; installMockImages.colors.length = 0; mock.miss = false; mock.fail = null }
   auto.install((ns, method, payloadJson, reqId) => {
     if (ns === 'screen') return handleScreen(method, payloadJson ? JSON.parse(payloadJson) : null, reqId)
     if (ns !== 'images') return undefined
@@ -100,6 +100,25 @@ function installMockImages() {
         installMockImages.matches.push({ haystack, needle, threshold: p.threshold })
         if (mock.miss) return ok('null')
         return ok(JSON.stringify({ x: 12, y: 34, width: 100, height: 50, confidence: 0.97 }))
+      }
+      case 'findColor': {
+        const haystack = rawOf(p?.haystack)
+        // 域校验逐条复刻 Kotlin ImagesNamespaceHandler.findColor：先拒，一次 SPI 都不发
+        if (!Array.isArray(p?.color) || p.color.length !== 4 || p.color.some((c) => !Number.isInteger(c) || c < 0 || c > 255)
+          || !Number.isInteger(p?.tolerance) || p.tolerance < 0 || p.tolerance > 255) {
+          return err('ERR_INVALID_PARAM', 'color 必须四分量各 [0,255]，tolerance [0,255]')
+        }
+        if (p.region !== undefined && p.region !== null
+          && (!Array.isArray(p.region) || p.region.length !== 4)) {
+          return err('ERR_INVALID_PARAM', 'region 给了就必须 x,y,w,h 四元组')
+        }
+        if (!haystack || !live.has(haystack.refId) || live.get(haystack.refId).generation !== haystack.generation) {
+          return err('ERR_STALE_HANDLE', 'images findColor 的帧句柄已释放')
+        }
+        if (mock.fail) return err(mock.fail.code, mock.fail.detail)
+        installMockImages.colors.push({ haystack, color: p.color, tolerance: p.tolerance, region: p.region ?? null })
+        if (mock.miss) return ok('null')
+        return ok(JSON.stringify({ x: 120, y: 340, r: 18, g: 52, b: 86, a: 255 }))
       }
       case 'release': {
         const ref = refOf(p)
@@ -243,6 +262,71 @@ test('fromFile 是 decode 的别名（wire 上仍只有 decode）', async () => 
   // images.release(frame) 与 frame.recycle() 同一条路
   await auto.images.release(frame)
   assert.equal(seenPayloads().at(-1).method, 'release')
+})
+
+test('findColor 发 haystack+color+tolerance，回六字段命中', async () => {
+  installMockImages()
+  installMockImages.reset()
+  const screen = await auto.images.decode('/sdcard/screen.png')
+  const hit = await auto.images.findColor(screen, [18, 52, 86, 255], 10)
+  assert.deepEqual(hit, { x: 120, y: 340, r: 18, g: 52, b: 86, a: 255 })
+  const sent = seenPayloads().at(-1)
+  assert.equal(sent.method, 'findColor')
+  assert.deepEqual(sent.p, {
+    haystack: { refId: 1, generation: 1 },
+    color: [18, 52, 86, 255],
+    tolerance: 10,
+  }, 'region 缺省时 JSON.stringify 把它整个丢掉（宿主当全帧）')
+  assert.equal(installMockImages.colors.length, 1)
+})
+
+test('findColor 的 region 可选：给了才出现在 wire 上', async () => {
+  installMockImages()
+  installMockImages.reset()
+  const screen = await auto.images.decode('/sdcard/screen.png')
+  await auto.images.findColor(screen, [1, 2, 3, 4], 0, { region: [10, 20, 30, 40] })
+  const sent = seenPayloads().at(-1)
+  assert.deepEqual(sent.p.region, [10, 20, 30, 40])
+  assert.deepEqual(installMockImages.colors.at(-1).region, [10, 20, 30, 40], '宿主按四元组收下')
+})
+
+test('findColor 未命中回 null（扫过了、没有）', async () => {
+  installMockImages()
+  installMockImages.reset()
+  const screen = await auto.images.decode('/sdcard/screen.png')
+  mock.miss = true
+  const hit = await auto.images.findColor(screen, [0, 0, 0, 255], 0)
+  assert.equal(hit, null, '扫过一遍没这个色 = null，不编 ERR_NOT_FOUND')
+  mock.miss = false
+})
+
+test('findColor 参数域越界抛 ERR_INVALID_PARAM 且不找色', async () => {
+  installMockImages()
+  installMockImages.reset()
+  const screen = await auto.images.decode('/sdcard/screen.png')
+  const bad = [
+    () => auto.images.findColor(screen, [1, 2, 3], 0),
+    () => auto.images.findColor(screen, [1, 2, 3, 4, 5], 0),
+    () => auto.images.findColor(screen, [256, 0, 0, 255], 0),
+    () => auto.images.findColor(screen, [-1, 0, 0, 255], 0),
+    () => auto.images.findColor(screen, [0, 0, 0, 255], 256),
+    () => auto.images.findColor(screen, [0, 0, 0, 255], -1),
+    () => auto.images.findColor(screen, [0, 0, 0, 255], 0, { region: [1, 2, 3] }),
+  ]
+  for (const call of bad) {
+    await assert.rejects(() => call(), (e) => e.code === 'ERR_INVALID_PARAM')
+  }
+  assert.equal(installMockImages.colors.length, 0, '域错一次 findColor 都不敢发')
+})
+
+test('findColor 用已释放的帧 ERR_STALE_HANDLE', async () => {
+  installMockImages()
+  installMockImages.reset()
+  const screen = await auto.images.decode('/sdcard/screen.png')
+  await screen.recycle()
+  await assert.rejects(() => auto.images.findColor(screen, [1, 2, 3, 4], 0),
+    (e) => e.code === 'ERR_STALE_HANDLE')
+  assert.equal(installMockImages.colors.length, 0, '帧已死，一次找色都不发')
 })
 
 test('未开桥面的图像操作如实 ERR_NOT_IMPLEMENTED', async () => {

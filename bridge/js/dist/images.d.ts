@@ -2,7 +2,7 @@
  * 截图与图像命名空间（docs/framework-design.md §9.2 / §8.8 / §12.2）：
  * screen.capture() → FrameSource 句柄（分类错误而非黑图：锁屏/FLAG_SECURE/
  * 无窗口/节流一律抛 ERR_*，见 Kotlin ScreenPolicy）；
- * images.decode/matchTemplate/findImage/release 走 native 分析面（§12.2 第七条独立缝，
+ * images.decode/matchTemplate/findImage/findColor/release 走 native 分析面（§12.2 第七条独立缝，
  * Kotlin 对偶 `ImagesNamespaceHandler` + `:domain` `ImageAnalyzer`）。
  *
  * **两张桥面别混**：`screen.*` 是截图帧源（句柄由 `ScreenshotSource` 发号，`recycle`
@@ -35,6 +35,21 @@ export interface MatchResult {
     height: number;
     confidence: number;
 }
+/**
+ * 找色命中（§9.2 native 面第一个 P1 算子）：`x`/`y` 是**全帧坐标**（`region` 只是
+ * 搜索范围不是坐标系）；`r`/`g`/`b`/`a` 是命中点的**实际像素分量** —— 不一定是调用方
+ * 传进去的目标色逐字值（容差带内哪一个被扫到就回哪一个，拿它做二次判断看的是真值）。
+ */
+export interface ColorHitResult {
+    x: number;
+    y: number;
+    r: number;
+    g: number;
+    b: number;
+    a: number;
+}
+/** 找色可选搜索区域 `[x,y,w,h]`（缺省全帧；给了就必须整体落在帧内）。 */
+export type Region4 = readonly [number, number, number, number];
 export declare const screen: {
     /**
      * 截图（§9.2）：a11y takeScreenshot（333ms 节流）/ MediaProjection 会话。
@@ -76,6 +91,13 @@ export declare const images: {
      * （脚本要拿它做坐标换算）。路径不得空白；文件缺失/不是合法图片由宿主原码透传
      * （`ERR_FILE_NOT_FOUND`/`ERR_IO`，不折叠成参数错）。
      *
+     * **路径写绝对路径**（2026-09-25 实测记账，见 §18 第 9 项）：`:domain` 契约写着
+     * 「路径解析由实现定」，但**四层里没有一层解析路径** —— 计算核直接 `fopen`/`imread`，
+     * 于是相对路径按**宿主进程 CWD** 解析，而 so 载在 `:main` 里、那个进程的 CWD 是 `/`。
+     * `decode('part.png')` 会去根目录找一个并不存在的文件，**回 `ERR_FILE_NOT_FOUND`
+     * 且报的路径是对的** —— 看起来像"文件真的不在"，不像"口径没定"。
+     * 基准解析（项目根/filesDir）拍板前，别写相对路径。
+     *
      * 帧是**文件侧**的句柄：`recycle()` 打 `images/release`（不是 `screen/recycle`）。
      */
     decode(path: string, opts?: {
@@ -86,6 +108,9 @@ export declare const images: {
      * wire 上仍是 `decode`（两侧同名，不搞两套方法名）。
      *
      * 别名只此一个：`load`/`open`/`read`/`bitmap` 一律不提供 —— 宿主侧同样只认 `decode`。
+     *
+     * v9 的 `fromFile('part.png')` 这种相对写法**在 AutoScript 眼下不成立**（同上：
+     * 无路径解析，按 `:main` 的 CWD 走）。别名保留的是名字，不是相对路径语义。
      */
     fromFile(path: string, opts?: {
         timeout?: number;
@@ -110,6 +135,30 @@ export declare const images: {
         threshold?: number;
         timeout?: number;
     }): Promise<MatchResult | null>;
+    /**
+     * 找色（`findColor`，§9.2 native 面第一个 P1 算子；§7.7 承诺 `findColor` 1080p < 10ms）：
+     * 在 `haystack` 帧（或其 `region` 子矩形）里找**第一个**与 `color` 的**每个分量**
+     * 差都不超过 `tolerance` 的像素，回它的全帧坐标与实际像素分量。
+     *
+     * 与 `matchTemplate` 的分界：那是"整块图案在哪"，这是"这个色在哪"—— 找色不问
+     * 图案、形状、连通性，只看分量是否落在容差带内（native `inRange` 的逐分量包含语义）。
+     *
+     * 命中多个时回的是一个**稳定可复现**的坐标，但不承诺"离左上角最近"——要挑
+     * 最近/最大连通域的脚本拿 x/y 自己再筛。
+     *
+     * **未命中是答案不是异常**：回 `null`（扫过了、没有），不编 `ERR_NOT_FOUND`。
+     * 但**"扫过 0 像素"**（空区域/region 越界）是 `ERR_INVALID_PARAM` —— 那不是"没有"，
+     * 是"根本没找"，混成 `null` 会让脚本把空区域当成搜过一遍。
+     *
+     * 参数域（越界一律 `ERR_INVALID_PARAM` 且一次 native 调用都不发）：
+     * `color` 恒四分量 `[r,g,b,a]`（**R,G,B,A 序**，与 Android `0xAARRGGBB` 同序），
+     * 各 `[0,255]`；`tolerance` `[0,255]`（逐分量，非欧氏距离）；`region` 给了必须四元组
+     * 且整体落在帧内（不静默裁剪 —— 半截区域在帧外时"帧外的像素"没有答案）。
+     */
+    findColor(haystack: FrameSource, color: readonly number[], tolerance: number, opts?: {
+        region?: Region4;
+        timeout?: number;
+    }): Promise<ColorHitResult | null>;
     /**
      * 释放 `decode` 出来的帧。首次释放回 `true`；**再放同一帧 → `ERR_STALE_HANDLE`**
      * （不是静默成功也不是内部错 —— 未知/跨代同码，"已释放"与"从未存在"由这句 detail 可辨）。
