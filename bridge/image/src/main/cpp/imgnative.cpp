@@ -1,8 +1,8 @@
 // bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
-//   - 只做五件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
-//     按阈值做模板匹配、按容差找色；
+//   - 只做六件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
+//     按阈值做模板匹配、按容差找色、取灰度信息面（**产出新帧**）；
 //   - 不做路径策略、不发桥请求、不碰 Kotlin 侧句柄号（发号归桥面 handler）；
 //   - 跨语言接触面全部 extern "C"：无 C++ 名修饰，无异常穿越（cv::Exception
 //     在本文件内就地折叠成状态码，绝不抛过 ABI 边界）。
@@ -51,11 +51,20 @@ constexpr int IMG_ERR_INVALID_PARAM = 4;
 /** `color` 未命中的 x 哨兵（0,0 是合法首像素坐标，不能拿它当"没有"）。 */
 constexpr int32_t IMG_MISS = -1;
 
-// 调用方必须已持 g_mu（四个入口的帧表段都在锁内）。
+// 调用方必须已持 g_mu（五个入口的帧表段都在锁内）。
 cv::Mat* find_locked(int64_t ref) {
     auto it = g_frames.find(ref);
     return it == g_frames.end() ? nullptr : &it->second;
 }
+
+/**
+ * 帧表不变式：**在场帧恒 4 通道 8 位**（由 decode 归一保证；detail 见
+ * imgnative_decode 的归一那段）。产出新帧的算子（`imgnative_gray`，后续
+ * crop/resize/rotate 同）必须自己满足它 —— 正因为这一条是可被违反的，
+ * 才有这个具名谓词：`imgnative_color` 的 `Vec4b` 回读在 3 通道帧上会静默
+ * 读进下一行首字节（2026-09-25 实测过那类越字节读），所以进像素前先问一遍。
+ */
+bool frame_is_normalized(const cv::Mat& m) { return m.channels() == 4 && m.depth() == CV_8U; }
 
 }  // namespace
 
@@ -164,6 +173,73 @@ int imgnative_release(int64_t ref) {
     return g_frames.erase(ref) == 1 ? IMG_OK : IMG_ERR_STALE_HANDLE;
 }
 
+// ── gray：取灰度信息面到**新的一帧**（§9.2 管线里的"灰度"）。
+//
+// **桥面此刻不对脚本开这个方法**（`:domain ImageAnalyzer` 五方法里没有它，
+// `ImagesNamespaceHandler` 也不认 `toGrayscale`）：显式转换在脚本侧是可选操作
+// —— 模板匹配/findColor 都在 native 内部按需处理通道，独独灰度没有消费方。
+// 先落计算核 + host 语义门（判读对不对先钉住），桥面等真出现消费方再开；
+// 这与 §9.2「没有脚本消费方之前不开桥面」是同一条纪律，不是落了一半。
+//
+// 为什么在新帧上产出而不是就地改灰度：帧表里这一帧被谁引用过、脚本手上
+// 还有没有它的句柄，本层不知道 —— 就地改会让先前读到的帧内容在背后变化。
+// 脚本拿到的句柄本来就"不是快照"（§7.4 既有语义），但"哪个算子会不会动我
+// 这帧"不该让脚本去猜：**产出新帧 + 自己 release 旧帧**是显式的，代价看得见。
+// （同理，产出帧与原帧各自独立在场面表，任一 release 不影响另一个。）
+//
+// 产出帧仍是 **4 通道 BGRA**：灰度值铺在三份，**alpha 原样带过去**。
+//   - 铺三份而不是单通道：帧表的不变式是"在场帧恒 4 通道 8 位"（见
+//     frame_is_normalized），单通道产出会让后续 matchTemplate/findColor 的
+//     Vec4b 回读越字节读 —— 这不是洁癖，是那条不变式的直接后果；顺带
+//     findColor 的 r=g=b=v 判定在灰度帧上照常成立。
+//   - alpha 保留而不是一律 255：灰度压掉的是**色彩信息**，透明与否不是色彩。
+//     decode 特意用 IMREAD_UNCHANGED 保住 A 就是为了让 a 分量参与判定
+//     （那是一次真事故：alpha 从来没参与过判定），在灰度这一步把它抹平等于
+//     把事故重新引回来 —— 脚本 toGray 之后按 a 找色会静默换答案。
+//
+// 灰度权重用库的 COLOR_BGRA2GRAY（0.299R+0.587G+0.114B，从 BGRA 直取 BGR），
+// **不自己写系数**：系数是契约外的事实，抄一份就多一个漂移面，将来两处不一致
+// 时没人能说清哪个对。实测值已钉进 host 测试（纯红 76 / 纯绿 150 / 纯蓝 29，
+// 平均法会给 85/85/85 —— 那组断言就是用来分开"用了权重"与"用了平均"的）。
+//
+// 宽高出参随帧一起回（与 imgnative_decode 同形）：灰度不改尺寸，但契约里
+// `ImageFrame` 是三元组（句柄 + 宽 + 高），让下游从"源帧尺寸"自己推是**猜** ——
+// 尺寸的真值只有产出这帧的地方知道，多传两个 int32 比多一处约定便宜。
+//
+// 拒收是**早退**：失败时三个出参一个字节都不写（与 imgnative_match 同口径）——
+// 调用方只能凭 status 判，别拿 out_ref 的残留值当帧号用。
+int imgnative_gray(int64_t frame, int64_t* out_ref, int32_t* out_w, int32_t* out_h) {
+    if (out_ref == nullptr || out_w == nullptr || out_h == nullptr) return IMG_ERR_INVALID_PARAM;
+    try {
+        const std::lock_guard<std::mutex> lk(g_mu);
+        const cv::Mat* f = find_locked(frame);
+        if (f == nullptr) return IMG_ERR_STALE_HANDLE;
+        if (!frame_is_normalized(*f)) return IMG_ERR_IO;
+
+        cv::Mat g;
+        cv::cvtColor(*f, g, cv::COLOR_BGRA2GRAY);
+
+        cv::Mat out(g.rows, g.cols, CV_8UC4);
+        for (int y = 0; y < g.rows; ++y) {
+            const unsigned char* gs = g.ptr<unsigned char>(y);
+            const cv::Vec4b* sa = f->ptr<cv::Vec4b>(y);
+            cv::Vec4b* dst = out.ptr<cv::Vec4b>(y);
+            for (int x = 0; x < g.cols; ++x) {
+                dst[x] = cv::Vec4b(gs[x], gs[x], gs[x], sa[x][3]);
+            }
+        }
+
+        const int64_t ref = g_next_ref++;
+        auto [it, _] = g_frames.emplace(ref, std::move(out));
+        *out_ref = ref;
+        *out_w = it->second.cols;
+        *out_h = it->second.rows;
+        return IMG_OK;
+    } catch (const cv::Exception&) {
+        return IMG_ERR_IO;
+    }
+}
+
 // ── color：在某帧（或其区域）里找"与目标色相近"的像素，回第一个命中的坐标。
 //
 // 未命中**不是错误也不是异常**：status 仍回 IMG_OK，而 out_x 留 -1（调用方据此
@@ -223,9 +299,9 @@ int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
         const cv::Mat view = (*f)(roi);
         if (view.empty()) return IMG_ERR_INVALID_PARAM;
         // 帧恒 4 通道 8 位（decode 归一）；不成立 = 帧表被塞进了非归一帧
-        // （帧表是本 TU 私有的，正常路径只经 decode 进）—— 如实报 IO，
+        // （帧表是本 TU 私有的，正常路径只经 decode/gray 进）—— 如实报 IO，
         // 不让 Vec4b 越界读下一行的字节糊过去。
-        if (view.channels() != 4 || view.depth() != CV_8U) return IMG_ERR_IO;
+        if (!frame_is_normalized(view)) return IMG_ERR_IO;
 
         // 下界/上界夹在 0..255：目标色贴边时（0 或 255）容差仍成立，不溢出成负数。
         // cv::Scalar 四个分量的顺序是 B,G,R,A（OpenCV 的通道序），所以 R/G/B 要
