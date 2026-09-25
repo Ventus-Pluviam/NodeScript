@@ -43,7 +43,8 @@ import com.autoscript.domain.bridge.HandleRef
  * 达到阈值的位置 —— 调用方据此走自己的分支，不编 `ERR_NOT_FOUND`（那是 UiSelector 的语义）。
  *
  * **文件缺失是分类错误**：路径不存在 → `ERR_FILE_NOT_FOUND`（不是空帧、不是 null）——
- * 路径解析（相对项目根 or filesDir）由实现定，契约只要求"找到文件或如实说没有"。
+ * 路径**必须是绝对的**（§18 第 9 项 2026-09-25 拍板：四层都不解析路径，相对写法按
+ * `:main` 进程 CWD（= `/`）解析，`fromFile('part.png')` 只会回 `ERR_FILE_NOT_FOUND`）。
  *
  * **真机实现缺席时由装配层不注入**（桥回 `ERR_NOT_IMPLEMENTED`），**绝不塞凑数实现**：
  * 一个看不见像素的"内存分析器"只能靠自报坐标假装匹配成功 —— 那比没有更坏
