@@ -59,34 +59,33 @@ if [ ! -f "$BUILD/lib/libopencv_core.a" ]; then
     -DBUILD_ZLIB=ON -DBUILD_JPEG=ON -DBUILD_PNG=ON >/tmp/ocvhost-build.log 2>&1
   cmake --build "$BUILD" --target opencv_imgcodecs -j"$(nproc)" >>/tmp/ocvhost-build.log 2>&1
 fi
+# 增量目标：`opencv_imgcodecs` 只连带 core/imgproc（imgcodecs 的依赖闭包），
+# features2d/flann 虽在 BUILD_LIST 白名单里、configure 配出来了，但没人编它就不落盘
+# —— host 侧与 device 侧各实测红过一次（ld.lld: unable to find library
+# -lopencv_features2d）。所以这里显式再编一轮（已编过即 no-op，不重编）。
+cmake --build "$BUILD" --target opencv_features2d -j"$(nproc)" >>/tmp/ocvhost-build.log 2>&1
 
 INC=(-I"$OCV_SRC/modules/core/include" -I"$OCV_SRC/modules/imgproc/include"
      -I"$OCV_SRC/modules/imgcodecs/include" -I"$BUILD")
-# 特征门禁要 features2d/flann：CI/现网的 host 构建缓存（$BUILD）按 VERSIONS.env 的
-# BUILD_LIST（含 features2d/flann）一次配出，本脚本不再单起第二份缓存。FEAT_* 三行
-# 是过渡期的兼容垫：本机 /tmp/ocvhostbuild 还是 2026-09-25 凌晨按旧三模块配的，
-# 重配前 host_feature_test 仍从 $FEAT_BUILD（/tmp/ocvfeatbuild，同 commit 另配的
-# 五模块缓存）取此二模块 —— 与"同 commit"不冲突（两份缓存同源码同 commit，
-# 差的只是 BUILD_LIST 白名单）。本机重配一次（删 /tmp/ocvhostbuild 重跑本脚本）
-# 即可丢掉这三行，届时 FEAT_LIBS 改从 $BUILD/lib 取。
-FEAT_BUILD="${OCV_FEAT_BUILD:-/tmp/ocvfeatbuild}"
-FEAT_INC=(-I"$OCV_SRC/modules/features2d/include" -I"$OCV_SRC/modules/flann/include")
-FEAT_LIBS=(-L"$FEAT_BUILD/lib" -lopencv_features2d -lopencv_flann)
+# features2d/flann 与三模块同缓存（$BUILD 按 VERSIONS.env 的 BUILD_LIST 一次配出，
+# 见上增量目标注记）：include 多两行，链接把此二模块排在 core 之前（静态库链接顺序
+# 是语义 —— features2d 的 Algorithm 符号住 core 里，后列先解，顺序反了即
+# undefined reference，host 侧实测过）。
+INC=(-I"$OCV_SRC/modules/core/include" -I"$OCV_SRC/modules/imgproc/include"
+     -I"$OCV_SRC/modules/imgcodecs/include"
+     -I"$OCV_SRC/modules/features2d/include" -I"$OCV_SRC/modules/flann/include"
+     -I"$BUILD")
 LIBS=(-L"$BUILD/lib" -L"$BUILD/3rdparty/lib"
-      -lopencv_imgcodecs -lopencv_imgproc -lopencv_core
+      -lopencv_features2d -lopencv_flann -lopencv_imgcodecs -lopencv_imgproc -lopencv_core
       -llibjpeg-turbo -llibpng -llibjasper -lzlib)
 
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 failed=0
-[ -f "$FEAT_BUILD/lib/libopencv_features2d.a" ] || {
-  printf '[FATAL] 缺 features2d host 缓存：%s（先按本脚本末段注记配一次，见 /tmp/ocvfeat-config.log 手法）\n' "$FEAT_BUILD" >&2
-  exit 1
-}
 for t in host_color_test host_decode_norm_test host_match_test host_gray_test host_crop_test host_resize_test host_rotate_test host_feature_test; do
   printf '[cc] %s\n' "$t"
-  g++ -std=c++17 -O2 -Wall -Wextra "${INC[@]}" "${FEAT_INC[@]}" -o "$OUT/$t" \
-    "$HERE/$t.cpp" bridge/image/src/main/cpp/imgnative.cpp "${FEAT_LIBS[@]}" "${LIBS[@]}"
+  g++ -std=c++17 -O2 -Wall -Wextra "${INC[@]}" -o "$OUT/$t" \
+    "$HERE/$t.cpp" bridge/image/src/main/cpp/imgnative.cpp "${LIBS[@]}"
   printf '[run] %s\n' "$t"
   if ! "$OUT/$t"; then
     printf '[FAIL] %s\n' "$t" >&2

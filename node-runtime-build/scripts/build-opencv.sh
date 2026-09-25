@@ -154,9 +154,13 @@ fi
 # 这一行是 image-native.yml 与人工核对共用的锚点，别改字面（grep 'kleidicv 状态:'）。
 say "kleidicv 状态: $KLEIDI_STATE（源码=$KLEIDI_SRC）"
 
-# ── 4) 只编 imgcodecs 连带 BUILD_LIST 模块（白名单已裁，不会捎带别的模块）
-say "make -j$(nproc) opencv_imgcodecs（连带 core/imgproc/features2d/flann 静态库）"
+# ── 4) 编 imgcodecs（连带 core/imgproc）+ features2d（连带 flann）────────
+# target 决定"编出来"：`opencv_imgcodecs` 只连带它的依赖闭包（core/imgproc），
+# features2d/flann 虽在 BUILD_LIST 白名单里但没人编就不落盘 —— CI 实测红过一次
+# （ld.lld: unable to find library -lopencv_features2d）。显式再编一轮。
+say "make -j$(nproc) opencv_imgcodecs opencv_features2d（连带各自依赖闭包）"
 cmake --build "$BUILD_DIR" --target opencv_imgcodecs -j"$(nproc)"
+cmake --build "$BUILD_DIR" --target opencv_features2d -j"$(nproc)"
 
 # ── 5) 我们的桥面 C++ + 静态链成 libopencv.so ───────────────────────────
 # 静态 STL：产物不依赖 libc++_shared.so（libnode 那条已有的 NEEDED 归装载面，见
