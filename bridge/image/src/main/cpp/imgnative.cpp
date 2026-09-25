@@ -1,10 +1,10 @@
 // bridge/image —— libopencv.so 的 C++ 面（docs/framework-design.md §9.2）
 //
 // 职责边界（与 :domain 的 ImageAnalyzer SPI 逐条对齐）：
-//   - 只做九件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
+//   - 只做十件事：decode 一帧（**顺带把帧归一成 4 通道 BGRA**）、管帧表、
 //     按阈值做模板匹配、按容差找色、取灰度信息面（**产出新帧**）、
 //     按区域取子图（**产出新帧**）、按尺寸缩放（**产出新帧**）、
-//     按角度旋转（**产出新帧**）；
+//     按角度旋转（**产出新帧**）、ORB 特征匹配（**不产出帧，只回坐标**）；
 //   - 不做路径策略、不发桥请求、不碰 Kotlin 侧句柄号（发号归桥面 handler）；
 //   - 跨语言接触面全部 extern "C"：无 C++ 名修饰，无异常穿越（cv::Exception
 //     在本文件内就地折叠成状态码，绝不抛过 ABI 边界）。
@@ -38,6 +38,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/features2d.hpp>
 
 namespace {
 
@@ -54,7 +55,7 @@ constexpr int IMG_ERR_INVALID_PARAM = 4;
 /** `color` 未命中的 x 哨兵（0,0 是合法首像素坐标，不能拿它当"没有"）。 */
 constexpr int32_t IMG_MISS = -1;
 
-// 调用方必须已持 g_mu（八个入口的帧表段都在锁内）。
+// 调用方必须已持 g_mu（九个入口的帧表段都在锁内）。
 cv::Mat* find_locked(int64_t ref) {
     auto it = g_frames.find(ref);
     return it == g_frames.end() ? nullptr : &it->second;
@@ -499,6 +500,134 @@ int imgnative_rotate(int64_t frame, double degrees,
         *out_ref = ref;
         *out_w = it->second.cols;
         *out_h = it->second.rows;
+        return IMG_OK;
+    } catch (const cv::Exception&) {
+        return IMG_ERR_IO;
+    }
+}
+
+// ── feature：在场景帧里找模板帧（ORB 特征匹配 + Lowe ratio，§9.2 管线里的"特征"）。
+//
+// **桥面此刻同样不对脚本开这个方法**（`:domain ImageAnalyzer` 五方法里没有它，
+// `ImagesNamespaceHandler` 也不认 `feature`）：与 gray/crop/resize/rotate 同一条纪律 ——
+// 先落计算核 + host 语义门，等真出现消费方再开桥面。与 matchTemplate 的分界：
+// 那是刚性模板匹配（逐像素相关，模板转 30°/缩一半就没分了）；这是特征匹配
+// （ORB 描述子 + 汉明距离，对旋转/尺度有一定容忍 —— host 实测子图转 30° 后
+// 仍有 53 个 crosscheck 匹配，top 距离 0/0/1/1/1）。
+//
+// 为什么是 ORB 而不是 SIFT/SURF/AKAZE：ORB 描述子是二进制（32 字节），汉明距离
+// 用 BFMatcher 硬件友好（POPCNT）；SIFT 是浮点描述子（L2 距离，又一 competent
+// 的距离口径），SURF 非free（`OPENCV_ENABLE_NONFREE=OFF`，构建轨里写死了）。
+// ORB 参数固定 `nfeatures=1000` 不做入参（与 resize/rotate 的"固定 LINEAR"同一条
+// 纪律）：host 实测 nfeatures=500 与 1000 在同一子图上出的描述子**逐字节一致**
+// （mean=0.0 max=0）—— 参数只 control 截断位置，不改描述子本身，所以调参不换
+// 答案，只换"留几个"。1000 是"够用的上限"，不是"最优值"。
+//
+// 旋转容忍的边界（host 实测，先写下来免得被高估）：ORB 有旋转不变性（灰度质心法定
+// 向），但**只在"特征点本身被转"时成立** —— 子块转 30° 后整块内容相对场景转了，
+// 描述子仍能对上（crosscheck top 距离 0/0/1/1/1），但几何阶段的中位数偏移假设
+// （"模板是场景子块"→ 偏移为常数）不再成立，内点只剩 1 个 → 按"几何不一致"判
+// 未匹配。所以"转 30° 仍命中"是不成立的期望：旋转容忍指的是**描述子层面**，
+// 不是"本算子的几何验证也跟着转"。真要转着找，得先把单应估计（findHomography，
+// calib3d 模块）接进来 —— 那是另一个算子，不是调参能解决的。
+//
+// 为什么 BGRA 直喂（不先转灰）：host 实测 BGRA 直喂与手转灰出的关键点/描述子
+// **逐字节一致**（sameDesc=1）—— ORB 内部自己按第一通道取灰（对 BGRA 就是 B），
+// 本管线的输入（截图/PNG）B 通道与亮度强相关，转灰是冗余步骤。冗余步骤不是无害的：
+// 多一次 cvtColor 就多一个"转错了静默换答案"的漂移面。
+//
+// 匹配链（固定，不做入参）：ORB detectAndCompute → BFMatcher(HAMMING, crossCheck)
+// → Lowe ratio（knn k=2，阈值 0.75）→ 几何一致性计数。host 实测 ratio=0.7/0.75/0.8
+// 在子图->全图上 good=29/30/33、几何正确都是 19 —— 阈值在 0.7~0.8 间不换答案，
+// 0.75 取中（Lowe 原论文值），不是调出来的"最优"。
+//
+// 回包是**模板中心在场景中的坐标**（不是左上角 —— 与 matchTemplate 的 ImageMatch
+// 不同：特征匹配没有"模板尺寸"的概念，模板多大在场景里是未知的；回中心让脚本
+// 直接点下去）。out_x/out_y 是 double（亚像素无意义 —— ORB 关键点是像素级，
+// double 只是不丢坐标小数；脚本取整即用）。
+//
+// **未匹配是答案不是异常**（与 matchTemplate 的 out_match=0 同一条纪律）：
+// status 仍回 IMG_OK，*out_found=0 且 x/y/confidence 全 0。空描述子（纯色模板，
+// ORB 找不到关键点）→ 同样是"未匹配"（不是 IO 错 —— 图是合法的图，只是没有特征）。
+// 调用方判据只有 status + *out_found（与 match 同口径：拒收早退不写出参）。
+//
+// 置信度 = 几何一致内点数 / good 数（[0,1]，与 matchTemplate 的 confidence 同域，
+// 可直接比较）。阈值由调用方定（与 matchTemplate 的 threshold 同位置 —— 本层
+// 只报数，不替脚本决定"多少算找到"）。
+int imgnative_feature(int64_t scene, int64_t templ, int32_t* out_found,
+                      double* out_x, double* out_y, double* out_conf) {
+    if (out_found == nullptr || out_x == nullptr || out_y == nullptr || out_conf == nullptr)
+        return IMG_ERR_INVALID_PARAM;
+    try {
+        const std::lock_guard<std::mutex> lk(g_mu);
+        const cv::Mat* s = find_locked(scene);
+        const cv::Mat* t = find_locked(templ);
+        if (s == nullptr || t == nullptr) return IMG_ERR_STALE_HANDLE;
+        if (!frame_is_normalized(*s) || !frame_is_normalized(*t)) return IMG_ERR_IO;
+
+        auto orb = cv::ORB::create(1000);
+        std::vector<cv::KeyPoint> ks, kt;
+        cv::Mat ds, dt;
+        orb->detectAndCompute(*s, cv::noArray(), ks, ds);
+        orb->detectAndCompute(*t, cv::noArray(), kt, dt);
+        // 空描述子（纯色图）= 没有特征可比 = 未匹配（答案，不是异常）
+        if (ds.empty() || dt.empty() || ks.empty() || kt.empty()) {
+            *out_found = 0;
+            *out_x = *out_y = *out_conf = 0.0;
+            return IMG_OK;
+        }
+
+        cv::BFMatcher matcher(cv::NORM_HAMMING);
+        std::vector<std::vector<cv::DMatch>> knn;
+        matcher.knnMatch(dt, ds, knn, 2);
+        std::vector<cv::DMatch> good;
+        for (const auto& p : knn) {
+            if (p.size() == 2 && p[0].distance < 0.75 * p[1].distance) good.push_back(p[0]);
+        }
+        // good 太少（<4）连几何验证都做不了 = 未匹配
+        if (good.size() < 4) {
+            *out_found = 0;
+            *out_x = *out_y = *out_conf = 0.0;
+            return IMG_OK;
+        }
+
+        // 几何一致性：正确匹配应满足 scenePt ≈ templPt + offset（模板是场景子块时
+        // offset 为常数）。用"中位数偏移 ±3px 内点占比"做验证 —— 不用 findHomography
+        //（那要 calib3d 模块；中位数偏移在平移场景下是同解，且 host 实测 19/30 内点）。
+        std::vector<double> dxs, dys;
+        dxs.reserve(good.size());
+        dys.reserve(good.size());
+        for (const auto& m : good) {
+            dxs.push_back(ks[m.trainIdx].pt.x - kt[m.queryIdx].pt.x);
+            dys.push_back(ks[m.trainIdx].pt.y - kt[m.queryIdx].pt.y);
+        }
+        std::sort(dxs.begin(), dxs.end());
+        std::sort(dys.begin(), dys.end());
+        const double mdx = dxs[dxs.size() / 2], mdy = dys[dys.size() / 2];
+        int inl = 0;
+        double sumx = 0.0, sumy = 0.0;
+        for (const auto& m : good) {
+            const double dx = ks[m.trainIdx].pt.x - kt[m.queryIdx].pt.x;
+            const double dy = ks[m.trainIdx].pt.y - kt[m.queryIdx].pt.y;
+            if (std::fabs(dx - mdx) < 3.0 && std::fabs(dy - mdy) < 3.0) {
+                ++inl;
+                sumx += ks[m.trainIdx].pt.x;
+                sumy += ks[m.trainIdx].pt.y;
+            }
+        }
+        // 内点 <4 = 几何不一致 = 未匹配（误报的形状：棋盘格模板 top 距离 60+，
+        // 连 ratio 都过不了几个，更到不了这里）
+        if (inl < 4) {
+            *out_found = 0;
+            *out_x = *out_y = *out_conf = 0.0;
+            return IMG_OK;
+        }
+        // 命中位置 = 内点在场景中的质心（模板中心不需要显式算 —— 内点质心即模板
+        // 在场景中的位置；模板是子块时质心 ≈ 子块中心）
+        *out_found = 1;
+        *out_x = sumx / inl;
+        *out_y = sumy / inl;
+        *out_conf = static_cast<double>(inl) / static_cast<double>(good.size());
         return IMG_OK;
     } catch (const cv::Exception&) {
         return IMG_ERR_IO;

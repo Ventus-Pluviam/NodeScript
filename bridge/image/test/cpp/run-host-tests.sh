@@ -47,7 +47,7 @@ if [ ! -f "$BUILD/lib/libopencv_core.a" ]; then
   # 上跑，不把本机指令集烤进基线（与 build-opencv.sh 不手写 -march 同一考虑）。
   cmake -S "$OCV_SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_LIST=core,imgproc,imgcodecs \
+    -DBUILD_LIST=core,imgproc,imgcodecs,features2d,flann \
     -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOCS=OFF \
     -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF -DBUILD_JAVA=OFF \
     -DBUILD_ANDROID_PROJECTS=OFF -DBUILD_ANDROID_EXAMPLES=OFF \
@@ -62,6 +62,16 @@ fi
 
 INC=(-I"$OCV_SRC/modules/core/include" -I"$OCV_SRC/modules/imgproc/include"
      -I"$OCV_SRC/modules/imgcodecs/include" -I"$BUILD")
+# 特征门禁要 features2d/flann：CI/现网的 host 构建缓存（$BUILD）按 VERSIONS.env 的
+# BUILD_LIST（含 features2d/flann）一次配出，本脚本不再单起第二份缓存。FEAT_* 三行
+# 是过渡期的兼容垫：本机 /tmp/ocvhostbuild 还是 2026-09-25 凌晨按旧三模块配的，
+# 重配前 host_feature_test 仍从 $FEAT_BUILD（/tmp/ocvfeatbuild，同 commit 另配的
+# 五模块缓存）取此二模块 —— 与"同 commit"不冲突（两份缓存同源码同 commit，
+# 差的只是 BUILD_LIST 白名单）。本机重配一次（删 /tmp/ocvhostbuild 重跑本脚本）
+# 即可丢掉这三行，届时 FEAT_LIBS 改从 $BUILD/lib 取。
+FEAT_BUILD="${OCV_FEAT_BUILD:-/tmp/ocvfeatbuild}"
+FEAT_INC=(-I"$OCV_SRC/modules/features2d/include" -I"$OCV_SRC/modules/flann/include")
+FEAT_LIBS=(-L"$FEAT_BUILD/lib" -lopencv_features2d -lopencv_flann)
 LIBS=(-L"$BUILD/lib" -L"$BUILD/3rdparty/lib"
       -lopencv_imgcodecs -lopencv_imgproc -lopencv_core
       -llibjpeg-turbo -llibpng -llibjasper -lzlib)
@@ -69,10 +79,14 @@ LIBS=(-L"$BUILD/lib" -L"$BUILD/3rdparty/lib"
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 failed=0
-for t in host_color_test host_decode_norm_test host_match_test host_gray_test host_crop_test host_resize_test host_rotate_test; do
+[ -f "$FEAT_BUILD/lib/libopencv_features2d.a" ] || {
+  printf '[FATAL] 缺 features2d host 缓存：%s（先按本脚本末段注记配一次，见 /tmp/ocvfeat-config.log 手法）\n' "$FEAT_BUILD" >&2
+  exit 1
+}
+for t in host_color_test host_decode_norm_test host_match_test host_gray_test host_crop_test host_resize_test host_rotate_test host_feature_test; do
   printf '[cc] %s\n' "$t"
-  g++ -std=c++17 -O2 -Wall -Wextra "${INC[@]}" -o "$OUT/$t" \
-    "$HERE/$t.cpp" bridge/image/src/main/cpp/imgnative.cpp "${LIBS[@]}"
+  g++ -std=c++17 -O2 -Wall -Wextra "${INC[@]}" "${FEAT_INC[@]}" -o "$OUT/$t" \
+    "$HERE/$t.cpp" bridge/image/src/main/cpp/imgnative.cpp "${FEAT_LIBS[@]}" "${LIBS[@]}"
   printf '[run] %s\n' "$t"
   if ! "$OUT/$t"; then
     printf '[FAIL] %s\n' "$t" >&2

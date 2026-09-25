@@ -76,7 +76,8 @@ grep -qF "$KLEIDICV_MD5" "$OCV_SRC/hal/kleidicv/kleidicv.cmake" \
     || die "NDK cmake toolchain 缺失: $NDK_DIR/build/cmake/android.toolchain.cmake"
 
 # ── 3) cmake 交叉 configure（静态 + 三条裁剪）───────────────────────────
-# BUILD_LIST=core,imgproc,imgcodecs：imgcodecs 只留 PNG/JPEG（截图与随包资源图就这两种），
+# BUILD_LIST 见 VERSIONS.env（core/imgproc/imgcodecs + features2d/flann for ORB）：
+# imgcodecs 只留 PNG/JPEG（截图与随包资源图就这两种），
 # 其余格式源/壳全 OFF；WITH_* 逐个 OFF 掉我们不开的面（TIFF/WEBP/EXR/JASPER/OPENJPEG/
 # AVIF/FFMPEG/V4L/1394/TBB/OPENCL/OPENVX/PROTOBUF/ITT…）。
 # WITH_KLEIDICV 保持**默认 ON**（AArch64+Android 默认开，见 VERSIONS.env 选型注记）：
@@ -153,8 +154,8 @@ fi
 # 这一行是 image-native.yml 与人工核对共用的锚点，别改字面（grep 'kleidicv 状态:'）。
 say "kleidicv 状态: $KLEIDI_STATE（源码=$KLEIDI_SRC）"
 
-# ── 4) 只编 imgcodecs 连带 core/imgproc（BUILD_LIST 已裁，不会捎带别的模块）
-say "make -j$(nproc) opencv_imgcodecs（连带 core/imgproc 静态库）"
+# ── 4) 只编 imgcodecs 连带 BUILD_LIST 模块（白名单已裁，不会捎带别的模块）
+say "make -j$(nproc) opencv_imgcodecs（连带 core/imgproc/features2d/flann 静态库）"
 cmake --build "$BUILD_DIR" --target opencv_imgcodecs -j"$(nproc)"
 
 # ── 5) 我们的桥面 C++ + 静态链成 libopencv.so ───────────────────────────
@@ -170,16 +171,18 @@ CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
     -I "$OCV_SRC/modules/core/include" \
     -I "$OCV_SRC/modules/imgproc/include" \
     -I "$OCV_SRC/modules/imgcodecs/include" \
+    -I "$OCV_SRC/modules/features2d/include" \
+    -I "$OCV_SRC/modules/flann/include" \
     -I "$BUILD_DIR" \
     -o "$IMG_LIB" \
     "$IMG_CPP_DIR/imgnative.cpp" \
     "$IMG_CPP_DIR/images_jni.cc" \
     -L"$BUILD_DIR/lib/arm64-v8a" -L"$BUILD_DIR/3rdparty/lib/arm64-v8a" \
-    -lopencv_imgcodecs -lopencv_imgproc -lopencv_core \
+    -lopencv_features2d -lopencv_flann -lopencv_imgcodecs -lopencv_imgproc -lopencv_core \
     -llibjpeg-turbo -llibpng -lzlib \
     -ldl -lm -llog
 
-# 链接面 = BUILD_LIST 三个模块 + 它们自带的两个格式库（libjpeg-turbo/libpng/zlib，
+# 链接面 = BUILD_LIST 五个模块 + 它们自带的两个格式库（libjpeg-turbo/libpng/zlib，
 # BUILD_JPEG/BUILD_PNG/BUILD_ZLIB=ON 强制走树内源码，不找宿主/交叉 sysroot ——
 # 无外部下载、无系统依赖，产物可复现）。最终的 NEEDED 白名单由下方门禁来验。
 
