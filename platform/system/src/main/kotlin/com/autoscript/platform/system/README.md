@@ -74,3 +74,11 @@ OpenCV 静态链接，构建轨 `node-runtime-build/scripts/build-opencv.sh`）�
 `JniOps` 后，本模块单测 `NativeImageAnalyzerTest` 注入内存替身跑全部分支。**像素判读不在本模块也不在 JVM**：
 计算核的语义门在宿主机直链（`bridge/image/test/cpp/run-host-tests.sh`，见 §9.2 末）——
 本 README 的 JVM 侧只证「句柄/错误码/域校验」。
+
+> **so 的符号面按时戳对表，别信手边的产物**（2026-09-25 记账）：`findColor` 落地后
+> 曾拿本机 `node-runtime-build/out-opencv/libopencv.so`（`colorNative` 符号**0** 个，
+> 早于该提交 87 分钟）以为"交付位已是新的"，差点据此判 JNI 名前四条对不上。so 是
+> gitignore 的构建产物，不在版本控制内，**手边那份只能证明"构建过一次"**。判据是
+> `llvm-nm -D libopencv.so | grep NativeImageAnalyzer_` 的四个符号（decode/match/
+> release/color）**逐个在场**，外加 `llvm-readelf -l` 的 LOAD 段 align ≥ 0x4000 ——
+> 后者 `check-opencv-alignment.sh` 每次构建都会跑，但只在 CI 侧跑。
