@@ -55,7 +55,7 @@ Android 真实现 ── :platform:system（SystemSpis.of）与 `device/` 的无
 | 剪贴板 | `ClipboardNamespaceHandler`（独立注入缝 `clipboardHandler`；读空裸 `null`、写侧无门禁） | `SystemSpis.Bundle.clipboard` = `AndroidClipboard`+`ClipboardOps`（与 a11y 剪贴板同口径 `coerceToText`）；生产已接（同存储三件） |
 | 传感器 | `SensorsNamespaceHandler`（独立注入缝 `sensorsHandler`；拉取式游标 `drain`，`on('change')` 只是 facade 节流轮询；delay 缺省 `NORMAL`） | `SystemSpis.Bundle.sensors` = `AndroidSensorSource`+`SensorOps`（P0 只做 motion/environment 名单；未知名→`ERR_NOT_SUPPORTED`、系统拒收→`ERR_SERVICE_DISABLED`）；生产已接（同存储三件） |
 | 图像面（§9.2） | `ImagesNamespaceHandler`（独立注入缝 `imagesHandler`；`decode`/`matchTemplate`/`findImage`/`findColor`/`release` 五方法，阈值一个键 `threshold`、域 `[0,1]`，未匹配回裸 `null` 不是异常；`findColor` 的 `color` 恒四分量 `[r,g,b,a]`、`tolerance` 逐分量 `[0,255]`、`region` 四元组可选，未命中同样回裸 `null` 而“扫过 0 像素”是 `ERR_INVALID_PARAM`；**单独成文件、刻意不住 `SystemNamespaces.kt`** —— 那五个共担 OVERLAY/ROOT/ADB_INPUT 门禁组，图像面没有门禁） | **生产已接**（2026-09-25）：`PlatformWiring.of` 构造 `NativeImageAnalyzer.of(JniOps.loadOrNull())`（`:platform:system`，装载 `:bridge:image` 的 `libopencv.so`）；so 缺位 → null → 桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`，绝不塞一个看不见像素的假分析器。帧表自管（`ScreenshotSource` 同套纪律：单调 refId + generation 恒 1 + `Mutex` 串行闸），`HandleRegistry` 住 `:bridge:java`、本模块黑名单碰不到 |
-| 图像面宿主机语义门禁 | `bridge/image/test/cpp/run-host-tests.sh`（OpenCV 4.14.0 同 commit x86_64 静态库直链 `imgnative.cpp`；`host_color_test` 36 例 + `host_decode_norm_test` 21 例；`imgnative_match` 的判读**没有** host 断言，模板匹配即当前覆盖缺口） | 不在这份 README 的门禁范围（它是 C++ 面、住 `:bridge:image`）：补在这儿只为「图像面有第三道门」这件事有据可查。NDK `-fsyntax-only` 只管 aarch64 能编、它管判读对，两者互不替代（2026-09-25 它抓出 `IMREAD_COLOR` 丢 alpha 导致 findColor 的 a 分量从未参与判定）|
+| 图像面宿主机语义门禁 | `bridge/image/test/cpp/run-host-tests.sh`（OpenCV 4.14.0 同 commit x86_64 静态库直链 `imgnative.cpp`；`host_color_test` 36 例 + `host_decode_norm_test` 21 例 + `host_match_test` 24 例 = 81 例，decode 归一/findColor/matchTemplate 三个算子的判读都有；灰度/裁剪/缩放/旋转/特征仍是缺口） | 不在这份 README 的门禁范围（它是 C++ 面、住 `:bridge:image`）：补在这儿只为「图像面有第三道门」这件事有据可查。NDK `-fsyntax-only` 只管 aarch64 能编、它管判读对，两者互不替代（2026-09-25 它抓出 `IMREAD_COLOR` 丢 alpha 导致 findColor 的 a 分量从未参与判定）|
 
 > 图像面这道门不替代 JVM/JS 双侧契约：前者证**像素判读对**，后者证**wire 形状与错误码**。
 
@@ -64,4 +64,4 @@ Android 真实现 ── :platform:system（SystemSpis.of）与 `device/` 的无
 MediaProjection 高清会话真实现、root/Shizuku 输入通道（§9.3 P1）、
 `images` native 面的剩余算子（灰度/裁剪/缩放/旋转/特征 —— §9.2：桥面五方法与
 `:domain` `ImageAnalyzer` SPI 已就位，`libopencv.so` 的 `decode`/`matchTemplate`/`findColor`
-也已接，缺的是那些还没开桥面的操作）。计算核判读的宿主机门禁已补上（`run-host-tests.sh`，57 例）—— 新算子落地时**先补它的 host 断言再上真机**，否则又是一次「三门全绿、alpha 从来没参与判定」。
+也已接，缺的是那些还没开桥面的操作）。计算核判读的宿主机门禁已补上（`run-host-tests.sh`，81 例，覆盖 decode 归一/findColor/matchTemplate）—— 新算子落地时**先补它的 host 断言再上真机**，否则又是一次「三门全绿、alpha 从来没参与判定」。
