@@ -66,6 +66,33 @@ cv::Mat* find_locked(int64_t ref) {
  */
 bool frame_is_normalized(const cv::Mat& m) { return m.channels() == 4 && m.depth() == CV_8U; }
 
+/**
+ * 把可选 region（x,y,w,h）解析成一个**保证落在帧内**的矩形。
+ * 调用方必须已持 g_mu（要读帧尺寸）。
+ *
+ * 三条判据合一处：`region == nullptr` = 全帧；给了就必须是正宽高**且整体落在帧内**
+ * —— 半截区域在帧外时"帧外的像素是什么"没有答案，不许静默裁剪成"只看得到的那半"
+ * （那会让脚本以为扫过全区域）。越界一律 IMG_ERR_INVALID_PARAM，不是"没找到"。
+ *
+ * 为什么提出来：找色已经这么判了，而**下一个要区域的算子（裁剪）会需要同一个判据** ——
+ * 抄一份就意味着两处判据能漂移（一处宽严不一，脚本按 A 算出来的坐标在 B 上越界）。
+ * 返回 false 时 `out` 不动。
+ */
+bool resolve_region(const cv::Mat& frame, const int32_t* region, cv::Rect* out) {
+    if (region == nullptr) {
+        *out = cv::Rect(0, 0, frame.cols, frame.rows);
+        return true;
+    }
+    const int32_t rx = region[0], ry = region[1], rw = region[2], rh = region[3];
+    if (rw <= 0 || rh <= 0 || rx < 0 || ry < 0 ||
+        rx + rw > frame.cols || ry + rh > frame.rows) {
+        return false;
+    }
+    *out = cv::Rect(static_cast<int>(rx), static_cast<int>(ry),
+                    static_cast<int>(rw), static_cast<int>(rh));
+    return true;
+}
+
 }  // namespace
 
 extern "C" {
@@ -289,20 +316,7 @@ int imgnative_color(int64_t frame, const int32_t* color, int32_t tolerance,
         if (f == nullptr) return IMG_ERR_STALE_HANDLE;
 
         cv::Rect roi;
-        if (region != nullptr) {
-            const int32_t rx = region[0];
-            const int32_t ry = region[1];
-            const int32_t rw = region[2];
-            const int32_t rh = region[3];
-            if (rw <= 0 || rh <= 0 || rx < 0 || ry < 0 ||
-                rx + rw > f->cols || ry + rh > f->rows) {
-                return IMG_ERR_INVALID_PARAM;
-            }
-            roi = cv::Rect(static_cast<int>(rx), static_cast<int>(ry),
-                           static_cast<int>(rw), static_cast<int>(rh));
-        } else {
-            roi = cv::Rect(0, 0, f->cols, f->rows);
-        }
+        if (!resolve_region(*f, region, &roi)) return IMG_ERR_INVALID_PARAM;
 
         // ROI 是浅视图（共享 f 的数据，不拷贝像素 —— §9.2 的 0~1 拷贝）；
         // 索引域是**视图内** 0..rw/0..rh，命中坐标要加回 roi 左上角才是全帧坐标。
