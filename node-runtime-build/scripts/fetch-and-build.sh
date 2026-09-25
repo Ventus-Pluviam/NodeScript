@@ -194,7 +194,7 @@ done
 
 # ── 7) 门禁 ──────────────────────────────────────────────────────────────
 say "16KB/ELF/平台/ABI 门禁 ..."
-"$SCRIPT_DIR/check-alignment.sh" "$TOOLCHAIN/bin/llvm-objdump" "$OUT"
+bash "$SCRIPT_DIR/check-alignment.sh" "$TOOLCHAIN/bin/llvm-objdump" "$OUT"
 
 # ── 8) 产物基表（对照 Node SHASUMS256 语义，供发布审计）──────────────────
 (cd "$OUT" && sha256sum node libnode.so* config.gypi config.mk | tee SHASUMS256)
