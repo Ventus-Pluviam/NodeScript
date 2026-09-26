@@ -924,7 +924,7 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 
 **接线现状（Kotlin 侧，与 `AppShell.assemble` 对齐；未列出的命名空间在两侧都还没有 handler）**：
 
-> 本表有**机械化门禁**：`bridge/js/test/wire-reconcile.test.cjs` 双向对账两份源码（不经 mock）——JS `invoke` 的命名空间必须被 `register`、JS 发的每个方法必须有 `when(request.method)` 分支、宿主方法表里每个分支必须有人发（收了没人发的 wire 名要么 facade 漏调、要么写进该测试的 `ALIASES` 并说明为什么，且 `ALIASES` 不许虚报）。它是 `npm test` 的一部分，随 CI 跑；a11y 选择器动作经 `call('<m>')` 字面量、`shell.shell()` 别名与 `findOneOrNull` 兼容分支是仅有的三处登记。 同族另有两道：`event-wire.test.cjs`（npm **事件面** wire 逐字对账——宿主 `phaseWire`/`kindWire`/`actionWire`/`type` ⇄ `npm.ts` 的 `PHASES`/`WARNING_KINDS`/`APPROVAL_ACTIONS`/`routeInstallEvent` 分支双向集合相等，防 `.name.lowercase()` 折出 `post_check` 那类连字符漂移）与 `err-catalog.test.cjs`（错误目录三面对账，见 §7.6）。
+> 本表有**机械化门禁**：`bridge/js/test/wire-reconcile.test.cjs` 双向对账两份源码（不经 mock）——JS `invoke` 的命名空间必须被 `register`、JS 发的每个方法必须有 `when(request.method)` 分支、宿主方法表里每个分支必须有人发（收了没人发的 wire 名要么 facade 漏调、要么写进该测试的 `ALIASES` 并说明为什么，且 `ALIASES` 不许虚报）。它是 `npm test` 的一部分，随 CI 跑；a11y 选择器动作经 `call('<m>')` 字面量、`shell.shell()` 别名与 `findOneOrNull` 兼容分支是仅有的三处登记。 同族另有两道：`event-wire.test.cjs`（npm **事件面** wire 逐字对账——宿主 `phaseWire`/`kindWire`/`actionWire`/`type` ⇄ `npm.ts` 的 `PHASES`/`WARNING_KINDS`/`APPROVAL_ACTIONS`/`routeInstallEvent` 分支双向集合相等，防 `.name.lowercase()` 折出 `post_check` 那类连字符漂移），并钉**键名面**——`encodeEvent`/审批 `mapOf` 发的每个键 ⇄ JS `w.x` 读的键逐分支对账，JS 读宿主不发的键即红、宿主发了没人读的键须登记 `UNREAD` 并写明理由（mock 测试发的永远是 JS 自己认识的键，键名漂移只有这道门能抓）与 `err-catalog.test.cjs`（错误目录三面对账，见 §7.6）。
 
 | 命名空间 | JS facade | Kotlin handler | 挂载状态 |
 |---|---|---|---|

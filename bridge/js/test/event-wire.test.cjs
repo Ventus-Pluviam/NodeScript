@@ -10,8 +10,12 @@
  * 对账**：Kotlin 改串、两边测试各自跟着改，运行期才炸——与 `vulnerabilities`/`vulns`
  * 是同一类事故。这道门直接读两份源码做双向集合相等。
  *
- * 不做的：不验回包其它字段名（那是 drain 回包形状测试的活）、不验 seq/游标语义
- * （`npm-events.test.cjs` 的活）。
+ * 同一文件顺带钉**键名面**：条目/信封的每个键都是两侧各写一半（Kotlin `mapOf` 发、
+ * JS `w.x` 读），mock 测试永远发 JS 自己认识的键，所以「宿主改了键名、两侧单测照绿、
+ * 运行期读出 undefined」这类漂移只有源码对账能抓。方向纪律与 wire-reconcile 相同：
+ * JS 读了宿主不发的键 = 红；宿主发了 JS 不读的键 = 须登记在 UNREAD 并写明为什么。
+ *
+ * 不做的：不验 seq/游标语义与丢帧行为（`npm-events.test.cjs` 的活）。
  */
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -78,6 +82,117 @@ function bothWays(name, ktSide, jsSide) {
   assert.deepStrictEqual(ktOnly, [], `${name}: 宿主会发、JS 白名单不认（拉到即抛）: ${ktOnly.join(', ')}`)
   assert.deepStrictEqual(jsOnly, [], `${name}: JS 认、宿主不发（白名单虚位）: ${jsOnly.join(', ')}`)
 }
+
+// ══════════ 键名面：Kotlin `mapOf` 发什么 ⇄ JS `w.x` 读什么 ══════════
+
+/**
+ * 宿主发了、facade 不读的键 → 为什么可以不读。
+ * 与 wire-reconcile 的 ALIASES 同纪律：登记即承诺，键真被读走或真消失都要红（见下）。
+ */
+const UNREAD = {
+  seq: '条目上的 seq 是宿主环位置的冗余标注：游标推进只看信封的 last，丢帧判据是 first > cursor+1（见 pumpInstallEvents KDoc），故条目 seq 无人读',
+}
+
+/** Kotlin `encodeEvent` 各分支 mapOf 的键（分支名 → 键集）。 */
+function ktEventKeysByBranch(src) {
+  const start = src.indexOf('internal fun encodeEvent(')
+  assert.ok(start >= 0, 'Kotlin 找不到 encodeEvent')
+  const open = src.indexOf('{', start)
+  const body = src.slice(open, src.indexOf('\n    }', open))
+  const out = new Map()
+  const parts = body.split(/is com\.autoscript\.domain\.npm\.InstallEvent\./).slice(1)
+  for (const part of parts) {
+    const name = part.slice(0, part.indexOf(' ')).toLowerCase() // Progress/Warning/Finished
+    const m = part.match(/mapOf\(([\s\S]*?)\n        \)/)
+    assert.ok(m, `encodeEvent ${name} 分支的 mapOf 没解析到`)
+    out.set(name, [...new Set([...m[1].matchAll(/"([A-Za-z_][\w]*)"?\s+to\s/g)].map((x) => x[1]))].sort())
+  }
+  return out
+}
+
+/** `routeInstallEvent` 各 case 读的键（case 名 → 键集）；default 不算读。 */
+function tsReadKeysByCase(src) {
+  const start = src.indexOf('function routeInstallEvent(')
+  assert.ok(start >= 0, 'npm.ts 找不到 routeInstallEvent')
+  const open = src.indexOf('{', start)
+  const body = src.slice(open, src.indexOf('\n}', start))
+  const out = new Map()
+  // switch 的判别表达式（w.type）在 case 体之前，对每个 case 都算读过
+  const disc = body.match(/switch\s*\(\s*w\.([A-Za-z_][\w]*)\s*\)/)
+  const discriminant = disc ? [disc[1]] : []
+  const chunks = body.split(/case\s+'([a-z]+)':|default:/)
+  for (let i = 1; i < chunks.length; i += 2) {
+    const name = chunks[i]
+    if (!name) continue // default: 捕获组为空
+    const keys = [...discriminant, ...[...chunks[i + 1].matchAll(/\bw\.([A-Za-z_][\w]*)/g)].map((x) => x[1])]
+    out.set(name, [...new Set(keys)].sort())
+  }
+  return out
+}
+
+/** Kotlin `"requests" ->` 嵌套 mapOf 的键（审批条目）。 */
+function ktApprovalKeys(src) {
+  const start = src.indexOf('"requests" to got.requests')
+  assert.ok(start >= 0, 'Kotlin 找不到 approvals 回包')
+  const open = src.indexOf('mapOf(', start)
+  const body = src.slice(open + 'mapOf('.length, src.indexOf('\n                            )', open))
+  return [...new Set([...body.matchAll(/"([A-Za-z_][\w]*)"?\s+to\s/g)].map((x) => x[1]))].sort()
+}
+
+/** JS `pumpApprovals` 条目分支读的键。 */
+function tsApprovalReads(src) {
+  const start = src.indexOf('async function pumpApprovals(')
+  assert.ok(start >= 0, 'npm.ts 找不到 pumpApprovals')
+  const open = src.indexOf('for (const w of items)', start)
+  const body = src.slice(open, src.indexOf('if (last > approvalSeq)', open))
+  return [...new Set([...body.matchAll(/\bw\.([A-Za-z_][\w]*)/g)].map((x) => x[1]))].sort()
+}
+
+function keyParity(name, emitted, read) {
+  const unread = read.filter((k) => !emitted.includes(k))
+  const unreadByHost = emitted.filter((k) => !read.includes(k))
+  assert.deepStrictEqual(unread, [], `${name}: JS 读了宿主不发的键（运行期 undefined）: ${unread.join(', ')}`)
+  const stale = unreadByHost.filter((k) => !(k in UNREAD))
+  assert.deepStrictEqual(stale, [], `${name}: 宿主发了没人读的键——要么 facade 漏用，要么登记进 UNREAD: ${stale.join(', ')}`)
+  // 过期 = 有人读走了它，或宿主压根不再发它（登记时承诺的前提消失）
+  const obsolete = Object.keys(UNREAD).filter((k) => read.includes(k) || !emitted.includes(k))
+  assert.deepStrictEqual(obsolete, [], `${name}: UNREAD 登记过期（键已被人读）: ${obsolete.join(', ')}`)
+}
+
+test('事件条目键：encodeEvent 各分支 ⇄ routeInstallEvent 各 case 逐分支对账', () => {
+  const kt = ktEventKeysByBranch(KT)
+  const ts = tsReadKeysByCase(TS)
+  assert.deepStrictEqual([...kt.keys()].sort(), [...ts.keys()].sort(), '分支集合不一致')
+  for (const [branch, emitted] of kt) {
+    keyParity(`事件 ${branch}`, emitted, ts.get(branch))
+  }
+})
+
+test('审批条目键：宿主 mapOf ⇄ pumpApprovals 读集对账', () => {
+  keyParity('审批', ktApprovalKeys(KT), tsApprovalReads(TS))
+})
+
+test('信封键：first/last/events/requests 两侧齐全（JS 只认这四个）', () => {
+  const ktEnvelope = [...new Set([...KT.matchAll(/"([A-Za-z_][\w]*)"?\s+to\s/g)].map((x) => x[1]))]
+  for (const k of ['first', 'last', 'events', 'requests']) {
+    assert.ok(ktEnvelope.includes(k), `宿主回包缺信封键 ${k}`)
+  }
+  const jsReads = tsReadKeysByCase(TS).size > 0 ? ['first', 'last'] : []
+  assert.ok(jsReads.length > 0, '解析失灵')
+  // drainBatchOf 读 first/last + 动态 key；keys 字面量在 pump 调用处
+  assert.ok(TS.includes("drainBatchOf(payload, 'events')"), 'JS 少了 events 信封')
+  assert.ok(TS.includes("drainBatchOf(payload, 'requests')"), 'JS 少了 requests 信封')
+})
+
+test('解析有牙：逐分支键数与 UNREAD 只有 seq', () => {
+  const kt = ktEventKeysByBranch(KT)
+  const ts = tsReadKeysByCase(TS)
+  assert.equal(kt.get('progress').length, 7, 'progress 分支应发 7 键（含 seq）')
+  assert.equal(ts.get('progress').length, 6, 'progress case 应读 6 键')
+  assert.deepStrictEqual(Object.keys(UNREAD), ['seq'], 'UNREAD 登记项变了——重审注释')
+  assert.ok(kt.get('progress').includes('percent'), '缺 percent——键名漂了')
+  assert.ok(!kt.get('progress').includes('pct'), '出现 pct——改名未同步')
+})
 
 test('phase：phaseWire ⇄ PHASES 双向相等（连字符陷阱在两侧都钉住）', () => {
   bothWays('phase', ktWhenWire(KT, 'phaseWire'), tsArrayWire(TS, 'PHASES'))
