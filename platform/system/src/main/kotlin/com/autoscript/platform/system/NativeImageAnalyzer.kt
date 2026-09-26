@@ -273,10 +273,12 @@ class NativeImageAnalyzer(
 
 /**
  * so 装载面（[NativeImageAnalyzer.Ops] 的真机实现）：`System.loadLibrary("opencv")`
- * 装载 `libopencv.so`（`:bridge:image` 产物）+ 三个 `external` native 方法。
+ * 装载 `libopencv.so`（`:bridge:image` 产物）+ 五个 `external` native 方法。
  * 方法名与 `:bridge:image` 的 `images_jni.cc`
- * 的 `Java_com_autoscript_platform_system_NativeImageAnalyzer_*` 对表 ——
- * **换包名/换类名必须同批改那边**（JNI 符号名是字符串约定，编译器不看护）。
+ * 的 `Java_com_autoscript_platform_system_JniOps_*` 对表 ——
+ * **换包名/换类名必须同批改那边**（JNI 符号名是字符串约定，编译器不看护；
+ * `bridge/js/test/jni-names.test.cjs` 钉的就是这条，2026-09-26 曾抓到
+ * cc 用 `NativeImageAnalyzer_` 而声明类是 `JniOps` 的对不上）。
  *
  * loadLibrary 在**类初始化**时做（companion 之外的实例化都跑得到）：so 缺位
  * 抛 `UnsatisfiedLinkError`，由 [NativeImageAnalyzer.of] 的捕获转成"不注入"。

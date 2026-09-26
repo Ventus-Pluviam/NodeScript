@@ -21,7 +21,7 @@
 
 #include <cstdint>
 
-// ── 装载面只引计算核的四个入口（imgnative.cpp 的 extern "C"，声明在此）──
+// ── 装载面只引计算核的五个入口（imgnative.cpp 的 extern "C"，声明在此）──
 // 装载面与计算核**共持同一份状态码表**（文件头 0/1/2/3/4，Kotlin 侧再对一次）；
 // 加/改状态码必须三处同批，别只改一处。
 extern "C" {
@@ -45,7 +45,7 @@ extern "C" {
 // ── decode：文件 → 一帧。回 jlong[3]{nativeRef, width, height}；
 // 失败回 null + *outStatus 状态码（Kotlin 侧折 ErrorCode，见伴生对象）。
 JNIEXPORT jlongArray JNICALL
-Java_com_autoscript_platform_system_NativeImageAnalyzer_decodeNative(
+Java_com_autoscript_platform_system_JniOps_decodeNative(
     JNIEnv* env, jobject /*thiz*/, jstring path, jobject out_status) {
     jintArray status_arr = static_cast<jintArray>(out_status);
     jint status = 0;
@@ -77,7 +77,7 @@ Java_com_autoscript_platform_system_NativeImageAnalyzer_decodeNative(
 // 字节数在这一层核（Kotlin 侧也核过一次 —— 两处判据必须一致，否则"谁在撒谎"分不清）：
 // 长度 < width*height*4 = 参数错（不越读调用方的数组）。
 JNIEXPORT jlongArray JNICALL
-Java_com_autoscript_platform_system_NativeImageAnalyzer_ingestNative(
+Java_com_autoscript_platform_system_JniOps_ingestNative(
     JNIEnv* env, jobject /*thiz*/, jbyteArray rgba, jint width, jint height,
     jobject out_status) {
     jintArray status_arr = static_cast<jintArray>(out_status);
@@ -124,7 +124,7 @@ Java_com_autoscript_platform_system_NativeImageAnalyzer_ingestNative(
 // 长度 0 的数组**（比 conf=0 更难误读 —— confidence 恒 ≥ 0，0 会被当成
 // "真的匹上了但很差"）；失败回 null + *outStatus。
 JNIEXPORT jdoubleArray JNICALL
-Java_com_autoscript_platform_system_NativeImageAnalyzer_matchNative(
+Java_com_autoscript_platform_system_JniOps_matchNative(
     JNIEnv* env, jobject /*thiz*/, jlong haystack, jlong needle, jdouble threshold,
     jobject out_status) {
     jintArray status_arr = static_cast<jintArray>(out_status);
@@ -153,7 +153,7 @@ Java_com_autoscript_platform_system_NativeImageAnalyzer_matchNative(
 // ── release：放掉一帧。回状态码直出（0 = OK，1 = STALE）—— 语义足够简单，
 // 不值得为它再开一个 out 数组；Kotlin 侧同样按对表折 ErrorCode。
 JNIEXPORT jint JNICALL
-Java_com_autoscript_platform_system_NativeImageAnalyzer_releaseNative(
+Java_com_autoscript_platform_system_JniOps_releaseNative(
     JNIEnv* /*env*/, jobject /*thiz*/, jlong native_ref) {
     return static_cast<jint>(imgnative_release(static_cast<int64_t>(native_ref)));
 }
@@ -166,7 +166,7 @@ Java_com_autoscript_platform_system_NativeImageAnalyzer_releaseNative(
 // 数组直达，不经过 JSON：分量是原生侧的域（0..255），在装载面多绕一层字符串
 // 往返只会多一个漂移面。
 JNIEXPORT jlongArray JNICALL
-Java_com_autoscript_platform_system_NativeImageAnalyzer_colorNative(
+Java_com_autoscript_platform_system_JniOps_colorNative(
     JNIEnv* env, jobject /*thiz*/, jlong frame,
     jintArray color, jint tolerance, jintArray region, jobject out_status) {
     jintArray status_arr = static_cast<jintArray>(out_status);
