@@ -57,8 +57,23 @@ exports.app = {
 };
 /** 悬浮窗（§9.4；P1 全形态，P0 类型面）。 */
 exports.floatingWindow = {
-    /** 创建悬浮窗宿主（overlay 权限门禁；P1 实现）。 */
-    async create(_opts = {}) {
-        return runtime_1.runtimeBridge.invoke('floatingWindow', 'create', null, { ttl: 10_000 });
+    /**
+     * 创建悬浮窗宿主（overlay 权限门禁在装配层，被拒 → ERR_PERMISSION_DENIED）。
+     * **形状参数原样过桥**（§12.3.3 已收口）：`{title,width,height}` 进 payload，
+     * 缺省字段发 null（handler 的 `optStr`/`optLong` 把 null 当缺席，不套错默认）。
+     */
+    async create(opts = {}) {
+        return (await runtime_1.runtimeBridge.invoke('floatingWindow', 'create', {
+            title: opts.title ?? null,
+            width: opts.width ?? null,
+            height: opts.height ?? null,
+        }, { ttl: opts.timeout ?? 10_000 }));
+    },
+    /**
+     * 关闭（宿主侧透传；未知/跨代句柄回 ERR_STALE_HANDLE，释放不了的窗口不说成已关）。
+     * 句柄必须来自 [create] —— 不猜 id、不自造 generation。
+     */
+    async close(ref, opts = {}) {
+        await runtime_1.runtimeBridge.invoke('floatingWindow', 'close', { ref }, { ttl: opts.timeout ?? 5_000 });
     },
 };

@@ -131,4 +131,44 @@ class ScreenNamespaceHandlerTest {
         )
         assertEquals("ERR_INVALID_PARAM", bad.code)
     }
+
+    @Test
+    fun `startCapturer 的尺寸提示透给生产者，回包尺寸不跟着编`() = runBlocking {
+        val seen = mutableListOf<Pair<Int, Int>>()
+        val h = ScreenNamespaceHandler(
+            ScreenshotSource(
+                object : ScreenshotSource.FrameProducer {
+                    override suspend fun snapshot() = ScreenSnapshot(locked = false, secureForeground = false, hasWindows = true)
+                    override suspend fun produce(width: Int, height: Int): ProducedFrame {
+                        seen += width to height
+                        return ProducedFrame(byteArrayOf(7, 7, 7), 1080, 2400) // 系统真值
+                    }
+                },
+            ),
+        )
+        val start = assertInstanceOf(
+            ScreenNamespaceHandler.Response.Ok::class.java,
+            h.handle(ScreenNamespaceHandler.Request(50, "startCapturer", """{"width":720,"height":1280}""")),
+        )
+        assertTrue(!start.payload!!.contains("720"), "回包不带请求尺寸（带了就是把提示说成事实）")
+        val sessionId = ((A11yBridgeJson.decodeObject(start.payload!!)["session"] as A11yBridgeJson.Value.Obj).fields["refId"] as A11yBridgeJson.Value.N).raw
+        val frame = assertInstanceOf(
+            ScreenNamespaceHandler.Response.Ok::class.java,
+            h.handle(ScreenNamespaceHandler.Request(51, "nextFrame", """{"session":{"refId":$sessionId,"generation":1}}""")),
+        )
+        assertEquals(listOf(720 to 1280), seen, "提示要走到生产者")
+        val o = A11yBridgeJson.decodeObject(frame.payload!!)
+        assertEquals("1080", (o["width"] as A11yBridgeJson.Value.N).raw, "帧尺寸恒为真实帧")
+        Unit
+    }
+
+    @Test
+    fun `startCapturer 尺寸非法一律 ERR_INVALID_PARAM（不静默套默认）`() = runBlocking {
+        for (payload in listOf("""{"width":0}""", """{"height":-1}""", """{"width":"tall"}""", """{"width":720.5}""")) {
+            val resp = handler.handle(ScreenNamespaceHandler.Request(60, "startCapturer", payload))
+            val err = assertInstanceOf(ScreenNamespaceHandler.Response.Err::class.java, resp)
+            assertEquals("ERR_INVALID_PARAM", err.code, "非法尺寸要报，不替调用方改成默认：$payload")
+        }
+        Unit
+    }
 }

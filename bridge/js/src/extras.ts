@@ -77,10 +77,46 @@ export const app = {
   },
 }
 
+/** 悬浮窗句柄（`create` 回包；`close` 原样带回 —— 句柄带 generation，跨代即 ERR_STALE_HANDLE）。 */
+export interface FloatingWindowRef {
+  readonly refId: number
+  readonly generation: number
+}
+
+/** 悬浮窗形状（handler 侧 `FloatingWindowSpec`；缺省 = 无标题 + 双向 wrap content）。 */
+export interface FloatingWindowSpec {
+  title?: string | null
+  width?: number | null
+  height?: number | null
+}
+
 /** 悬浮窗（§9.4；P1 全形态，P0 类型面）。 */
 export const floatingWindow = {
-  /** 创建悬浮窗宿主（overlay 权限门禁；P1 实现）。 */
-  async create(_opts: { title?: string; width?: number; height?: number; timeout?: number } = {}): Promise<unknown> {
-    return runtimeBridge.invoke('floatingWindow', 'create', null, { ttl: 10_000 })
+  /**
+   * 创建悬浮窗宿主（overlay 权限门禁在装配层，被拒 → ERR_PERMISSION_DENIED）。
+   * **形状参数原样过桥**（§12.3.3 已收口）：`{title,width,height}` 进 payload，
+   * 缺省字段发 null（handler 的 `optStr`/`optLong` 把 null 当缺席，不套错默认）。
+   */
+  async create(
+    opts: { title?: string | null; width?: number | null; height?: number | null; timeout?: number } = {},
+  ): Promise<FloatingWindowRef> {
+    return (await runtimeBridge.invoke(
+      'floatingWindow',
+      'create',
+      {
+        title: opts.title ?? null,
+        width: opts.width ?? null,
+        height: opts.height ?? null,
+      },
+      { ttl: opts.timeout ?? 10_000 },
+    )) as FloatingWindowRef
+  },
+
+  /**
+   * 关闭（宿主侧透传；未知/跨代句柄回 ERR_STALE_HANDLE，释放不了的窗口不说成已关）。
+   * 句柄必须来自 [create] —— 不猜 id、不自造 generation。
+   */
+  async close(ref: FloatingWindowRef, opts: { timeout?: number } = {}): Promise<void> {
+    await runtimeBridge.invoke('floatingWindow', 'close', { ref }, { ttl: opts.timeout ?? 5_000 })
   },
 }

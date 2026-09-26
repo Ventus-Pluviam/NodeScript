@@ -39,6 +39,7 @@ function installMockExtras() {
       case 'app.launch': return ok('true')
       case 'app.currentPackage': return ok('null')
       case 'floatingWindow.create': return ok(JSON.stringify({ refId: 7, generation: 1 }))
+      case 'floatingWindow.close': return ok('true')
       default: return err('ERR_NOT_IMPLEMENTED', `未知 ${ns}.${method}`)
     }
   })
@@ -102,4 +103,28 @@ test('floatingWindow.create：句柄两字段可解析（refId/generation）', a
   installMockExtras()
   const ref = await auto.floatingWindow.create({ title: '面板', width: 300, height: 200 })
   assert.deepEqual(ref, { refId: 7, generation: 1 })
+})
+
+test('floatingWindow.create：形状参数原样过桥（不再发 null payload）', async () => {
+  installMockExtras()
+  await auto.floatingWindow.create({ title: '面板', width: 300, height: 200 })
+  const c = lastCall()
+  assert.equal(c.method, 'create')
+  // handler 的 create 要求 payload（缺 payload = ERR_INVALID_PARAM）；发 null 就是自断通路。
+  assert.deepEqual(c.p, { title: '面板', width: 300, height: 200 })
+})
+
+test('floatingWindow.create：缺省字段发 null（handler 把 null 当缺席，不套错默认）', async () => {
+  installMockExtras()
+  await auto.floatingWindow.create()
+  assert.deepEqual(lastCall().p, { title: null, width: null, height: null })
+})
+
+test('floatingWindow.close：句柄原样带回（不猜 id、不自造 generation）', async () => {
+  installMockExtras()
+  const ref = await auto.floatingWindow.create({ title: '面板' })
+  await auto.floatingWindow.close(ref)
+  const c = lastCall()
+  assert.equal(c.method, 'close')
+  assert.deepEqual(c.p, { ref: { refId: 7, generation: 1 } })
 })

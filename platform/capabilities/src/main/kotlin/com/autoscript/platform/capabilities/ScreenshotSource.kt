@@ -28,6 +28,8 @@ import java.util.concurrent.atomic.AtomicLong
  * - 帧句柄 generation=1（单帧单句柄，不复用；recycle 幂等，同 §7.4 dispose 语义）；
  * - 会话式（MediaProjection）：[openSession] 一次性授权，会话内 nextFrame 同样先过
  *   屏幕策略；reconnect 不自动重试授权（用完即 close，由 PermissionCenter 引导重授权）；
+ *   [openSession] 的 width/height 是**请求提示**（透传给生产者，可被忽略），回包尺寸
+ *   恒为真实帧 —— 请求过尺寸不代表能拿到那个尺寸；
  * - 会话外 nextFrame / 已 close 后操作 → ERR_SERVICE_DISABLED（诚实上报，不伪造帧）。
  *
  * **帧表与 `images` 共用**（§18 第 8 项 (b) 2026-09-25 拍板，发号侧归一）：给了
@@ -94,10 +96,14 @@ class ScreenshotSource(
         return register(frame)
     }
 
-    override suspend fun openSession(): ScreenCaptureSession {
+    /**
+     * [width]/[height] 透传给会话 → 每帧的 [FrameProducer.produce] 入参（**请求提示**，
+     * 生产者可忽略，见其 KDoc）。提示只影响"想截多大"，**回包尺寸恒为真实帧**。
+     */
+    override suspend fun openSession(width: Int?, height: Int?): ScreenCaptureSession {
         val snapshot = producer.snapshot()
         ScreenPolicy.requireCapturable(snapshot)
-        return CaptureSession(this)
+        return CaptureSession(this, width, height)
     }
 
     /**
@@ -127,11 +133,16 @@ class ScreenshotSource(
         }
     }
 
-    internal suspend fun nextFramed(snapshotFirst: Boolean = true): ImageFrame {
+    /** [width]/[height] 为请求提示（缺省走 [DEFAULT_WIDTH]/[DEFAULT_HEIGHT]）；回包尺寸取 [ProducedFrame] 真值。 */
+    internal suspend fun nextFramed(
+        snapshotFirst: Boolean = true,
+        width: Int? = null,
+        height: Int? = null,
+    ): ImageFrame {
         if (snapshotFirst) {
             ScreenPolicy.requireCapturable(producer.snapshot())
         }
-        val frame = producer.produce(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        val frame = producer.produce(width ?: DEFAULT_WIDTH, height ?: DEFAULT_HEIGHT)
         if (frame.bytes.isEmpty()) {
             throw AutojsException(ErrorCode.ERR_SERVICE_DISABLED, "会话无可用帧")
         }
@@ -154,6 +165,8 @@ class ScreenshotSource(
 
     private inner class CaptureSession(
         private val parent: ScreenshotSource,
+        private val hintWidth: Int? = null,
+        private val hintHeight: Int? = null,
     ) : ScreenCaptureSession {
         @Volatile private var closed = false
 
@@ -161,7 +174,7 @@ class ScreenshotSource(
 
         override suspend fun nextFrame(): ImageFrame {
             if (closed) throw AutojsException(ErrorCode.ERR_SERVICE_DISABLED, "截图会话已关闭")
-            return parent.nextFramed()
+            return parent.nextFramed(snapshotFirst = true, width = hintWidth, height = hintHeight)
         }
 
         override suspend fun close() {
