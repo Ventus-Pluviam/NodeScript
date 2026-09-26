@@ -24,12 +24,26 @@ class PackageManagerFacadeContractTest {
             "requestApprove", "resolveApproval", "pendingApprovals",
             // P1
             "runScript", "exec",
-            // 事件流
-            "progress", "approvals",
+            // 事件流（Flow 供 :main 订阅；drain* 是脚本侧拉取口，§10.7）
+            "progress", "approvals", "drainEvents", "drainApprovals",
             // 快照
             "exportSnapshot",
         )
         assertEquals(expected, names, "门面方法面必须与 §10.7 冻结清单一致")
+    }
+
+    @Test
+    fun `拉取批次 DTO 形状（first 与 last 与 seq 三件套，与 a11y events 同口径）`() {
+        assertEquals(
+            listOf("firstSeq", "lastSeq", "events"),
+            InstallEventBatch::class.java.declaredFields.map { it.name },
+        )
+        assertEquals(
+            listOf("firstSeq", "lastSeq", "requests"),
+            ApprovalBatch::class.java.declaredFields.map { it.name },
+        )
+        assertEquals(listOf("seq", "event"), SequencedInstallEvent::class.java.declaredFields.map { it.name })
+        assertEquals(listOf("seq", "request"), SequencedApproval::class.java.declaredFields.map { it.name })
     }
 
     @Test

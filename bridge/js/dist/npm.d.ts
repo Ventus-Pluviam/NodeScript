@@ -1,7 +1,10 @@
 /**
  * npm 依赖管理命名空间（docs/framework-design.md §10.8 / §12.3 auto.npm）。
  * P0：install/remove/ci/list/prune/dedupe/offlineGap/audit、registry 配置、离线导入、
- * approval 只提交请求（人机分离：绝不脚本直调 approve）、progress/approval/warning 事件流。
+ * approval 只提交请求（人机分离：绝不脚本直调 approve）、progress/approval/warning/finished
+ * 事件流。宿主没有主动推给脚本的通道（§7.5 入站面只有按 requestId 结算的 ok/err），
+ * 所以事件面是**带游标的拉取轮询**（§10.7 `drainEvents`/`drainApprovals`），
+ * 不是推送：首订开定时器，退订干净自停。
  *
  * 全部操作跨进程路由到全局安装会话（:app-service:packager InstallCoordinator），TTL 绑定，
  * 绝不阻塞脚本事件循环；脚本内不直接 require('child_process')。
@@ -195,12 +198,19 @@ export declare const npm: {
         versionHash?: string;
         timeout?: number;
     }): Promise<ApprovalTicket>;
-    /** 进度事件（数据面，可丢包）。返回退订函数。 */
+    /** 进度事件（数据面，可丢包）。返回退订函数；首订即开拉取轮询。 */
     onProgress(listener: (e: InstallEvent) => void): () => void;
-    /** 审批请求事件（宿主经 approvals Flow 推过来）。 */
+    /** 审批请求事件（宿主 approvals 拉取口；自己的轮询与安装事件互不牵连）。 */
     onApproval(listener: (req: ApprovalRequest) => void): () => void;
     /** 警告（此类不可恢复的静默漂移变响亮错误）。 */
     onWarning(listener: (e: InstallWarning) => void): () => void;
+    /**
+     * 安装终止（成功**和**失败都发，detail 带失败原因）。
+     *
+     * `install()` 的回包只是「已入队」，装没装完只能听这里 —— 没有它，脚本要么
+     * 轮询 `list()` 猜、要么干脆不知道失败（§1 诚实原则）。
+     */
+    onFinished(listener: (e: InstallFailure) => void): () => void;
 };
 /**
  * 宿主向 facade 喂安装警告（装配侧/N-API TSF 回调调用；桌面/测试可直接调）。
@@ -216,3 +226,21 @@ export declare const npm: {
  * 补拉，而「来源未校验」这种降信任标记必须在安装当下让人看见）。
  */
 export declare function feedWarning(e: InstallWarning): void;
+/** 事件轮询周期注入缝（形态对齐 engines.installHeartbeatPeriod；改周期须在首订前生效）。 */
+export declare function installEventPollPeriod(millis: number): void;
+/** 审批轮询周期注入缝（独立于事件轮询：审批要等人，不必跟进度同拍）。 */
+export declare function installApprovalPollPeriod(millis: number): void;
+/**
+ * 拉一轮安装事件（progress / warning / finished 三路共用一个游标与定时器）。
+ *
+ * 错误分两档，分界线是「能不能自己好」：
+ * - `ERR_NOT_IMPLEMENTED` = 宿主没实现 `events` → **响亮上抛**。订阅了却永远收不到，
+ *   正是 feedWarning KDoc 说的「比没有这个 API 更糟」，必须崩在脸上；
+ * - 其余（超时/断链/引擎未就绪）= 瞬时 → 吞掉走下一拍，游标不动，不丢事件。
+ *
+ * 与 a11y.events 同口径：回包里的 `seq` 是宿主环的位置，游标取 `last`；
+ * `first > eventSeq+1` 说明环有界丢过最旧的（进度是可丢数据面，如实跳过不补造）。
+ */
+export declare function pumpInstallEvents(): Promise<void>;
+/** 拉一轮审批请求（独立游标：审批不必等安装事件那一拍）。 */
+export declare function pumpApprovals(): Promise<void>;

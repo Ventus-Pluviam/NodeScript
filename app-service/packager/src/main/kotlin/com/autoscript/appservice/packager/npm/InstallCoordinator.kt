@@ -5,7 +5,11 @@ import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalRequest
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.AuditReport
+import com.autoscript.domain.npm.ApprovalBatch
 import com.autoscript.domain.npm.InstallEvent
+import com.autoscript.domain.npm.InstallEventBatch
+import com.autoscript.domain.npm.SequencedApproval
+import com.autoscript.domain.npm.SequencedInstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.MissingPkg
@@ -151,6 +155,10 @@ class InstallCoordinator(
     private val projectLocks = ConcurrentHashMap<String, Mutex>()
     private val events = MutableSharedFlow<InstallEvent>(extraBufferCapacity = 256)
     private val approvalFlow = MutableSharedFlow<ApprovalRequest>(extraBufferCapacity = 64)
+    // 脚本侧拉取口的宿主缓冲（[progress]/[approvals] 那两条 Flow 无重放、只服务 :main；
+    // 桥没有主动推面，脚本只能带游标来取 —— 两个环与两条 Flow 在同一批投递点一起写）。
+    private val installEventRing = SeqRing<InstallEvent>(capacity = RING_CAPACITY)
+    private val approvalRing = SeqRing<ApprovalRequest>(capacity = RING_CAPACITY)
     private val handles = ConcurrentHashMap<String, TrackedOp>()
     private val handleSeq = AtomicLong(0)
 
@@ -377,7 +385,10 @@ class InstallCoordinator(
         projectId: String, pkg: String, versionHash: String, action: ApprovalAction,
     ): ApprovalTicket {
         val ticket = ledger.submit(projectId, pkg, versionHash, action)
-        ledger.pending(projectId).firstOrNull { it.id == ticket.requestId }?.let { approvalFlow.tryEmit(it) }
+        ledger.pending(projectId).firstOrNull { it.id == ticket.requestId }?.let {
+            approvalRing.push(it.projectId, it)
+            approvalFlow.tryEmit(it)
+        }
         return ticket
     }
 
@@ -410,6 +421,16 @@ class InstallCoordinator(
 
     override fun approvals(projectId: String): Flow<ApprovalRequest> =
         approvalFlow.filter { it.projectId == projectId }
+
+    override suspend fun drainEvents(projectId: String, sinceSeq: Long, batch: Int): InstallEventBatch {
+        val (first, last, picked) = installEventRing.drain(projectId, sinceSeq, batch)
+        return InstallEventBatch(first, last, picked.map { SequencedInstallEvent(it.first, it.second) })
+    }
+
+    override suspend fun drainApprovals(projectId: String, sinceSeq: Long, batch: Int): ApprovalBatch {
+        val (first, last, picked) = approvalRing.drain(projectId, sinceSeq, batch)
+        return ApprovalBatch(first, last, picked.map { SequencedApproval(it.first, it.second) })
+    }
 
     // ══════════ 快照 ══════════
 
@@ -626,6 +647,52 @@ class InstallCoordinator(
     }
 
     private suspend fun emit(e: InstallEvent) {
+        // 先落环再进 Flow：两条路是同一批事件的两个视图（拉取侧有界重放、订阅侧即收即走），
+        // 顺序反了会出现「Flow 已发、环还没记」的窗口 —— 拉取方在同一刻会拿到旧批次。
+        installEventRing.push(e.projectId, e)
         events.emit(e)
     }
+    /**
+     * 有界 seq 环（`A11yEventRing` 同纪律）：seq 单调递增、超界丢最旧、空洞可见。
+     *
+     * - `drain` 按 [projectId] 过滤（脚本只看自己项目的事件）、`batch` 截断（未取完的下一批从
+     *   `lastSeq+1` 续）；空增量回 `(sinceSeq, sinceSeq)` —— 调用方以游标为准，不以空数组终结；
+     * - 丢最旧不告警而是**留空洞**：`first > sinceSeq + 1` 就是「中间丢过」，与 a11y 同口径
+     *   （进度数据面本就可丢包，§7.3；静默断流才是要禁的）。
+     */
+    internal class SeqRing<T>(private val capacity: Int) {
+        private val guard = Any()
+        private val entries = ArrayList<Entry<T>>()
+        private var head = 0L
+
+        internal class Entry<T>(val seq: Long, val projectId: String, val value: T)
+
+        /** 任意线程投递；锁内分配序号并追加（超界丢最旧）。 */
+        fun push(projectId: String, value: T) {
+            synchronized(guard) {
+                entries.add(Entry(++head, projectId, value))
+                while (entries.size > capacity) entries.removeAt(0)
+            }
+        }
+
+        /** 返回 (本批首序号, 本批末序号, 命中的 (seq, value))。 */
+        fun drain(projectId: String, sinceSeq: Long, batch: Int): Triple<Long, Long, List<Pair<Long, T>>> {
+            require(batch > 0) { "batch 必须 > 0" }
+            val picked = synchronized(guard) {
+                entries.asSequence()
+                    .filter { it.seq > sinceSeq && it.projectId == projectId }
+                    .take(batch)
+                    .map { it.seq to it.value }
+                    .toList()
+            }
+            if (picked.isEmpty()) return Triple(sinceSeq, sinceSeq, emptyList())
+            return Triple(picked.first().first, picked.last().first, picked)
+        }
+    }
+
+    companion object {
+        /** 事件环容量（与 `A11yEventRing.MAX_EVENTS` 同值同纪律）。 */
+        const val RING_CAPACITY = 512
+    }
+
 }

@@ -35,6 +35,10 @@ import com.autoscript.domain.core.ErrorCode
  *   回旧键名会让 `report.vulns` 恒 undefined）；
  * - `setRegistry`：`{registry,scope?}` → 无参（scope→npmrc `<scope>:registry`，§10.2 三层注册表配置；经 :main 可配列表 + 审计）；
  * - `importOfflineBundle`/`importTarball`：`{uri}`/`{path}`；
+ * - `events`：`{sinceSeq?,batch?}` → `{first,last,events:[{seq,type,…}]}`（**拉取式**，§9.1 同形；
+ *   见 [com.autoscript.domain.npm.InstallEventBatch]）。`type` ∈ `progress`/`warning`/`finished`——
+ *   三种分别喂 JS 的 `onProgress`/`onWarning`/`onFinished`；空增量回 `{first:last:sinceSeq,events:[]}`。
+ * - `approvals`：`{sinceSeq?,batch?}` → `{first,last,requests:[{seq,…}]}`（`onApproval` 的取数口）。
  * - `requestApprove`：`{pkg,versionHash?,action?,scripts?}` → `{requestId,status,scripts}`
  *   （**只入队**；脚本绝无 resolve 权。`scripts` 回显：JS facade 一直带着这个字段，
  *   宿主不校验也不回就是静默丢用户显式声明——与 `setRegistry` 的 scope 同一类问题）。
@@ -148,6 +152,42 @@ class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageMana
                 facade.importTarball(projectId, NpmBridgeJson.reqStr(f, "path"))
                 null
             }
+            "events" -> {
+                val sinceSeq = NpmBridgeJson.optLong(f, "sinceSeq") ?: 0L
+                val batch = (NpmBridgeJson.optLong(f, "batch") ?: 32L).toInt()
+                if (batch <= 0) throw IllegalArgumentException("batch 必须 > 0")
+                val got = facade.drainEvents(projectId, sinceSeq, batch)
+                NpmBridgeJson.encode(
+                    mapOf(
+                        "first" to got.firstSeq,
+                        "last" to got.lastSeq,
+                        "events" to got.events.map { encodeEvent(it.seq, it.event) },
+                    ),
+                )
+            }
+            "approvals" -> {
+                val sinceSeq = NpmBridgeJson.optLong(f, "sinceSeq") ?: 0L
+                val batch = (NpmBridgeJson.optLong(f, "batch") ?: 32L).toInt()
+                if (batch <= 0) throw IllegalArgumentException("batch 必须 > 0")
+                val got = facade.drainApprovals(projectId, sinceSeq, batch)
+                NpmBridgeJson.encode(
+                    mapOf(
+                        "first" to got.firstSeq,
+                        "last" to got.lastSeq,
+                        "requests" to got.requests.map { r ->
+                            mapOf(
+                                "seq" to r.seq,
+                                "id" to r.request.id,
+                                "projectId" to r.request.projectId,
+                                "pkg" to r.request.pkg,
+                                "versionHash" to r.request.versionHash,
+                                "action" to actionWire(r.request.action),
+                                "requestedAtMillis" to r.request.requestedAtMillis,
+                            )
+                        },
+                    ),
+                )
+            }
             "requestApprove" -> {
                 val pkg = NpmBridgeJson.reqStr(f, "pkg")
                 val versionHash = NpmBridgeJson.optStr(f, "versionHash") ?: ""
@@ -174,6 +214,58 @@ class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageMana
                 "未知 npm 方法: ${request.method}",
             )
         }
+    }
+
+    /**
+     * 事件上桥的 wire 形状（JS 侧 `InstallEvent`/`InstallWarning`/`InstallFailure` 逐字对齐）。
+     *
+     * 枚举名**不走 `.name.lowercase()`**：`POST_CHECK` 折出来是 `post_check`，而 JS 的
+     * phase 联合写的是 `post-check` —— 差一个连字符，脚本的 switch 就会整段落到 default
+     * （与 `vulnerabilities`/`vulns` 同一类事故）。故 phase/kind/action 三处逐值显式映射，
+     * 新增枚举值在 `when` 里缺分支 = 编译期红，不留到运行期。
+     */
+    internal fun encodeEvent(seq: Long, e: com.autoscript.domain.npm.InstallEvent): Map<String, Any?> = when (e) {
+        is com.autoscript.domain.npm.InstallEvent.Progress -> mapOf(
+            "seq" to seq, "type" to "progress",
+            "projectId" to e.projectId, "handleId" to e.handleId,
+            "phase" to phaseWire(e.phase), "name" to e.pkg, "percent" to e.percent,
+        )
+        is com.autoscript.domain.npm.InstallEvent.Warning -> mapOf(
+            "seq" to seq, "type" to "warning",
+            "projectId" to e.projectId, "handleId" to e.handleId,
+            "kind" to kindWire(e.kind), "pkgs" to e.pkgs, "message" to e.message,
+        )
+        is com.autoscript.domain.npm.InstallEvent.Finished -> mapOf(
+            "seq" to seq, "type" to "finished",
+            "projectId" to e.projectId, "handleId" to e.handleId,
+            "success" to e.success, "detail" to e.detail,
+        )
+    }
+
+    /** 与 JS `InstallEvent['phase']` 联合逐字对齐（见 [encodeEvent] 的 KDoc）。 */
+    internal fun phaseWire(p: com.autoscript.domain.npm.InstallEvent.Phase): String = when (p) {
+        com.autoscript.domain.npm.InstallEvent.Phase.QUEUED -> "queued"
+        com.autoscript.domain.npm.InstallEvent.Phase.RESOLVE -> "resolve"
+        com.autoscript.domain.npm.InstallEvent.Phase.DOWNLOAD -> "download"
+        com.autoscript.domain.npm.InstallEvent.Phase.REIFY -> "reify"
+        com.autoscript.domain.npm.InstallEvent.Phase.POST_CHECK -> "post-check"
+        com.autoscript.domain.npm.InstallEvent.Phase.DONE -> "done"
+    }
+
+    /** 与 JS `InstallWarning['kind']` 联合逐字对齐（feedWarning 认不出即抛，§10.5-3）。 */
+    internal fun kindWire(k: com.autoscript.domain.npm.InstallEvent.Kind): String = when (k) {
+        com.autoscript.domain.npm.InstallEvent.Kind.SCRIPTS_SKIPPED -> "scripts-skipped"
+        com.autoscript.domain.npm.InstallEvent.Kind.TRUST_DOWNGRADED -> "trust-downgraded"
+        com.autoscript.domain.npm.InstallEvent.Kind.LOW_MEMORY -> "low-memory"
+        com.autoscript.domain.npm.InstallEvent.Kind.REGISTRY_FALLBACK -> "registry-fallback"
+        com.autoscript.domain.npm.InstallEvent.Kind.DISK_QUOTA -> "disk-quota"
+    }
+
+    /** 与 JS `ApprovalRequest['action']` 联合逐字对齐。 */
+    internal fun actionWire(a: com.autoscript.domain.npm.ApprovalAction): String = when (a) {
+        com.autoscript.domain.npm.ApprovalAction.INSTALL_SCRIPT -> "install_script"
+        com.autoscript.domain.npm.ApprovalAction.RUN_SCRIPT -> "run_script"
+        com.autoscript.domain.npm.ApprovalAction.EXEC -> "exec"
     }
 
     private fun requirePayload(request: BridgeRequest): String =
