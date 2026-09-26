@@ -11,8 +11,10 @@
  * 运行期 undefined 不是编译期红）。
  *
  * 刻意不做的：不执行示例（会引一个手写 mock，回到「mock 跟着 JS 想象走」的老坑）、
- * 不检查返回值形状（那是各命名空间契约测试的活）。反例如果**故意**写进代码块（教人别这么写），
- * 登记进 [INTENTIONAL_NOT_ON_FACADE] 并写清为什么。
+ * 不检查返回值形状（那是各命名空间契约测试的活）、**不扫散文**——§12.2 开头那份
+ * 「对应 AutoJsPro v9」的清单含 `auto.ui.*`/`auto.media`/`auto.ocr` 等设计面，未实现是
+ * 常态，扫了就常年假红（设计愿望与可运行示例的分界就是围栏）。反例如果**故意**写进
+ * 代码块（教人别这么写），登记进 [INTENTIONAL_NOT_ON_FACADE] 并写清为什么。
  */
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
