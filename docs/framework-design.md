@@ -923,6 +923,8 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 
 **接线现状（Kotlin 侧，与 `AppShell.assemble` 对齐；未列出的命名空间在两侧都还没有 handler）**：
 
+> 本表有**机械化门禁**：`bridge/js/test/wire-reconcile.test.cjs` 双向对账两份源码（不经 mock）——JS `invoke` 的命名空间必须被 `register`、JS 发的每个方法必须有 `when(request.method)` 分支、宿主方法表里每个分支必须有人发（收了没人发的 wire 名要么 facade 漏调、要么写进该测试的 `ALIASES` 并说明为什么，且 `ALIASES` 不许虚报）。它是 `npm test` 的一部分，随 CI 跑；a11y 选择器动作经 `call('<m>')` 字面量、`shell.shell()` 别名与 `findOneOrNull` 兼容分支是仅有的三处登记。
+
 | 命名空间 | JS facade | Kotlin handler | 挂载状态 |
 |---|---|---|---|
 | `console` | `console.ts` | `ConsoleCollector`（`:bridge:java`） | `AppShell.assemble` 已挂；`:ui` 控制台屏读口已接（`HostSummary.console`，§7.3 末） |
