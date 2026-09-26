@@ -37,7 +37,7 @@ import com.autoscript.domain.core.ErrorCode
  * - `importOfflineBundle`/`importTarball`：`{uri}`/`{path}`；
  * - `events`：`{sinceSeq?,batch?}` → `{first,last,events:[{seq,type,…}]}`（**拉取式**，§9.1 同形；
  *   见 [com.autoscript.domain.npm.InstallEventBatch]）。`type` ∈ `progress`/`warning`/`finished`——
- *   三种分别喂 JS 的 `onProgress`/`onWarning`/`onFinished`；空增量回 `{first:last:sinceSeq,events:[]}`。
+ *   三种分别喂 JS 的 `onProgress`/`onWarning`/`onFinished`；空增量回 `{first=last=sinceSeq, events:[]}`。
  * - `approvals`：`{sinceSeq?,batch?}` → `{first,last,requests:[{seq,…}]}`（`onApproval` 的取数口）。
  * - `requestApprove`：`{pkg,versionHash?,action?,scripts?}` → `{requestId,status,scripts}`
  *   （**只入队**；脚本绝无 resolve 权。`scripts` 回显：JS facade 一直带着这个字段，

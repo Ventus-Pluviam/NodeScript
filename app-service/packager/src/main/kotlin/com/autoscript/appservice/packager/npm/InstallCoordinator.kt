@@ -652,6 +652,7 @@ class InstallCoordinator(
         installEventRing.push(e.projectId, e)
         events.emit(e)
     }
+
     /**
      * 有界 seq 环（`A11yEventRing` 同纪律）：seq 单调递增、超界丢最旧、空洞可见。
      *
@@ -694,5 +695,4 @@ class InstallCoordinator(
         /** 事件环容量（与 `A11yEventRing.MAX_EVENTS` 同值同纪律）。 */
         const val RING_CAPACITY = 512
     }
-
 }
