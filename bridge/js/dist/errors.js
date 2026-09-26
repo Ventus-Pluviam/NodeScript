@@ -65,6 +65,7 @@ exports.ERROR_CODES = [
     'ERR_NOT_SUPPORTED',
     'ERR_REGISTRY_UNAVAILABLE',
     'ERR_NPM_LOWMEM',
+    'ERR_IO',
 ];
 function fromErrPayload(p) {
     if (p.code === "ERR_NOT_FOUND" /* ErrCode.NOT_FOUND */)
