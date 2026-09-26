@@ -8,7 +8,8 @@
  *
  * 全部操作跨进程路由到全局安装会话（:app-service:packager InstallCoordinator），TTL 绑定，
  * 绝不阻塞脚本事件循环；脚本内不直接 require('child_process')。
- * 事件流在 bootstrap loader 层经 RuntimeChannel 注入（见 runtime.ts handleResponse 注释）。
+ * 事件不靠宿主推：脚本侧带游标拉 `events`/`approvals`（文件末 pumpInstallEvents/pumpApprovals），
+ * 回包仍经 bootstrap 注入的 handleResponse 按 requestId 结算（见 runtime.ts 注释）。
  */
 
 import { runtimeBridge } from './runtime'
@@ -82,7 +83,7 @@ export interface AuditReport {
 }
 
 /**
- * 审批请求（宿主经 approvals Flow 推过来；人工在 UI 卡确认）。
+ * 审批请求（脚本侧经 `onApproval` 收到 —— 底下是 approvals 拉取口的轮询投递，不是宿主推送；人工在 UI 卡确认）。
  *
  * 与 :domain `ApprovalRequest` 逐字段对齐：`{id, projectId, pkg, versionHash, action,
  * requestedAtMillis}`。刻意**没有** `scripts` —— 那是 §10.8 示例里 `requestApprove`

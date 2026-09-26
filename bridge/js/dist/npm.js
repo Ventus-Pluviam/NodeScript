@@ -9,7 +9,8 @@
  *
  * 全部操作跨进程路由到全局安装会话（:app-service:packager InstallCoordinator），TTL 绑定，
  * 绝不阻塞脚本事件循环；脚本内不直接 require('child_process')。
- * 事件流在 bootstrap loader 层经 RuntimeChannel 注入（见 runtime.ts handleResponse 注释）。
+ * 事件不靠宿主推：脚本侧带游标拉 `events`/`approvals`（文件末 pumpInstallEvents/pumpApprovals），
+ * 回包仍经 bootstrap 注入的 handleResponse 按 requestId 结算（见 runtime.ts 注释）。
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.npm = void 0;
