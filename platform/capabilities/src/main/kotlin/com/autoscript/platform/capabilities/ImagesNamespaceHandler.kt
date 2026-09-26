@@ -6,9 +6,6 @@ import com.autoscript.domain.automation.ImageMatch
 import com.autoscript.domain.bridge.HandleRef
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * `images` 命名空间的桥处理器（docs §9.2 / §12.2；JS 对偶 `bridge/js/src/images.ts`；
@@ -27,9 +24,18 @@ import java.util.concurrent.atomic.AtomicLong
  * 两侧 mock 各自自洽所以漂移没被抓到）；域 `[0,1]`，越界 → `ERR_INVALID_PARAM` 且
  * **一次 SPI 调用都不发**。
  *
- * **帧句柄**：`decode` 发号（handler 自管：单调 refId + generation 恒 1，与
- * [ScreenshotSource] 同一套纪律），回包带 `width/height` 真值（脚本要拿它做坐标换算）；
- * **匹配方法不再要求回传尺寸**（那是对实现报它自己已知的值）。[release] 与
+ * **帧句柄：发号侧归一到 [ImageAnalyzer]（§18 第 8 项 (b)，2026-09-25 拍板）**。
+ * 本 handler **不再自管帧表**（曾经有 `ids`/`live`/`sizes` 三张本地图 —— 与 SPI 的
+ * native 帧表**双写**，靠"两个计数器各自从 1 起、每次 decode 各加一"的隐式不变式
+ * 对齐，一处失败分岔就错位）：`decode` 回包直接用 SPI 回的 [HandleRef]（单调 refId +
+ * generation 恒 1），`matchTemplate`/`findImage`/`findColor`/`release` 一律把 wire 上的
+ * 句柄**原样交给 SPI** 判在场与释放 —— 在场性、发号、像素所有权三件事的唯一事实源
+ * 是 SPI 自己。回包仍带 `width/height` 真值（脚本拿它做坐标换算）；**匹配方法不要求
+ * 回传尺寸**（那是对实现报它自己已知的值）。
+ *
+ * 由此 **`screen` 与 `images` 的句柄在同一个号段上**（截屏帧经 `ImageAnalyzer.ingest`
+ * 进同一张表）："帧不通用"那条纪律已取消 —— 拿 `screen.capture()` 的帧当
+ * `findImage` 的 haystack 不再是 `ERR_STALE_HANDLE`。[release] 与
  * `ScreenshotSource.recycle` 逐字同口径：放掉的帧当场从在场面表移除 —— 未知/跨代/
  * **放过的帧再放**一律 `ERR_STALE_HANDLE`（不提供静默成功的第二次；脚本 `finally`
  * 里补一刀不会炸，是因为帧没放时怎么放都回 `true`）；匹配时任一帧已死 → 同码。
@@ -47,17 +53,7 @@ import java.util.concurrent.atomic.AtomicLong
 class ImagesNamespaceHandler(
     private val analyzer: ImageAnalyzer,
 ) {
-    /** decode 发号（单调 refId，generation 恒 1 —— 一个文件一个帧，不复用不缓存）。 */
-    private val ids = AtomicLong(1)
-
-    /** 已发放的帧句柄集合（release/匹配的在场判据；§7.4「关掉的帧」与「没见过的帧」可分辨；只经 [guard] 读写）。 */
-    private val live = HashMap<Long, HandleRef>()
-
-    /** ref → 帧宽高（decode 时登记；匹配只凭 ref 调 SPI，不回显尺寸）。 */
-    private val sizes = HashMap<Long, Pair<Int, Int>>()
-
-    /** 帧表（[live]/[sizes]）的串行闸：handle 是 suspend，多请求可重入。 */
-    private val guard = Mutex()
+    /** 本类**无状态**：帧表（在场/发号/像素）全在 [analyzer] 里（§18-8(b) 发号侧归一）。 */
 
     suspend fun handle(request: BridgeRequestLite): ResponseLite = when (request.method) {
         "decode" -> decode(request)
@@ -88,12 +84,8 @@ class ImagesNamespaceHandler(
         }
         return try {
             val frame = analyzer.decode(path)
-            val ref = guard.withLock {
-                val r = HandleRef(ids.getAndIncrement(), 1L)
-                live[r.refId] = r
-                sizes[r.refId] = frame.width to frame.height
-                r
-            }
+            // 发号归 SPI：wire 上的 refId 就是帧表的键（handler 不再另起一套号）。
+            val ref = frame.handle
             ResponseLite.Ok(
                 request.id,
                 A11yBridgeJson.encode(
@@ -140,13 +132,9 @@ class ImagesNamespaceHandler(
             )
         }
         val (haystack, needle) = refs
-        if (guard.withLock { !live.containsKey(haystack.refId) || !live.containsKey(needle.refId) }) {
-            return ResponseLite.err(
-                request.id,
-                ErrorCode.ERR_STALE_HANDLE,
-                "images $method 的帧句柄已释放（haystack=${haystack.refId}, needle=${needle.refId}）",
-            )
-        }
+        // 在场性不在这层判（§18-8(b)：帧表唯一事实源是 SPI）—— 任一帧已死由 SPI 抛
+        // ERR_STALE_HANDLE，这里 catch 后原码透传；这样"截屏帧"与"decode 帧"都由
+        // 同一张表回答，不存在 handler 的表认识、SPI 的表不认识的分岔。
         val hit = try {
             if (method == "matchTemplate") {
                 analyzer.matchTemplate(haystack, needle, threshold)
@@ -204,13 +192,7 @@ class ImagesNamespaceHandler(
                 )
             }
         }
-        if (guard.withLock { !live.containsKey(ref.refId) }) {
-            return ResponseLite.err(
-                request.id,
-                ErrorCode.ERR_STALE_HANDLE,
-                "images findColor 的帧句柄已释放（haystack=${ref.refId}）",
-            )
-        }
+        // 在场性同 match：SPI 判、原码透传（见 match 处的说明）。
         val hit = try {
             analyzer.findColor(ref, color, tolerance, region)
         } catch (e: AutojsException) {
@@ -230,24 +212,9 @@ class ImagesNamespaceHandler(
         } catch (e: IllegalArgumentException) {
             return ResponseLite.err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
         }
-        // 未知/跨代 → ERR_STALE_HANDLE（与 FrameSource.recycle 同口径）："已释放"与
-        // "从未存在"必须能分辨。已知帧才放，sizes 同步清。
-        val known = guard.withLock {
-            if (live[ref.refId]?.generation != ref.generation) {
-                false
-            } else {
-                sizes.remove(ref.refId)
-                live.remove(ref.refId)
-                true
-            }
-        }
-        if (!known) {
-            return ResponseLite.err(
-                request.id,
-                ErrorCode.ERR_STALE_HANDLE,
-                "未知帧句柄 ${ref.refId} gen=${ref.generation}",
-            )
-        }
+        // 未知/跨代/放过的帧再放 → 一律 ERR_STALE_HANDLE，判据在 SPI 的帧表里
+        // （与 ScreenshotSource.recycle 同一张表、同一口径 —— §18-8(b) 发号侧归一的
+        // 直接后果：screen 的帧也能在这里放，反之亦然）。原码透传。
         return try {
             analyzer.release(ref)
             ResponseLite.Ok(request.id, "true")

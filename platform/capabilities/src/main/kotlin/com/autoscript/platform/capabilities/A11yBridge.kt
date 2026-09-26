@@ -46,7 +46,7 @@ interface A11yBridge {
     suspend fun screenSnapshot(): com.autoscript.domain.automation.ScreenSnapshot
 
     /**
-     * a11y 截一帧 → 实际尺寸的 JPEG 字节；失败按 §8.8 分类抛
+     * a11y 截一帧 → 实际尺寸的紧密打包 RGBA 字节（`width*height*4`，供 `ImageAnalyzer.ingest` 进同一张帧表，§18-8(b)）；失败按 §8.8 分类抛
      * （安全窗 → ERR_BLACK_FRAME、系统限频 → ERR_INVALID_PARAM、服务失效 →
      * ERR_SERVICE_DISABLED、内部错 → ERR_IO，见设备层映射表）。
      */

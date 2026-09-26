@@ -22,8 +22,10 @@ import com.autoscript.domain.core.ErrorCode
  * - `capture`：无参 → Ok `{ref:{refId,generation},width,height}`；
  *   锁屏/FLAG_SECURE/无窗口/节流 → 分类 Err（§8.8：分类错误而非黑图）；
  * - `recycle`：payload `{ref}` → Ok `true`（幂等；未知句柄 → ERR_STALE_HANDLE）；
- * - `startCapturer`：无参 → Ok `{session:{refId,generation}}`（MediaProjection 会话；
- *   open 时即做策略判定，失败直接 Err，不发空会话）；
+ * - `startCapturer`：payload 可选 `{width?,height?}` → Ok `{session:{refId,generation}}`
+ *   （MediaProjection 会话；open 时即做策略判定，失败直接 Err，不发空会话）。
+ *   尺寸是**请求提示**（透传 `FrameSource.openSession`，生产者可忽略）—— 回包不含尺寸、
+ *   `nextFrame` 的宽高恒为真实帧；非法（≤0/非整数）回 ERR_INVALID_PARAM，不静默套默认；
  * - `nextFrame`：payload `{session}` → Ok `{ref,width,height}`；
  * - `closeSession`：payload `{session}` → Ok `true`（幂等；未知会话 → ERR_NOT_FOUND）；
  * - 未知方法 → ERR_NOT_IMPLEMENTED；非法载荷 → ERR_INVALID_PARAM。
@@ -73,8 +75,13 @@ class ScreenNamespaceHandler(
     }
 
     private suspend fun startCapturer(request: Request): Response {
+        val size = try {
+            optSize(request.payload)
+        } catch (e: IllegalArgumentException) {
+            return err(request.id, ErrorCode.ERR_INVALID_PARAM, e.message)
+        }
         return try {
-            val session = source.openSession()
+            val session = source.openSession(size.first, size.second)
             val id = synchronized(guard) {
                 val nid = nextSessionId++
                 sessions[nid] = session
@@ -123,6 +130,26 @@ class ScreenNamespaceHandler(
                 "height" to f.height.toLong(),
             ),
         )
+
+    /**
+     * 可选尺寸提示：payload 缺席（null）→ 不带提示；字段缺席/null 同理；非法
+     * （非整数、≤0、超 Int）抛 IllegalArgumentException → 调用方折 ERR_INVALID_PARAM。
+     * **不静默套默认**：请求了 0 就是要 0，替他改成 1080 是报假尺寸的前一步。
+     */
+    private fun optSize(payload: String?): Pair<Int?, Int?> {
+        if (payload == null) return null to null
+        val o = A11yBridgeJson.decodeObject(payload)
+        return optPositiveInt(o, "width") to optPositiveInt(o, "height")
+    }
+
+    private fun optPositiveInt(o: Map<String, A11yBridgeJson.Value>, key: String): Int? {
+        val v = o[key] ?: return null
+        if (v is A11yBridgeJson.Value.Null) return null
+        val n = (v as? A11yBridgeJson.Value.N)?.raw?.toLongOrNull()
+            ?: throw IllegalArgumentException("字段 $key 必须是数字")
+        if (n <= 0L || n > Int.MAX_VALUE) throw IllegalArgumentException("字段 $key 必须 > 0，实际 $n")
+        return n.toInt()
+    }
 
     private fun decodePayload(payload: String?): Map<String, A11yBridgeJson.Value> {
         if (payload == null) throw IllegalArgumentException("缺 payload")

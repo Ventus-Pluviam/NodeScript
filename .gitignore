@@ -15,4 +15,5 @@ node-runtime-build/work/
 node-runtime-build/out-opencv/
 
 # misc
-.DS_Store.kotlin/
+.DS_Store
+.kotlin/

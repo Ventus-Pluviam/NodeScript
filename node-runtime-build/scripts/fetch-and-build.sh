@@ -164,11 +164,15 @@ export GYP_DEFINES="target_arch=${TARGET_ARCH} v8_target_arch=${TARGET_ARCH} and
 # ── 5) configure + make（configure 仅读 env CC/CXX/AR，见 configure.py:24）──
 cd "$SRC/node-$NODE_VERSION"
 say "configure --dest-os=android --dest-cpu=$TARGET_ARCH --shared"
+# ICU：small-icu + zh,en（§18 第 4 项 2026-09-26 拍板）。数据源是**仓内 canned ICU**
+# （deps/icu-small/ 带 README-FULL-ICU.txt → configure.py 走 canned_is_full 分支），
+# **不需要联网下载 icu4c**；locales 由 tools/icu 在构建期裁剪（root 自动加，故 zh,en）。
 ./configure \
     --dest-cpu="$TARGET_ARCH" \
     --dest-os=android \
     --openssl-no-asm \
-    --with-intl=none \
+    --with-intl=small-icu \
+    --with-icu-locales=zh,en \
     --cross-compiling \
     --shared
 

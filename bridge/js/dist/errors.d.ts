@@ -23,7 +23,8 @@ export declare const enum ErrCode {
     NPM_SPAWN_BLOCKED = "ERR_NPM_SPAWN_BLOCKED",
     NOT_SUPPORTED = "ERR_NOT_SUPPORTED",
     REGISTRY_UNAVAILABLE = "ERR_REGISTRY_UNAVAILABLE",
-    NPM_LOWMEM = "ERR_NPM_LOWMEM"
+    NPM_LOWMEM = "ERR_NPM_LOWMEM",
+    IO = "ERR_IO"
 }
 /** 桥回包中的可序列化错误骨架（跨进程往返的唯一错误载体）。 */
 export interface ErrPayload {

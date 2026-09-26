@@ -30,9 +30,12 @@ import com.autoscript.platform.system.SystemSpis
  *
  * **a11y/screen 生产已接**（同一座无障碍服务做底）：
  * - `a11y` = `AndroidUiTree`（树+动作一体，句柄注册表共享）+ `AndroidGestureInput`；
- * - `screen` = `ScreenshotSource(AndroidFrameProducer())`（§9.2 a11y 截图路径：
- *   333ms 节流 + §8.8 策略预检/回调分类；MediaProjection 高清会话是后续升级，
- *   换 producer 即插）；
+ * - `screen` = `ScreenshotSource(AndroidFrameProducer(), analyzer = images)`（§9.2 a11y
+ *   截图路径：333ms 节流 + §8.8 策略预检/回调分类；MediaProjection 高清会话是后续升级，
+ *   换 producer 即插）。**analyzer 一并喂进去**（§18-8(b) 发号侧归一）：截屏帧经
+ *   `ImageAnalyzer.ingest` 进 `images` 那张帧表，两 namespace 句柄同号段互认；
+ *   analyzer 为 null（so 缺位）时 ScreenshotSource 退回本地帧表 —— 此时 `images`
+ *   根本没注册，两个号段不可能相撞；
  * 二者都走 `SystemA11yBridge` —— 装配期即可注入（连接态在调用期判定），服务未连 =
  * 桥如实 `ERR_SERVICE_DISABLED`（不伪造可用，也不必等 `onServiceConnected` 才装壳）。
  *
@@ -85,7 +88,7 @@ object PlatformWiring {
         // 树+动作同一个实例（句柄注册表共享，同 InMemoryUiTree 双身份形态）；
         // 事件流缺省 A11yEventRing.shared（服务 push / 树读同一环）。
         a11yHandler = a11yHandler(),
-        screenHandler = screenHandler(),
+        screenHandler = screenHandler(images),
         systemHandlers = SystemHandlers(
             // 缺省 null（未提供）→ 如实 ERR_NOT_IMPLEMENTED；生产由 of() 传真宿主。
             dialogs = dialogs?.let { CapabilityNamespaces.dialogs(it) },
@@ -112,9 +115,15 @@ object PlatformWiring {
         return CapabilityNamespaces.a11y(tree = tree, actions = tree, input = AndroidGestureInput())
     }
 
-    /** screen 装配（§9.2 a11y 截图路径：语义节流/策略在 ScreenshotSource，设备面在 producer）。 */
-    private fun screenHandler(): NamespaceHandler =
-        CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer()))
+    /**
+     * screen 装配（§9.2 a11y 截图路径：语义节流/策略在 ScreenshotSource，设备面在 producer）。
+     * [analyzer] 与 `images` 缝**同一个实例**（§18-8(b)）：截屏帧与 decode 帧同表同号段，
+     * `images.findImage(screenFrame, decodeFrame)` 才成立；null 即退回本地帧表。
+     */
+    private fun screenHandler(analyzer: ImageAnalyzer?): NamespaceHandler =
+        CapabilityNamespaces.screen(
+            ScreenshotSource(AndroidFrameProducer(), analyzer = analyzer),
+        )
 
     /**
      * 生产入口：`Context` → [SystemSpis.of] 十件 + DialogHost 构造（本类是唯一同时

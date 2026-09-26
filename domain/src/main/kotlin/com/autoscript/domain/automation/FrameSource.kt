@@ -10,8 +10,14 @@ import com.autoscript.domain.bridge.HandleRef
 interface FrameSource {
     suspend fun capture(): ImageFrame
 
-    /** 会话式（MediaProjection）一次性授权；reconnect 不自动重试授权。 */
-    suspend fun openSession(): ScreenCaptureSession
+    /**
+     * 会话式（MediaProjection）一次性授权；reconnect 不自动重试授权。
+     *
+     * [width]/[height] 是**请求提示**，不是承诺（§12.3.3 收口）：生产者可忽略 ——
+     * 系统给什么尺寸就是什么尺寸，回包尺寸恒以真实帧为准（`ProducedFrame` 随帧走），
+     * 不因请求过尺寸就报假数。缺省 null = 不带提示（与旧调用同形）。
+     */
+    suspend fun openSession(width: Int? = null, height: Int? = null): ScreenCaptureSession
 
     /**
      * 显式释放帧句柄（JS `Image.recycle` 对偶；幂等）。

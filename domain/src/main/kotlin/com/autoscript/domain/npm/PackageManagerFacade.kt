@@ -131,6 +131,37 @@ sealed interface InstallEvent {
     enum class Kind { SCRIPTS_SKIPPED, TRUST_DOWNGRADED, LOW_MEMORY, REGISTRY_FALLBACK, DISK_QUOTA }
 }
 
+/**
+ * 拉取式事件流的一批（§9.1 a11y `events` 同形：`{first,last,events}` + `seq` 游标）。
+ *
+ * 为什么脚本侧是**拉**不是推：桥的入站面只有「按 requestId 结算的 ok/err」（§7.5），
+ * 宿主没有主动推给脚本的通道（tsf_data 是脚本→宿主方向）。[PackageManagerFacade.progress]
+ * 那条 Flow 只服务 :main 侧订阅者；脚本侧的 `onProgress`/`onWarning`/`onFinished`
+ * 背后是节流轮询本方法 —— 语义与 a11y 事件流一致，不发明第二套。
+ *
+ * `first`/`last` = **本批**首/末条的序号；空增量回 `(sinceSeq, sinceSeq)` —— 调用方以
+ * 游标为准，不以空数组为终结（事件是开放流）。缓冲**有界**（丢最旧）：`first > sinceSeq+1`
+ * 即中间丢过，seq 空洞可见、不静默断流（与 `A11yEventRing` 同纪律）。
+ */
+data class InstallEventBatch(
+    val firstSeq: Long,
+    val lastSeq: Long,
+    val events: List<SequencedInstallEvent>,
+)
+
+/** 带序号的安装事件（`seq` 上桥，脚本拿它当下一次 `sinceSeq`）。 */
+data class SequencedInstallEvent(val seq: Long, val event: InstallEvent)
+
+/** 审批入队事件的一批（对偶 [InstallEventBatch]，游标各自独立）。 */
+data class ApprovalBatch(
+    val firstSeq: Long,
+    val lastSeq: Long,
+    val requests: List<SequencedApproval>,
+)
+
+/** 带序号的审批请求。 */
+data class SequencedApproval(val seq: Long, val request: ApprovalRequest)
+
 /** node_modules 体积统计（storage() 轻操作，Kotlin 目录遍历算尺寸）。 */
 data class NodeModulesStats(
     val projectId: String,
@@ -192,8 +223,20 @@ interface PackageManagerFacade {
     suspend fun exec(projectId: String, bin: String, args: List<String> = emptyList()): InstallHandle
 
     // —— 事件流 ——
+    /** :main 侧订阅用（Flow，无重放：没在收就错过）。脚本侧走 [drainEvents]。 */
     fun progress(projectId: String): kotlinx.coroutines.flow.Flow<InstallEvent>
     fun approvals(projectId: String): kotlinx.coroutines.flow.Flow<ApprovalRequest>
+
+    /**
+     * 拉取式安装事件（脚本侧 `onProgress`/`onWarning`/`onFinished` 的取数口）。
+     *
+     * `sinceSeq` 从 0 起 = 不漏仍在有界缓冲里的历史（晚订阅不丢 `scripts-skipped`
+     * 这类必须被看见的警告）；语义与形状见 [InstallEventBatch]。
+     */
+    suspend fun drainEvents(projectId: String, sinceSeq: Long, batch: Int = 32): InstallEventBatch
+
+    /** 拉取式审批入队事件（脚本侧 `onApproval` 的取数口；与 [drainEvents] 游标独立）。 */
+    suspend fun drainApprovals(projectId: String, sinceSeq: Long, batch: Int = 32): ApprovalBatch
 
     // —— 快照（高信任通道）——
     suspend fun exportSnapshot(projectId: String, uri: String): SnapshotRef

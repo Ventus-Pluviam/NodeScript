@@ -71,6 +71,30 @@ class NativeImageAnalyzer(
         }
     }
 
+    override suspend fun ingest(width: Int, height: Int, rgba: ByteArray): ImageFrame {
+        require(width > 0 && height > 0) { "ingest 的宽高必须为正，实际 ${width}x$height" }
+        require(rgba.size == width * height * 4) {
+            "ingest 的像素必须紧密打包 RGBA：期望 ${width * height * 4} 字节，实际 ${rgba.size}"
+        }
+        return withContext(Dispatchers.IO) {
+            val status = IntArray(1)
+            val ingested = ops.ingest(rgba, width, height, status)
+            val rc = status[0]
+            if (ingested == null) {
+                throw if (rc != 0) statusToException(rc, "ingest ${width}x$height") else {
+                    AutojsException(ErrorCode.ERR_IO, "images ingest 的 native 调用失败")
+                }
+            }
+            val (nativeRef, w, h) = ingested
+            val refId = synchronized(guard) {
+                val id = nextRefId++
+                frames[id] = nativeRef
+                id
+            }
+            ImageFrame(HandleRef(refId, GENERATION), w, h)
+        }
+    }
+
     override suspend fun release(handle: HandleRef) = withContext(Dispatchers.IO) {
         if (handle.generation != GENERATION) {
             throw AutojsException(
@@ -189,6 +213,13 @@ class NativeImageAnalyzer(
         fun decode(path: String, status: IntArray): Triple<Long, Int, Int>?
 
         /**
+         * 登记一屏**已在内存里的 RGBA 紧排像素**（§18 第 8 项 (b)：截屏帧进 images 帧表，
+         * 发号侧归一）。与 [decode] 同一张 native 帧表、同一个号段。
+         * @return `Triple(nativeRef, width, height)`；失败 null + `status[0]` 非 0。
+         */
+        fun ingest(rgba: ByteArray, width: Int, height: Int, status: IntArray): Triple<Long, Int, Int>?
+
+        /**
          * @return 命中五元组；**未命中** null + `status[0] == 0`（答案）；
          * 分类失败 null + status 非 0。
          */
@@ -242,10 +273,12 @@ class NativeImageAnalyzer(
 
 /**
  * so 装载面（[NativeImageAnalyzer.Ops] 的真机实现）：`System.loadLibrary("opencv")`
- * 装载 `libopencv.so`（`:bridge:image` 产物）+ 三个 `external` native 方法。
+ * 装载 `libopencv.so`（`:bridge:image` 产物）+ 五个 `external` native 方法。
  * 方法名与 `:bridge:image` 的 `images_jni.cc`
- * 的 `Java_com_autoscript_platform_system_NativeImageAnalyzer_*` 对表 ——
- * **换包名/换类名必须同批改那边**（JNI 符号名是字符串约定，编译器不看护）。
+ * 的 `Java_com_autoscript_platform_system_JniOps_*` 对表 ——
+ * **换包名/换类名必须同批改那边**（JNI 符号名是字符串约定，编译器不看护；
+ * `bridge/js/test/jni-names.test.cjs` 钉的就是这条，2026-09-26 曾抓到
+ * cc 用 `NativeImageAnalyzer_` 而声明类是 `JniOps` 的对不上）。
  *
  * loadLibrary 在**类初始化**时做（companion 之外的实例化都跑得到）：so 缺位
  * 抛 `UnsatisfiedLinkError`，由 [NativeImageAnalyzer.of] 的捕获转成"不注入"。
@@ -254,6 +287,8 @@ class NativeImageAnalyzer(
 class JniOps : NativeImageAnalyzer.Ops {
 
     private external fun decodeNative(path: String, status: IntArray): LongArray?
+
+    private external fun ingestNative(rgba: ByteArray, width: Int, height: Int, status: IntArray): LongArray?
 
     private external fun matchNative(
         haystack: Long,
@@ -274,6 +309,16 @@ class JniOps : NativeImageAnalyzer.Ops {
 
     override fun decode(path: String, status: IntArray): Triple<Long, Int, Int>? {
         val r = decodeNative(path, status)
+        return if (r == null || r.size < 3) null else Triple(r[0], r[1].toInt(), r[2].toInt())
+    }
+
+    override fun ingest(
+        rgba: ByteArray,
+        width: Int,
+        height: Int,
+        status: IntArray,
+    ): Triple<Long, Int, Int>? {
+        val r = ingestNative(rgba, width, height, status)
         return if (r == null || r.size < 3) null else Triple(r[0], r[1].toInt(), r[2].toInt())
     }
 

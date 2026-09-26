@@ -14,6 +14,8 @@ const auto = autoModule.default
 /** mock screen 宿主：按 Kotlin ScreenNamespaceHandler 响应形状回包。 */
 let installed = false
 const mockState = { locked: false, throttle: false }
+/** 每条到宿主的请求（断言 wire 形状用：尺寸提示这类"发了什么"只有这里看得见）。 */
+const seen = []
 function installMockScreen() {
   if (installed) return
   installed = true
@@ -23,6 +25,7 @@ function installMockScreen() {
   auto.install((ns, method, payloadJson, reqId) => {
     if (ns !== 'screen') return undefined
     const p = payloadJson ? JSON.parse(payloadJson) : null
+    seen.push({ method, p })
     const ok = (payload) => auto.handleResponse({ t: 'ok', id: reqId, payload })
     const err = (code, detail) => auto.handleResponse({ t: 'err', id: reqId, code, detail })
     switch (method) {
@@ -96,4 +99,13 @@ test('screen.startCapturer 会话全链路：nextFrame 取帧 + close', async ()
   assert.strictEqual(frame.width, 1080)
   await cap.close()
   await assert.rejects(() => cap.nextFrame(), (e) => e.code === 'ERR_NOT_FOUND')
+})
+
+test('screen.startCapturer 的尺寸提示原样过桥（回包不带尺寸——尺寸是提示不是事实）', async () => {
+  const cap = await auto.screen.startCapturer({ width: 720, height: 1280 })
+  const last = seen[seen.length - 1]
+  assert.equal(last.method, 'startCapturer')
+  assert.deepEqual(last.p, { width: 720, height: 1280 })
+  assert.ok(cap.session, '回包只有会话句柄，没有宽高')
+  await cap.close()
 })

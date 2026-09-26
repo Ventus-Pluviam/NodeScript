@@ -37,7 +37,7 @@
 1. **脚本绝不进 UI 进程。**
    开源 Auto.js 最大的架构教训就是脚本跑在主进程（UI 卡顿、一个死循环拖垮整个 app、无法 kill 单个脚本）。脚本运行时只存在于独立进程。
    - 推论 A：**进程级隔离是唯一的真实隔离**。「模块作用域 + 独立 vm context」不是隔离——`process.exit()` 会带走同进程的一切。任何被用户脚本控制的特性（`process.exit`、`setTimeout` 风暴、OOM）都必须被进程边界吸收。
-   - 推论 B：最不可信的代码最隔离 → QuickJS 沙箱（跑第三方/市场脚本）必须在其**自己的进程**，而不是塞进主进程的一个线程。
+   - 推论 B：最不可信的代码最隔离 → 若引入沙箱，它必须在**自己的进程**，而不是塞进主进程的一个线程。**2026-09-26 拍板不做沙箱（§18 第 1 项），本推论暂无落地对象**；铁律「脚本不进主进程」不受影响 —— 现有的隔离单元就是 `:nodeN`。
 
 2. **跨进程调用永远异步。**
    JSON-RPC 过桥、Binder、IPC 一律 Promise；**同步变体被禁止**。同一事件循环内的纯内存路径（如纯 JS datastore importer）可以同步，但只要有进程/线程边界跳过同步 facade。
@@ -63,7 +63,7 @@
 |---|---|---|---|
 | **Node 发行渠道** | **Node 24.x LTS 源码自建 `libnode.so`**，fork/自持 `nodejs-mobile` 的构建 recipe 管线并自行维护 | 官方 nodejs-mobile 停在 18.20.4（已 EOL）且 ELF 按 4KB 对齐，**在 16KB 页设备上 dlopen 直接崩**；自建才能跟进 LTS 升级补漏洞 | 维护构建管线成本；需长期持有（预期树哈希门禁、NDK r27d/r28、jar 剥离、zlib/gzip 静态化约 26MB ABI 预算） |
 | **引擎执行模型** | **每脚本一个 `:node` 进程**，进程池按设备内存自适应 | 唯一的真实执行隔离；`process.exit`/OOM/死循环只杀自己；全局变量天然隔离；崩溃可重建 | 内存开销（池默认 1–2，≥6GB RAM 到 3）；不能共享一个 Node 实例的模块缓存 |
-| **JS 引擎** | P0 只做 Node；P1 加 **QuickJS** 作不可信脚本沙箱（独立 `:sandbox` 进程） | AutoJsPro 双引擎（Rhino+Node）证明沙箱是刚需；QuickJS 体积小、有 `JS_SetInterruptHandler` 可打断 CPU 风暴 | 双引擎维护；API 子集对齐成本 |
+| **JS 引擎** | **只有 Node**（QuickJS 沙箱已裁，§18 第 1 项 2026-09-26 拍板） | 单引擎免掉双引擎 API 对齐与 `:sandbox` 进程/白名单三件大事；脚本特权改由**安装时用户选择 + §11 来源提示**约束，不靠进程隔离 | 第三方脚本与自写脚本同权（见 §11 表） |
 | **桥** | TS facade → N-API addon（`NAPI_VERSION=10`）→ JNI → Kotlin Router；**全异步 JSON-RPC + requestId 关联**；每 context 一个 `napi_threadsafe_function` | N-API 稳定 ABI、nodejs-mobile 系已验证；TSF 允许任何 Java 线程安全投递事件，`napi_unref_threadsafe_function` 闲置不保活事件循环 | 无同步调用便利性（/并发模型语病，已在 §7.2 定死） |
 | **无障碍通道** | `AccessibilityService` 部署在 **`:main`** 进程；**紧凑索引树**传输；句柄带 generation | 与引擎进程分离＝无障碍服务存活不依赖脚本进程；紧凑树省 IPC 体积（全树 JSON 序列化是性能杀手） | 树构建在 UI 进程承担；事件洪峰需节流 |
 | **截图** | 默认 **a11y `takeScreenshot`**（API34 起 333ms 节流）；**MediaProjection** 做会话式实时截屏/录屏（API34 每会话确认 + FGS 前置）；**图像分析全走 native**（独立 `libopencv.so`，OpenCV 4.14.0 静态链接 + kleidicv 默认 ON） | 图像管线 0–1 拷贝直达 Native，避免 Bitmap→Byte[]→Buffer 多次拷贝；`FLAG_SECURE` 窗口如实返回 `ERR_SCREEN_LOCKED/ERR_BLACK_FRAME` 系错误对象 | 维护两份 so；OpenCV 静态链接体积 |
@@ -71,7 +71,7 @@
 | **保活** | **specialUse FGS**（`onCreate` 即 `startForeground`，声明 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`，无超时）+ 电池优化白名单引导 + 精确闹钟看门狗 + 开机 specialUse 恢复；**全部作为一级权限项进能力中心** | API35 普通 FGS 有 6h 超时、普通后台启动受限；specialUse 无超时，精确闹钟不受 FGS 后台启动限制 | Play Store 不可发行；部分 ROM 需要引导 |
 | **打包** | 模板 APK 改写（AXML/ARSC 编辑替换 application + 注入 assets/project），复用宿主 Node 引擎 so | AutoJsPro 已验证的发行形态；不需要为每个脚本重编 C++ | APK 依赖宿主引擎版本 |
 | **npm 支持** | **D（混合）**：vendored 真 npm CLI（npm 12.x 系，Node≥24.15）在**专用安装会话进程**内进程内执行——P0 默认零 spawn（npm12 官方 `allowScripts=none` 等默认语义把「无 child_process」从 workaround 变成契约）；P1 加 spawn 桥升级通道（批准后 lifecycle/npm run）；内置离线 bundle + 精选 tarball 种子通道 | 纯 JS 生态（axios/dayjs/lodash/ws 等）安装**实证无需子进程**（strace 实测 0 execve）；真 CLI 白拿 lockfile v3/audit/审批语义且可审计；不重造轮子 | npm CLI ~8–9MB 体积；供应链护栏只能靠带外信任锚与审批人机分离（§10） |
-| **进程隔离** | `:main`(UI+服务) / `:node0..N`(脚本) / `:sandbox`(QuickJS) | §4 进程拓扑 | — |
+| **进程隔离** | `:main`(UI+服务) / `:node0..N`(脚本) | §4 进程拓扑（`:sandbox` 已裁，图中留痕标注） | — |
 | **SDK 基线** | minSdk 24 / compile&target **36**（Android 16）/ arm64-v8a 首发（后续 x86_64）；**16KB ELF 对齐进 CI 门禁** | 2026 事实标准；16KB 页设备成为主流 | 放弃 32 位旧机 |
 
 ---
@@ -98,7 +98,7 @@
 └───────▲──────────────────────────────▲───────────────────────────────┘
         │ 实现 SPI                      │ 实现 SPI
 ┌───────┴────────────────────┐   ┌──────┴──────────────────────────────┐
-│ :platform:capabilities     │   │ :engine:node-process    :engine:sandbox│
+│ :platform:capabilities     │   │ :engine:node-process    :engine:sandbox*│
 │  a11y / 截图 / 输入 / 悬浮窗 │   │  Node host (.so 装载 + bridge)      │
 │  / 系统 / 存储              │   └─────────┬──────────────────────────┘
 └────────────────────────────┘             │ JNI
@@ -134,8 +134,8 @@
 └───────┬──────────────────────────────────────────────────────────────────┘
         │  bridge router（unix socket / binder？见 §7.5）
 ┌───────▼──────────────┐   ┌───────▼──────────────┐   ┌──────▼────────────────┐
-│ :node0 引擎进程        │   │ :node1              │   │ :sandbox (P1)          │
-│  node::Start          │   │  ...                 │   │  QuickJS 隔离池         │
+│ :node0 引擎进程        │   │ :node1              │   │ :sandbox *已裁          │
+│  node::Start          │   │  ...                 │   │  (QuickJS 不进排期)     │
 │  N-API addon+TSF      │   │  池容量由设备内存决定 │   │  interrupt handler     │
 │  单脚本/单 context     │   │  执行 slot 持 FGS     │   │  白名单 auto.* 子集      │
 │  libopencv.so      │   │                      │   │  独立进程：最不可信最隔离 │
@@ -145,7 +145,7 @@
 进程职责切割的推演（含批判结论）：
 - **无障碍服务放 `:main`**（离系统最近、显著最高、Binder 调用最省），且**与脚本进程解耦**——脚本崩了无障碍服务不死，反之亦然。批判 5/8 交叉验证了「无障碍与运行时同进程=一损俱损」「无障碍进引擎进程是错误」，主进程承接它被否决否认性证伪。
 - **脚本（Node）只在 `:nodeN`**，执行中的 slot 持有 specialUse FGS（绑定到 :main 继承进程重要性，形成 group），防 LMK 优先回收。
-- **QuickJS 沙箱 `:sandbox`** 单独进程：CPU 风暴不饿死 `:main` 渲染与无障碍回调；`process.exit`/死循环只死沙箱。批判 6 指出的「QuickJS 放主进程 = CPU 饥饿主进程」已修正为独立进程。
+- ~~**QuickJS 沙箱 `:sandbox`** 单独进程~~ **已裁（2026-09-26，§18 第 1 项）**：不再有第三个进程。CPU 风暴/死循环的吸收者就是 `:nodeN` 自己（进程边界 + 心跳/差分看门狗，§8.4/§8.8），与沙箱无关。
 
 ---
 
@@ -156,7 +156,7 @@
 - `:node0…N`：脚本引擎进程。**每引擎进程恰好一个 `node::Start`/单一 v8 isolate/单一 context**（P0 单脚本进程一对一；并发 = 池化多进程）。孤立过程：
   - **池容量自适应**：由 `/proc/meminfo` + 设备分级决定，默认 1–2，≥6GB 内存 → 至多 3；低内存模式堆上限降为 128MB / 池=1。
   - 一个常驻引擎 slot 绑一个持 FGS 的「执行 slot」；闲时进程被复用（脚本之间不共享内存）。
-- `:sandbox`：QuickJS（P1）。
+- ~~`:sandbox`：QuickJS（P1）~~ **已裁（2026-09-26）**，引擎进程只有 `:node0..N`。
 
 ### 5.2 线程
 | 线程 | 归属 | 职责 | 规则 |
@@ -197,7 +197,7 @@
 | `:bridge:image` | C++：图像分析管线 addon（独立 so `libopencv.so`，OpenCV 4.14.0 静态链接 + kleidicv，不依赖 node；`imgnative.cpp` 计算核 + `images_jni.cc` 装载面，构建轨 `node-runtime-build/scripts/build-opencv.sh` + `.github/workflows/image-native.yml`；宿主机语义门禁 `bridge/image/test/cpp/`，277 例直链同 commit OpenCV 跑像素断言，覆盖 decode 归一 21 + findColor 36 + matchTemplate 24 + 灰度 28 + 裁剪 46 + 缩放 45 + 旋转 45 + 特征 32） | 被引擎宿主 + `:main` 分析器引用 | — |
 | `:bridge:js` | npm workspace：TS facade SDK（`@autojs/*`）、RuntimeChannel、bootstrap loader、d.ts | 仅 npm 依赖 | 禁 Gradle 反向 |
 | `:engine:node-process` | `:nodeN` 进程宿主：**`NodeProcessEngine`（Kotlin spawn：ProcessLauncher 缝 + env 契约 + pid/状态语义，实现 `:domain` 的 `ScriptEngine`）**、main.cpp、Node config、JNI 注册 | `:bridge:native`、`:domain` | 禁 Android SDK UI；Kotlin 侧禁 `com.autoscript.bridge..`/`appservice`/`platform`（ArchitectureTest 量化） |
-| `:engine:sandbox` | QuickJS 宿主进程（P1） | — | — |
+| `:engine:sandbox` | QuickJS 宿主进程 —— **已裁、不进排期**（§18 第 1 项；`settings.gradle.kts` 模块表由协调者冻结，壳保留） | — | — |
 | `:platform:capabilities` | a11y 服务/UiNodeTreeReader、截图 FrameSource（a11y 路径已接，MediaProjection 待）、输入通道（无障碍/root/adb/Shizuku）、`a11y`/`screen` 命名空间 handler + 挂载缝薄转接；`DialogHost`（`AndroidDialogHost` 编排 + **设备面全部住 `…capabilities.device` 子包** —— ArchUnit 按包豁免 `android..`，语义层保持纯 JVM）；`dialogs`/`shell`/`device`/`app`/`floatingWindow` 五个 handler（语义层，SPI 由 Android 侧注入）；`datastore`/`zip`/`settings` 三个存储面 + `notification` 通知面 + `clipboard` 剪贴板面 + `sensors` 传感器面 + `images` 图像面 handler（§9.6/§9.2/§12.2，各自独立注入缝 —— 图像面的 `ImagesNamespaceHandler` **单独成文件、刻意不住 `SystemNamespaces.kt`**：那五个共担 OVERLAY/ROOT/ADB_INPUT 门禁组，图像面没有门禁） | `:domain` + 系统 API | 禁服务逻辑；禁直连 `com.autoscript.bridge..`（挂载缝类型住 `:domain`，见 §12.2） |
 | `:platform:system` | overlay、通知、datastore（SQLite）、shell、设备信息、zip、系统设置 —— **只放 `com.autoscript.domain.system` 各 SPI 的 Android 实现**（`Runtime.exec`/`Build`/`PackageManager`/`WindowManager`），handler 语义层不在这里（见上一行，理由见 §12.2）。**已落地**：`shell`/`device`/`app`/`floatingWindow` 四件 + `datastore`（`AndroidDataStore`+`SqliteKvOps`）+ `zip`（`JdkZipArchiver`，`java.util.zip` 纯 JVM 无 ops 缝）+ `settings`（`AndroidSystemSettings`+`SettingsSystemOps`）（`SystemSpis.of` 是实现入口，`Bundle` 已到十件）+ `notification`（`AndroidNotificationPoster`+`NotificationOps`，默认 channel 归实现）+ `clipboard`（`AndroidClipboard`+`ClipboardOps`，与 a11y 剪贴板同口径）+ `sensors`（`AndroidSensorSource`+`SensorOps`，拉取式游标/有界环/句柄纪律）；`dialogs` **不在本模块**（domain KDoc 约定实现住 :platform:capabilities，平台模块间无依赖边，构造归 `PlatformWiring.of`）；`images` 的 `ImageAnalyzer` 真实现是 `NativeImageAnalyzer` + `JniOps`（`System.loadLibrary("opencv")`，so 缺位即不构造）——它不住 `SystemSpis.Bundle`（`images` 是独立可选参数，构造归 `PlatformWiring.of`：`JniOps.loadOrNull()` 失败 → null → 桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`） | `:domain` | 禁服务逻辑；禁直连 `com.autoscript.bridge..`（本模块不挂 Router，挂载在 `:platform:capabilities`） |
 | `:node-runtime-build` | **构建管线（不打包进 APK）**：Node 源码 recipe、NDK 编译、16KB 对齐门禁、产物 hash | CI 脚本 | — |
@@ -259,6 +259,13 @@ RuntimeBridge (单例)                        ← requestId 生成/关联、TTL�
   - 任何操作若 `gen` 不匹配 → `ERR_STALE_HANDLE`（防「旧引用操纵新资源」竞态）。
   - 资源 `dispose` 后 tombstone 立即清除内核引用；销毁由内核单线程执行，杜绝并发 Dispose。
 - **引用计数对象**（Image/MediaPlayer）用弱引用 + finalize 兜底；`Image.recycle()` 比 GC 优先。
+- **帧的所有权：发号侧归一（§18 第 8 项 (b)，2026-09-26 落地）**：图像帧的在场性/发号/像素
+  **只由 `:domain` `ImageAnalyzer` 一家持有**（`decode` 与 `ingest` 同一个 `nextRefId`）。
+  `screen` 与 `images` 是**两个释放入口、一张表**：`frame.recycle()` 按来源各打各的
+  namespace，落进去是同一个"已释放"事实 —— 放过的帧任一侧再用都是 `ERR_STALE_HANDLE`。
+  handler 层不再自持第二张在场面表（曾是"两个计数器各自从 1 起"的隐式对齐，属漂移面）；
+  `analyzer == null`（so 缺位）时 `ScreenshotSource` 才退回本地表，而此时 `images`
+  命名空间未注册，两个号段结构上不可能相撞。
 
 ### 7.5 进程间传输
 P0 起用 **unix domain socket**（同应用可持久连接、双向流、背压可控），JSON-RPC over newline-delimited frames；抽象为一个 `Transport` 接口，可替换成 binder（只改 `:bridge:java` 内的 Transport impl，不影响上层）。**不引入自制 RPC 编解码 excess**——送 pubsub/流用独立 channel。
@@ -275,13 +282,14 @@ class AutojsError extends Error {
 ```
 错误目录（前 20 个中最关键）：`ERR_TIMEOUT`、`ERR_STALE_HANDLE`、`ERR_PERMISSION_DENIED`（能力未授权/被降级）、`ERR_SERVICE_DISABLED`、`ERR_SCREEN_LOCKED`、`ERR_BLACK_FRAME`（FLAG_SECURE）、`ERR_CAPTURE_DENIED`、`ERR_ENGINE_STOPPED`、`ERR_ENGINE_CRASHED`（进程死）、`ERR_NOT_IMPLEMENTED`（本平台不支持，如 child_process）、`ERR_INVALID_PARAM`、`ERR_FILE_NOT_FOUND`、`ERR_FILE_EXISTS`（打包产物已存在等）、`ERR_DISK_FULL`、`ERR_NOT_FOUND`（UiSelector 未找到 → 可选 `NotFoundError` 对齐 Pro v9）。
 映射规则：`Java Exception → 分类 → AutojsError`，保留 `javaStack`，JS `instanceof` 可判。
+目录三处落字（`:domain` `core/Error.kt` 的 `ErrorCode`、`bridge/js/src/errors.ts` 的 `ErrCode` + `ERROR_CODES`、本文提及）由 `bridge/js/test/err-catalog.test.cjs` **三面对账**（Kotlin ⇄ JS 双向相等、同文件枚举 ⇄ 字面量表双向相等、文档提及必须两处都在；随 `npm test` 进 CI）——2026-09-26 首跑就抓到真漂移：`ERR_IO` 在宿主全线服役（zip/settings/images/spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 false；已补码并被该门的「回潮」断言钉死。
 
 ### 7.7 性能关键路径（数量级目标）
 | 链路 | 目标 | 设计 |
 |---|---|---|
 | 空 RPC（JS→:main→回） | p95 < 2ms | 直连 unix socket、零 JSON 二次解析、TSF 双队列 |
 | 无障碍 `find → click` | 200ms 内 p60 / ~10ms 树读 | 紧凑索引树 + 按需属性 + 句柄（不全量序列化） |
-| `captureScreen → findImage` | < 1s 且一次截图两次匹配 < 700ms | 屏幕帧→native 0 拷贝，模板匹配在 `libopencv.so`；**目标链路当前脚本走不通**（两缝帧不通用，见 §9.2 末缺口条），数字是「链路通了之后」的口径 |
+| `captureScreen → findImage` | < 1s 且一次截图两次匹配 < 700ms | 屏幕帧→native 0 拷贝，模板匹配在 `libopencv.so`；**链路已通**（§18 第 8 项 (b) 2026-09-26 落地：截屏帧经 `ImageAnalyzer.ingest` 进 `images` 同一张帧表，"帧不通用"取消）—— 数字仍是**待实测**的验收口径（真机未量） |
 | `findColor`（单人独立子图 1080p） | < 10ms | native 遍历（`cv::inRange` 逐分量包含 + `findNonZero` 取首个；ROI 是浅视图不拷像素；kleidicv 覆盖 `inRange` 面） |
 | `matchTemplate` 1080p | < 40ms | OpenCV TM_CCOEFF_NORMED（实测它、不是早前写的 CCORR：见下注）|
 | 紧凑树构建/传输 | < 15ms / 数十 KB | 预聚合属性，代价解析放"取用即取" |
@@ -468,7 +476,7 @@ interface EnginePool {                                // 实现在 :app-service:
 - **无 `pause/resume`/`console: Flow`/`events: Flow`/`channel()`**：暂停未进 P0；控制台与事件走 §7.3 的 TSF 双队列 + EventBus 拉取，不建模成引擎侧 Flow（轮询式 Flow 会把「事件」伪装成「流」，丢失 TTL 与背压语义）；命名通道在 `:app-service:runtime` 的 `EnginesNamespaceHandler` 侧按 `channel/channelEmit/channelDrain/channelClose` 显式管理。
 - **引擎是一次一脚本**（`execute(run)` 非 `start(session)`）：同槽位不并发两个脚本，会话身份 = `runId`。
 - **`acquire/release` 收 `PoolAcquireRequest`/`PoolHandle`**而不是 `EngineSession`/`ExecutionHandle`：排队上限（`waitTimeoutMillis`）必须与请求同行，否则满池只能无限等。
-- 实现：`:engine:node-process`（NodeFactory）、`:engine:sandbox`（QuickJSFactory），通过 **Provider/SPI** 注入；界面完全面向接口，双引擎可互换。
+- 实现：`:engine:node-process`（NodeFactory），经 **Provider/SPI** 注入（`QuickJSFactory` 随沙箱裁掉，§18 第 1 项；缝留在原处，将来真要第二个引擎不必改接口）。
 
 ### 8.2 引擎实例模型决议（批判决议）
 - **不做**「单 Node 实例多 engine/多 Job」——共享 context 的 `process.exit()`、全局变量、模块副作用全部泄漏（批判 2 反面教材）；「模块作用域隔离」被明确定为**假隔离**。
@@ -611,23 +619,36 @@ FrameSource (SPI)
 ```
 - 截图对象生命周期：JS `Image` 句柄 → native 帧句柄；`recycle()` 显式 + finalize 兜底；`dispose` tombstone 协议同 §7.4。
 - `FLAG_SECURE` → 分类错误（§7.6），不返回黑图（让脚本可判断）。
-- **已落地（Kotlin 侧）**：`ScreenshotSource`（333ms 节流 / generation=1 单帧句柄 / 会话 open-close；`recycle` 已升为 `:domain` `FrameSource` SPI 方法）+ `ScreenNamespaceHandler`（构造只收 `FrameSource` SPI，`capture/recycle/startCapturer/nextFrame/closeSession`）。**Android 真实现已接（§9.2 a11y 截图路径）**：`AndroidFrameProducer` 经 `A11yBridge.{screenSnapshot,takeScreenshot}`（`AutoScriptAccessibilityService` 设备面实现——`ScreenshotResult` HardwareBuffer→软位图→JPEG，**实际尺寸随帧走**（`ProducedFrame`，曾经固定 1080×2400 回包是对 JS 报假尺寸，已除）；配置 `canTakeScreenshot=true` 进 res/xml（AOSP 明示缺它两法都不可用）；失败码分类映射 SECURE→`ERR_BLACK_FRAME`、系统限频→`ERR_INVALID_PARAM`、通道失效/无效窗口→`ERR_SERVICE_DISABLED`、内部错→`ERR_IO`；API34+ `takeScreenshotOfWindow`、API30–33 `takeScreenshot`、API<30 如实 `ERR_NOT_IMPLEMENTED`）。生产装配 `PlatformWiring.screenHandler = CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer()))` → `AppShellApplication.installWithFiles`，与 a11y 同底（`SystemA11yBridge`，服务未连 = `ERR_SERVICE_DISABLED`）；锁屏/无窗口由 `ScreenPolicy` 预检分类，安全窗由回调码兜底（无障碍读不到窗口 FLAG_SECURE，`secureForeground` 预检位恒 false —— 不伪造预检能力，分类结果殊途同归）。**仍缺**：MediaProjection 高清会话（授权 UI + FGS + ImageReader→libopencv.so）——换 producer 即插，语义面不动；P0 会话由同一 a11y 帧源连续截图承接。
+- **已落地（Kotlin 侧）**：`ScreenshotSource`（333ms 节流 / generation=1 单帧句柄 / 会话 open-close；`recycle` 已升为 `:domain` `FrameSource` SPI 方法）+ `ScreenNamespaceHandler`（构造只收 `FrameSource` SPI，`capture/recycle/startCapturer/nextFrame/closeSession`）。**Android 真实现已接（§9.2 a11y 截图路径）**：`AndroidFrameProducer` 经 `A11yBridge.{screenSnapshot,takeScreenshot}`（`AutoScriptAccessibilityService` 设备面实现——`ScreenshotResult` HardwareBuffer→软位图→**紧密 RGBA 像素**（2026-09-26 起不再压 JPEG —— 那段压缩是死重且有损），**实际尺寸随帧走**（`ProducedFrame`，曾经固定 1080×2400 回包是对 JS 报假尺寸，已除）；配置 `canTakeScreenshot=true` 进 res/xml（AOSP 明示缺它两法都不可用）；失败码分类映射 SECURE→`ERR_BLACK_FRAME`、系统限频→`ERR_INVALID_PARAM`、通道失效/无效窗口→`ERR_SERVICE_DISABLED`、内部错→`ERR_IO`；API34+ `takeScreenshotOfWindow`、API30–33 `takeScreenshot`、API<30 如实 `ERR_NOT_IMPLEMENTED`）。生产装配 `PlatformWiring.screenHandler = CapabilityNamespaces.screen(ScreenshotSource(AndroidFrameProducer(), analyzer = images))`（**同一个** analyzer 也喂给 `images` 缝，§18-8(b) 一张表；analyzer 为 null 即退回本地帧表） → `AppShellApplication.installWithFiles`，与 a11y 同底（`SystemA11yBridge`，服务未连 = `ERR_SERVICE_DISABLED`）；锁屏/无窗口由 `ScreenPolicy` 预检分类，安全窗由回调码兜底（无障碍读不到窗口 FLAG_SECURE，`secureForeground` 预检位恒 false —— 不伪造预检能力，分类结果殊途同归）。**仍缺**：MediaProjection 高清会话（授权 UI + FGS + ImageReader→libopencv.so）——换 producer 即插，语义面不动；P0 会话由同一 a11y 帧源连续截图承接。
 - MediaProjection **会话语义**：`capture()` 一次性授权会话（API34 每会话确认）；`reconnect` 不自动重试授权，由 PermissionCenter 引导用户重授权。
-- **图像分析面（`images`，§12.2 第七条独立缝）已通桥面、已通 native 实现（2026-09-25）**：`:domain` `ImageAnalyzer` SPI（`decode`/`matchTemplate`/`findImage`/`findColor`/`release` 五方法，`ImageFrame{HandleRef,width,height}` / `ImageMatch{x,y,width,height,confidence}` / `ColorHit{x,y,r,g,b,a}`）+ `:platform:capabilities` `ImagesNamespaceHandler`（帧句柄自管发号，与 `ScreenshotSource` 同套纪律）+ JS facade `images.ts`。**P0 刻意不提供内存分析器**：看不见像素的替身只能靠自报坐标假装匹配成功，那比没有更坏 —— so 缺位时 `imagesHandler` 为 null，桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`（2026-09-25 起 native 已接，见下）。**`findColor` 已落地（2026-09-25，P1 第一个算子）**：单色 + 逐分量容差 + 可选区域 + 回第一个命中，四层同改（`imgnative_color` → `colorNative` → `NativeImageAnalyzer.findColor` → `images.findColor`）。两条口径在该层钉死：**未命中是答案**（`x = -1` 哨兵回裸 `null` —— (0,0) 是合法首像素，拿 0 当“没有”会把左上角的命中静悄悄吃掉）；**“扫过 0 像素”是参数错**（`ERR_INVALID_PARAM`，那不是“没有”而是“根本没找”）。P1 native 面的八个算子已全落（**灰度、裁剪、缩放、旋转与特征**：计算核 `imgnative_gray`/`imgnative_crop`/`imgnative_resize`/`imgnative_rotate`/`imgnative_feature` 已落（28 + 46 + 45 + 45 + 32 例 host 断言），但桥面同样不开 —— 见本节末）。**宿主机语义门禁**：计算核零 JNI（见 imgnative.cpp 文件头），于是 host 侧用**同 commit** 的 OpenCV 4.14.0 静态库直链它、以 x86_64 跑像素断言（`bridge/image/test/cpp/`：`run-host-tests.sh` 一条命令装+编+跑）。这道门存在的理由很实：`imgnative_color` 里有三处判读是「编得过但译反了照样出结论」（**已覆盖**，36 例）——Vec4b 回读的通道序（px[2]→r/px[1]→g/px[0]→b，译反只是回包 r/b 互换）、ROI 内坐标+roi 左上角=全帧坐标、以及「扫过了、没有」与「扫过 0 像素」的区分；JVM 522 例与 JS 128 例全绿时它照样能错，而违约金是 hook 不到。**2026-09-25 已实证**：NDK `-fsyntax-only`、JVM、JS 三门全绿之际，这道门抓出 `cv::imread(IMREAD_COLOR)` 把任何来源压成 3 通道 BGR、`at<Vec4b>` 静默读进下一行首字节 —— alpha 分量从来没参与过判定（ASan 也不报）。修法=IMREAD_UNCHANGED + decode 归一成 4 通道 + `imgnative_color` 内通道/深度兜底守卫，`host_decode_norm_test.cpp` 21 例钉死。 **`imgnative_match` 的判读也补上了 host 断言**（`host_match_test.cpp` 24 例，2026-09-25）：命中坐标 = 模板左上角（matchTemplate 的 maxloc 是结果面左上角，照搬即模板位置，**不**再叠加 ROI 偏移）、w/h = 模板尺寸、**未匹配是答案不是异常**（out_match=0 且 x/y/w/h/confidence 全 0，status 仍是 0 —— 与 findColor 的 `x = -1` 同一条纪律；若把 `w == 0` 当"未命中"判，一张 0 宽模板就能让脚本把命中读成未命中）、阈值域 `maxv == threshold` 判命中（"≥ 阈值即命中"是契约原话）、模板比画面大 → ERR_IO(3)。补它的理由与 decode 归一同源：**模板匹配此前只被 JVM mock 覆盖，mock 不碰像素、永远回一个编好的 ImageMatch**，于是"坐标译反了""未命中时把 x/y/w/h 也回出去"在 JVM/JS 两门全绿时照样能溜过去。**灰度也落进计算核了**（`imgnative_gray`，2026-09-25，`host_gray_test.cpp` 28 例）：它是 decode 之外**第一个产出新帧的算子**，所以这道门额外钉了"产出新帧"的边界 ——产出帧号 > 原帧号且不顶掉原帧、原帧不被就地改灰、两帧各自独立 release、放掉产出帧后原帧照常可用（这四条 JVM/JS 两门**结构上看不见**：mock 只回一个自报的 ref）。产出帧仍是 4 通道 BGRA（帧表不变式，为此提了具名谓词 `frame_is_normalized`，`imgnative_color` 里原先手写的那处判据一并换过去），**alpha 原样带过去不抹 255**（灰度压掉的是色彩信息，透明与否不是色彩；decode 用 IMREAD_UNCHANGED 保住 A 就是让 a 分量参与判定，在灰度这步抹平等于把那次事故引回来）。灰度权重用库的 `COLOR_BGRA2GRAY` （0.299R+0.587G+0.114B），不自己写系数（抄一份就多一个漂移面）；host 断言钉纯红 76 / 纯绿 150 / 纯蓝 29，并正面否认平均法（找 85 必须未命中）。**桥面刻意不开**：`:domain ImageAnalyzer` 五方法里没有它，handler 也不认 `toGrayscale` —— 灰度在脚本侧是可选操作（匹配与找色都按需处理通道），没有消费方就不开桥面。**裁剪也落进计算核了**（`imgnative_crop`，2026-09-25，`host_crop_test.cpp` 46 例）：它是第一个**尺寸会变**的产出算子，比灰度多三处判断，每一处都在 host 上钉住。（1）**区域判据复用 `resolve_region`**（找色那同一个函数，不是抄一份）—— 于是"越界"在两处是同一个码、同一个边界口径（`rx + rw == cols` 贴边合法，越界一律 `ERR_INVALID_PARAM`）。（2）**`region == nullptr` 在本算子是拒收**，不按 `resolve_region` 的缺省解释成"整帧"：裁剪的语义就是"取一个子区域"，缺区域时唯一自洽的解释是"整帧拷贝"—— 想要整帧副本就明写整帧区域（那也有断言）。（3）**产出必须是拷贝（`clone()`），不能是 `(*f)(roi)` 视图**：帧表是**所有权表**不是视图表，源帧一 release，脚本手里的"子图"就悬垂。第（3）条值得单独记一笔，因为**它的判据不是直觉能给的**：`(*f)(roi)` 是浅视图，而 OpenCV 的 ROI **会把父缓冲的引用计数带住**（实测 `src.u->refcount` 1→2），所以"放掉源帧后视图会读到垃圾"**不成立** —— 缓冲根本没被释放，像素照常读出正确值（host 侧实测：放掉源帧后再读产出帧，视图实现同样正确，64 轮同尺寸重分配也没能把它分出来）。别名唯一可观测的后果是**内存归属**：视图共享同一个 `UMatData`，引用计数不为零就释放不掉，于是一张 1×1 的产出帧能把源帧整块缓冲钉在常驻内存里（4000×4000×4 实测：拷贝实现放源帧后 RSS 回落到基线，视图实现留 ~61MB）。这条判据因此写成了 **RSS 断言**（`host_crop_test.cpp` 第 8 段，大源帧裁 1×1 后放源帧、阈值 16MB 取在两种实现中间；§7.7 本来就没有为 crop 承诺 0 拷贝，而"0.3MB 的产出帧钉住 64MB 常驻"正是它在脚本侧的代价）。顺带钉住：产出帧号 > 源帧号且不顶掉源帧、宽高 = region 的 w/h（不是源帧尺寸）、区域坐标是**源帧坐标系**（子图 (0,0) 逐分量 == 源帧 (rx,ry)，非零起点也钉了）、产出帧仍是 4 通道 BGRA 且 **alpha 原样带过去**（裁出的单像素 a=210 不抹 255）、产出帧可以**再裁**、句柄已死 → `STALE`、出参指针为 null → `ERR_INVALID_PARAM`，且**拒收一律早退不写出参**（与 match/gray 同口径）。**裁剪的桥面同样刻意不开**（`:domain ImageAnalyzer` 五方法里没有它，handler 也不认 `crop`）—— 同灰度那条纪律：脚本侧没有消费方（找色已经能在 `region` 上限定范围，读路径不产出帧；只有"要把子图当独立一帧反复用/当模板"时才需要 crop）。**缩放也落进计算核了**（`imgnative_resize`，2026-09-25，`host_resize_test.cpp` 45 例）：它是第一个**像素值要重算**的产出算子（crop 是搬像素、逐点相等；resize 按插值重算，逐点不等是正常的）。入参是**目标尺寸**（`dst_w` × `dst_h`）不是倍数（倍数是调用方算的浮点；与 gray/crop 的"宽高随帧回"同一条纪律：尺寸真值只有产出帧的地方知道，让下游自己推是猜）。插值**固定 `INTER_LINEAR`，不做入参**：NEAREST 放大是块状马赛克（UI 细线条/文字边缘丢信息），CUBIC/LANCZOS 更贵且在截图/PNG 这类非照片输入上无可证增益 —— 多一个入参就多一个"选错静默换答案"的漂移面。门禁把 LINEAR 的可观测行为钉了三条：纯色帧任意缩放值不变（杀通道丢失/alpha 被抹）、2×2 四角帧放 4×4 四角守恒（杀几何对错/行列互换）、中心 (1,1) r=101 混合值**专杀 NEAREST**（NEAREST 给 100；已用故意 NEAREST 实现验过变红 —— 但诚实起见：CUBIC/LANCZOS 在此处同样给混合值，这条钉的是"不是 NEAREST"而非"只能是 LINEAR"）。另有 4×4 象限→2×2 的均值行为、同尺寸合法拷贝（不早退，调用方不用先判要不要调）、非对称尺寸（宽高各自独立）、**16384 单边配额**（16384²×4≈1GB，再往上是笔误把字节数当宽高；配额拒收与尺寸不合法同码，注释里分开写）。产出 4 通道 BGRA（resize 逐通道，归一进归一出，显式再断言一次防将来换后端静默掉通道），拒收一律早退，**桥面同样刻意不开** —— 同一条纪律：同一套模板跑多分辨率设备时才需要它。**旋转也落进计算核了**（`imgnative_rotate`，2026-09-25，`host_rotate_test.cpp` 45 例）：它是第一个**画布尺寸要算**的产出算子（resize 的尺寸是入参直给，rotate 的画布是包络公式 bw=round(|w·cosθ|+|h·sinθ|)、bh=round(|w·sinθ|+|h·cosθ|) 算出来的 —— 4×2 转 90°→2×4、5×5 转 30°→7×7 都钉了）。入参是**逆时针角度**（与 `getRotationMatrix2D` 正方向一致；转反了整行对不上 —— 5×5 数字帧 90° 首行 {5,10,15,20,25}，顺时针会是 {21,21,16,11,6}）。画布是 **expand**（包住整图不静默裁像素；想要"旋转裁剪"先 rotate 再 crop —— 两个算子都在了）。中心是**帧中心** ((w-1)/2,(h-1)/2)：奇尺寸下恰落中心像素，90° 倍角采样点落整数格点、敢写整行精确相等（相邻行采样到同一行是**行复制** —— warpAffine 逆映射的精确行为，host 实测五组全是整行相等，不是 bug；实现注释里写明了）。插值固定 LINEAR、填充固定 REPLICATE（黑边是找色的假阳性源 —— 见实现注释），30° 中心 3×3 混合值**专杀 NEAREST**（已用故意 NEAREST 实现验过变红；诚实线与 resize 同一条：CUBIC/LANCZOS 同样给混合值）。NaN/Inf → INVALID_PARAM（三角函数吃掉它们不报错，矩阵是垃圾 —— 入口拒比 warpAffine 断言变 IO 错更诚实），0°/360° 恒等（360° 先归一，不因浮点余数差一像素），**桥面同样刻意不开** —— "把画面转正再匹配"是调用方显式要的变换，不是匹配内部顺手做的。**特征也落进计算核了**（`imgnative_feature`，2026-09-25，`host_feature_test.cpp` 32 例）：P1 native 面的收官算子，也是第一个**不产出帧、只回坐标**的算子（回模板中心在场景中的 (x,y,confidence)，不是新帧号 —— 与 matchTemplate 的 ImageMatch 不同：特征匹配没有"模板尺寸"的概念，模板在场景里多大是未知的；回中心让脚本直接点下去）。链全固定：ORB(nfeatures=1000) → BFMatcher(HAMMING) knn k=2 → Lowe ratio 0.75 → 中位数偏移 ±3px 几何一致性计数。每个固定点都有 host 实测依据：nfeatures 500/1000 同一子图描述子逐字节一致（参数只截断、不换答案）；BGRA 直喂与手转灰一致（ORB 内部按第一通道取灰，转灰是冗余步骤）；ratio 0.7~0.8 不换答案（good=29/30/33、几何正确都是 19），0.75 取 Lowe 原论文值。门禁钉了：子块命中（中心 ±10px、conf≈0.63±0.15 —— conf 指纹把 ratio 链钉住，ratio=0.99 会把它拉到 0.47，已用变体验过变红）、棋盘格误报 → 未匹配（host 实测误报 top 距离 60+，ratio 后 good 寥寥）、纯色模板空描述子 → 未匹配（不是 IO 错）、旋转 30° 后**未匹配**（描述子对得上但中位数偏移假设不再成立 —— 这是设计不是 bug，真要转着找得接 findHomography/calib3d，那是另一个算子；断言把这个边界钉死，免得被脑补成"旋转容忍=转着也找到"）、拒收早退、两帧不消耗。**构建轨代价**：features2d/flann 进 BUILD_LIST（`VERSIONS.env` 三模块 → 五模块；`build-opencv.sh` 链接行同步；host 门禁用同 commit 另配的五模块缓存过渡，本机重配一次即可合一）。so 体积增量待下一次 device 构建实测（host 静态库实测 features2d 1.8MB + flann 1.3MB —— 那是 x86_64 未 strip 的 .a，不是 arm64 so 增量，写在这里免得被当成结论引用）。**桥面同样刻意不开** —— 同一条纪律：刚性匹配（matchTemplate）与特征匹配（feature）是两种找图语义，脚本侧没有消费方之前不开第二个。P1 native 面至此收官：八算子（decode/match/release/color/gray/crop/resize/rotate/feature）全在计算核 + host 门禁里，桥面仍是五方法（decode/matchTemplate/findImage/findColor/release）。**附带修掉一处判据主语**：`imgnative_color` 里的 `frame_is_normalized` 原先问的是 **ROI 视图**，而视图的 `channels()/depth()` 与父矩阵**同解**（实测），所以那既不是漏判也不构成事故；改问源帧、且挪到 `resolve_region` **之前**，是因为谓词的名字与注释谈的都是"帧"—— 判据该写在它自己声称的主语上，顺序本身也是判据的一部分（非归一帧上"某个 region 合不合法"是另一套尺寸语义）。这道门附带钉住一条此前没写明的口径：`imgnative_match` 的拒收分支是**早退**——不写出参，所以调用方**不能拿 out_match 当"没命中"判**（可能还是上次调用的残留），判据只有 status；真实调用链正是这么做的（`images_jni.cc` 的 `matchNative` 只看 rc，`NativeImageAnalyzer.match` 同样 rc 优先）。NDK 交叉 `-fsyntax-only` 与这道 host 门**互不替代**（前者管 aarch64 能编、后者管判读对），真机红测仍是最后一关。它已接进 `.github/workflows/image-native.yml`（job `host-image-semantics`，与 build-opencv 同文件、paths 同源，且**排在构建前面**：判读先红一个 5–10 分钟的，不占满 15–30 分钟的构建槽；OpenCV 按 VERSIONS.env 同 commit 拉取并对表，tarball 会让对表退化成口号）。**native 侧已接**：`libopencv.so` = OpenCV 4.14.0（`core+imgproc+imgcodecs`，`BUILD_JPEG/BUILD_PNG/BUILD_ZLIB=ON` 树内源码、`WITH_KLEIDICV` 默认 ON）静态链接进我们自己的桥面 C++（`imgnative.cpp` 纯计算核：`extern "C"` 九入口、帧表自管、`cv::Exception` 就地折叠）；装载面 `images_jni.cc`（全仓图像侧唯一 `#include <jni.h>`）+ Kotlin `NativeImageAnalyzer`/`JniOps`（住 `:platform:system`，零 android import；`System.loadLibrary` 失败即不构造）。构建在 `node-runtime-build/scripts/build-opencv.sh`（按 commit SHA 固定、kleidicv pin 对表、16KB LOAD/NEEDED 白名单门禁、SHASUMS256 旁 kleidicv ON/OFF 审计行），由 `.github/workflows/image-native.yml` 在 Actions 跑；`PlatformWiring.of` 一行接上（so 缺位 → `ERR_NOT_IMPLEMENTED`，不塞内存替身）。
-- **缺口一条，写在这儿免得反复发现（2026-09-25 记账）**：`screen.capture()` 出的帧与
-  `images.decode` 出的帧**互不通用**（两缝各发各的号，§12.2）。所以 §7.7 表里
-  `captureScreen → findImage < 1s` 这条链路**当前脚本走不通**——拿 screen 的帧去
-  `images.findImage()` 只有 `ERR_STALE_HANDLE`。而 screen 面既不给 `save()` 也不给
-  `pixel()`（拿不到字节），脚本没法自己把屏变成文件。三条出路，入口都在同一处
-  （换 producer 或加一个 `screen.save`），代价不同，**§18 第 8 项已拍板 (b) 两缝共用帧表**：
-  (a) `screen` 面加 `save(path)`（把 a11y 已产出的 JPEG 字节原样落盘 —— 设备面已经在压
-      JPEG 了，只是字节从来没出过 :main；最小改动，且 JPEG 是有损的，`findColor` 的
-      分量判定会吃到压缩伪影）；
-  (b) producer 直接把帧写进 `images` 的帧表（两缝共用一个帧表 = 取消"帧不通用"这条纪律，
-      动的是 §7.4 所有权边界，收益是真正的 0 拷贝直连）；
-  (c) `images` 面加 `decodeBytes(byte[])`（屏幕字节不落盘直进 native —— 但 bytes 要过桥，
-      §7.7 的"0 拷贝"在两个维度上都要重新记账）。
-  在此之前 §12.3 示例已按"屏先落成文件（脚本自己的事）"改写，不再描述一条跑不通的路。
+- **图像分析面（`images`，§12.2 第七条独立缝）已通桥面、已通 native 实现（2026-09-25）**：`:domain` `ImageAnalyzer` SPI（`decode`/`matchTemplate`/`findImage`/`findColor`/`release` 五方法，`ImageFrame{HandleRef,width,height}` / `ImageMatch{x,y,width,height,confidence}` / `ColorHit{x,y,r,g,b,a}`）+ `:platform:capabilities` `ImagesNamespaceHandler`（**无状态转接**：帧表/发号/在场性全在 SPI，2026-09-26 起不再自管第二张表 —— §18 第 8 项 (b) 发号侧归一）+ JS facade `images.ts`。**P0 刻意不提供内存分析器**：看不见像素的替身只能靠自报坐标假装匹配成功，那比没有更坏 —— so 缺位时 `imagesHandler` 为 null，桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`（2026-09-25 起 native 已接，见下）。**`findColor` 已落地（2026-09-25，P1 第一个算子）**：单色 + 逐分量容差 + 可选区域 + 回第一个命中，四层同改（`imgnative_color` → `colorNative` → `NativeImageAnalyzer.findColor` → `images.findColor`）。两条口径在该层钉死：**未命中是答案**（`x = -1` 哨兵回裸 `null` —— (0,0) 是合法首像素，拿 0 当“没有”会把左上角的命中静悄悄吃掉）；**“扫过 0 像素”是参数错**（`ERR_INVALID_PARAM`，那不是“没有”而是“根本没找”）。P1 native 面的八个算子已全落（**灰度、裁剪、缩放、旋转与特征**：计算核 `imgnative_gray`/`imgnative_crop`/`imgnative_resize`/`imgnative_rotate`/`imgnative_feature` 已落（28 + 46 + 45 + 45 + 32 例 host 断言），但桥面同样不开 —— 见本节末）。**宿主机语义门禁**：计算核零 JNI（见 imgnative.cpp 文件头），于是 host 侧用**同 commit** 的 OpenCV 4.14.0 静态库直链它、以 x86_64 跑像素断言（`bridge/image/test/cpp/`：`run-host-tests.sh` 一条命令装+编+跑）。这道门存在的理由很实：`imgnative_color` 里有三处判读是「编得过但译反了照样出结论」（**已覆盖**，36 例）——Vec4b 回读的通道序（px[2]→r/px[1]→g/px[0]→b，译反只是回包 r/b 互换）、ROI 内坐标+roi 左上角=全帧坐标、以及「扫过了、没有」与「扫过 0 像素」的区分；JVM 522 例与 JS 128 例全绿时它照样能错，而违约金是 hook 不到。**2026-09-25 已实证**：NDK `-fsyntax-only`、JVM、JS 三门全绿之际，这道门抓出 `cv::imread(IMREAD_COLOR)` 把任何来源压成 3 通道 BGR、`at<Vec4b>` 静默读进下一行首字节 —— alpha 分量从来没参与过判定（ASan 也不报）。修法=IMREAD_UNCHANGED + decode 归一成 4 通道 + `imgnative_color` 内通道/深度兜底守卫，`host_decode_norm_test.cpp` 21 例钉死。 **`imgnative_match` 的判读也补上了 host 断言**（`host_match_test.cpp` 24 例，2026-09-25）：命中坐标 = 模板左上角（matchTemplate 的 maxloc 是结果面左上角，照搬即模板位置，**不**再叠加 ROI 偏移）、w/h = 模板尺寸、**未匹配是答案不是异常**（out_match=0 且 x/y/w/h/confidence 全 0，status 仍是 0 —— 与 findColor 的 `x = -1` 同一条纪律；若把 `w == 0` 当"未命中"判，一张 0 宽模板就能让脚本把命中读成未命中）、阈值域 `maxv == threshold` 判命中（"≥ 阈值即命中"是契约原话）、模板比画面大 → ERR_IO(3)。补它的理由与 decode 归一同源：**模板匹配此前只被 JVM mock 覆盖，mock 不碰像素、永远回一个编好的 ImageMatch**，于是"坐标译反了""未命中时把 x/y/w/h 也回出去"在 JVM/JS 两门全绿时照样能溜过去。**灰度也落进计算核了**（`imgnative_gray`，2026-09-25，`host_gray_test.cpp` 28 例）：它是 decode 之外**第一个产出新帧的算子**，所以这道门额外钉了"产出新帧"的边界 ——产出帧号 > 原帧号且不顶掉原帧、原帧不被就地改灰、两帧各自独立 release、放掉产出帧后原帧照常可用（这四条 JVM/JS 两门**结构上看不见**：mock 只回一个自报的 ref）。产出帧仍是 4 通道 BGRA（帧表不变式，为此提了具名谓词 `frame_is_normalized`，`imgnative_color` 里原先手写的那处判据一并换过去），**alpha 原样带过去不抹 255**（灰度压掉的是色彩信息，透明与否不是色彩；decode 用 IMREAD_UNCHANGED 保住 A 就是让 a 分量参与判定，在灰度这步抹平等于把那次事故引回来）。灰度权重用库的 `COLOR_BGRA2GRAY` （0.299R+0.587G+0.114B），不自己写系数（抄一份就多一个漂移面）；host 断言钉纯红 76 / 纯绿 150 / 纯蓝 29，并正面否认平均法（找 85 必须未命中）。**桥面刻意不开**：`:domain ImageAnalyzer` 五方法里没有它，handler 也不认 `toGrayscale` —— 灰度在脚本侧是可选操作（匹配与找色都按需处理通道），没有消费方就不开桥面。**裁剪也落进计算核了**（`imgnative_crop`，2026-09-25，`host_crop_test.cpp` 46 例）：它是第一个**尺寸会变**的产出算子，比灰度多三处判断，每一处都在 host 上钉住。（1）**区域判据复用 `resolve_region`**（找色那同一个函数，不是抄一份）—— 于是"越界"在两处是同一个码、同一个边界口径（`rx + rw == cols` 贴边合法，越界一律 `ERR_INVALID_PARAM`）。（2）**`region == nullptr` 在本算子是拒收**，不按 `resolve_region` 的缺省解释成"整帧"：裁剪的语义就是"取一个子区域"，缺区域时唯一自洽的解释是"整帧拷贝"—— 想要整帧副本就明写整帧区域（那也有断言）。（3）**产出必须是拷贝（`clone()`），不能是 `(*f)(roi)` 视图**：帧表是**所有权表**不是视图表，源帧一 release，脚本手里的"子图"就悬垂。第（3）条值得单独记一笔，因为**它的判据不是直觉能给的**：`(*f)(roi)` 是浅视图，而 OpenCV 的 ROI **会把父缓冲的引用计数带住**（实测 `src.u->refcount` 1→2），所以"放掉源帧后视图会读到垃圾"**不成立** —— 缓冲根本没被释放，像素照常读出正确值（host 侧实测：放掉源帧后再读产出帧，视图实现同样正确，64 轮同尺寸重分配也没能把它分出来）。别名唯一可观测的后果是**内存归属**：视图共享同一个 `UMatData`，引用计数不为零就释放不掉，于是一张 1×1 的产出帧能把源帧整块缓冲钉在常驻内存里（4000×4000×4 实测：拷贝实现放源帧后 RSS 回落到基线，视图实现留 ~61MB）。这条判据因此写成了 **RSS 断言**（`host_crop_test.cpp` 第 8 段，大源帧裁 1×1 后放源帧、阈值 16MB 取在两种实现中间；§7.7 本来就没有为 crop 承诺 0 拷贝，而"0.3MB 的产出帧钉住 64MB 常驻"正是它在脚本侧的代价）。顺带钉住：产出帧号 > 源帧号且不顶掉源帧、宽高 = region 的 w/h（不是源帧尺寸）、区域坐标是**源帧坐标系**（子图 (0,0) 逐分量 == 源帧 (rx,ry)，非零起点也钉了）、产出帧仍是 4 通道 BGRA 且 **alpha 原样带过去**（裁出的单像素 a=210 不抹 255）、产出帧可以**再裁**、句柄已死 → `STALE`、出参指针为 null → `ERR_INVALID_PARAM`，且**拒收一律早退不写出参**（与 match/gray 同口径）。**裁剪的桥面同样刻意不开**（`:domain ImageAnalyzer` 五方法里没有它，handler 也不认 `crop`）—— 同灰度那条纪律：脚本侧没有消费方（找色已经能在 `region` 上限定范围，读路径不产出帧；只有"要把子图当独立一帧反复用/当模板"时才需要 crop）。**缩放也落进计算核了**（`imgnative_resize`，2026-09-25，`host_resize_test.cpp` 45 例）：它是第一个**像素值要重算**的产出算子（crop 是搬像素、逐点相等；resize 按插值重算，逐点不等是正常的）。入参是**目标尺寸**（`dst_w` × `dst_h`）不是倍数（倍数是调用方算的浮点；与 gray/crop 的"宽高随帧回"同一条纪律：尺寸真值只有产出帧的地方知道，让下游自己推是猜）。插值**固定 `INTER_LINEAR`，不做入参**：NEAREST 放大是块状马赛克（UI 细线条/文字边缘丢信息），CUBIC/LANCZOS 更贵且在截图/PNG 这类非照片输入上无可证增益 —— 多一个入参就多一个"选错静默换答案"的漂移面。门禁把 LINEAR 的可观测行为钉了三条：纯色帧任意缩放值不变（杀通道丢失/alpha 被抹）、2×2 四角帧放 4×4 四角守恒（杀几何对错/行列互换）、中心 (1,1) r=101 混合值**专杀 NEAREST**（NEAREST 给 100；已用故意 NEAREST 实现验过变红 —— 但诚实起见：CUBIC/LANCZOS 在此处同样给混合值，这条钉的是"不是 NEAREST"而非"只能是 LINEAR"）。另有 4×4 象限→2×2 的均值行为、同尺寸合法拷贝（不早退，调用方不用先判要不要调）、非对称尺寸（宽高各自独立）、**16384 单边配额**（16384²×4≈1GB，再往上是笔误把字节数当宽高；配额拒收与尺寸不合法同码，注释里分开写）。产出 4 通道 BGRA（resize 逐通道，归一进归一出，显式再断言一次防将来换后端静默掉通道），拒收一律早退，**桥面同样刻意不开** —— 同一条纪律：同一套模板跑多分辨率设备时才需要它。**旋转也落进计算核了**（`imgnative_rotate`，2026-09-25，`host_rotate_test.cpp` 45 例）：它是第一个**画布尺寸要算**的产出算子（resize 的尺寸是入参直给，rotate 的画布是包络公式 bw=round(|w·cosθ|+|h·sinθ|)、bh=round(|w·sinθ|+|h·cosθ|) 算出来的 —— 4×2 转 90°→2×4、5×5 转 30°→7×7 都钉了）。入参是**逆时针角度**（与 `getRotationMatrix2D` 正方向一致；转反了整行对不上 —— 5×5 数字帧 90° 首行 {5,10,15,20,25}，顺时针会是 {21,21,16,11,6}）。画布是 **expand**（包住整图不静默裁像素；想要"旋转裁剪"先 rotate 再 crop —— 两个算子都在了）。中心是**帧中心** ((w-1)/2,(h-1)/2)：奇尺寸下恰落中心像素，90° 倍角采样点落整数格点、敢写整行精确相等（相邻行采样到同一行是**行复制** —— warpAffine 逆映射的精确行为，host 实测五组全是整行相等，不是 bug；实现注释里写明了）。插值固定 LINEAR、填充固定 REPLICATE（黑边是找色的假阳性源 —— 见实现注释），30° 中心 3×3 混合值**专杀 NEAREST**（已用故意 NEAREST 实现验过变红；诚实线与 resize 同一条：CUBIC/LANCZOS 同样给混合值）。NaN/Inf → INVALID_PARAM（三角函数吃掉它们不报错，矩阵是垃圾 —— 入口拒比 warpAffine 断言变 IO 错更诚实），0°/360° 恒等（360° 先归一，不因浮点余数差一像素），**桥面同样刻意不开** —— "把画面转正再匹配"是调用方显式要的变换，不是匹配内部顺手做的。**特征也落进计算核了**（`imgnative_feature`，2026-09-25，`host_feature_test.cpp` 32 例）：P1 native 面的收官算子，也是第一个**不产出帧、只回坐标**的算子（回模板中心在场景中的 (x,y,confidence)，不是新帧号 —— 与 matchTemplate 的 ImageMatch 不同：特征匹配没有"模板尺寸"的概念，模板在场景里多大是未知的；回中心让脚本直接点下去）。链全固定：ORB(nfeatures=1000) → BFMatcher(HAMMING) knn k=2 → Lowe ratio 0.75 → 中位数偏移 ±3px 几何一致性计数。每个固定点都有 host 实测依据：nfeatures 500/1000 同一子图描述子逐字节一致（参数只截断、不换答案）；BGRA 直喂与手转灰一致（ORB 内部按第一通道取灰，转灰是冗余步骤）；ratio 0.7~0.8 不换答案（good=29/30/33、几何正确都是 19），0.75 取 Lowe 原论文值。门禁钉了：子块命中（中心 ±10px、conf≈0.63±0.15 —— conf 指纹把 ratio 链钉住，ratio=0.99 会把它拉到 0.47，已用变体验过变红）、棋盘格误报 → 未匹配（host 实测误报 top 距离 60+，ratio 后 good 寥寥）、纯色模板空描述子 → 未匹配（不是 IO 错）、旋转 30° 后**未匹配**（描述子对得上但中位数偏移假设不再成立 —— 这是设计不是 bug，真要转着找得接 findHomography/calib3d，那是另一个算子；断言把这个边界钉死，免得被脑补成"旋转容忍=转着也找到"）、拒收早退、两帧不消耗。**构建轨代价**：features2d/flann 进 BUILD_LIST（`VERSIONS.env` 三模块 → 五模块；`build-opencv.sh` 链接行同步；host 门禁用同 commit 另配的五模块缓存过渡，本机重配一次即可合一）。so 体积增量待下一次 device 构建实测（host 静态库实测 features2d 1.8MB + flann 1.3MB —— 那是 x86_64 未 strip 的 .a，不是 arm64 so 增量，写在这里免得被当成结论引用）。**桥面同样刻意不开** —— 同一条纪律：刚性匹配（matchTemplate）与特征匹配（feature）是两种找图语义，脚本侧没有消费方之前不开第二个。P1 native 面至此收官：八算子（decode/match/release/color/gray/crop/resize/rotate/feature）全在计算核 + host 门禁里，桥面仍是五方法（decode/matchTemplate/findImage/findColor/release）。**附带修掉一处判据主语**：`imgnative_color` 里的 `frame_is_normalized` 原先问的是 **ROI 视图**，而视图的 `channels()/depth()` 与父矩阵**同解**（实测），所以那既不是漏判也不构成事故；改问源帧、且挪到 `resolve_region` **之前**，是因为谓词的名字与注释谈的都是"帧"—— 判据该写在它自己声称的主语上，顺序本身也是判据的一部分（非归一帧上"某个 region 合不合法"是另一套尺寸语义）。这道门附带钉住一条此前没写明的口径：`imgnative_match` 的拒收分支是**早退**——不写出参，所以调用方**不能拿 out_match 当"没命中"判**（可能还是上次调用的残留），判据只有 status；真实调用链正是这么做的（`images_jni.cc` 的 `matchNative` 只看 rc，`NativeImageAnalyzer.match` 同样 rc 优先）。NDK 交叉 `-fsyntax-only` 与这道 host 门**互不替代**（前者管 aarch64 能编、后者管判读对），真机红测仍是最后一关。它已接进 `.github/workflows/image-native.yml`（job `host-image-semantics`，与 build-opencv 同文件、paths 同源，且**排在构建前面**：判读先红一个 5–10 分钟的，不占满 15–30 分钟的构建槽；OpenCV 按 VERSIONS.env 同 commit 拉取并对表，tarball 会让对表退化成口号）。**native 侧已接**：`libopencv.so` = OpenCV 4.14.0（`core+imgproc+imgcodecs`，`BUILD_JPEG/BUILD_PNG/BUILD_ZLIB=ON` 树内源码、`WITH_KLEIDICV` 默认 ON）静态链接进我们自己的桥面 C++（`imgnative.cpp` 纯计算核：`extern "C"` 九入口、帧表自管、`cv::Exception` 就地折叠）；装载面 `images_jni.cc`（全仓图像侧唯一 `#include <jni.h>`）+ Kotlin `NativeImageAnalyzer`/`JniOps`（住 `:platform:system`，零 android import；`System.loadLibrary` 失败即不构造）。构建在 `node-runtime-build/scripts/build-opencv.sh`（按 commit SHA 固定、kleidicv pin 对表、16KB LOAD/NEEDED 白名单门禁、SHASUMS256 旁 kleidicv ON/OFF 审计行），由 `.github/workflows/image-native.yml` 在 Actions 跑；`PlatformWiring.of` 一行接上（so 缺位 → `ERR_NOT_IMPLEMENTED`，不塞内存替身）。
+- **两缝帧表已合一（§18 第 8 项 (b)，2026-09-26 落地）**：`screen.capture()` 出的帧与
+  `images.decode` 出的帧现在**同号段、互认** —— 拿截屏帧当 `images.findImage()` 的
+  haystack 通，`images.release()` 也放得掉一帧截屏。"帧不通用"那条纪律**取消**。
+  落点是**发号侧归一**（§7.4）：
+  - `:domain` `ImageAnalyzer` 加第 6 方法 `ingest(width, height, rgba)` —— 把**已在内存里**
+    的紧密打包 RGBA（`width*height*4`，R,G,B,A 序）登记进它自己那张帧表，回句柄。
+    `decode` 与 `ingest` 共用同一个 `nextRefId`，这就是"两帧互认"的结构证据；
+  - `:platform:capabilities` `ImagesNamespaceHandler` **去掉自管的三张本地表**（`ids`/`live`/`sizes`）
+    退成无状态转接 —— 曾经它靠"两个计数器各自从 1 起、每次 decode 各加一"的隐式不变式
+    与 SPI 对齐，那种对齐是漂移面不是契约；
+  - `ScreenshotSource` 收一个可选 `analyzer`：给了就把截出的帧 `ingest` 进 SPI 的表、
+    `recycle` 转 `ImageAnalyzer.release`；没给（so 缺位）才退回本地表 —— 此时 `images`
+    命名空间根本没注册，两个号段不可能相撞；
+  - `AutoScriptAccessibilityService.frameOf` 从 **JPEG 压缩改成原样 RGBA 像素**。
+    曾经那段 `Bitmap.compress(JPEG, 90)` 是死重：`ProducedFrame.bytes` 全仓只被
+    `isEmpty()` 看过一眼，而有损 JPEG 一旦真进 `findColor`，"按分量精确判定"的承诺
+    就吃到压缩伪影。改走 `Bitmap.getPixels(int[])` → 打包 `0xAARRGGBB` → 拆 RGBA：
+    **不猜 `copyPixelsToBuffer` 的字节序**（那是 Skia 缓冲的原样拷贝，文档没承诺通道序；
+    猜反了就是 r/b 互换，四道门全绿照样错）；
+  - 像素契约：ingest 收 RGBA、native 进帧表时做一次 `cvtColor(RGBA→BGRA)` swizzle 并
+    **拷出自有缓冲**（不持有调用方的 `ByteArray`）—— 帧表不变式仍是 4 通道 BGRA。
+  钉子：`host_ingest_test.cpp`（通道序 + **跨来源同表**：`imgnative_decode` 出的模板帧与
+  `imgnative_ingest` 出的截屏帧共用 `g_next_ref`，release 一个另一个照常可用）、
+  `ImagesNamespaceHandlerTest` 的跨命名空间用例、`NativeImageAnalyzerTest` 的 ingest 三例、
+  `images.test.cjs` 的互认用例。§7.7 表里 `captureScreen → findImage` 的数字仍是待实测口径。
+  三条落选出路留档：(a) `screen.save` 有损、(c) `decodeBytes` 让 bytes 过桥 —— 都切掉被契约
+  承诺的性质（见 §18 第 8 项）。
 
 ### 9.3 输入通道（`root_automator` / 手势）
 `InputProvider` SPI 三实现：无障碍手势（默认）/ root `sendevent`（root 设备自选）/ Shizuku-ADB（可代理 dev `${i}` 事件）。统一 `touchDown/Move/Up` + 手势 DSL。root 能力分级进 PermissionCenter，无 root 不降级渲染为禁用（不假装可用）。
@@ -659,7 +680,7 @@ FrameSource (SPI)
 
 ### 9.7 OCR（P1）与插件（P2）
 - `OcrProvider` SPI：P1 内置 MLKit 插件基准实现（可下载模型）；插件以独立 `:plugin:*` 模块 + 清单注册，native addon 走 `:node-runtime-build` 交叉编译管线（arm64 `.node`）。
-- 插件加载: P2，plugin.json 声明 require 钩子/资源/权限；市场脚本不可加载任意插件（白名单）→ 引到 QuickJS 沙箱子集。
+- 插件加载: P2，plugin.json 声明 require 钩子/资源/权限；市场脚本不可加载任意插件（白名单）。**沙箱已裁（§18 第 1 项）** —— 这条白名单是能力面的，不再有"引到 QuickJS 子集"的去处。
 
 ---
 
@@ -675,7 +696,7 @@ FrameSource (SPI)
 - **用真 CLI 而非重造轮子**：lockfile v3、audit、`approve-scripts`、`replace-registry-host`、`--prefer-offline` 免费获得且可审计。npm 12 默认「拒绝全部 lifecycle + allow-git=none + allow-remote=none」，把 child_process 缺失从 workaround 变成**官方默认语义**。
 - **三通道合一**：B（零 spawn 编程式）作 P0 主线；A（spawn 桥）作 P1 升级通道（批准后脚本/`npm run`/`npm exec`）；C（离线 bundle + 精选 tarball 种子）作首发与离线通道。
 - 否决纯 B（丢 CLI audit/approve/config 语义，多维护一层）、纯 A（P0 依赖未经验证的真子进程，OEM exec/SIGKILL-only/内存峰值风险最高）、纯 C（桌面预装无法满足「用户自主安装」的硬性需求）。
-- **QuickJS 关系**：npm 是 Node 高信任层的能力；`:sandbox` 白名单**不含** `auto.npm` 与 spawn 桥，冷启动即缺失、不可降级（能力中心如实显示「沙箱不支持」）。
+- **沙箱关系（2026-09-26 已裁，口径随之简化）**：npm 是 Node 高信任层的能力，而引擎只剩 Node 一条轨 —— 不存在"`:sandbox` 白名单不含 `auto.npm`"这回事，能力中心也不再显示「沙箱不支持」。
 - **process.exit() 边界**：安装长任务与 `process.exit` 风险由专用安装会话进程吸收，与用户脚本引擎池隔离（`slotTag='npm'`，heapCap 列见 §10.6）。
 
 ### 10.2 调用链与存储布局
@@ -700,7 +721,7 @@ FrameSource (SPI)
 - `cacheDir/npm-cache`（**系统可自动清，损失可接受**）：npm 内容寻址缓存 `content-v2 + index-v5`（非 SQLite）；`cacheDir/npm-cache-seed`：精选 tarball 种子（axios/dayjs/lodash/cheerio 等 ~5MB），首启播种。
 - `files/npm/`：vendored npm CLI（assets→filesDir 原子部署 tmp+sha256+rename；首启/升级落盘）。
 - `files/offline-bundles/<bundleId>`、`files/npm-import/`：离线 bundle / 本地 tarball 导入区。
-- registry 配置：项目 `.npmrc` → `files/.npmrc`(userconfig) → `NPM_CONFIG_REGISTRY` env；默认 `registry.npmmirror.com`（实证存活；可切 npmjs/华为/腾讯），`replace-registry-host=npmjs` 使 lockfile 跨 registry 可用；代理 `Settings.Global.HTTP_PROXY` → 引擎 env `HTTP(S)_PROXY`。
+- registry 配置：项目 `.npmrc` → `files/.npmrc`(userconfig) → `NPM_CONFIG_REGISTRY` env；默认 **`registry.npmjs.org` 官方**（§18 第 7 项 2026-09-26 拍板；要快自己 `setRegistry` 切 npmmirror/华为/腾讯），`replace-registry-host=npmjs` 使 lockfile 跨 registry 可用；代理 `Settings.Global.HTTP_PROXY` → 引擎 env `HTTP(S)_PROXY`。
 
 ### 10.3 spawn 三层策略与不可行边界
 
@@ -715,7 +736,7 @@ FrameSource (SPI)
 - `node-gyp` 设备端编译 → `ERR_NOT_IMPLEMENTED`（设备无 NDK/编译器，引导 **wasm 优先、纯 JS 兜底**——如 `esbuild-wasm`/`node:sqlite`/`bcryptjs`；prebuild 小工具已移出排期，真需要时再立需求）；
 - `fork`/`cluster` → `ERR_NOT_IMPLEMENTED`（并发用 engines 进程池）；
 - 从 app 数据区任意 exec 二进制（W^X）→ 拒绝（原生 bin 走「代码签名 exec」独立通道，见 §10.11 P3）；
-- `npm exec` 非 node 二进制 → 仅走既有 `auto.shell`(root/adb) 能力且 Node 高信任才可，QuickJS 一律拒绝。
+- `npm exec` 非 node 二进制 → 仅走既有 `auto.shell`(root/adb) 能力且 Node 高信任才可（沙箱已裁，不存在另一档"一律拒绝"的引擎）。
 
 ### 10.4 事务化安装与崩溃自愈（整改自批判 android-runtime F1）
 
@@ -735,7 +756,7 @@ FrameSource (SPI)
    - 设备端首生锁标记「来源未校验」**降信任级 + UI 明示**；正式链路走桌面/CI 离线生成 + 来源证明（sigstore 可选）。
    - App 以应用密钥对 lock 做 HMAC/ECDSA 签名（`lock.sig`，私钥入 **Android Keystore**；密钥丢失 = 显式「安全降级」状态而非假装模型成立）；`npm ci` 前验签；市场/第三方项目**只开放 npm ci**（无裸 install）。
 
-   **已落地（裁决与处置，`:app-service:packager`）**：`NpmRegistryVerifier` 是三分裁决而非布尔——`Agreed` / `Disagreed` / `Unverifiable`，调用方必须能区分「验过且一致」与「没能验」（否则 UI 只能画同一个绿勾）。第二意见恒为 `registry.npmjs.org`，**不随用户首选变**（首选容易被自己改成 npmjs，那就成了自己跟自己比）。处置写死在 `InstallCoordinator.crossCheckRegistry` 一处：`Disagreed` → `ERR_REGISTRY_UNAVAILABLE` + 两家版本/完整 integrity，安装会话不起、事务不建、拒本身入史；`Unverifiable` → **不拦安装**但发 `InstallEvent.Warning(TRUST_DOWNGRADED)` + 入史「来源未校验」（副镜像不可达 / 版本只在一侧 / 无 integrity 锚点都是「没验成」而非「验出问题」，当分歧拒掉会把镜像同步窗口期误判成攻击）。判定对象是 `dist.integrity` 而非两个 tarball 的字节（结论等价、少一倍下载）。JS 侧 `auto.npm.onWarning` 的 `kind` 联合与 `InstallEvent.Kind` 五值逐字对齐，宿主经 `feedWarning` 显式投递；未知 kind 抛错而非静默丢弃（契约漂移即响亮错误）。诚实边界：**不**回答「镜像 hardcode 的摘要是否真由上游产生」——那要 sigstore/官方签名端点，记为未决项。
+   **已落地（裁决与处置，`:app-service:packager`）**：`NpmRegistryVerifier` 是三分裁决而非布尔——`Agreed` / `Disagreed` / `Unverifiable`，调用方必须能区分「验过且一致」与「没能验」（否则 UI 只能画同一个绿勾）。第二意见恒为 `registry.npmjs.org`，**不随用户首选变**（首选容易被自己改成 npmjs，那就成了自己跟自己比）。处置写死在 `InstallCoordinator.crossCheckRegistry` 一处：`Disagreed` → `ERR_REGISTRY_UNAVAILABLE` + 两家版本/完整 integrity，安装会话不起、事务不建、拒本身入史；`Unverifiable` → **不拦安装**但发 `InstallEvent.Warning(TRUST_DOWNGRADED)` + 入史「来源未校验」（副镜像不可达 / 版本只在一侧 / 无 integrity 锚点都是「没验成」而非「验出问题」，当分歧拒掉会把镜像同步窗口期误判成攻击）。判定对象是 `dist.integrity` 而非两个 tarball 的字节（结论等价、少一倍下载）。JS 侧 `auto.npm.onWarning` 的 `kind` 联合与 `InstallEvent.Kind` 五值逐字对齐。**生产投递走事件拉取口**（`drainEvents` → JS 轮询泵 → 过 `feedWarning` 做 kind 校验；`feedWarning` 自身降为注入缝供装配/测试直调，2026-09-26 起不再是唯一投递方 —— 在那之前它零生产调用者）；未知 kind 抛错而非静默丢弃（契约漂移即响亮错误）。诚实边界：**不**回答「镜像 hardcode 的摘要是否真由上游产生」——那要 sigstore/官方签名端点，记为未决项。
 2. **审批 = 人的动作（人机分离）**（整改自批判「程序化绕过」）：
    - `approveScript`/`runScript`/`exec` **不允许脚本直调**——脚本只能发出 `ApprovalRequest` 排队，等 UI 弹卡人工二次确认（可配生物特征），脚本侧限流 + 全量审计。
    - 审批记录绑定 `pkg+版本+脚本内容哈希`，版本升级必须重新审批；审计日志（approve/registry 变更/lock 重签）落 App 且可导出。
@@ -743,7 +764,7 @@ FrameSource (SPI)
    - 默认**拒绝全部 install 脚本**（对操纵无障碍/root 的自动化脚本是最大投毒面）；postinstall 包装完即出「脚本未运行」显式警告，**禁止静默**。
    - 在线 `npm audit` + `audit signatures`（ECDSA）；离线捆绑 OSV 库 + `osv-scanner --offline`；签名端点不可用**绝不静默降级**。
 4. **低信任边界**：T1 脚本执行会话一律**独立最小 CapabilityMask**（仅 npm 目录 fs+network，无 a11y/shell/root），与用户脚本会话物理区分；UI 明示「审批 postinstall ≠ 授权自动化能力」；高信任须**可验证签名 + 用户显式升级**（不用软签名）。
-5. **QuickJS 白名单库独立 vendored**：冻结版本 + 独立 integrity + 只读区（npm 可写目录之外），禁止从 npm 目录/共享 store 解析；未来共享 store 必须持「store 内容哈希 == 各项目 lock 哈希」的加签映射校验。
+5. ~~**QuickJS 白名单库独立 vendored**~~ **已裁（2026-09-26，§18 第 1 项）**：沙箱不在排期，白名单库不复存在。（"共享 store 要持 `store 哈希 == 各项目 lock 哈希` 的加签映射校验"那半句是 store 的纪律，随 P3 跨项目共享 store 保留。）
 
 ### 10.6 轻/重操作拆分与资源预算（整改自批判「过度设计+欠定义」）
 
@@ -768,17 +789,21 @@ interface PackageManager {
   suspend fun runScript(projectId, name, args) / exec(bin, args, env)   // P1 仅待人工确认项，纯 JS bin 白名单
   suspend fun importOfflineBundle(uri) / importTarball(path)   // 验签→校验→入缓存→ci
   suspend fun config(projectId?, key, value)                   // .npmrc 层；registry 变更经 :main 卡可配列表+审计
-  fun progress(projectId): Flow<InstallEvent>
+  fun progress(projectId): Flow<InstallEvent>              // :main 订阅用（Flow 无重放）
   fun approvals(projectId): Flow<ApprovalRequest>
+  suspend fun drainEvents(projectId, sinceSeq, batch=32): InstallEventBatch   // 脚本侧拉取口（§7.5 桥无宿主→脚本推送面）
+  suspend fun drainApprovals(projectId, sinceSeq, batch=32): ApprovalBatch    // 同上；游标由调用方持有
   suspend fun storage(): Map<ProjectId, NodeModulesStats>
   suspend fun exportSnapshot(uri): SnapshotRef                 // node_modules.zip+lock+ledger→SAF；高信任通道
   suspend fun cancel(handle: InstallHandle)               // TTL/取消 → quiesce 安装会话
 }
 ```
 
+**事件面是拉取不是推送（2026-09-26 收口的第三处落差）**：桥的入站面只有按 requestId 结算的 ok/err（§7.5），宿主没有任何主动推给脚本的通道 —— 在此之前 JS 的 `onProgress`/`onWarning`/`onApproval` **双侧都没有投递方**（订阅了但生产永远不响：`progress`/`approvals` 两个 SharedFlow 零订阅、`feedWarning` 零生产调用者、`InstallFailure` 连订阅口都没有），正是 `feedWarning` KDoc 自己写的「比没有这个 API 更糟」。接法沿用仓库既有的游标拉取（`a11y.events`/传感器批次/`startHeartbeat`）：`InstallCoordinator` 两条有界环（`SeqRing`，512、DROP_OLDEST、单调 seq）由 `emit()`/`requestApprove` 唯一投递，`drainEvents`/`drainApprovals` 按调用方游标取批；回包 `{first,last,items}`，空增量 `first=last=sinceSeq`，环丢过最旧时 `first > sinceSeq+1` 即空洞可见（进度是可丢数据面，如实露洞不补造）。四个 DTO（`InstallEventBatch`/`SequencedInstallEvent`/`ApprovalBatch`/`SequencedApproval`）与两个新方法由 `PackageManagerFacadeContractTest` 冻结，JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
+
 ### 10.8 JS API —— `auto.npm`
 
-Promise 优先 + EventEmitter；QuickJS 白名单缺失该命名空间；npm 操作一律跨进程路由到全局安装会话、TTL 绑定，**绝不阻塞脚本事件循环**；脚本内不直接 `require('child_process')`。
+Promise 优先 + EventEmitter；npm 操作一律跨进程路由到全局安装会话、TTL 绑定，**绝不阻塞脚本事件循环**；脚本内不直接 `require('child_process')`。
 
 ```ts
 // 安装（P0）
@@ -805,10 +830,14 @@ await auto.npm.importTarball('/sdcard/Download/pkg.tgz');
 // 审批（人机分离：只能发起请求，人工在 UI 弹卡确认）
 await auto.npm.requestApprove('esbuild', { scripts: ['postinstall'] });  // 不直接 approve；不 await 的话被拒会成 unhandled rejection
 
-// 事件（三个独立方法，**不是** `on('progress')` —— 那种写法在 facade 上会 TypeError，见 §12.3.2 第 6 条）
+// 事件（四个独立方法，**不是** `on('progress')` —— 那种写法在 facade 上会 TypeError，见 §12.3.2 第 6 条）
+// 实现是**带游标拉取轮询**（§7.5 桥没有宿主→脚本的推送面，§10.7 drainEvents/drainApprovals）：
+// 首订立拉一轮、之后按周期补拉、退订干净自停（定时器 unref 不保活事件循环，同 startHeartbeat）；
+// 宿主没实现 events/approvals → 响亮 ERR_NOT_IMPLEMENTED（「订阅了却永远收不到」禁静默），瞬时错误吞掉走下一拍。
 const offP = auto.npm.onProgress(e => console.log(e.phase, e.name, e.percent));
 const offA = auto.npm.onApproval(req => notify('需人工确认', req.pkg));   // ApprovalRequest 六字段，无 scripts
 const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
+const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // 成功**和**失败都发（install 回包只是已入队）
 // kind: scripts-skipped/trust-downgraded/registry-fallback/low-memory/disk-quota（:domain InstallEvent.Kind 同集）
 
 // 错误码新增：ERR_NPM_*（安装失败/审批被拒/SPAWN_BLOCKED）、ERR_NOT_SUPPORTED（git:依赖）、
@@ -822,7 +851,7 @@ const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
 3. **npm 终端视图**（P1）：项目内终端 `npm install axios` / `npm ls`，stdout/stderr 流式输出 + exit code；与依赖面板同一安装会话队列。
 4. **离线包导入**：SAF 选择（tarball / lock+cacache bundle / 快照 node_modules.zip）→ 验签 → 队列安装；另提供「从内置精选缓存离线装 axios/dayjs/…」。`node_modules.zip` 导入**仅限高信任项目**，签名锚定 `HMAC(应用密钥, lock.sig + zip.sha256)`；市场脚本一律拒绝该格式（走 reify 产出 integrity）。
 5. **包大小管理页**：per-project `node_modules` + `npm-cache` 尺寸（Kotlin 遍历）+ 配额条（80%黄/100%拦）→ 一键 prune/dedupe/ci 重装/cache clean；明确标注 node_modules 计入系统「App 数据」。
-6. **首启引导**：原子部署 assets/npm CLI + 播种精选缓存 → registry ping 探测 → 选镜像（默认 npmmirror）与配置代理（能力中心网络项）。
+6. **首启引导**：原子部署 assets/npm CLI + 播种精选缓存 → registry ping 探测 → 选镜像（**默认官方 npmjs**，§18 第 7 项；镜像是加速选项不是开箱前提）与配置代理（能力中心网络项）。
 7. **打包向导联动**：node_modules 默认入 APK + `.autojs.build.ignore` 排除规则 + 「完全离线变体」（宿主预装 node_modules.zip）+ 项目 lock 签名生成。
 
 ### 10.10 与既有机制的关系
@@ -834,7 +863,7 @@ const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
 ### 10.11 优先级落定（npm 相关增补到 §14）
 
 - **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警 + 审批卡 UI（仅请求）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；依赖面板 + `auto.npm` 核心 API；打包向导 node_modules 入包。
-- **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ 批准后脚本真实执行（人工确认）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；npm 终端视图；在线 audit + audit signatures + OSV 离线；QuickJS 白名单库独立 vendored；`offlineGap` + 种子金标准测试。
+- **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ **lifecycle 脚本真实执行**（§18 第 7 项 2026-09-26 口径：安装时让用户自己选跑不跑，不设出厂卡口，也**不是**"审批通过才跑"的流）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；npm 终端视图；在线 audit + audit signatures + OSV 离线；`offlineGap` + 种子金标准测试。（原「QuickJS 白名单库独立 vendored」随第 1 项裁掉。）
 - **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；native 依赖 **wasm 方案**（2026-09 拍板）：优先取上游 wasm 构建（`esbuild-wasm`、`argon2-wasm`、sql.js 等——Node 内置 `WebAssembly`，无 ABI/无 dlopen、一份全平台、随 bundle 离线送达），无 wasm 产物的回落纯 JS 替代/内置（sharp→jimp 或平台图像桥、bcrypt→bcryptjs、better-sqlite3→`node:sqlite`——Node 24 官方标 **STABILITY 1.2 Release-candidate**，随 libnode 钉版即锁 API，保守备选 sql.js-wasm）；安装期检测 `binding.gyp`/平台 optionalDeps 点名引导，不静默半装。**对标 AutoX-v7（研究笔记，2026-09）**：它**不需要**这条管线 —— 运行时是 Javet（`com.caoccao.javet:javet-node-android:5.0.2`，进程内 `NodeRuntime`）而非真 libnode，全仓零 node-gyp/prebuild/`NODE_MODULE_VERSION`/`.node` dlopen 痕迹；模块解析是自研 `NodeModuleResolver`（`createRequire` + package.json 走查 + ESM），常用包以**已物化的纯 JS 树**预置在 `assets/modules/npm`（buffer/stream/process/events + lodash/cheerio/bluebird/rxjs），原生能力全走 Java↔V8 绑定（`NativeApiManager` → `Autox.*`），paddle OCR 等 `.so` 只经 Java `System.loadLibrary`、与 JS 引擎无关。即：没有 N-API 加载面就没有 `.node` 交付问题。本仓 §7 桥本体就是 N-API addon（真 libnode 不能换），故 native 依赖的策略已定为 **wasm 优先、纯 JS 兜底**——他们 assets 全纯 JS 是兜底可行的实证；**prebuild `.node` 小工具已移出排期**（需要时再立需求），ABI/`--dest-os` 断言届时随需求一起复活。
 - **P3**：跨项目共享 store 去重（pnpm 式，须 store↔lock 加签映射）；程序化安装服务化；ECDSA 签名强制；vendored npm 自动升级（仅通过零 spawn 金标准闸门）；esbuild 类**代码签名原生 exec** 独立通道。
 
@@ -860,8 +889,8 @@ const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
 | 来源 | 信任级别 | 引擎 | 能力 | 说明 |
 |---|---|---|---|---|
 | 内置/作者签名模板 | 高 | Node | 全量（含 root） | 软签名验证 |
-| 用户自写脚本 | 中 | Node（+QuickJS 可选） | 全量 | 提示风险 |
-| 第三方/市场脚本 | **低** | **QuickJS `:sandbox` 进程** | **白名单子集**（无 root、无 shell、无任意 file、无 UI 宿主、无媒体投影） | 硬盘级隔离 + interrupt handler + 超时；`process.exit` 只死沙箱 |
+| 用户自写脚本 | 中 | Node | 全量 | 提示风险 |
+| 第三方/市场脚本 | **低** | **Node（与自写脚本同进程、同权）** | **全量** —— **沙箱已裁，进程隔离这条防线不存在**（§18 第 1 项 2026-09-26） | 防线改为：**安装时按 `hasInstallScript` 如实告知并由用户当场选**（§18 第 7 项）+ 来源分级提示（本表）+ 运行期 TTL/看门狗；**文案不得让人误以为是沙箱跑的** |
 | 打包分发脚本 | 中高 | Node | 打包时配置 | 走签名链 |
 
 - RuntimeChannel/engines 通信也按来源分级（低信任不能给高信任发控制消息）。
@@ -890,10 +919,12 @@ const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
 - `auto.datastore` / `auto.settings`  / `auto.zip`
 - `auto.ocr`（P1）/ `auto.plugins`（P2）/ `auto.workManager`（定时/Intent 任务）
 - `auto.power`（脚本电源：`power_manager` 桥面的 `acquire`/`release`/`status`，§8.7）
-- `auto.npm`（包管理与依赖生态，§10：install/ci/list/audit/offlineGap/importOfflineBundle/requestApprove——审批人机分离，QuickJS 沙箱缺失该命名空间）
+- `auto.npm`（包管理与依赖生态，§10：install/ci/list/audit/offlineGap/importOfflineBundle/requestApprove——审批人机分离；事件面 `onProgress`/`onApproval`/`onWarning`/`onFinished` 四方法，wire 走 `events`/`approvals` 两个拉取口而非推送，§10.7）
 - Node 内建：`fs/path/http/os/process` 等**完整可用**（除 `child_process` 显式报 `ERR_NOT_IMPLEMENTED`）；`@autojs/*` npm 包 SDK（`@autojs/opencv` 对齐 Pro）。
 
 **接线现状（Kotlin 侧，与 `AppShell.assemble` 对齐；未列出的命名空间在两侧都还没有 handler）**：
+
+> 本表有**机械化门禁**：`bridge/js/test/wire-reconcile.test.cjs` 双向对账两份源码（不经 mock）——JS `invoke` 的命名空间必须被 `register`、JS 发的每个方法必须有 `when(request.method)` 分支、宿主方法表里每个分支必须有人发（收了没人发的 wire 名要么 facade 漏调、要么写进该测试的 `ALIASES` 并说明为什么，且 `ALIASES` 不许虚报）。它是 `npm test` 的一部分，随 CI 跑；a11y 选择器动作经 `call('<m>')` 字面量、`shell.shell()` 别名与 `findOneOrNull` 兼容分支是仅有的三处登记。 同族另有三道：`event-wire.test.cjs`（npm **事件面** wire 逐字对账——宿主 `phaseWire`/`kindWire`/`actionWire`/`type` ⇄ `npm.ts` 的 `PHASES`/`WARNING_KINDS`/`APPROVAL_ACTIONS`/`routeInstallEvent` 分支双向集合相等，防 `.name.lowercase()` 折出 `post_check` 那类连字符漂移），并钉**键名面**——`encodeEvent`/审批 `mapOf` 发的每个键 ⇄ JS `w.x` 读的键逐分支对账，JS 读宿主不发的键即红、宿主发了没人读的键须登记 `UNREAD` 并写明理由（mock 测试发的永远是 JS 自己认识的键，键名漂移只有这道门能抓）与 `err-catalog.test.cjs`（错误目录三面对账，见 §7.6）；`wiring-table.test.cjs`（**本表**三向对账：facade 列点名的 `.ts` 真存在、handler 列点名的类真存在（花括号组展开，且每行至少认出一个候选防改名绕过）、宿主 `register` 了的命名空间本表必列 + 状态列写「已挂」的必须真注册——表是手写的，§19 又宣布它为事实来源，就该有门看着）；`pull-wire.test.cjs`（**另两条拉取环** a11y.events / sensors.drain 的回包键名 + 入参键名对账——入参 `sinceSeq` 改名的失败面是宿主读不到、游标恒 0、事件重复投递，不报错只出错数据）。
 
 | 命名空间 | JS facade | Kotlin handler | 挂载状态 |
 |---|---|---|---|
@@ -902,14 +933,14 @@ const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
 | `a11y` | `a11y.ts` | `A11yNamespaceHandler`（`:platform:capabilities`）+ `CapabilityNamespaces.a11y(tree, actions, input, events)` 装配缝（树/动作/输入/事件四 SPI）+ **Android 真实现** `AndroidUiTree`/`AndroidGestureInput` 经 `SystemA11yBridge`（`A11yServiceHolder` 连接态） | **生产已接**：`PlatformWiring.inject` → `a11yHandler` → `AppShellApplication.installWithFiles`（服务未连 = 桥如实 `ERR_SERVICE_DISABLED`，装配期即可注入不必等 `onServiceConnected`）；内存实现仍是单测缺省；未注入缝保留 → 仍如实 `ERR_NOT_IMPLEMENTED` |
 | `screen` | `images.ts` | `ScreenNamespaceHandler`（`:platform:capabilities`）+ `ScreenshotSource`（333ms 节流/§8.8 策略预检/句柄记账）+ **Android 真实现** `AndroidFrameProducer`（经 `SystemA11yBridge.takeScreenshot`：API34+ 窗口级、API30–33 显示级、API<30 如实 `ERR_NOT_IMPLEMENTED`；失败码分类 SECURE→BLACK_FRAME/限频→INVALID_PARAM/通道失效→SERVICE_DISABLED/内部→ERR_IO） | **生产已接**：`PlatformWiring.screenHandler` → `AppShellApplication.installWithFiles`（与 a11y 同底：服务未连 = `ERR_SERVICE_DISABLED`）；**回包尺寸 = 系统真值**（`ProducedFrame` 随帧走，不再固定 1080×2400）。MediaProjection 高清会话仍待（换 producer 即插） |
 | `images`（decode/matchTemplate/findImage/findColor/release） | `images.ts` | `ImagesNamespaceHandler.kt`（`:platform:capabilities`，经 `CapabilityNamespaces.images(analyzer)` 转接；SPI = `:domain` `ImageAnalyzer`+`ImageFrame`/`ImageMatch`，真身 = `:platform:system` 的 `NativeImageAnalyzer`/`JniOps` + `:bridge:image` 的 `libopencv.so`，2026-09-25 已接） | **桥面已可挂**：`assemble` 的 `imagesHandler` **独立缝**（同 datastore/zip/settings/notification/clipboard/sensors —— 图像面无共担门禁：读图是应用私有目录内 IO、匹配是纯计算，`ERR_FILE_NOT_FOUND`/`ERR_STALE_HANDLE` 判据在 SPI；不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。**生产侧已喂**（2026-09-25）：`PlatformWiring.of` 构造 `NativeImageAnalyzer.of(JniOps.loadOrNull())` 传 `inject(images = …)` —— so 缺位（未跑 `build-opencv.sh` 的 CI JVM / 无 native 的设备）→ null → 桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`（一个看不见像素的内存分析器只能靠自报坐标假装匹配成功，那比没有更坏 —— 这条防线从"不喂"变成"缺件不喂"，语义不变）。两侧钉子：`ImagesNamespaceHandlerTest` + `images.test.cjs` + `NativeImageAnalyzerTest` |
-| `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | `SystemNamespaces.{Dialogs,Shell,Device,App,FloatingWindow}NamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.{dialogs,shell,device,app,floatingWindow}` 转接） | **生产已接**：`com.autoscript.shell.PlatformWiring.of(context)`（§6 包级例外二）把 `SystemSpis.of` 十件拼成 `systemHandlers` 束 + 七独立缝，`AppShellApplication.installWithFiles` 喂 `AppShellKit.assemble`（七个字段各自可空，未注入仍如实 `ERR_NOT_IMPLEMENTED`；`dialogs` **生产已接** —— `PlatformWiring.of(context)` 构造 `AndroidDialogHost(SystemDialogOps(...))`（实现住 :platform:capabilities，`inject` 单测缺省不传仍 null→`ERR_NOT_IMPLEMENTED`）。SPI 侧 `shell`/`device`/`app`/`floatingWindow` 四件走 `:platform:system` 真实现；JS 双侧契约见 `extras.test.cjs`（mock 宿主验 wire 形状）。**实测缺口（2026-09-25，见 §12.3.3）**：`floatingWindow.create` 三处口径没接上 —— facade 收 `{title,width,height}` 却发 `null` payload、handler 的 `create` 要求 payload（真宿主回 `ERR_INVALID_PARAM`）、facade 没有 `close`（handler 有）；`screen.startCapturer` 的 `{width,height}` 同理不生效 |
+| `dialogs`/`shell`/`device`/`app`/`floatingWindow` | `extras.ts` | `SystemNamespaces.{Dialogs,Shell,Device,App,FloatingWindow}NamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.{dialogs,shell,device,app,floatingWindow}` 转接） | **生产已接**：`com.autoscript.shell.PlatformWiring.of(context)`（§6 包级例外二）把 `SystemSpis.of` 十件拼成 `systemHandlers` 束 + 七独立缝，`AppShellApplication.installWithFiles` 喂 `AppShellKit.assemble`（七个字段各自可空，未注入仍如实 `ERR_NOT_IMPLEMENTED`；`dialogs` **生产已接** —— `PlatformWiring.of(context)` 构造 `AndroidDialogHost(SystemDialogOps(...))`（实现住 :platform:capabilities，`inject` 单测缺省不传仍 null→`ERR_NOT_IMPLEMENTED`）。SPI 侧 `shell`/`device`/`app`/`floatingWindow` 四件走 `:platform:system` 真实现；JS 双侧契约见 `extras.test.cjs`（mock 宿主验 wire 形状）。**参数面已收口（2026-09-26，原 §12.3.3 记的两处缺口）**：`floatingWindow.create` 三处一起改齐 —— facade 把 `{title,width,height}` 原样发 payload（缺省显式 `null`，不静默删键）+ 补 `close({ref})`，与 handler 的 payload 要求对上；`screen.startCapturer` 的 `{width,height}` 现透给 `FrameSource.openSession`（**请求提示**，回包尺寸仍是真实帧）。两侧各加契约测试（`extras.test.cjs` / `screen.test.cjs` + `ScreenNamespaceHandlerTest`/`ScreenshotSourceTest`），任一侧漂移即红 |
 | `datastore` | `datastore.ts`（`get/put/remove/contains/keys/clear`；`get` 拆 `{found,value}` 信封：缺失 `undefined` ≠ 存的 JSON `null`） | `DatastoreNamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.datastore(store)` 转接；SPI = `:domain` `DataStore`，测试传 `InMemoryDataStore`） | **已可挂**：`assemble` 的 `datastoreHandler` **独立缝**（不入 `systemHandlers` 束 —— 存储面无共担门禁；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。字节值不过桥（§7.4 side-channel 未接 → `get` 如实 ERR_NOT_IMPLEMENTED）、`transaction` 不上桥（facade 无此方法）；SPI 真身 `:platform:system` `AndroidDataStore`，生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂 `datastoreHandler` 独立缝；`PlatformWiringTest` 同路径真转接覆盖）。双侧钉子：`DatastoreNamespaceHandlerTest` + `datastore.test.cjs` |
 | `zip` | `zip.ts`（`compress`/`extract` 两方法，TTL 缺省 60s） | `ZipNamespaceHandler`（`:platform:capabilities`，经 `CapabilityNamespaces.zip(archiver)` 转接；SPI = `:domain` `ZipArchiver`，真身 `:platform:system` `JdkZipArchiver`） | **已可挂**：`assemble` 的 `zipHandler` **独立缝**（同 datastore —— 归档无共担门禁，不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。SPI 错误原码透传不折叠；`unzip` 等未约定别名两侧都不提供。双侧钉子：`ZipNamespaceHandlerTest` + `zip.test.cjs`；归档语义（zip-slip）钉在 `JdkZipArchiverTest` |
 | `settings` | `settings.ts`（`canWrite`/`getString`/`getInt`/`putString`/`putInt` 五方法与 SPI 1:1，读缺失回 `null`；不提供猜型的 `get`/`put`） | `SettingsNamespaceHandler.kt`（`:platform:capabilities`，经 `CapabilityNamespaces.settings(systemSettings)` 转接；SPI = `:domain` `SystemSettings`，真身 `:platform:system` `AndroidSystemSettings`） | **已可挂**：`assemble` 的 `settingsHandler` **独立缝**（同 datastore/zip —— `WRITE_SETTINGS` 判据在 SPI、与五命名空间无共担门禁，不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。双侧钉子：`SettingsNamespaceHandlerTest` + `settings.test.cjs`；授权语义钉在 `AndroidSystemSettingsTest`；生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂 `settingsHandler` 独立缝；`PlatformWiringTest` 同路径覆盖） |
 | `notification` | `notification.ts`（`canPost`/`post`/`cancel` 三方法与 SPI 1:1；`post` 未授权**抛** `ERR_PERMISSION_DENIED`、`cancel` 回 void 无回执；不带 `channelId`/actions/`ongoing`） | `NotificationNamespaceHandler.kt`（`:platform:capabilities`，经 `CapabilityNamespaces.notification(poster)` 转接；SPI = `:domain` `NotificationPoster`+`NotificationSpec`，真身 `:platform:system` `AndroidNotificationPoster`） | **已可挂**：`assemble` 的 `notificationHandler` **独立缝**（同 datastore/zip/settings —— `POST_NOTIFICATIONS` 判据在 SPI、与五命名空间不共担 OVERLAY/ROOT/ADB_INPUT，不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。id 必填（§8.5「只发一次」的幂等键目标，不自动发号）。双侧钉子：`NotificationNamespaceHandlerTest` + `notification.test.cjs`；门禁语义钉在 `AndroidNotificationPosterTest`；生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂 `notificationHandler` 独立缝；`PlatformWiringTest` 同路径覆盖） |
 | `clipboard` | `clipboard.ts`（`getText`/`setText` 两方法与 SPI 1:1；读空回 `null`，空串是真值；写侧无门禁；不带 `clear`/`hasText`/富文本） | `ClipboardNamespaceHandler.kt`（`:platform:capabilities`，经 `CapabilityNamespaces.clipboard(clipboard)` 转接；SPI = `:domain` `Clipboard`，真身 `:platform:system` `AndroidClipboard`+`ClipboardOps`） | **生产已接**：`assemble` 的 `clipboardHandler` **独立缝**（同 datastore/zip/settings/notification，不入 `systemHandlers` 束；未注入如实 `ERR_NOT_IMPLEMENTED`；`PlatformWiring.of` → `inject` → `installWithFiles` 喂缝；`PlatformWiringTest` 同路径覆盖）。双侧钉子：`ClipboardNamespaceHandlerTest` + `clipboard.test.cjs`；读写语义钉在 `AndroidClipboardTest` |
 | `sensors` | `sensors.ts`（`isSupported`/`register`/`unregister`/`unregisterAll`/`drain` 五方法与 SPI 1:1；拉取式游标不做 push 回调，`on('change')` 只是 facade 节流轮询；delay 缺省 `NORMAL`、wire 传名字面量；`ignoresUnsupported` 只折叠 `ERR_NOT_SUPPORTED`；P0 只做 motion/environment 名单） | `SensorsNamespaceHandler.kt`（`:platform:capabilities`，经 `CapabilityNamespaces.sensors(sensors)` 转接；SPI = `:domain` `SensorSource`+`SensorDelay`/`SensorEvent`，真身 `:platform:system` `AndroidSensorSource`+`SensorOps`） | **生产已接**：`assemble` 的 `sensorsHandler` **独立缝**（同 datastore/zip/settings/notification/clipboard，不入 `systemHandlers` 束；未注入如实 `ERR_NOT_IMPLEMENTED`；`PlatformWiring.of` → `inject` → `installWithFiles` 喂缝；`PlatformWiringTest` 同路径覆盖）。双侧钉子：`SensorsNamespaceHandlerTest` + `sensors.test.cjs`；采样语义（归一化/发号/有界环/幂等/拒收折叠）钉在 `AndroidSensorSourceTest` |
-| `npm` | `npm.ts` | `NpmBridgeHandler`（`:app-service:packager`，`mount(): NamespaceHandler`） | **已可挂**：`assemble` 的 `npmHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`；方法表 11 项，`resolveApproval` 刻意不在桥面，§10.5 人机分离）。**wire 形状已两侧对齐**（原与 `a11y.waitFor` 同类漂移：facade 读宿主从不发的键）：`install` → `:domain` `InstallHandle`（`{handleId,projectId,enqueuedAtMillis}`，非包体）；`audit` 键名 `vulns`；`list` 不带 `sizeBytes`；`offlineGap` 带 `version`；`requestApprove` 校验 + 回显 `scripts`；`InstallEvent.phase` 取 `:domain` 六阶段。钉子在 Kotlin `NpmBridgeHandlerTest` + JS `npm-contract.test.cjs`（mock 逐字复刻宿主回包） |
+| `npm` | `npm.ts` | `NpmBridgeHandler`（`:app-service:packager`，`mount(): NamespaceHandler`） | **已可挂**：`assemble` 的 `npmHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`；方法表 13 项 —— 含 2026-09-26 补的 `events`/`approvals` 两个事件拉取口，`resolveApproval` 刻意不在桥面，§10.5 人机分离）。**wire 形状已两侧对齐**（原与 `a11y.waitFor` 同类漂移：facade 读宿主从不发的键）：`install` → `:domain` `InstallHandle`（`{handleId,projectId,enqueuedAtMillis}`，非包体）；`audit` 键名 `vulns`；`list` 不带 `sizeBytes`；`offlineGap` 带 `version`；`requestApprove` 校验 + 回显 `scripts`；`InstallEvent.phase` 取 `:domain` 六阶段。钉子在 Kotlin `NpmBridgeHandlerTest` + JS `npm-contract.test.cjs`（mock 逐字复刻宿主回包）；事件面另有 `NpmEventDrainTest` + `npm-events.test.cjs`（游标/环语义与响亮分档，§10.7） |
 | `workManager`（create/cancel/list 建任务面） | `workManager.ts`（排期工具 + 桥门面） | `WorkManagerNamespaceHandler`（`:app`，直驱 Scheduler，直写注册表） | **已挂**（恒挂载，调度器是本壳自建、无注入缝；cron 非法表达式桥侧 `ERR_INVALID_PARAM`，校验出处 `CronTab.parse` 与 UI 侧同口径） |
 | `power_manager`（acquire/release/status 脚本电源面） | `power.ts`（`acquire`/`release`/`status`） | `PowerManagerNamespaceHandler`（`:app`，直驱 `foregroundKeeper()` 的同一本 `WakeLockLedger`，账本零改） | **已挂**（`powerManagerHandler` **独立缝**，与 datastore/zip/settings/notification/clipboard/sensors 同形、不入 `systemHandlers` 束；生产由 `AppShellApplication.installWithFiles` 从 keeper 账本现建喂缝；脚本锁必须限时、无期限只属框架；token 服务端分配；取不到锁 `ERR_SERVICE_DISABLED` 且未记账；直驱账本不走 `ForegroundKeeper.start(token)` 单槽） |
 
@@ -965,7 +996,8 @@ console.log(img.width, img.height);          // 尺寸是**系统真值**（随�
 await img.recycle();                         // 打 screen/recycle
 
 // 会话式（MediaProjection）：open 时即做策略判定，会话内逐帧拉；close 是连接态（二次关 ERR_NOT_FOUND）
-const cap = await auto.screen.startCapturer();
+const cap = await auto.screen.startCapturer();          // 也可 {width,height}：**请求提示**，生产者可忽略
+// await auto.screen.startCapturer({ width: 720, height: 1280 });  // 回包与帧尺寸仍是真实值，不按提示编
 try {
   const f1 = await cap.nextFrame();
   await f1.recycle();
@@ -973,7 +1005,7 @@ try {
   await cap.close();
 }
 
-// ── images：图像分析面（**与 screen 是两张桥面**，句柄互不通用，见 12.3.2 第 3 条）
+// ── images：图像分析面（**与 screen 共用一张帧表**，§18 第 8 项 (b)，见 12.3.2 第 3 条）
 const shot = await auto.images.decode('/sdcard/shot.png');   // 宽高是**文件真值**
 const icon = await auto.images.decode('/sdcard/icon.png');
 const m = await auto.images.findImage(shot, icon, { threshold: 0.9 });  // null = 没找到（**不是异常**）
@@ -1030,8 +1062,8 @@ const out = await auto.shell.exec('pm list packages');      // shell 是**命名
 console.log(out.code, out.stdout, out.stderr);
 console.log(await auto.device.model(), await auto.device.sdkInt());
 console.log(await auto.app.launch('com.example'), await auto.app.currentPackage());  // false/null 是**诚实答案**
-// floatingWindow.create 的参数面还没接通（见 12.3.3）：眼下**别调它** —— facade 发的 payload 是 null，
-// 而 handler 的 create 要求 payload，真宿主会回 ERR_INVALID_PARAM
+const win = await auto.floatingWindow.create({ title: '面板', width: 300, height: 200 });  // {refId,generation}；缺省项显式 null
+await auto.floatingWindow.close(win);   // 幂等；晚到/重放 → ERR_STALE_HANDLE
 
 // ── datastore / zip / settings / notification / clipboard / sensors（六条独立缝）
 await auto.datastore.put('progress', { chapter: 3 });
@@ -1059,6 +1091,8 @@ const report = await auto.npm.audit({ offline: true });     // 键名是 vulns�
 auto.npm.onProgress((e) => console.log(e.phase, e.name, e.percent));  // phase: queued/resolve/download/
                                                                      // reify/post-check/done
 auto.npm.onApproval((req) => notify('需人工确认', req.pkg)); // 只能提交请求，绝不脚本直调（人机分离）
+auto.npm.onFinished((f) => (f.success ? done() : fail(f.detail))); // 成功+失败都到（install 回包只是已入队）
+                                                             // 四条订阅 2026-09-26 起由 events/approvals 拉取口真投递
 await auto.npm.requestApprove('evil-pkg', { scripts: ['postinstall'] });  // → {requestId, status:'pending', scripts}
                                                              // scripts 是**入参回显**（宿主确认收到了这份清单）
 
@@ -1074,21 +1108,20 @@ offQe();
    `const { AutojsError, ERROR_CODES } = require('auto')` 成立，`auto.AutojsError` 是 `undefined`（`index.ts` 的具名导出，不挂在命名空间根上）。判错两条路：`e instanceof AutojsError && e.code === 'ERR_FILE_NOT_FOUND'`，或 `e.is('ERR_FILE_NOT_FOUND')`。
    **`ErrCode` 是 TS `const enum`，运行期不存在**（编译期内联，`dist` 里只剩 `/* ErrCode.NOT_FOUND */` 注释）。所以 `e.code === ErrCode.FILE_NOT_FOUND` 只对 TS 脚本成立；`.js` 脚本用 `ERROR_CODES` 里的字符串字面量。`bridge/js/src` 内部用 `ErrCode` 是因为它整体过 `tsc`，不是"运行期也能拿到"的证据。
 2. **`auto.shell` 是命名空间对象，不是可调用函数**：`await auto.shell('pm list packages')` 当场 `TypeError`（`auto.shell` 是 `{exec, shell}`）。**`shell.shell()` 是别名，wire 上仍是 `shell/exec`**。`auto.a11y.selector().timeout(2000)` 同理——选择器上的超时方法叫 `time()`（`timeout` 只在 `findOne` 的选项里）。
-3. **`screen.*` 与 `images.*` 是两张桥面，句柄互不通用**（§12.2 第七条独立缝 + §9.2 末）：`decode` 的帧 `recycle()` 打 `images/release`，`capture` 的帧打 `screen/recycle`；拿 `screen.capture()` 的帧当 `findImage` 的 haystack 只会得 `ERR_STALE_HANDLE`（handler 的说法：这张帧不在我的在场面表里）。所以"截屏→找图"眼下要先落成文件：screen 面既没有 `save()` 也没有 `pixel()`（字节出不了 `:main`），**落盘是脚本自己的事**（§18 第 8 项的三条出路还没拍板）。
+3. **`screen.*` 与 `images.*` 是两个释放入口、一张帧表**（§18 第 8 项 (b) 2026-09-26 落地，"帧不通用"取消）：`decode` 的帧 `recycle()` 打 `images/release`，`capture` 的帧打 `screen/recycle` —— **打进去是同一张表**，所以 `screen.capture()` 的帧可以直接当 `findImage`/`findColor` 的 haystack，反过来 `images.release()` 也放得掉一帧截屏。放过的帧任一侧再用都是 `ERR_STALE_HANDLE`（同一个"已释放"事实）。**"截屏→找图"不再需要先落成文件**（§9.2 的落地段写明了链路与钉子）。
 4. **未命中 / 缺键 / 空结果是答案，不是异常**：`findImage`/`matchTemplate`/`findColor` 未命中回裸 `null`（`findColor` 的 native 侧用 `x = -1` 哨兵，因为 `(0,0)` 是合法首像素）；`findOneOrNull` 回 `null`；`datastore.get` 缺键回 `undefined` 而存的 JSON `null` 回 `null`（两者不折叠）；`settings.getInt`/`clipboard.getText` 缺键回 `null`。**但"扫过 0 像素"（空 region / region 越界）是 `ERR_INVALID_PARAM`** —— 那不是"没有"，是"根本没找"，混成 `null` 会让脚本把空区域当成搜过一遍。
 5. **引擎会话的两个名字都是 v9 的两代形态，别照旧写法**：`engines.exec({projectId, scriptPath})`（不是 `{script}`）；`session.onExit(info => …)` 且 `info` 是 `CrashInfo | null`（不是 `on('exit', code => …)` 的数字码，也没有 `.on` 这个方法）；`session.channel` 恒 `null`，命名通道要 `engines.channel(name)` **显式打开**（隐式建通道会在宿主侧留一条永远没人 drain 的缓冲）。
-6. **npm 的事件订阅名与 §12.2 表格一致，不是 `on('progress')`**：`onProgress`/`onApproval`/`onWarning` 三个独立方法（各有退订返回值）。`on('progress')`/`on('approval')` 在 facade 上**不存在**（会 `TypeError`），wire 上也没有对应方法（§10.8 的示例同批改）。
+6. **npm 的事件订阅名与 §12.2 表格一致，不是 `on('progress')`**：`onProgress`/`onApproval`/`onWarning`/`onFinished` 四个独立方法（各有退订返回值）。`on('progress')`/`on('approval')` 在 facade 上**不存在**（会 `TypeError`），wire 上也没有对应方法（§10.8 的示例同批改）。四条都是**拉取轮询**投递（首订立拉、退订自停）：宿主侧没有推给脚本的通道，谁把 wire 上的 `events`/`approvals` 删了，`pump*` 会响亮抛 `ERR_NOT_IMPLEMENTED` 而不是安静空转。
 
 #### 12.3.3 接口期未落地（示例里故意不写，写了就是撒谎）
 
 - **`images` 的 `toGrayscale`/`crop`/`rotate`/`pixel`**：`fromFile` 是 `decode` 的合法别名（两侧同名 `decode`），其余名字**两侧都没有**。灰度、裁剪、缩放、旋转与特征特殊一点：**计算核已落**（`imgnative_gray` 28 例 + `imgnative_crop` 46 例 + `imgnative_resize` 45 例 + `imgnative_rotate` 45 例 + `imgnative_feature` 32 例 host 断言，§9.2 末），但**桥面刻意不开** —— `:domain ImageAnalyzer` 五方法里没有它们，handler 也不认 `toGrayscale`/`crop`/`resize`/`rotate`/`feature`。落了一半是刻意的：脚本侧还没有消费方（刚性匹配与特征匹配是两种找图语义，不开第二个）。
 - **`engines.stop(runId)` 之外的会话操作**、`npm` 的 `resolveApproval`（人机分离，§10.5）等：刻意不在桥面，脚本调即 `ERR_NOT_IMPLEMENTED`（诚实）。
-- **`floatingWindow.create` 的参数面还没接通**（实测）：facade 忽略 `{title,width,height}` 且 wire 上发 `null`，而 handler 的 `create` 又要求 payload —— 眼下**只回句柄**，窗口的形状参数到不了宿主；且 facade 没有 `close`（handler 有），脚本拿不到关闭口。三处（facade 参数 / handler 的 payload 要求 / facade 缺 close）要一起收口，见 §12.2 接线表的 `floatingWindow` 行。
-- **`screen.startCapturer()` 的 `{width,height}`** 同理：facade 收下、handler 的 `startCapturer` 只 `openSession()` 无参 —— 请求的尺寸不生效（回包尺寸仍是系统真值）。
+- ~~`floatingWindow.create` 的参数面 / 缺 `close`~~、~~`screen.startCapturer` 的 `{width,height}` 不生效~~ —— **两处已于 2026-09-26 收口**（facade 发真 payload + 补 `close`；尺寸经 `openSession(w,h)` 透给生产者，回包尺寸仍 = 真实帧）。故示例（§12.3.1）现在**照写**；余下本节的其他条目仍是"写了就是撒谎"。
 
 #### 12.3.4 本节与 §12.2 的分工
 
-§12.2 是**命名空间清单**（有什么、接线到哪、谁注入），§12.3 是**调用形状**（怎么调、回什么、哪里会抛）。两者冲突时以本节为准（本节是实测），并应回来改 §12.2。两处已知的**待拍板缺口**写在 §18，别在本节自行发明口径：第 8 项（截屏帧 ↔ images 帧的通路）与第 9 项（`images.decode` 的相对路径口径 —— 四层都不解析路径，相对写法按 `:main` 的 CWD（= `/`）解析，`fromFile('part.png')` 回 `ERR_FILE_NOT_FOUND` 而报的路径是对的，看起来像"文件真的不在"。**口径拍板前，本节示例一律写绝对路径**）。
+§12.2 是**命名空间清单**（有什么、接线到哪、谁注入），§12.3 是**调用形状**（怎么调、回什么、哪里会抛）。两者冲突时以本节为准（本节是实测），并应回来改 §12.2。§18 的**已拍板缺口**别在本节自行发明口径：第 8 项（截屏帧 ↔ images 帧的通路）**已于 2026-09-26 落地**（(b) 两缝共用帧表，见 §9.2）；第 9 项（`images.decode` 的相对路径口径）**已于 2026-09-25 拍板 (a)** —— 只收绝对路径，故本节示例**一律绝对**（`fromFile('/sdcard/part.png')`）。相对写法按 `:main` 的 CWD（= `/`）解析，`fromFile('part.png')` 回 `ERR_FILE_NOT_FOUND` 而报的路径是对的，看起来像"文件真的不在"，不像口径没定。
 
 ### 12.4 typings 工程
 `:bridge:js` 产出全套 `.d.ts`（@types/auto），IDE 补全不依赖文档站点；d.ts 作为 API 契约的单一事实来源，API 评审以 d.ts diff 为准。
@@ -1119,7 +1152,7 @@ offQe();
 | **Transaction Journal + 暂存目录/rename** | InstallCoordinator · reify | 安装原子化（node_modules.part-<ts> + install.journal begin/commit/fail），崩溃自愈坏树 |
 | **Trust Anchor（带外）** | 供应链安全 | pin 注册表签名公钥 + 多镜像 integrity 交叉校验，破除 TOFU 自签 |
 | **Generation/tombstone（Handle）** | HandleRegistry | 跨进程资源竞态安全 |
-| **Interrupt Handler** | QuickJS 沙箱 CPU 打断 | 风暴消融 |
+| ~~**Interrupt Handler**~~ | ~~QuickJS 沙箱 CPU 打断~~ **已裁**（§18 第 1 项）；CPU 风暴由 `:nodeN` 进程边界 + 看门狗吸收 | 风暴消融（改测 `:nodeN` 进程级） |
 
 ---
 
@@ -1142,15 +1175,15 @@ offQe();
 - 单测/archUnit CI；Docker 构建镜像。**已落地**：`.github/workflows/ci.yml`（JVM 单测 + archUnit）；本机已配 Android SDK（`/root/android-sdk`，2026-09-23）——CI 同款 `./gradlew …` 命令可本机直跑复现；`tools/jvm-test.sh [--android-jar]`（+ `jvm-test-all.sh`）仍是快速旁路，见 §6 末。
 - npm P0（§10.11）：vendored npm CLI + 专用安装会话进程 + 零 spawn 主路径 + 事务化安装/journal 自愈 + 精选缓存种子离线首装 + 带外信任锚/lock 验签/审批卡 UI + 依赖面板 + 打包 node_modules 入包。
 
-### P1 — 并发、沙箱、图像、生态关键件
+### P1 — 并发、图像、生态关键件（沙箱已裁，§18 第 1 项）
 - 引擎池自适应（1-3）＋执行 slot FGS + 队列语义；`engines` 多引擎/`RuntimeChannel`。
-- QuickJS `:sandbox` 进程（白名单子集 + interrupt handler + CPU 配额）。
+- ~~QuickJS `:sandbox` 进程~~ **已裁（2026-09-26，§18 第 1 项「不要沙箱」）**：QuickJS 整条轨撤出排期，引擎只剩 Node 一条；`:engine:sandbox` 模块壳保留但不进排期。连带作废的还有 npm P1 里的「QuickJS 白名单库独立 vendored」与 §16 的两条相关风险——第三方脚本的防线改为**安装时用户选择 + §11 来源提示**（进程隔离那条不再存在）。
 - `libopencv.so` 全图像管线的 P1 算子已全落（剩桥面消费方）；**找色已落地**（2026-09-25，§9.2：单色 + 逐分量容差 + 可选区域 + 首个命中，四层同改，`x=-1` 哨兵与“扫过 0 像素”两条口径），模板匹配 + `decode`/`release` 亦已随 §9.2 落地，**灰度、裁剪、缩放、旋转与特征已落计算核**（2026-09-25：`imgnative_gray` 产出新帧 + 28 例；`imgnative_crop` 尺寸会变的产出 + 复用区域判据 + 真拷贝 + 46 例；`imgnative_resize` 目标尺寸入参 + 固定 LINEAR + 配额 + 45 例；`imgnative_rotate` 逆时针角度 + expand 包络画布 + 帧中心 + 45 例；`imgnative_feature` ORB+ratio+几何一致性只回坐标 + 32 例 host 断言；五者桥面刻意未开——脚本侧没有消费方，P1 native 面收官）；MediaProjection 会话式截屏/录屏仍待（换 producer 即插）。
 - `ui` 原生 XML UI 宿主 + `ui_web` WebView JS 桥 + 悬浮窗。
 - datastore SQLite、settings、sensors、notification、app Intent、zip、power_manager（**已落地**，见 §8.7；clipboard 亦已落地 §12.2 第五条独立缝，sensors 亦已落地 §12.2 第六条独立缝，images 桥面与 native 实现均已落地 §12.2 第七条独立缝 —— `libopencv.so`（OpenCV 4.14 静态链接，`node-runtime-build/scripts/build-opencv.sh` + `.github/workflows/image-native.yml`）+ `NativeImageAnalyzer`/`JniOps`（`:platform:system`）+ `PlatformWiring.of` 三件套齐全，so 缺位时桥回 `ERR_NOT_IMPLEMENTED`）。
 - OCR (MLKit 插件基准实现) + `OcrProvider`。
 - 插件框架骨架 + 打包合并插件资产。
-- npm P1（§10.11）：spawn 桥 polyfill + 批准后脚本真实执行（纯 JS bin 白名单）+ npm 终端 + 在线/OSV 离线审计 + QuickJS 白名单库独立 vendored + node-shim 红测。
+- npm P1（§10.11）：spawn 桥 polyfill + **lifecycle 脚本真实执行**（§18 第 7 项口径：不做出厂卡口、安装时让用户自己选，不是"批准后才跑"的审批流）+ npm 终端 + 在线/OSV 离线审计 + node-shim 红测。（原「QuickJS 白名单库独立 vendored」随第 1 项沙箱裁掉。）
 
 ### P2 — 生态与分发
 - `dialogs` 全形态的 **Android 渲染侧**（overlay 真弹窗 / 通知回调的真投递；`mode` 选择与 BAL 降级判据已在 §9.6 的语义层落地）、`root_automator`/Shizuku 输入、`shell` 全量（`ShellMode.ROOT`/`ADB` 的真执行通道；`DEFAULT` 侧语义已落地）。
@@ -1173,7 +1206,7 @@ offQe();
 | APK 体积 | ≤ 40MB release（`libnode.so` + `libopencv.so` + assets）—— **已超支，见下** |
 
 > **APK 体积预算是本表唯一已被实测推翻的条目（2026-09-25 记账）**：`:engine:node-process` 侧 jniLibs 三件套
-> `libnoden.so` + `libnode.so` + `libc++_shared.so` 实测未压缩合计已 ≈81MB（APK 压缩安装后另计）；
+> `libnoden.so` + `libnode.so` + `libc++_shared.so` 实测未压缩合计已 ≈81MB（APK 压缩安装后另计）——**2026-09-26 ICU 之后要按 ≈92MB 读**：`libnode.so` 由 `--with-intl=none` 换成 `small-icu zh,en` 后实测 70,725,976 → 81,950,376 B（**+11,224,400 B = +10.70 MiB = +15.87%**），增量全在 `libnode.so`，故三件套 +10.70 MiB；取证 = 两个 `node-slice` artifact（`36153816811` / `36185853302`）+ 各自 `config.gypi`（旧 `icu_small=false`，新 `icu_small=true, icu_locales=en,root,zh, icu_path=deps/icu-small`）。§18 第 4 项的拍板（只要 zh,en）**已按本条买单**——不拍这条的话全量 ICU 还要再多，预算只会更超（下文 `libopencv` 两处「占三件套 8.6%/7.8%」的分母仍是 ICU 前的 81MB，按 ≈92MB 折算应为 7.6%/6.6%，分母换了、结论不变：图像面不是超支原因）；
 > `libopencv.so` 是 OpenCV 4.14 `core+imgproc+imgcodecs+features2d+flann` 静态链接（kleidicv=ON；五模块 device 构建实测 **7,298,272 B = 7.0 MiB**（特征落地前 6,328,916 B = 6.0 MiB，增量不足 1MB、+15.3%），占引擎三件套 81MB 的 8.6%）——
 > 仅按 `BUILD_LIST` 裁剪，**未压缩实测 6,328,916 B = 6.0 MiB**（占三件套 81MB 的 7.8%）——
 > 早前"再添一个数量级相当的份额"是不成立的推断，实测不是同一量级。因此超支**全在引擎三件套**，
@@ -1202,16 +1235,16 @@ offQe();
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | **Node-on-Android 升级依赖自持管线** | 上游（nodejs-mobile）停更；我方需长期维护 recipe | 建立 `:node-runtime-build` 固化管线：固定 Node LTS、预期树哈希门禁、NDK 版本锁定、CI 每日构建冒烟、产物 ABI 号校验；管线减至「换版本号→跑一次→回归」 |
-| **16KB 页 / ELF 对齐** | 未对齐 so 在新设备加载即崩 | **CI 门禁强制 `LOAD 0x4000` 对齐**（用 `llvm-objdump --private-headers` 断言）；红测机里常驻一台 16KB 页设备；`libopencv.so` 同轨还有一个**JNI 符号面**断言（四个 `NativeImageAnalyzer_*` 逐个在场）—— 2026-09-25 补，理由是符号名是字符串约定、改包名/类名漏一处照样编得过，前三类断言一条都不红 |
+| **16KB 页 / ELF 对齐** | 未对齐 so 在新设备加载即崩 | **CI 门禁强制 `LOAD 0x4000` 对齐**（用 `llvm-objdump --private-headers` 断言）；红测机里常驻一台 16KB 页设备；`libopencv.so` 同轨还有一个**JNI 符号面**断言（五个 `JniOps_*` 逐个在场）—— 2026-09-25 补，理由是符号名是字符串约定、改包名/类名漏一处照样编得过，前三类断言一条都不红；**2026-09-26 修过一次真错位**：cc 用 `NativeImageAnalyzer_` 而声明类是顶层 `JniOps`，JVM 按声明类找 `JniOps_` 一个都找不到（无 RegisterNatives 兜底），本机 `jni-names.test.cjs` 先钉、CI 的符号面断言同批改对 |
 | **引擎进程被杀/LMK** | 长任务中断 | 执行 slot 与 `:main` 绑定继承进程重要性 + specialUse FGS；看门狗对「被杀」能恢复意图日志重调度（幂等）；low-memory 降池 |
 | **无障碍树洪峰（滚动/动画）** | IPC 爆炸 / UI 卡顿 | 节流拉取（seq 游标批量）+ 数据面可丢包 + 紧凑索引树按需属性 |
-| **`process.exit` / CPU 风暴 / OOM 单脚本** | 曾拖垮整个 app | **进程边界**吸收全部；外带 CPU 差分 + 心跳双通道 + 堆 cap；沙箱 interrupt handler |
+| **`process.exit` / CPU 风暴 / OOM 单脚本** | 曾拖垮整个 app | **进程边界**吸收全部；外带 CPU 差分 + 心跳双通道 + 堆 cap（沙箱 interrupt handler 随 §18 第 1 项裁掉） |
 | **屏幕锁定时守时任务失败** | 闹钟响但任务是黑帧/无窗口 | 诚实契约：亮屏+解锁保底；预热闹钟 -60s；`screen` 三态声明；分类错误可 catch |
 | **厂商 ROM（MIUI/HyperOS/Vivo）杀后台** | 自启/保活失效 | 能力中心三态 +「一键引导」直达 ROM 白名单页；无保证的功能如实降级标注 |
 | **SCHEDULE_EXACT_ALARM 默认拒绝** | 定时不准 | 一级权限项 + 可降级 setWindow；坏 case 用户可见偏差标注 |
 | **MediaProjection 会话授权中断** | 截屏功能随会话失效 | 会话状态机 + 可重授权引导；306s 超时前自动续期/提示 |
-| **QuickJS 沙箱缺口** | 恶意脚本逃逸 | 沙箱进程只开白名单能力 + 无集成桥权限 + interrupt/TTL 双保险；永不默认静默提级 |
-| **双引擎 API 漂移**（Node vs QuickJS） | 同脚本两处行为不同 | P0 仅有 Node；QuickJS 以「白名单子集」封锁边界，逐项对照测试 |
+| ~~**QuickJS 沙箱缺口**~~ **作废（2026-09-26，§18 第 1 项）** | 恶意脚本逃逸 | **换成：无进程隔离后的逃逸面** —— 第三方脚本与自写脚本同权，防线只剩安装时用户选择 + 来源提示 + TTL/看门狗；永不默认静默提级 |
+| ~~**双引擎 API 漂移**（Node vs QuickJS）~~ **作废（2026-09-26，§18 第 1 项）** | 同脚本两处行为不同 | **只剩 Node 一条轨**，不存在两处行为；`ImageAnalyzer`/引擎缝仍留 SPI 以便将来换实现 |
 | **桥死锁回归** | 事件循环冻结 | archUnit + 专项契约测试（双向同步禁令的静态检查 + 死锁压力测试）；线程规则写进 code review checklist |
 | **脚本间广播/通信滥用** | 引擎间干扰 | RuntimeChannel 按来源分级过滤；低信任不得控制高信任引擎 |
 | **打包 APK 依赖宿主引擎版本** | 旧 APK + 新宿主 mismatch | 打包时记录引擎 ABI 哈希，启动校验 |
@@ -1242,32 +1275,45 @@ offQe();
 
 1. **引擎路线：先 Node-only，还是 P0 就并行 QuickJS 沙箱？**
    推荐「P0 只 Node；QuickJS 沙箱 P1」——沙箱牵扯独立进程、白名单、双引擎 API 对齐三件大事，混进 P0 会把最小闭环拖垮。
+   **已拍板（2026-09-26）：不要沙箱**——QuickJS 整条轨撤出排期，**不只是推迟到 P1**：引擎只剩 Node 一条轨，`:engine:sandbox` 不进排期（`settings.gradle.kts` 里的模块壳保留，模块表按协调者冻结不动），§14 的「QuickJS `:sandbox` 进程」与 §16 的两条相关风险随之作废。
+   **这条改的是安全边界，不是排期**：原先「第三方/市场脚本 → `:sandbox` 白名单子集」的隔离（§11 来源分级表）不再存在，第三方脚本与自写脚本**同在 Node 进程、同权**（无障碍/截屏/点击/网络全开）。防线因此只剩两条：**安装时的用户选择**（见第 7 项）与 §11 的来源提示——「靠能力授予而非进程隔离」要写在给用户的提示里，不能让人以为装来的脚本是沙箱跑的。
 2. **进程模型：P0 就用「每脚本一进程」，还是先单引擎进程后扩？**
    推荐**一步到位**：反正脚本绝不能进主进程，单引擎进程的边界与多引擎池完全同构，代价只是「池容量先写死为 1」。避免二次重构。
+   **已拍板（2026-09-26）：采纳推荐，一步到位**——现状即如此（`FixedEnginePool` 池容量 1，`:nodeN` 每脚本一进程），本项只是把"将来扩到 1-3"那条路确认成默认方向，无代码改动。
 3. **分发定位与 Play 态度？**
    推荐完全避开 Play Store（specialUse FGS / SCHEDULE_EXACT_ALARM / MANAGE_EXTERNAL_STORAGE 政策冲突），官网/F-Droid/APK 直下。若你仍想上 Play，需砍掉 specialUse 保活与精确闹钟，P0 范围要变。
+   **已拍板（2026-09-26）：不发行**——非商业化项目、不分发，故 Play 政策冲突面（specialUse FGS / 精确闹钟 / 全盘存储）**根本不存在**，上面那组"若上 Play 要砍什么"的代价不用付，保活与 `SCHEDULE_EXACT_ALARM` 原样保留。落地形态 = 本机自装 APK；Play/F-Droid/官网分发轨不进排期。
 4. **ICU 取舍：全量 ICU（完整 Unicode/时区/国际化，体积 +20MB 级）还是配 `--with-intl=none`（体积小但字符串/时区残缺，自动化和 UI 场景产物不友好）？**
    推荐**全量 ICU + 裁剪为所需 subset**（也可放 assets 按需加载），自动化 app 大量依赖正则/时区/日期格式化。
+   **已拍板（2026-09-26）：只要中文 + 英文**——即 locale 面收成 `{zh, en}`，既不停在 `none`（那样连 `zh-CN` 的 `Intl.*`/`toLocaleString` 都不可用，等于还是残缺），也不背全量的 +20MB。落点是 Node 构建旗标 **`--with-intl=small-icu --with-icu-locales=zh,en`**。**旗标已改（2026-09-26，同日）**：`node-runtime-build/scripts/fetch-and-build.sh` 由 `--with-intl=none` 换成上述两行；数据源是仓内 canned ICU（`deps/icu-small/` 带 `README-FULL-ICU.txt` → `configure.py` 走 `canned_is_full`），**不联网下载 icu4c**，`root` 由 configure 自动并入。
+   跟进（构建轨，Actions 跑，本机不编）：旗标已改 → **重编已过（run `36185853302`，success，2026-09-25T23:01Z，约 2h34m）** → **体积差已量并回填 §15**：`libnode.so` 70,725,976 → **81,950,376 B（+11,224,400 B = +10.70 MiB = +15.87%）**，取证两个 `node-slice` artifact（基线 `36153816811` intl=none / 新 `36185853302`）+ `config.gypi`（`icu_small=true`、`icu_locales=en,root,zh`、`icu_path=deps/icu-small`、`icu_ver_major=78`）。旧估数 "~10MB+" 是 small-icu **默认面**，`zh,en` 实测比它还略高一点（ICU 数据不是按 locale 线性摊的）。`RISKS.md` §3 同批改成「已改 + 已量」。**仍待设备**：`Intl.DateTimeFormat`/`Collator` 在 zh/en 上的运行期实测（arm64 二进制本机跑不了，归 §8b 那批真机账）。副作用要写明：`toLocaleString('ja_JP')` 之类非 zh/en locale 会回落 en —— 脚本作者该知道这不是 bug。
 5. **无障碍服务与脚本进程共享与否的极限形态**：本设计定案「a11y 在 `:main`、脚本在 `:nodeN`」。若未来遇到「无障碍回调海量 + 脚本高频读树」压垮 `:main`，可演进出
    `:accessibility` 第三进程（§9.1 的接口已留好接缝）。P0 不做——保持最少进程数。
+   **已拍板（2026-09-26）：采纳推荐，P0 不做**（接口缝照留；真出现压垮证据再切）。
 6. **UI 宿主策略**：脚本 UI 用「`:main` 渲染原生 View」还是「脚本自带 WebView（ui_web）」为主？
    推荐**两者都留、原生优先**（原生 View 桥链短、性能好；WebView 桥用于复杂富交互）。若优先做 Web 方案更快出 demo，可调整为 Web 优先。你在意的 demo 速度可以决定这个顺序。
+   **已拍板（2026-09-26）：采纳推荐，两者都留、原生优先**——两个 UI 面都还在 P1 排期里（§14），本项只是定下先后：原生 XML UI 先，`ui_web` 桥后。
 7. **npm 默认镜像与脚本审批严苛度**（§10 已定案技术路线，这两项是面向用户的策略）：
    - 默认 registry：推荐 `registry.npmmirror.com`（国内实测存活）——若你的目标用户全球分布则改 `npmjs.org` + 可切换。种子缓存与「离线秒装」文案都要绑定默认镜像。
    - 脚本审批默认值：推荐出厂 **global-deny**（全部 install 脚本默认拒绝，人工逐个批准）。代价是与 AutoJsPro 既有的「默认跑脚本」用户习惯不同，新旧用户需要文档/示例适配；若你更看重无缝迁移，可出厂 allow-listed 常用安全包 + 黑名单模式。
+   **已拍板（2026-09-26）**：
+   - **默认 registry = 官方 `registry.npmjs.org`**——不分发、不面向陌生用户（第 3 项），镜像加速不是开箱前提；用户要快自己 `setRegistry` 切 npmmirror。`HostNodeExecutor`（实际装包用的那家）与 `NpmRegistryVerifier`（交叉校验的首选）**两处缺省同批改**，§10.2/§10.4 的"默认 npmmirror"同批改。**第二意见的规则同时改写**：交叉校验要的是**两个运营主体**，不是"官方那一家"——首选官方时镜像做第二意见，首选任意别家时官方做第二意见（`secondary` 缺省跟着 `primary` 走），否则会出现 primary 与 secondary 同站、自己跟自己比也算通过。
+   - **lifecycle 脚本不做出厂卡口，安装时让用户自己选**——既不是 global-deny 也不是白名单：装包时按包如实告知 `hasInstallScript`（**禁止静默**，§10.12 那条保留），跑不跑由这次安装的使用者当场决定；`requestApprove`/审批接口保留为这条选择的落点。
+   - **实现落差（明写，不当已办）**：现网 T0 是 `--ignore-scripts` 全程 + npm12 `allowScripts=none`，lifecycle 脚本**一个都没跑过**，安装回执显式发 `scripts-skipped`（禁止静默那条就是为这个静默面立的）。"用户选择跑"要先有 spawn 桥（`child_process` 真执行），那是 §14 的 **P1 项**——**口径在此定死，实现排 P1**，P1 落地时按本条写交互，不重新拍。
 8. **截屏帧与 images 帧的通路**（§9.2 记账的缺口，决定 §7.7 表里 `captureScreen → findImage < 1s` 这条链路什么时候能兑现）：
-   `screen.capture()` 出的帧与 `images.decode` 出的帧**互不通用**（两缝各发各的号，§12.2），且 screen 面既不给 `save()` 也不给 `pixel()`（字节出不了 `:main`），脚本目前**只能自己先落盘再 decode**（§12.3 示例这么写）。三条出路，入口在同一处（换 producer 或加一个 `screen.save`），代价不同：
+   **记账时的现状（2026-09-25）**：`screen.capture()` 出的帧与 `images.decode` 出的帧**互不通用**（两缝各发各的号，§12.2），且 screen 面既不给 `save()` 也不给 `pixel()`（字节出不了 `:main`），脚本**只能自己先落盘再 decode**（§12.3 示例当时这么写）。三条出路，入口在同一处（换 producer 或加一个 `screen.save`），代价不同：
    - (a) **`screen` 面加 `save(path)`**：把 a11y 已产出的 JPEG 字节原样落盘。设备面已经在压 JPEG 了，最小改动；代价是**有损**——`findColor` 的分量判定会吃到压缩伪影（§9.2 的契约是按分量精确夹的），"屏幕上这个色还在吗"这类判读会变钝。
-   - (b) **两缝共用一个帧表**（producer 直接把帧写进 `images` 的帧表）：收益是真正的 0 拷贝直连（§7.4 所有权边界仍是每个句柄一份 Mat，变的是**发号那一侧**归谁）；代价是"帧不通用"这条纪律取消，`screen`/`images` 两个命名空间的释放语义要重新对齐（谁 release 谁背 STALE）。
+   - (b) **两缝共用一个帧表**（producer 直接把帧写进 `images` 的帧表）：收益是真正的 0 拷贝直连（§7.4 所有权边界仍是每个句柄一份 Mat，变的是**发号那一侧**归谁）；代价是"帧不通用"这条纪律取消，`screen`/`images` 两个命名空间的释放语义要重新对齐（谁 release 谁背 STALE）——**已对齐为"两个释放入口、一张表"**（本项末）。
    - (c) **`images` 面加 `decodeBytes(byte[])`**：屏幕字节不落盘直进 native；代价是 bytes 要过桥，§7.7 的"屏幕帧→native 0 拷贝"这条在**两个维度上**都要重新记账，且 §7.4 的多一路径 = 多一处规格要守。
-   **已拍板 (b)**（2026-09-25）：只有它同时保住了"0 拷贝"与"按分量精确判定"两条被契约明确承诺的性质，(a) 切掉的是判读精度、(c) 切掉的是性能口径。(a) 不作为过渡 —— 过渡方案一旦进示例就会被抄成正式用法，而带 JPEG 往返的链路不叫「屏幕帧→native 0 拷贝」，§7.7 的买单口径不为它改。落地时动的是 §7.4 所有权边界（发号侧归一），`screen`/`images` 的句柄纪律届时同批重写，"帧不通用"那条纪律取消。
+   **已拍板 (b)**（2026-09-25）：只有它同时保住了"0 拷贝"与"按分量精确判定"两条被契约明确承诺的性质，(a) 切掉的是判读精度、(c) 切掉的是性能口径。(a) 不作为过渡 —— 过渡方案一旦进示例就会被抄成正式用法，而带 JPEG 往返的链路不叫「屏幕帧→native 0 拷贝」，§7.7 的买单口径不为它改。
+   **已落地**（2026-09-26，§7.4 发号侧归一 + §9.2 末落地段）：`ImageAnalyzer.ingest`（第 6 方法，紧密 RGBA → 同一张帧表）、`ImagesNamespaceHandler` 退成无状态转接、`ScreenshotSource` 可选 `analyzer`（null 即本地表，且那时 `images` 未注册故不撞号）、`frameOf` JPEG → 原样 RGBA（`getPixels(int[])` 打包序，不猜 `copyPixelsToBuffer` 字节序）。钉子 = `host_ingest_test`（跨来源同表）+ JVM 三处 + JS 互认用例。**`captureScreen → findImage` 的实测数字仍欠**（§7.7 表里是验收口径，真机未量）。
 
 9. **`images.decode` 的相对路径口径**（2026-09-25 实测记账，影响 §9.2/§12.3 的示例写法）：
    `:domain` 的 `ImageAnalyzer.decode` KDoc 写着「路径解析（相对项目根 or filesDir）由实现定」，但**四层里没有任何一层解析路径**（计算核 `std::fopen`/`cv::imread` 直取、装载面与 `NativeImageAnalyzer` 原样透传、handler 只挡空白串）。host 侧实测把这条钉死了：传相对路径时按**进程 CWD** 解析——同一个文件，绝对写法与「chdir 到该目录 + 相对写法」都回 `ERR_IO(3)`（说明相对写法确实命中到了文件），而不存在的相对路径回 `ERR_FILE_NOT_FOUND(2)`。`libopencv.so` 载在 `:main` 进程里，那个进程的 CWD 是 `/`（Android 对 zygote 后代的固定行为），于是脚本写 `images.decode('part.png')` 会在根目录找一个并不存在的文件——**回的是 `ERR_FILE_NOT_FOUND`，且报的路径是对的**，所以看起来像"文件真的不在"，不像"口径没定"。
    两条出路，代价不同：
    - (a) **就在契约里写明"路径必须是绝对的"**（示例改成 `/sdcard/...` 或让脚本自己拼 `filesDir`）。零实现改动，代价是 v9 的 `fromFile('part.png')` 这种相对用法在 AutoScript 直接不成立，脚本要改写法。
    - (b) **在 handler 层加一层基准解析**（相对路径按项目根 / `filesDir` 拼绝对再往下传）。保住 v9 的写法，代价是要定"基准是谁"（项目根？脚本所在目录？filesDir？）——**三选一本身又是一个要拍板的策略**，且 §9.2 的「不做路径策略」那条边界要重画。
-   **已拍板 (a)**（2026-09-25）：路径必须是绝对的 —— 把"相对路径"从契约里去掉而不是猜一个基准。(b) 不给：基准三选一本身又是一个策略，且 §9.2「不做路径策略」的边界不重画。**§12.3 已按 (a) 改写**：示例路径一律绝对（`fromFile('/sdcard/part.png')`），并写明了相对写法为什么回 `ERR_FILE_NOT_FOUND`。跟进动作：`:domain` `ImageAnalyzer.decode` KDoc 里「路径解析由实现定」那句要收紧为"只收绝对路径"（见下）。
+   **已拍板 (a)**（2026-09-25）：路径必须是绝对的 —— 把"相对路径"从契约里去掉而不是猜一个基准。(b) 不给：基准三选一本身又是一个策略，且 §9.2「不做路径策略」的边界不重画。**§12.3 已按 (a) 改写**：示例路径一律绝对（`fromFile('/sdcard/part.png')`），并写明了相对写法为什么回 `ERR_FILE_NOT_FOUND`。**跟进动作已执行**（同日 `a0a802e`）：`:domain` `ImageAnalyzer.decode` 的「路径解析由实现定」收紧为"路径**必须是绝对的**"，facade `images.ts` 注释同步。
 
 ---
 
@@ -1280,9 +1326,9 @@ AutoScript 的骨架可以一句话记住：
 架构的全部取舍都锚定在五条铁律上：脚本不进主进程、跨进程必异步、每次操作有 TTL、teardown 四步 quiesce、依赖单向接缝可替换。这个骨架让「写脚本→跑起来→守护它→定时它→打包走」的 P0 闭环与 AutoJsPro 对整个 API 面的演进式补齐，是同一条路的两个阶段，而不是两个项目。
 
 下一步（建议与后续迭代方向，需你确认后开工）：
-1. 确认 §18 决策点（第 8 项帧通路与第 9 项路径口径已于 2026-09-25 拍板，剩 7 个；或直接采纳推荐默认值）；
-2. 在 `:node-runtime-build` 上跑通「Node 24 → 16KB 对齐 libnode.so → 最小 `:node` 进程能执行 `console.log` 并回传」的**垂直切片**——这是全架构的第一块里程碑，也是最硬的一块骨头；
-3. 第二个切片接 **npm**：专用安装会话进程内跑 vendored npm CLI 完成一次 `npm ci --offline`（用种子缓存装 axios），把 §10 的零 spawn 契约、事务化安装与镜像校验一次验证；
-4. 切片通过后，按 §14 P0 展开桥与 a11y 最小集。文档将随切片验证持续修订。
+1. **§18 九项已全部拍板**（第 8/9 项 2026-09-25；第 1-7 项 2026-09-26）：1 不要沙箱 / 2 一步到位每脚本一进程 / 3 不发行 / 4 ICU 只要 zh+en / 5 P0 不切第三进程 / 6 原生优先 / 7 官方 registry + 安装时让用户选脚本。**没有待你拍板的开放项了**（§18 保留作决策台账）；
+2. ~~Node 垂直切片~~ **已跑通**：Node 24 → 16KB 对齐 `libnode.so` → `:node` 进程执行并回传，构建走 Actions（`.github/workflows/node-slice.yml`，本地禁编）；P0 回环 `P0LoopbackTest`（装 axios → 读 UI 树 → 点节点 → 看 console）已绿；
+3. ~~npm 切片~~ **已跑通**：vendored npm CLI + 专用安装会话 + 零 spawn 主路径 + 种子离线首装已在生产装配里（§10.11 P0 主体 + §19 中段的 wire 形状修复）；
+4. **下一步**（按可执行性排序）：(a) 等设备的那笔账——§7.7 实测数字 + exec/dlopen / findColor 红测；(b) ICU **已闭环**：旗标改 + Actions 重编 success + 体积差已回填 §15（`libnode.so` +10.70 MiB），仅剩 zh/en 的 `Intl.*` 运行期实测归真机那批；(c) ~~§14 P0 剩余项按 §12.2 接线现状表逐条核~~ **已核完（2026-09-26），并据此收口第三处落差**：核过的 P0 条目（构建链、桥、a11y、看门狗 CPU/OOM、调度器、权限门禁、CI 门）实为已落；被裁的如实标裁（打包整轨 2026-09-23 后移、§18 第 10 项 npm 呈现层暂不排期、lifecycle 脚本 = P1）。核出的真落差是 **npm 事件面双侧无投递方** —— `onProgress`/`onWarning`/`onApproval` 订阅了但生产永远不响（两个 SharedFlow 零订阅、`feedWarning` 零生产调用者、`InstallFailure` 连订阅口都没有），「订阅了却收不到」正是 §10.5-3/`feedWarning` 自己点名要禁的最恶失败面。接法沿用仓库既有的游标拉取（桥没有宿主→脚本推送面，§7.5）：`:domain` 补 `drainEvents`/`drainApprovals` + 四个 DTO（§10.7），`InstallCoordinator` 两条 512 环由 `emit()`/`requestApprove` 唯一投递，`NpmBridgeHandler` 上桥 `events`/`approvals`，JS 侧 `pumpInstallEvents`/`pumpApprovals` 轮询泵 + 新增 `onFinished`，`warning` 一律过 `feedWarning` 校验 kind。钉子：`NpmEventDrainTest` 12 例（环语义/回包三件套/wire 逐字映射/参数校验）+ `npm-events.test.cjs` 11 例（首订立拉、游标不重复、瞬时错不推进游标、NOT_IMPLEMENTED 响亮、未知 type/phase/action 响亮、定时器自停）。**第 10 项（脚本库/编辑器页、npm 呈现层）2026-09-26 拍板暂不排期**。
 
 **本仓库的推进顺序（已落地的按 §12.2 接线现状表为准，勿按上表臆造）**：契约与纯 JVM 层（`:domain` / `:bridge:java` / 各 app-service / `:platform:capabilities` 的 handler）已逐块落地并有单测；`AppShellApplication` 已从 11 行桩变成**闹钟/门禁的装配入口**（`AlarmSchedulerProvider` + `AndroidAlarmPort` + `AndroidScreenGate` + 静态注册的 `AlarmReceiver` → `AlarmDispatch` → `Scheduler.onTrigger`，漏投记账不静默丢弃），`AppShell.assemble` 的**生产调用方已落地**：`AppShellKit.assemble(filesDir, cacheDir, schedulerProvider, screenGate)`（`:app` 装配包，纯 JVM 可测）是那条路径的单一落点 —— 目录约定（`files/.autojs` 两个持久寄存器 + `files/scripts` 项目根 + `cacheDir/npm-cache`）与持久句柄的成对释放都收在它里面，`AppShellApplication.onCreate` 在 IO 域调它（`installWithFiles`），装配失败如实降级成"壳保持 null + 闹钟继续漏投记账"而不是半装冒充就绪；引擎工厂**生产已换 `NodeProcessEngine`**（`AppShellApplication.installWithFiles` 注入，`nativeLibraryDir/libnoden.so`+`libnode.so` 候选位；socket 名 = 桥监听 `BridgeSocketListener` **绑定成功才注入**（失败离线降级），`addonPath = ScriptPaths.bridgeAddonFile(filesDir)`（§19 交付轨 2026-09-24 接线：`assets/bridge-addon/` → `BridgeAddonDeploy` 落位，文件缺位即降级不注入 —— 与 bridgeDistPath 同一条选填纪律；jniLibs 三件套 `libnoden.so`/`libnode.so`/`libc++_shared.so` 由 `prepareEngineNativeLibs` 三件齐才落包、半套红，`extractNativeLibs=true` 保证 exec 有真文件）；缺件由 execute 预检**点名绝对路径**——比笼统"未接入"更可操作）；`AppShellKit` 缺省仍是 `UnavailableEngine`（`:app-service:runtime`，见其 KDoc）——**JVM 配方/测试不经 Application 装配时每次执行如实 `CRASHED` + 真原因进意图日志**，而不是开机后什么都不发生。开机恢复的接线点（`AppShell.bootRecover` → `Scheduler.recoverUncommitted`，`AppShellApplication.install` 在 IO 域触发；持久形态 `JournalFileStore` + `PersistentIntentLog` 已有 `AppShellProductionWiringTest` 覆盖），npm 侧已有生产装配（`NpmShellKit.assembleHandler(filesDir, cacheDir)` → `assemble(npmHandler = …)`，`NpmShellKitTest` + 同一接线测试覆盖）；归档侧意图日志与运行档案双持久（`JournalFileStore` + `FileRunArchive`，同一 `JsonLine` 行格式，`FileRunArchiveTest` 与 `InMemoryRunArchiveTest` 同语义锚点），`AssembledShell` 同时是任务中心的**读口**（`taskCenter()` = `scheduler.tasks()` + `archive.unfinished()`/`link()` + 恢复账经参数给入；`runsOf`/`runRecord`/`unfinishedRuns` 保留为窄读口，避免 UI 自开第二个 `FileRunArchive` 造成写侧两份视图）兼**操作面**（`registerTask`/`cancelTask`/`runTaskNow` 直通壳持有的同一个 `Scheduler` —— store-first 先落盘后动内存/闹钟，绝不另开第二个 `FileTaskStore`）；**任务中心全链已接上（2026-09-24）**：`AppShellApplication.taskCenter()`（壳未装配即抛，不冒充空清单）→ `:domain` 的 `TaskCenter.kt` 呈现 DTO → `:ui` 的 `TaskCenterScreen`（三页签之二：任务行 + 未结算执行 + 恢复账；2026-09-24 再接**操作面** —— 登记/取消/立即执行三写口 + `TaskCenterOps` 语义闸门 + `runTaskNow` 先查后触发的不哑火边界，见 §8.6）；**控制台全链也已接上（2026-09-24）**：`AppShellApplication.console()`（壳未装配即抛，不冒充「暂无日志」）→ `:domain` 的 `Console.kt` 呈现 DTO → `:app` 的 `ConsoleRead` + `AssembledShell.consoleView`（读壳持有的收集器与在途表，不另开第二份）→ `:ui` 的 `ConsoleScreen`（页签之三：行累积 + 丢包/拉满/在途两端对照，见 §7.3 末）；`AppShellKitTest` 覆盖自装配全路径（目录落位、门禁拒绝不投递、启动失败不写孤儿档案、真起引擎落终态记录、落盘遗留经 `bootRecover` 重投）。a11y 的 Android 真实现注入**已接**（`PlatformWiring` → `a11yHandler`：`AndroidUiTree`/`AndroidGestureInput` 经 `SystemA11yBridge`，服务未连如实 `ERR_SERVICE_DISABLED`），screen 的生产注入**同批已接**（`PlatformWiring.screenHandler`，§9.2 a11y 截图路径）；dialogs 的生产注入**也已接**（`PlatformWiring.of` 构造 `AndroidDialogHost`，AUTO 选路/强制降级拒绝/通知回调回投 + TTL 双清）；仍待的是 MediaProjection 高清会话（授权 UI + FGS，换 producer 即插）；脚本内容侧装配期补部署已接上（`ScriptDeployRecovery` 在 `AppShellKit.assemble` 时跑一次：只补缺不覆盖、空清单如实为空、失败不投毒，`deployReport`/`deployFailures()` 随壳暴露给能力中心）；§8.4 已闭环（判据/采样/`EngineWatchdog` 调度/`HeartbeatLedger` 心跳打点；pid 归属表仍归在途账不另建），Kotlin spawn 半边已送 pid 与心跳、桥监听 `BridgeSocketListener` 已接、addon JS 消费面 `attachNative` 已接（见 §8.4 末），设备面只剩真机联调（facade dist 随包 + 打包入口 attach 接线与 jniLibs 三件套/addon 落位 2026-09-24 均已落 —— assets 构建拷贝 → `BridgeDistDeploy` 落位 `filesDir/node_modules/auto` → env 注入 → kBootstrap `attachNative`，全链有 `BridgeDistPackagingEntryTest`；二进制侧 `prepareEngineNativeLibs` → `lib/arm64-v8a/{libnoden,libnode,libc++_shared}.so` + addon 走 assets → `BridgeAddonDeploy` → `addonPath`，APK 条目已实测）一道；§8.3 的 drift 已有裁决方（`EngineWatchdog` drift 连段 + `KillCause.DRIFT`：连续 3 轮对不上杀掉重来）；§8.6 已闭环（dispatcher 排队默认上限按触发源分级 + `PendingRun` deadline 记账与过期不重投；注册表持久 `TaskStore`/`FileTaskStore`（`tasks.jsonl`，upsert+tombstone，与意图日志同一 `.autojs` 目录、同一追加纪律）：`schedule`/`cancel` 先落盘后动内存/闹钟，`bootRecover` 先 `restoreTasks` 续排再重投意向，`AppShellKit` 建第三持久并随壳释放），**Android 触发侧也已接上**（预拉/Exact/降级记账 + 静态接收器回投 + 屏幕门禁生产实现） + 开机续排（`RECEIVE_BOOT_COMPLETED` + 静态 `BootReceiver`：重启清掉全部闹钟，没有它持久注册表再完整也没人续排；receiver 无判断只记日志，续排/重投走 `Application.onCreate` 正常装配路径，避免与 `install` 的恢复并发撞车）。**§8.7 保活与电源（`:main` 侧）也已接上**：`AutoScriptForegroundService`（specialUse FGS，`PROPERTY_SPECIAL_USE_FGS_SUBTYPE="automation"`，清单静态声明、`exported=false`）+ `ForegroundKeeper`（start/stop/renew + 15 分钟守护 ticker）+ `WakeLockLedger`（token 引用计数 + 超时自动释放，**取锁失败不记账**）+ `AndroidWakeLockOps`（真 `PARTIAL_WAKE_LOCK`，`setReferenceCounted(false)`）；**屏幕门禁的持锁判定就此收口**——`AppShellApplication.screenGateOf` 传 `WakeLockLedger::isHeld`，§8.7 原「恒真 = 明写的待接」作废；保活事实经 `ShellSummary.keepAliveActive`（`:domain`，无默认值）透到 `:ui` 首屏（「保活已生效」/「保活未生效：熄屏的亮屏任务会被拒绝」，不藏二级页）。服务经进程级邮箱 `ForegroundHost` 现取 Keeper（**服务不自装配**，避 service → 根包成环）、`START_NOT_STICKY`（续期统一走 `Application.onCreate` 装配路径，与 `BootReceiver` 同纪律）；`onTerminate()` 真机上从不被调用，只为测试收口 + 给「谁来停」一个落点。引擎侧 `power_manager` **已落地（2026-09-24）**：`PowerManagerNamespaceHandler` 直驱 `foregroundKeeper()` 的同一本账（`hold(token, timeoutMillis)` 插口当年就是照这个形状留的，账本零改）+ `powerManagerHandler` 独立缝 + `auto.power` 双侧契约（见 §8.7 与 §12.2 接线表）。**§9.5 能力中心的全链也已接上（2026-09-23）**：`AndroidCapabilityProbes`(6 事实) → `AndroidSystemStateReader`(判据唯一出处) + `AndroidGrantLauncher`(去向唯一出处) → `AppShellApplication.permissionCenter()` → **读口** `HostSummary.capabilityCenter()`/`openCapabilitySettings()`（`:domain`，`CapabilityCenterSnapshot`/`CapabilityRow`，`canRequestGrant` 是 `CapabilityLifecycle` 的投影）→ 拼装 `CapabilityCenterRead.snapshot`（`:app` 壳装配包，纯 JVM 可测：全量枚举 + 逐项现问三态 + 同一份 `guideText` + 降级任务账）→ `:ui` 的 `CapabilityScreen`（纯状态 DTO，JVM 可测）：三态各自的中文说法、引导文案原样透传、降级任务单列一段（§8.6「可能偏差」）、**没读到 ≠ 一个能力都没有**（`NOT_LOADED` 与 `failed` 分开且保留原异常文案）；刷新走「回前台/切页签」重问一次（授完权回来看到的是刚问过的结论，不是离开时的缓存；读失败不自激重读）。§9.4/§9.6 的五个系统命名空间（`dialogs`/`shell`/`device`/`app`/`floatingWindow`）已落地到**语义层**：`:domain` 的 `SystemContracts.kt`（`ShellExecutor`/`DeviceInfoProvider`/`AppLauncher`/`DialogHost`/`FloatingWindowHost` + DTO）、`:platform:capabilities` 的 `SystemNamespaces.kt`（五个 handler）、`AppShell.assemble` 的 `systemHandlers` 束 + `AppShellKit.assemble` 的透传（五个字段各自可空，未注入即如实 `ERR_NOT_IMPLEMENTED`）与 `bridge/js` 的 `extras.test.cjs` 双侧契约测试，三者串成一条线且都有单测；SPI 的 Android 实现**已落四件**（`:platform:system` 的 `AndroidShellExecutor`/`AndroidDeviceInfoProvider`/`AndroidAppLauncher`/`AndroidFloatingWindowHost`，入口 `SystemSpis.of(context)`，27 契约测试并进了 CI 测试任务表），`dialogs` 的 `DialogHost` 亦已落地（`AndroidDialogHost` 编排 + `…capabilities.device` 设备面，构造在 `PlatformWiring.of`，按 domain KDoc 住 :platform:capabilities）；**那次把 `SystemSpis` + `CapabilityNamespaces` 拼进 `AppShellKit.assemble` 的生产调用已落地**（`com.autoscript.shell.PlatformWiring`：`of(context)` = `SystemSpis.of` → `inject` → `systemHandlers` + `datastore`/`zip`/`settings`/`notification`/`clipboard`/`sensors`/`images` 七独立缝，`AppShellApplication.installWithFiles` 调用；拓扑靠 §6 **包级例外二**放行——仅 shell 装配包可依赖 `:platform:capabilities`/`:platform:system`，`ArchitectureTest`「平台实现只许装配包碰」+ `ModuleGraphTest` 允许集量化执行）。**`a11y` 的生产调用已接**（无障碍服务本体 `AutoScriptAccessibilityService` + `PlatformWiring` 注入，服务未连桥如实 `ERR_SERVICE_DISABLED`）；**`screen` 也已接**（§9.2 a11y 截图路径，与 a11y 同底），MediaProjection 高清会话是后续升级（换 producer 即插），不再是接线缺口。**`images` 桥面与 native 真实现均已接，且 P1 第一个算子 `findColor` 已落地**（单色+逐分量容差+可选区域+回第一个命中，四层同改；宿主机语义门禁 109 例附上（见 §9.2 末），真机红测待补）—— §12.2 第七条独立缝：`:domain` `ImageAnalyzer` + `ImagesNamespaceHandler` + `images.ts` 双侧契约齐全；native 侧 `:bridge:image` 的 `libopencv.so`（OpenCV 4.14 静态链接）+ `:platform:system` 的 `NativeImageAnalyzer`/`JniOps` 也齐了，`PlatformWiring.of` 构造（so 缺位 → null → 桥回 `ERR_NOT_IMPLEMENTED`，看不见像素的内存分析器只能假装匹配成功，那比没有更坏 —— 这条防线保留）。**`auto.npm` 的 wire 形状漂移已修**（与 `a11y.waitFor` 同一类事故：JS facade 读一个宿主从不发的键，两侧各自的测试都没抓到，因为 JS mock 自己回的那个形状）：`install` 曾被 JS 声明成 `Promise<InstallResult>{name,version,integrity,linkedBins}`，而宿主回的是字面量 `true`——现宿主回 `:domain` 的 `InstallHandle`（`{handleId,projectId,enqueuedAtMillis}`），facade 改成 `InstallQueued`，并在两侧注释里钉死「门面此刻还不知道会装出什么版本，回猜的版本号就是伪造」（§10.8/§12.3 文档里 `install → {name,version,integrity}` 的示例同批改掉：`InstallResult`/`ResolvedPkg` 两个 DTO 至今没有任何实现方产出）；`audit` 的键名 `vulnerabilities` → `vulns`（§10.8 与 `AuditReport.vulns` 都读它）；`list` 不再发恒 0 的 `sizeBytes`（lockfile 量不到尺寸，尺寸的两条真来源是 `offlineGap` 与 `storage`）；`offlineGap` 补上 JS 漏声明的 `version`；`requestApprove` 新增 `scripts` 校验 + 回显（与 `setRegistry` 的 scope 同一条纪律：宿主不认的字段被静默丢弃比报错更糟）；`ApprovalRequest` 的 JS 侧形状改与 `:domain` 逐字段对齐（`scripts` 是入参不是宿主字段）；`InstallEvent.phase` 从 `unpack/link/failed` 改到 `:domain` 六个阶段（`queued/resolve/download/reify/post-check/done`，失败由 `InstallFailure` 表达）。钉子：Kotlin +4 / JS `npm-contract.test.cjs` +9，反证过任一侧单独漂移立刻红。native/NDK 侧已出空壳：`:bridge:native` addon 控制面（`invoke`/`setSocketFd`/`setup`/`droppedData` + 读线程 + TSF 接线）与 `:engine:node-process` 宿主 `main.cpp`（§7.8 启动序）均已落地，经本机 NDK r28c 交叉编译验证（`engine/node-process/scripts/build-native.sh`：AArch64 ELF、`node::Start` 三方符号对表、LOAD≥16KB）；`:bridge:image` 也已落地 C++ 面（`imgnative.cpp` 计算核 + `images_jni.cc` 装载面），OpenCV 构建轨在 Actions（`image-native.yml`），本机不编译。**Kotlin spawn 执行链已落并本机验证**（`NodeProcessEngine` 16 单测 + `:app` 垂直切片 E2E：spawn → unix 桥 → console/心跳 → `SUCCEEDED` 归档；main.cpp abstract 连接 + `SO_PEERCRED` uid 门禁 + kBootstrap 自动心跳；addon invoke payload 字符串化金样；生产桥监听 `BridgeSocketListener`：abstract 绑定 + uid 门禁 + `NewlineFrameServer` serve，JVM 假缝单测 6 例；facade addon 消费面 `attachNative()`：setup(onFrame) 按 id 结算 + invoke 注入 + `errFromThrown` 保留真码，mock 6 例 + env 门禁真 addon 全环），仍待真机：设备侧 exec/dlopen 红测（16KB 页机 + targetSdk 提取策略；jniLibs 三件套与 addon 落位、facade dist 随包与打包入口 attach 接线均已落，见第 2 条切片路线）。

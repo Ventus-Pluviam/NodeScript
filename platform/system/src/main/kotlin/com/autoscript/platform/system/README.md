@@ -79,6 +79,6 @@ OpenCV 静态链接，构建轨 `node-runtime-build/scripts/build-opencv.sh`）�
 > 曾拿本机 `node-runtime-build/out-opencv/libopencv.so`（`colorNative` 符号**0** 个，
 > 早于该提交 87 分钟）以为"交付位已是新的"，差点据此判 JNI 名前四条对不上。so 是
 > gitignore 的构建产物，不在版本控制内，**手边那份只能证明"构建过一次"**。判据是
-> `llvm-nm -D libopencv.so | grep NativeImageAnalyzer_` 的四个符号（decode/match/
+> `llvm-nm -D libopencv.so | grep JniOps_` 的四个符号（decode/match/
 > release/color）**逐个在场**，外加 `llvm-readelf -l` 的 LOAD 段 align ≥ 0x4000 ——
 > 后者 `check-opencv-alignment.sh` 每次构建都会跑，但只在 CI 侧跑。

@@ -130,4 +130,30 @@ class ScreenshotSourceTest {
         assertInstanceOf(AutojsException::class.java, e)
         assertEquals(ErrorCode.ERR_SCREEN_LOCKED, e.error)
     }
+
+    @Test
+    fun `会话尺寸是请求提示：透给生产者，回包尺寸仍是真实帧`() = runBlocking {
+        val seen = mutableListOf<Pair<Int, Int>>()
+        val src = ScreenshotSource(
+            object : ScreenshotSource.FrameProducer {
+                override suspend fun snapshot() = ScreenSnapshot(locked = false, secureForeground = false, hasWindows = true)
+                override suspend fun produce(width: Int, height: Int): ProducedFrame {
+                    seen += width to height
+                    return ProducedFrame(byteArrayOf(1, 2, 3), 1080, 2400) // 系统真值，与请求不同
+                }
+            },
+        )
+        val hinted = src.openSession(720, 1280)
+        val f = hinted.nextFrame()
+        assertEquals(listOf(720 to 1280), seen, "请求提示要原样到生产者")
+        assertEquals(1080, f.width, "回包尺寸是真实帧，不因请求过尺寸报假数")
+        assertEquals(2400, f.height)
+        hinted.close()
+
+        val bare = src.openSession() // 缺省提示 → 默认尺寸入参
+        bare.nextFrame()
+        assertEquals(ScreenshotSource.DEFAULT_WIDTH to ScreenshotSource.DEFAULT_HEIGHT, seen.last())
+        bare.close()
+        Unit
+    }
 }

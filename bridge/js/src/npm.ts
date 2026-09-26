@@ -1,14 +1,19 @@
 /**
  * npm 依赖管理命名空间（docs/framework-design.md §10.8 / §12.3 auto.npm）。
  * P0：install/remove/ci/list/prune/dedupe/offlineGap/audit、registry 配置、离线导入、
- * approval 只提交请求（人机分离：绝不脚本直调 approve）、progress/approval/warning 事件流。
+ * approval 只提交请求（人机分离：绝不脚本直调 approve）、progress/approval/warning/finished
+ * 事件流。宿主没有主动推给脚本的通道（§7.5 入站面只有按 requestId 结算的 ok/err），
+ * 所以事件面是**带游标的拉取轮询**（§10.7 `drainEvents`/`drainApprovals`），
+ * 不是推送：首订开定时器，退订干净自停。
  *
  * 全部操作跨进程路由到全局安装会话（:app-service:packager InstallCoordinator），TTL 绑定，
  * 绝不阻塞脚本事件循环；脚本内不直接 require('child_process')。
- * 事件流在 bootstrap loader 层经 RuntimeChannel 注入（见 runtime.ts handleResponse 注释）。
+ * 事件不靠宿主推：脚本侧带游标拉 `events`/`approvals`（文件末 pumpInstallEvents/pumpApprovals），
+ * 回包仍经 bootstrap 注入的 handleResponse 按 requestId 结算（见 runtime.ts 注释）。
  */
 
 import { runtimeBridge } from './runtime'
+import { AutojsError, ErrCode } from './errors'
 
 /**
  * 排队结果（宿主 `install` 的回包）。
@@ -78,7 +83,7 @@ export interface AuditReport {
 }
 
 /**
- * 审批请求（宿主经 approvals Flow 推过来；人工在 UI 卡确认）。
+ * 审批请求（脚本侧经 `onApproval` 收到 —— 底下是 approvals 拉取口的轮询投递，不是宿主推送；人工在 UI 卡确认）。
  *
  * 与 :domain `ApprovalRequest` 逐字段对齐：`{id, projectId, pkg, versionHash, action,
  * requestedAtMillis}`。刻意**没有** `scripts` —— 那是 §10.8 示例里 `requestApprove`
@@ -161,11 +166,16 @@ class EventHub<T> {
   emit(e: T): void {
     for (const l of [...this.listeners]) l(e)
   }
+  /** 在场监听数：定时器靠它自停（没人听了就不该继续占着轮询）。 */
+  get size(): number {
+    return this.listeners.size
+  }
 }
 
 const progress = new EventHub<InstallEvent>()
 const approvals = new EventHub<ApprovalRequest>()
 const warnings = new EventHub<InstallWarning>()
+const finished = new EventHub<InstallFailure>()
 
 export const npm = {
   /** 安装（排队→门禁→起会话→执行→post-check→归档；P0）。回包 = 排队结果，非装完。 */
@@ -246,19 +256,33 @@ export const npm = {
     )) as ApprovalTicket
   },
 
-  /** 进度事件（数据面，可丢包）。返回退订函数。 */
+  /** 进度事件（数据面，可丢包）。返回退订函数；首订即开拉取轮询。 */
   onProgress(listener: (e: InstallEvent) => void): () => void {
+    ensureEventTimer()
     return progress.on(listener)
   },
 
-  /** 审批请求事件（宿主经 approvals Flow 推过来）。 */
+  /** 审批请求事件（宿主 approvals 拉取口；自己的轮询与安装事件互不牵连）。 */
   onApproval(listener: (req: ApprovalRequest) => void): () => void {
+    ensureApprovalTimer()
     return approvals.on(listener)
   },
 
   /** 警告（此类不可恢复的静默漂移变响亮错误）。 */
   onWarning(listener: (e: InstallWarning) => void): () => void {
+    ensureEventTimer()
     return warnings.on(listener)
+  },
+
+  /**
+   * 安装终止（成功**和**失败都发，detail 带失败原因）。
+   *
+   * `install()` 的回包只是「已入队」，装没装完只能听这里 —— 没有它，脚本要么
+   * 轮询 `list()` 猜、要么干脆不知道失败（§1 诚实原则）。
+   */
+  onFinished(listener: (e: InstallFailure) => void): () => void {
+    ensureEventTimer()
+    return finished.on(listener)
   },
 }
 
@@ -293,4 +317,232 @@ export function feedWarning(e: InstallWarning): void {
     )
   }
   warnings.emit(e)
+}
+
+// ══════════ 事件拉取（§10.7：宿主→脚本无推送面，带 seq 游标轮询） ══════════
+
+/** 已知安装阶段（与 :domain `InstallEvent.Phase` 六个值逐字对齐；与 [WARNING_KINDS] 同纪律）。 */
+const PHASES: ReadonlyArray<InstallEvent['phase']> = [
+  'queued',
+  'resolve',
+  'download',
+  'reify',
+  'post-check',
+  'done',
+]
+
+/** 已知审批动作（与 :domain `ApprovalAction` 对齐；`lowercase()` 会把 RUN_SCRIPT 折成 run_script 恰好撞上，纯属巧合）。 */
+const APPROVAL_ACTIONS: ReadonlyArray<ApprovalRequest['action']> = ['install_script', 'run_script', 'exec']
+
+/** 一轮拉多少（宿主侧环有界 512，32 足够一拍装完）。 */
+const EVENT_BATCH = 32
+
+/** 事件游标（已拉过的最大 seq，下次 `sinceSeq`）。只前进：退订再订不回退，漏掉的在环里还捞得到。 */
+let eventSeq = 0
+let approvalSeq = 0
+
+let eventPollPeriodMillis = 250
+let approvalPollPeriodMillis = 250
+let eventTimer: ReturnType<typeof setInterval> | null = null
+let approvalTimer: ReturnType<typeof setInterval> | null = null
+let eventPumping = false
+let approvalPumping = false
+
+function checkPeriod(millis: number, what: string): void {
+  if (!Number.isFinite(millis) || millis <= 0) throw new Error(`${what} 必须 > 0: ${millis}`)
+}
+
+/** 事件轮询周期注入缝（形态对齐 engines.installHeartbeatPeriod；改周期须在首订前生效）。 */
+export function installEventPollPeriod(millis: number): void {
+  checkPeriod(millis, 'eventPollPeriodMillis')
+  eventPollPeriodMillis = millis
+}
+
+/** 审批轮询周期注入缝（独立于事件轮询：审批要等人，不必跟进度同拍）。 */
+export function installApprovalPollPeriod(millis: number): void {
+  checkPeriod(millis, 'approvalPollPeriodMillis')
+  approvalPollPeriodMillis = millis
+}
+
+/** 宿主 `events`/`approvals` 拉取回包（{first,last,items}；空增量 first=last=sinceSeq）。 */
+interface DrainBatch<T> {
+  readonly first: number
+  readonly last: number
+  readonly events?: readonly T[]
+  readonly requests?: readonly T[]
+}
+
+function drainBatchOf(payload: unknown, key: 'events' | 'requests'): { first: number; last: number; items: readonly Record<string, unknown>[] } {
+  const b = payload as DrainBatch<Record<string, unknown>> | null
+  if (!b || !Array.isArray(b[key]) || typeof b.first !== 'number' || typeof b.last !== 'number') {
+    // 形状对不上 = 两侧契约漂移（宿主改了回包而这里没同步）。响亮炸：静默吞掉
+    // 就是「拉回来一堆 undefined 却继续跑」，比没有这个 API 更糟。
+    throw new Error(`npm 拉取回包形状不符（须 {first,last,${key}:[]}）: ${JSON.stringify(payload)}`)
+  }
+  return { first: b.first, last: b.last, items: b[key] as readonly Record<string, unknown>[] }
+}
+
+/**
+ * 拉一轮安装事件（progress / warning / finished 三路共用一个游标与定时器）。
+ *
+ * 错误分两档，分界线是「能不能自己好」：
+ * - `ERR_NOT_IMPLEMENTED` = 宿主没实现 `events` → **响亮上抛**。订阅了却永远收不到，
+ *   正是 feedWarning KDoc 说的「比没有这个 API 更糟」，必须崩在脸上；
+ * - 其余（超时/断链/引擎未就绪）= 瞬时 → 吞掉走下一拍，游标不动，不丢事件。
+ *
+ * 与 a11y.events 同口径：回包里的 `seq` 是宿主环的位置，游标取 `last`；
+ * `first > eventSeq+1` 说明环有界丢过最旧的（进度是可丢数据面，如实跳过不补造）。
+ */
+export async function pumpInstallEvents(): Promise<void> {
+  if (eventPumping) return
+  eventPumping = true
+  try {
+    let payload: unknown
+    try {
+      payload = await runtimeBridge.invoke('npm', 'events', { sinceSeq: eventSeq, batch: EVENT_BATCH }, { ttl: 5_000 })
+    } catch (e) {
+      if (isNotImplemented(e)) throw e
+      return
+    }
+    const { last, items } = drainBatchOf(payload, 'events')
+    for (const w of items) routeInstallEvent(w)
+    if (last > eventSeq) eventSeq = last
+  } finally {
+    eventPumping = false
+  }
+}
+
+/** 拉一轮审批请求（独立游标：审批不必等安装事件那一拍）。 */
+export async function pumpApprovals(): Promise<void> {
+  if (approvalPumping) return
+  approvalPumping = true
+  try {
+    let payload: unknown
+    try {
+      payload = await runtimeBridge.invoke('npm', 'approvals', { sinceSeq: approvalSeq, batch: EVENT_BATCH }, { ttl: 5_000 })
+    } catch (e) {
+      if (isNotImplemented(e)) throw e
+      return
+    }
+    const { last, items } = drainBatchOf(payload, 'requests')
+    for (const w of items) {
+      const action = w.action
+      if (!APPROVAL_ACTIONS.includes(action as ApprovalRequest['action'])) {
+        throw new Error(`未知审批动作: ${String(action)}（:domain ApprovalAction 新增值时须同步 bridge/js/src/npm.ts）`)
+      }
+      approvals.emit({
+        id: String(w.id),
+        projectId: String(w.projectId),
+        pkg: String(w.pkg),
+        versionHash: String(w.versionHash),
+        action: action as ApprovalRequest['action'],
+        requestedAtMillis: Number(w.requestedAtMillis),
+      })
+    }
+    if (last > approvalSeq) approvalSeq = last
+  } finally {
+    approvalPumping = false
+  }
+}
+
+function isNotImplemented(e: unknown): boolean {
+  if (e instanceof AutojsError) return e.is(ErrCode.NOT_IMPLEMENTED)
+  return (e as { code?: unknown } | null)?.code === 'ERR_NOT_IMPLEMENTED' // N-API 形态的裸错误
+}
+
+/** 一条宿主事件 → 对应 hub；未知分支/未知取值一律响亮（平台说过了但 facade 听不见 = 静默漂移）。 */
+function routeInstallEvent(w: Record<string, unknown>): void {
+  switch (w.type) {
+    case 'progress': {
+      if (!PHASES.includes(w.phase as InstallEvent['phase'])) {
+        throw new Error(`未知安装阶段: ${String(w.phase)}（:domain InstallEvent.Phase 新增值时须同步 bridge/js/src/npm.ts）`)
+      }
+      progress.emit({
+        projectId: String(w.projectId),
+        handleId: String(w.handleId),
+        phase: w.phase as InstallEvent['phase'],
+        name: (w.name as string | null | undefined) ?? null,
+        percent: (w.percent as number | null | undefined) ?? null,
+      })
+      return
+    }
+    case 'warning':
+      // 过 feedWarning 而不是直接 warnings.emit：kind 的逐字校验只写一处（双断言防漂移）。
+      feedWarning({
+        projectId: String(w.projectId),
+        handleId: String(w.handleId),
+        kind: w.kind as InstallWarning['kind'],
+        pkgs: Array.isArray(w.pkgs) ? (w.pkgs as string[]) : [],
+        message: String(w.message ?? ''),
+      })
+      return
+    case 'finished': {
+      if (typeof w.success !== 'boolean') {
+        throw new Error(`finished 事件缺布尔字段 success: ${JSON.stringify(w)}`)
+      }
+      finished.emit({
+        projectId: String(w.projectId),
+        handleId: String(w.handleId),
+        success: w.success,
+        detail: (w.detail as string | null | undefined) ?? null,
+      })
+      return
+    }
+    default:
+      throw new Error(`未知安装事件 type: ${String(w.type)}（:domain InstallEvent 上桥新增分支时须同步 bridge/js/src/npm.ts）`)
+  }
+}
+
+function unref(t: ReturnType<typeof setInterval>): void {
+  const u = (t as unknown as { unref?: () => void }).unref
+  if (typeof u === 'function') u.call(t)
+}
+
+/** 响亮上抛：瞬时错已在 pump 内吞掉，走到这里的都是契约漂移类，不许静默成「收不到」。 */
+function loud(p: Promise<void>): void {
+  void p.catch((e) => {
+    queueMicrotask(() => {
+      throw e
+    })
+  })
+}
+
+function stopEventTimer(): void {
+  if (eventTimer) clearInterval(eventTimer)
+  eventTimer = null
+}
+
+function stopApprovalTimer(): void {
+  if (approvalTimer) clearInterval(approvalTimer)
+  approvalTimer = null
+}
+
+function ensureEventTimer(): void {
+  if (!eventTimer) {
+    eventTimer = setInterval(() => {
+      if (progress.size + warnings.size + finished.size === 0) {
+        stopEventTimer() // 没人听了就自停；游标保留，重订时从原位续拉
+        return
+      }
+      loud(pumpInstallEvents())
+    }, eventPollPeriodMillis)
+    unref(eventTimer)
+  }
+  // 每次订阅都立拉一轮（不只定时器首建时）：退订到重订之间定时器可能还活着
+  // 但一拍没到，只在首建时拉会让人以为「订了不响」。并发由 eventPumping 挡。
+  loud(pumpInstallEvents())
+}
+
+function ensureApprovalTimer(): void {
+  if (!approvalTimer) {
+    approvalTimer = setInterval(() => {
+      if (approvals.size === 0) {
+        stopApprovalTimer()
+        return
+      }
+      loud(pumpApprovals())
+    }, approvalPollPeriodMillis)
+    unref(approvalTimer)
+  }
+  loud(pumpApprovals())
 }
