@@ -60,6 +60,16 @@ namespace {
 
 std::mutex g_mu;
 std::unordered_map<int64_t, cv::Mat> g_frames;
+
+// 仅缓存“模板端”的粗筛准备结果。模板帧也是不可变的；A2/重复匹配场景里，
+// 每次重做 cvtColor + resize + scale-cycle 自检没有信息增量。独立 cache 锁避免
+// 为了这几个毫秒把 g_mu 的匹配段重新变成长锁。release 时同步清掉对应 ref。
+struct NeedlePrep {
+    double sc = 1.0;
+    cv::Mat small;
+};
+std::mutex g_match_cache_mu;
+std::unordered_map<int64_t, NeedlePrep> g_needle_prep;
 int64_t g_next_ref = 1;
 
 constexpr int IMG_OK = 0;
@@ -127,7 +137,7 @@ struct MatchHit {
 // 可调常数：进程起始读环境变量，缺省与原 constexpr 逐字相同 —— **imgbench 调参口**：
 // 云手机上扫这三个数不该重编 so（评审 2026-09-30 第 4 条：原常数是在合成屏上
 // 每档 6 个样本调出来的，真机 sweep 比那组数字更有信息量）。
-//   AUTOSCRIPT_MATCH_MIN_TEMPL_SIDE=80    模板短边低于此值 → 精确路径
+//   AUTOSCRIPT_MATCH_MIN_TEMPL_SIDE=48    模板短边低于此值 → 精确路径
 //   AUTOSCRIPT_MATCH_MARGIN=0.10          粗筛候选带宽：提出 conf ≥ thr−margin 的峰
 //   AUTOSCRIPT_MATCH_MAX_CANDIDATES=8     粗筛最多精配几个候选（NMS 压重复后）
 struct MatchTune {
@@ -154,17 +164,19 @@ double env_double(const char* key, double dflt) {
 
 const MatchTune& match_tune() {
     static const MatchTune t{
-        env_int("AUTOSCRIPT_MATCH_MIN_TEMPL_SIDE", 80),
+        env_int("AUTOSCRIPT_MATCH_MIN_TEMPL_SIDE", 48),
         env_double("AUTOSCRIPT_MATCH_MARGIN", 0.10),
         env_int("AUTOSCRIPT_MATCH_MAX_CANDIDATES", 8),
     };
     return t;
 }
 
-// 粗筛层模板至少留 24px（更小结构在缩放后失真到不可辨）；模板灰度 std 低于 12 =
+// 粗筛层模板短边最低对应 12px（再小的模板继续走精确路径）；模板灰度 std 低于 12 =
 // 纯色/平噪，粗尺度上没有可辨结构 —— 两者都直接落精确路径。两个数与上面三个
 // 不同：它们不给调参口（合成屏调参时改过一次就够，扫它们对真机决策无增量）。
-constexpr double kMinCoarseSide = 24.0;
+// 0.25× 对 48px 模板意味着 12px 短边。保留 12px 是为了让 48×48 这档进入
+// 粗筛；最终答案仍由原图精配，正确性门仍由 scale-cycle gate + differential test 守住。
+constexpr double kMinCoarseSide = 12.0;
 constexpr double kMinTemplStd = 12.0;
 // 频率门阈值：模板「缩小→放大」自检互相关下限。0.8 卡在两簇之间（平滑 UI
 // ~0.95+ / 白噪声 ~0.5）；差分门 2026-09-30 的 case6 就是被它从假 miss 里捞回来的。
@@ -182,36 +194,64 @@ MatchHit match_exact(const cv::Mat& h, const cv::Mat& n, double thr) {
 }
 
 /** 金字塔缩放：0.25×（首选，省 16× 像素）/ 0.5×（模板短边撑不起 0.25 时）/ 1.0 = 不走粗筛。 */
-double coarse_scale(const cv::Mat& n) {
+NeedlePrep build_needle_prep(const cv::Mat& n) {
     const MatchTune& t = match_tune();
+    NeedlePrep out;
     const int m = std::min(n.cols, n.rows);
-    if (m < t.min_templ_side) return 1.0;
-    cv::Mat g;
-    cv::cvtColor(n, g, cv::COLOR_BGRA2GRAY);
+    // 48px 是新的粗筛下限：
+    //   * 48×48 -> 0.25× = 12×12；
+    //   * <48px 仍走精确路径，避免继续把模板压成个位数像素。
+    // 0.25× 的候选只负责“提名”，位置/置信度最终仍回原图精配。
+    if (m < t.min_templ_side) return out;
+
+    cv::Mat gray;
+    cv::cvtColor(n, gray, cv::COLOR_BGRA2GRAY);
     cv::Scalar mean, sd;
-    cv::meanStdDev(g, mean, sd);
-    if (sd[0] < kMinTemplStd) return 1.0;   // 纯色/平噪模板：粗筛无可辨结构
+    cv::meanStdDev(gray, mean, sd);
+    if (sd[0] < kMinTemplStd) {
+        return out;   // 纯色/平噪模板：粗筛无可辨结构
+    }
+
     double sc = 1.0;
     if (m * 0.25 >= kMinCoarseSide) sc = 0.25;
     else if (m * 0.5 >= kMinCoarseSide) sc = 0.5;
-    if (sc >= 1.0) return 1.0;
+    if (sc >= 1.0) {
+        return out;
+    }
 
-    // 频率门（差分门 2026-09-30 抓到的真案例：i.i.d. 逐像素噪声的模板落在对 4
-    // 不对齐的坐标上，0.25× 的 4×4 平均块错位后互不相关 → 粗峰值欠估到候选
-    // 带宽之下 → 零候选 → 假 miss）。模板先过一遍「缩小再放大」自检：**自己
-    // 都认不出自己的模板不进粗筛**（互相关 < 0.8 直接精确路径）。UI/文字/图标
-    // 一个来回 ~0.95+，白噪声 ~0.5；QR/细密条纹这类高频内容也会被它挡下 ——
-    // 门是保守方向的：挡错了只损失速度，放错了才是错答案。自检只在模板尺寸
-    // 上跑（一次 resize 往返 + 1×1 matchTemplate），量级可忽略。
-    cv::Mat small, back;
-    cv::resize(g, small, cv::Size(), sc, sc, cv::INTER_AREA);
-    cv::resize(small, back, g.size(), 0, 0, cv::INTER_LINEAR);
+    // 频率门：模板先过一遍“缩小→放大”自检，自己都认不出的模板不进粗筛。
+    cv::Mat back;
+    cv::resize(gray, out.small, cv::Size(), sc, sc, cv::INTER_AREA);
+    cv::resize(out.small, back, gray.size(), 0, 0, cv::INTER_LINEAR);
     cv::Mat rt;
-    cv::matchTemplate(g, back, rt, cv::TM_CCOEFF_NORMED);
+    cv::matchTemplate(gray, back, rt, cv::TM_CCOEFF_NORMED);
     double rt_conf = 0.0;
     cv::minMaxLoc(rt, nullptr, &rt_conf, nullptr, nullptr);
-    if (!(rt_conf >= kMinScaleCycle)) return 1.0;  // NaN 也落精确路径
-    return sc;
+    if (!(rt_conf >= kMinScaleCycle)) {
+        out.small.release();
+        return out;  // NaN 也落精确路径
+    }
+    out.sc = sc;
+    // 只保留粗筛真正需要的缩小模板；灰度原图不需要跨调用保存。
+    return out;
+}
+
+NeedlePrep get_needle_prep(int64_t needle, const cv::Mat& n) {
+    {
+        const std::lock_guard<std::mutex> lk(g_match_cache_mu);
+        auto it = g_needle_prep.find(needle);
+        if (it != g_needle_prep.end()) return it->second;
+    }
+    NeedlePrep built = build_needle_prep(n);
+    // release() 与这里使用同样的锁顺序：先 g_mu，再 cache_mu。这样不会把一个已经
+    // 释放的 ref 重新插回缓存，也不会和 release 形成锁顺序反转。
+    {
+        const std::lock_guard<std::mutex> lk(g_mu);
+        if (g_frames.find(needle) == g_frames.end()) return built;
+        const std::lock_guard<std::mutex> ck(g_match_cache_mu);
+        auto [it, inserted] = g_needle_prep.emplace(needle, built);
+        return it->second;
+    }
 }
 
 /**
@@ -225,13 +265,14 @@ double coarse_scale(const cv::Mat& n) {
  * 精确 —— 回退会让「图上没有」退化回 900ms）。假 miss 的残余风险由 host 差分
  * 双跑门计数：同一输入强制精确 vs 本路径，必须同命中/同位置/置信度 ≤2e-3。
  */
-MatchHit match_pyramid(const cv::Mat& h, const cv::Mat& n, double thr, double sc) {
+MatchHit match_pyramid(const cv::Mat& h, const cv::Mat& n, double thr, const NeedlePrep& prep) {
     const MatchTune& t = match_tune();
-    cv::Mat hg, ng, hs, ns;
+    cv::Mat hs;
+    const double sc = prep.sc;
+    cv::Mat hg;
     cv::cvtColor(h, hg, cv::COLOR_BGRA2GRAY);
-    cv::cvtColor(n, ng, cv::COLOR_BGRA2GRAY);
     cv::resize(hg, hs, cv::Size(), sc, sc, cv::INTER_AREA);
-    cv::resize(ng, ns, cv::Size(), sc, sc, cv::INTER_AREA);
+    const cv::Mat& ns = prep.small;
     if (ns.cols > hs.cols || ns.rows > hs.rows) return match_exact(h, n, thr);
 
     cv::Mat r;
@@ -239,6 +280,9 @@ MatchHit match_pyramid(const cv::Mat& h, const cv::Mat& n, double thr, double sc
 
     // Top-K + NMS：迭代取全局峰 → 局部窗置 −1 → 取下一个（重复 UI 行/图标格
     // 会给出一排近等高峰，NMS 不压则 K 个名额被同一个小区域占满）。
+    // 0.25× 时模板只有 12px 短边，量化/插值会更明显地压低 coarse conf；多放
+    // 0.05 的候选带宽只会增加少量精配候选，不改变最终原图判定。
+    const double coarse_margin = t.margin + (sc <= 0.25 ? 0.05 : 0.0);
     std::vector<cv::Point> cands;
     const int supp = std::max(ns.cols, ns.rows) / 2 + 1;
     const cv::Rect bounds(0, 0, r.cols, r.rows);
@@ -246,7 +290,7 @@ MatchHit match_pyramid(const cv::Mat& h, const cv::Mat& n, double thr, double sc
         double mx = 0.0;
         cv::Point loc;
         cv::minMaxLoc(r, nullptr, &mx, nullptr, &loc);
-        if (mx < thr - t.margin) break;
+        if (mx < thr - coarse_margin) break;
         cands.push_back(loc);
         r(cv::Rect(loc.x - supp, loc.y - supp, 2 * supp + 1, 2 * supp + 1) & bounds)
             .setTo(-1.0f);
@@ -407,7 +451,7 @@ int imgnative_decode(const char* path, int64_t* out_ref, int32_t* out_w, int32_t
 // 不静默裁剪）。两条错误码分界：region 形状/越界 = 参数错（4）；**region 比模板小
 // = IMG_ERR_IO(3)** —— 与"模板比画面大"同属"参数关系不成立"（§7.7 已记）。
 // 命中坐标恒**全帧口径**（区域只是搜索范围不是坐标系，与 findColor 的
-// roi.x + p.x 同一条）。小模板（48×48 这类进不了粗筛的）的提速出路就是它：
+// roi.x + p.x 同一条）。小模板（48×48 这类原先进不了粗筛）的提速出路就是它：
 // 搜索窗缩到 300×150 后，全图 2.6M 像素的频谱开销按窗面积缩水。
 int imgnative_match(int64_t haystack, int64_t needle, double threshold,
                     const int32_t* region,
@@ -438,11 +482,11 @@ int imgnative_match(int64_t haystack, int64_t needle, double threshold,
         // 先一步按 IO 错答（这是"参数关系不成立"，不是"图上没有"）。
         if (n.cols > h.cols || n.rows > h.rows) return IMG_ERR_IO;
 
-        const double sc = g_force_exact.load(std::memory_order_relaxed)
-                              ? 1.0
-                              : coarse_scale(n);
-        const MatchHit hit = sc < 1.0 ? match_pyramid(h, n, threshold, sc)
-                                      : match_exact(h, n, threshold);
+        const bool force_exact = g_force_exact.load(std::memory_order_relaxed);
+        const NeedlePrep prep = force_exact ? NeedlePrep{} : get_needle_prep(needle, n);
+        const MatchHit hit = (!force_exact && prep.sc < 1.0)
+                                  ? match_pyramid(h, n, threshold, prep)
+                                  : match_exact(h, n, threshold);
         if (!hit.found) {
             *out_match = 0;
             *out_x = *out_y = *out_w = *out_h = 0;
@@ -464,7 +508,12 @@ int imgnative_match(int64_t haystack, int64_t needle, double threshold,
 // ── release：放掉即从在场表移除。未知/已释放 → STALE（不给静默成功的第二次）
 int imgnative_release(int64_t ref) {
     const std::lock_guard<std::mutex> lk(g_mu);
-    return g_frames.erase(ref) == 1 ? IMG_OK : IMG_ERR_STALE_HANDLE;
+    const bool erased = g_frames.erase(ref) == 1;
+    if (erased) {
+        const std::lock_guard<std::mutex> ck(g_match_cache_mu);
+        g_needle_prep.erase(ref);
+    }
+    return erased ? IMG_OK : IMG_ERR_STALE_HANDLE;
 }
 
 // ── gray：取灰度信息面到**新的一帧**（§9.2 管线里的"灰度"）。

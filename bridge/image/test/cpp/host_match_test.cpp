@@ -249,6 +249,36 @@ int main() {
         }
     }
 
+    // 6b) **48×48 小模板也应能进入金字塔**：这是设备 A4-small 的原始瓶颈。
+    //     模板由低频小图放大得到，0.25× 后仍保留 12×12 结构，频率门应放行。
+    //     精确路径约束保留：金字塔只负责提名，最终位置/置信度回原图重算。
+    {
+        cv::Mat base48(12, 12, CV_8UC4);
+        rng.fill(base48, cv::RNG::UNIFORM, 0, 256);
+        cv::Mat icon48;
+        cv::resize(base48, icon48, cv::Size(48, 48), 0, 0, cv::INTER_LINEAR);
+
+        cv::Mat scr48(480, 640, CV_8UC4);
+        rng.fill(scr48, cv::RNG::UNIFORM, 110, 150);
+        const cv::Point at48(301, 177);
+        icon48.copyTo(scr48(cv::Rect(at48.x, at48.y, 48, 48)));
+
+        const int64_t s48 = dec(d + "/scr48.png", scr48);
+        const int64_t t48 = dec(d + "/tpl48.png", icon48);
+        if (s48 >= 0 && t48 >= 0) {
+            const MR r = dual_match(s48, t48, 0.9);
+            chk(r.rc == 0, "case48 match 成功");
+            chk(r.m == 1, "case48 命中");
+            chk(r.x == at48.x && r.y == at48.y,
+                "case48 坐标 = 模板原位 (301,177)（实际 " +
+                std::to_string(r.x) + "," + std::to_string(r.y) + "）");
+            chk(r.w == 48 && r.h == 48, "case48 w/h = 模板尺寸");
+            chk(r.c > 0.99, "case48 置信度 >0.99（实际 " + std::to_string(r.c) + "）");
+            imgnative_release(s48);
+            imgnative_release(t48);
+        }
+    }
+
     // 6c) **高频反例 = 频率门的锁**（差分门 2026-09-30 首跑抓到的真红）：
     //     i.i.d. 逐像素噪声模板落在 4 不对齐的坐标 (301,177) 上 —— 0.25× 的
     //     4×4 平均块在错位坐标上与模板的平均块互不相关，粗峰值欠估到候选带宽
