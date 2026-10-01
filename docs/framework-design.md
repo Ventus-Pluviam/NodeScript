@@ -29,7 +29,7 @@
 |---|---|
 | 本文件 + [`design/`](design/) 12 卷 | 是什么（契约正文 §0–§17；§18 决策台账 / §19 结语在 `design/18-19-ledger.md`） |
 | [`design-decisions.md`](design-decisions.md) | 为什么这么定 / 什么被改过（只追加，原口径不删） |
-| [`design-status.md`](design-status.md) | 实现到哪了（流水 + 接口期） |
+| [`design-status.md`](design-status.md) | 实现到哪了（**当前状态页**：接口期表 + 流水目录；历史流水见 [`log/`](log/)，实现注记见 [`implementation-notes.md`](implementation-notes.md)） |
 
 **推进顺序与接线现状不在契约里**，见 [`design-status.md`](design-status.md) ——
 那里是唯一权威（§12.2 接线现状表属契约的一部分，在 `design/12-js-api.md`；两条互为印证时以

@@ -18,7 +18,9 @@
 |---|---|
 | [`docs/framework-design.md`](docs/framework-design.md) | 架构设计**薄索引**（分卷导航；先读这个） |
 | [`docs/design/`](docs/design/) | 架构设计**分卷**，按 § 号分卷 —— **契约的单一事实来源**（进程模型 / 桥 / 执行 / 能力 / npm / 安全 / JS API / 路线图） |
-| [`docs/design-status.md`](docs/design-status.md) | 落地台账：已落地 / 还是接口期 / 哪次实测推翻了什么 |
+| [`docs/design-status.md`](docs/design-status.md) | 落地台账（**当前状态页**）：已落地 / 还是接口期 / 流水目录 |
+| [`docs/log/`](docs/log/) | 流水**按日期切片**（`README.md` 是索引）；历史条目逐字保留 |
+| [`docs/implementation-notes.md`](docs/implementation-notes.md) | 实现注记：自各分卷外迁的「已落地 / 实测」叙事 |
 | [`docs/design-decisions.md`](docs/design-decisions.md) | 决策记录：已拍板项 + 被推翻、改过的口径 |
 | [`docs/backlog.md`](docs/backlog.md) | 待办池（收件箱，不是承诺） |
 | [`SECURITY.md`](SECURITY.md) | 安全策略：支持范围、怎么报告、密钥怎么管 |

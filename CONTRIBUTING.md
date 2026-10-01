@@ -14,11 +14,12 @@
 | 文件 | 写什么 | 纪律 |
 |---|---|---|
 | [`docs/design/`](docs/design/) | 契约本身（**单一事实来源**）：「是什么」 | 改契约 = 改行为，必须与代码同批 |
-| [`docs/design-status.md`](docs/design-status.md) | 落地台账：已落地 / 接口期 / 哪次实测推翻了什么 | **只追加**，新条目加在流水顶部；被推翻的原地划掉并注明日期与原因 |
+| [`docs/design-status.md`](docs/design-status.md) | 落地台账（**当前状态页**）：接口期表 + 流水目录 | **只追加**；新条目加在 `docs/log/<当天>.md` 顶部并把目录表那一行的计数 +1 |
+| [`docs/log/`](docs/log/) | 流水**按日期切片**（`README.md` 是索引） | **只追加**，新条目加在当天切片顶部；被推翻的原地划掉并注明日期与原因 |
 | [`docs/design-decisions.md`](docs/design-decisions.md) | 口径变更：已拍板项 + 被推翻、改过的口径 | **只追加，不改写历史结论** —— 旧口径原文保留，新结论追加一行 |
 | [`docs/backlog.md`](docs/backlog.md) | 尚未排期的待做项 | 是**收件箱不是承诺**：排期了移走、做完了去 status 记流水、裁定不做了去 decisions 记口径 |
 
-**本仓刻意不设 `CHANGELOG`**：变更流水已经在 `docs/design-status.md`，再开一份必然漂移成第二个事实来源；
+**本仓刻意不设 `CHANGELOG`**：变更流水已经在 `docs/design-status.md` + `docs/log/`（2026-10-02 起按日期切片，见 `design-decisions.md` 第 22 项），再开一份必然漂移成第二个事实来源；
 发版流程真立起来那天再谈（[`docs/backlog.md`](docs/backlog.md) 有登记）。
 
 **别写会漂的数字**：模块数、测试任务数这类计数有派生门看着（`:domain` 的 `ModuleGraphTest` 从

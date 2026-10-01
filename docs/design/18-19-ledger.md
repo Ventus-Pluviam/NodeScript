@@ -156,7 +156,7 @@ jniLibs 三件套与 addon 落位、facade dist 随包与打包入口 attach 接
 |---|---|---|
 | [`framework-design.md`](../framework-design.md)（薄索引；本文件是其 §18–§19 卷） | 是什么 | §0–§17 全部 |
 | [`design-decisions.md`](../design-decisions.md) | 为什么这么定 / 什么被改过 | 原 §18 已拍板两项 + 口径变更表 |
-| [`design-status.md`](../design-status.md) | 实现到哪了 | 原 §19 那条 9,584 字符的流水账 |
+| [`design-status.md`](../design-status.md) | 实现到哪了（当前状态页；历史流水见 [`log/`](../log/)、实现注记见 [`implementation-notes.md`](../implementation-notes.md)） | 原 §19 那条 9,584 字符的流水账 |
 
 **推进顺序与接线现状不在本文件**，见 [`design-status.md`](../design-status.md) —— 那里是
 唯一权威（原 §12.2 接线现状表仍在本文件 §12.2，属契约的一部分，两条互为印证时以
