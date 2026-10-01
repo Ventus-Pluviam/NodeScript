@@ -77,7 +77,7 @@ jobs:
       # run-host-tests.sh 的 BUILD 必填（$OCV_HOST_BUILD，审查步骤 1 起无缺省）——
       # 这里显式指进 workspace 才能被 actions/cache 存走；commit 对表由脚本内 pin 源 verdict。
       - name: 缓存 host ccache（x86_64 OpenCV 静态库）
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache-host
           key: ocv-host-ccache-${{ hashFiles('node-runtime-build/VERSIONS.env') }}
@@ -128,13 +128,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake ninja-build unzip git python3 ccache
 
       - name: 缓存下载层（NDK zip，与 Node 轨同文件、前缀不同防撞）
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/work/dl
           key: ocv-dl-${{ hashFiles('node-runtime-build/VERSIONS.env') }}
 
       - name: 缓存 ccache（device OpenCV 交叉编译 + 桥面编链）
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ocv-ccache-${{ hashFiles('node-runtime-build/VERSIONS.env') }}

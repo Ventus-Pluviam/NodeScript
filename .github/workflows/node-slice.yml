@@ -68,7 +68,7 @@ jobs:
       # 合并写法（actions/cache）：命中则用且构建后跳过存，未命中则构建后自动存 ——
       # 同 key 重复 save 会炸步骤，拆分写法的 restore+save 在这里是错的。
       - name: 缓存下载层（NDK zip + Node tarball）
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/work/dl
           key: node-dl-${{ hashFiles('node-runtime-build/VERSIONS.env') }}
@@ -81,7 +81,7 @@ jobs:
       # 只占空间不毒构建）。编译器本体升级风险可忽略：交叉编译器来自 pin 死的 r28c
       # zip（不随 runner 镜像滚），host gcc 只编 mksnapshot 等小工具。
       - name: 缓存 ccache（V8 交叉编译单元）
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: node-ccache-${{ hashFiles('node-runtime-build/VERSIONS.env') }}
