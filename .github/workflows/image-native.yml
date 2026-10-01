@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30        # OpenCV host configure+build 实测 5–10 分钟
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 安装编译期依赖（cmake + ninja + g++ + git + ccache）
         run: |
@@ -118,7 +118,7 @@ jobs:
       # 后续步骤的 $WORK 是空的（审计步骤会安静地 ls 到空路径然后失败在 artifact 上）。
       WORK_DIR: ${{ github.workspace }}/work
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 安装编译期依赖（cmake + ninja + unzip + git + python3 + ccache）
         run: |
