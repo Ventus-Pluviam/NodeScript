@@ -55,7 +55,7 @@ jobs:
           npm --prefix bridge/js ci
           npm --prefix bridge/js run build
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - name: 真 npm E2E（与 ci.yml 同一条命令，**不带** -PskipNpmE2E）
         run: |
           ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:test :app-service:script-repo:testDebugUnitTest :app-service:permission-center:test :app-service:packager:test :app-service:npm:test :platform:capabilities:testDebugUnitTest :platform:system:testDebugUnitTest :engine:node-process:testDebugUnitTest :ui:testDebugUnitTest :app:testDebugUnitTest --stacktrace

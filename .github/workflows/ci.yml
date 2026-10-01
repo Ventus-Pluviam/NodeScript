@@ -46,7 +46,7 @@ jobs:
           npm --prefix bridge/js ci
           npm --prefix bridge/js run build
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         # 不写 gradle-version：版本的事实来源是仓库里的 gradlew wrapper（gradle-wrapper.properties
         # 的 8.9，与 AGP 8.5.2 匹配）。写死在这里会变成第二个事实来源，迟早与 wrapper 漂移。
       - name: JVM 单元测试
@@ -131,7 +131,7 @@ jobs:
           npm --prefix bridge/js ci
           npm --prefix bridge/js run build
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       # 先 lint 后 assemble：lint 快（全模块增量实测 3~6s）且抓的是会**静默**错的那类
       # （NewApi 调了高版本 API、NotificationPermission 没声明权限就发通知）——早失败早看见。
       # 不加模块前缀（`./gradlew lintDebug`）= 跑**所有**带 lint 的模块：`:app` 一个模块的
