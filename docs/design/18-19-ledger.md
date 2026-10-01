@@ -150,13 +150,12 @@ jniLibs 三件套与 addon 落位、facade dist 随包与打包入口 attach 接
 
 ## 文档边界（拆分后）
 
-本文件是**契约的单一事实来源**：只写「是什么 / 为什么这么设计」。三份文件的分工：
-
-| 文件 | 回答的问题 | 本文件里对应的原章节 |
-|---|---|---|
-| [`framework-design.md`](../framework-design.md)（薄索引；本文件是其 §18–§19 卷） | 是什么 | §0–§17 全部 |
-| [`design-decisions.md`](../design-decisions.md) | 为什么这么定 / 什么被改过 | 原 §18 已拍板两项 + 口径变更表 |
-| [`design-status.md`](../design-status.md) | 实现到哪了（当前状态页；历史流水见 [`log/`](../log/)、实现注记见 [`implementation-notes.md`](../implementation-notes.md)） | 原 §19 那条 9,584 字符的流水账 |
+本文件（与 [`framework-design.md`](../framework-design.md) 导航的 `design/` 12 卷）是**契约的
+单一事实来源**：只写「是什么 / 为什么这么设计」。哪份文档回答什么，表已 2026-10-02 搬到
+[`docs/README.md`](../README.md)（backlog C9），原地只留指针 —— 一句话版：
+[`design-decisions.md`](../design-decisions.md) 管「为什么这么定 / 什么被改过」，
+[`design-status.md`](../design-status.md) 管「实现到哪了」（当前状态页；历史流水见 [`log/`](../log/)、
+实现注记见 [`implementation-notes.md`](../implementation-notes.md)）。
 
 **推进顺序与接线现状不在本文件**，见 [`design-status.md`](../design-status.md) —— 那里是
 唯一权威（原 §12.2 接线现状表仍在本文件 §12.2，属契约的一部分，两条互为印证时以

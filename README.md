@@ -16,7 +16,8 @@
 
 | 路径 | 内容 |
 |---|---|
-| [`docs/framework-design.md`](docs/framework-design.md) | 架构设计**薄索引**（分卷导航；先读这个） |
+| [`docs/README.md`](docs/README.md) | **`docs/` 总索引**：哪份文档回答什么（先读这个） |
+| [`docs/framework-design.md`](docs/framework-design.md) | 架构设计**薄索引**（分卷导航） |
 | [`docs/design/`](docs/design/) | 架构设计**分卷**，按 § 号分卷 —— **契约的单一事实来源**（进程模型 / 桥 / 执行 / 能力 / npm / 安全 / JS API / 路线图） |
 | [`docs/design-status.md`](docs/design-status.md) | 落地台账（**当前状态页**）：已落地 / 还是接口期 / 流水目录 |
 | [`docs/log/`](docs/log/) | 流水**按日期切片**（`README.md` 是索引）；历史条目逐字保留 |

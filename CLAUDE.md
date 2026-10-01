@@ -1,12 +1,13 @@
 # AutoScript
 
-内置 Node.js 的安卓自动化平台（对标 AutoJsPro v9）：每脚本一个 Node 进程、跨进程异步桥、能力三态门禁。架构设计见 **`docs/design/` 12 卷**（按 § 号分卷，入口/导航 = `docs/framework-design.md` 薄索引，**契约的单一事实来源**，2026-09-30 审查步骤 8 拆分、§号与标题逐字保留）；「实现到哪了」看 `docs/design-status.md`（**当前状态页**：接口期表 + 流水目录；历史流水按日期切片在 `docs/log/`，实现注记在 `docs/implementation-notes.md`），「为什么这么定 / 什么被改过」看 `docs/design-decisions.md`。
+内置 Node.js 的安卓自动化平台（对标 AutoJsPro v9）：每脚本一个 Node 进程、跨进程异步桥、能力三态门禁。架构设计见 **`docs/design/` 12 卷**（按 § 号分卷，入口/导航 = `docs/framework-design.md` 薄索引，**契约的单一事实来源**，2026-09-30 审查步骤 8 拆分、§号与标题逐字保留）；「实现到哪了」看 `docs/design-status.md`（**当前状态页**：接口期表 + 流水目录；历史流水按日期切片在 `docs/log/`，实现注记在 `docs/implementation-notes.md`），「为什么这么定 / 什么被改过」看 `docs/design-decisions.md`；`docs/` 各文档的分工见 `docs/README.md`。
 
 ## 仓库地图
 
 | 路径 | 说明 | 设计章节 |
 |---|---|---|
-| `docs/framework-design.md` | 架构设计**薄索引**（分卷导航 + 文档边界；2026-09-30 拆分后只做入口） | §0–§19 |
+| `docs/README.md` | **`docs/` 总索引**：哪份文档回答什么（文档地图的单一事实来源） | — |
+| `docs/framework-design.md` | 架构设计**薄索引**（分卷导航；2026-09-30 拆分后只做入口） | §0–§19 |
 | `docs/design/*.md` | 架构设计**分卷**（**契约的单一事实来源**）—— 只写「是什么」；`00-overview/03-technology/04-architecture/06-modules/07-bridge/08-execution/09-capabilities/10-npm/11-security/12-js-api/13-roadmap-budget/18-19-ledger` | §0–§19 |
 | `docs/design-decisions.md` | 决策记录：已拍板项（原 §18 全部九项 + 后续编号项）+ 被推翻/改过的口径（原口径不删，只追加） | 原 §18 |
 | `docs/design-status.md` | **当前状态页**：接口期清单 + 流水目录（2026-10-02 backlog C6 拆分；原 §19 的 9,584 字符流水外迁于此） | 原 §19 |

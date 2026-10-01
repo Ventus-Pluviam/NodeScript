@@ -23,13 +23,10 @@
 
 ## 文档边界
 
-本仓库三分工 —— **契约说「是什么」，台账说「实现到哪」，决策说「为什么这么定、什么被改过」**：
-
-| 文件 | 回答的问题 |
-|---|---|
-| 本文件 + [`design/`](design/) 12 卷 | 是什么（契约正文 §0–§17；§18 决策台账 / §19 结语在 `design/18-19-ledger.md`） |
-| [`design-decisions.md`](design-decisions.md) | 为什么这么定 / 什么被改过（只追加，原口径不删） |
-| [`design-status.md`](design-status.md) | 实现到哪了（**当前状态页**：接口期表 + 流水目录；历史流水见 [`log/`](log/)，实现注记见 [`implementation-notes.md`](implementation-notes.md)） |
+本目录里哪份文档回答什么 —— **单一事实来源是本目录的 [`README.md`](README.md)**（backlog C9，2026-10-02
+把这张表搬了过去、原地留指针，免得同一事实写两遍）：契约说「是什么」、
+[`design-decisions.md`](design-decisions.md) 说「为什么这么定 / 什么被改过」、
+[`design-status.md`](design-status.md) 说「实现到哪了」。
 
 **推进顺序与接线现状不在契约里**，见 [`design-status.md`](design-status.md) ——
 那里是唯一权威（§12.2 接线现状表属契约的一部分，在 `design/12-js-api.md`；两条互为印证时以
