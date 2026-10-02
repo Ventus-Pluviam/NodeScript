@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 平台主题（无 appcompat 依赖，故只能挂 @android:style/…）。
      只做一件事：让窗口背景与本 App 画的第一帧同色 —— 否则深色主题下
-     启动瞬间会闪一帧白底。真正的配色在 :ui 的 TgTheme.kt（Compose 侧单一出口）。 -->
+     启动瞬间会闪一帧白底。真正的配色在 :ui 的 Theme.kt（Compose 侧单一出口）。 -->
 <resources>
     <style name="Theme.AutoScript" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@color/tg_window_background</item>
+        <item name="android:windowBackground">@color/app_window_background</item>
     </style>
 </resources>

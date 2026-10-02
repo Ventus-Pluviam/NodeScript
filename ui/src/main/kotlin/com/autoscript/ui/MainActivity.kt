@@ -3,6 +3,8 @@ package com.autoscript.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,8 +26,8 @@ import androidx.compose.ui.unit.dp
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.ui.components.ActionBarAction
-import com.autoscript.ui.components.TgTab
-import com.autoscript.ui.components.TgTabBar
+import com.autoscript.ui.components.TabItem
+import com.autoscript.ui.components.TabBar
 import com.autoscript.ui.screens.CapabilityScreen
 import com.autoscript.ui.screens.ConsoleScreen
 import com.autoscript.ui.screens.HomeScreen
@@ -37,7 +39,8 @@ import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
 import com.autoscript.ui.state.ActiveRunState
-import com.autoscript.ui.theme.TgTheme
+import com.autoscript.ui.theme.Theme
+import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
 
@@ -58,7 +61,7 @@ import kotlinx.coroutines.launch
  *   这样用户从系统设置页授完权回来，看到的是**刚问过**的结论，而不是离开时那份缓存
  *   （后者正是"授权了但界面还说没授权"的来源）。
  *
- * **外壳（Telegram 式）**：顶栏 + 底部页签条由 `TgScaffoldScreen` 统一，四屏只画内容；
+ * **外壳（Telegram 式）**：顶栏 + 底部页签条由 `ScaffoldScreen` 统一，四屏只画内容；
  * 顶栏右侧挂 [THEME_ACTION] 一个主题切换动作（浅/深/跟随系统三档），主题选择
  * `rememberSaveable` 保留 —— 进程重建后不回弹，是"用户设过一次"的承诺。
  *
@@ -93,39 +96,48 @@ class MainActivity : ComponentActivity() {
         homeState = HomeState.read(hostSummary())
         setContent {
             val scope = rememberCoroutineScope()
-            TgTheme(mode = themeMode) {
+            Theme(mode = themeMode) {
                 MainShell(
                     tab = tab,
                     onSelectTab = { tab = it },
                     themeMode = themeMode,
                     onCycleTheme = { themeMode = themeMode.next() },
                 ) { shellModifier ->
-                    when (tab) {
-                        Tab.HOME -> HomeScreen(
-                            state = homeState,
-                            onRefresh = { homeState = HomeState.read(hostSummary()) },
-                            modifier = shellModifier,
-                        )
-                        Tab.TASKS -> TaskCenterScreen(
-                            state = taskState,
-                            onRefresh = { scope.launch { reloadTasks() } },
-                            onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
-                            onCancel = { task -> scope.launch { cancelTaskOp(task) } },
-                            onRegister = { form -> scope.launch { registerTaskOp(form) } },
-                            modifier = shellModifier,
-                        )
-                        Tab.CONSOLE -> ConsoleScreen(
-                            state = consoleState,
-                            onRefresh = { scope.launch { reloadConsole() } },
-                            onStopRun = { run -> scope.launch { stopRunOp(run) } },
-                            modifier = shellModifier,
-                        )
-                        Tab.CAPABILITIES -> CapabilityScreen(
-                            state = capabilityState,
-                            onRefresh = { scope.launch { reloadCapabilities() } },
-                            onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
-                            modifier = shellModifier,
-                        )
+                    // 页签切换**淡入淡出**而不是硬切：四屏各有各的顶栏（标题、副标题、
+                    // 行尾动作都不同），硬切时标题是"啪"地换掉。时长压到 140ms ——
+                    // 再长就会有"点了没反应"的迟滞感（TG 的页签切换也是这种短淡入）。
+                    Crossfade(
+                        targetState = tab,
+                        animationSpec = tween(durationMillis = 140),
+                        label = "tabScreen",
+                    ) { current ->
+                        when (current) {
+                            Tab.HOME -> HomeScreen(
+                                state = homeState,
+                                onRefresh = { homeState = HomeState.read(hostSummary()) },
+                                modifier = shellModifier,
+                            )
+                            Tab.TASKS -> TaskCenterScreen(
+                                state = taskState,
+                                onRefresh = { scope.launch { reloadTasks() } },
+                                onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
+                                onCancel = { task -> scope.launch { cancelTaskOp(task) } },
+                                onRegister = { form -> scope.launch { registerTaskOp(form) } },
+                                modifier = shellModifier,
+                            )
+                            Tab.CONSOLE -> ConsoleScreen(
+                                state = consoleState,
+                                onRefresh = { scope.launch { reloadConsole() } },
+                                onStopRun = { run -> scope.launch { stopRunOp(run) } },
+                                modifier = shellModifier,
+                            )
+                            Tab.CAPABILITIES -> CapabilityScreen(
+                                state = capabilityState,
+                                onRefresh = { scope.launch { reloadCapabilities() } },
+                                onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
+                                modifier = shellModifier,
+                            )
+                        }
                     }
                 }
             }
@@ -374,7 +386,7 @@ private fun MainShell(
     onCycleTheme: () -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(TgTheme.colors.background)) {
+    Column(Modifier.fillMaxSize().background(ThemeColors.background)) {
         Box(Modifier.weight(1f)) {
             content(Modifier.fillMaxSize())
         }
@@ -385,12 +397,12 @@ private fun MainShell(
         ) {
             ActionBarAction(themeMode.label(), onCycleTheme)
         }
-        TgTabBar(
+        TabBar(
             tabs = MainActivity.Tab.entries.map {
                 // 刻意**不挂页签徽标**：徽标在 TG 里是"未读"语义，
                 // 与本仓的"在途 / 漏投 / 未结算"三种账都不是一回事 ——
                 // 混上去等于造出第四种读法。计数一律在各自屏内说。
-                TgTab(label = it.short, badge = null)
+                TabItem(label = it.short, badge = null)
             },
             selected = tab.ordinal,
             onSelect = { onSelectTab(MainActivity.Tab.entries[it]) },

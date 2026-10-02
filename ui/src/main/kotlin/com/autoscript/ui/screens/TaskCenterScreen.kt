@@ -1,6 +1,7 @@
 package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,9 +29,9 @@ import com.autoscript.ui.components.Dot
 import com.autoscript.ui.components.LabeledRow
 import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.SectionHeader
-import com.autoscript.ui.components.TgActionBar
-import com.autoscript.ui.components.TgDivider
-import com.autoscript.ui.components.TgRow
+import com.autoscript.ui.components.ActionBar
+import com.autoscript.ui.components.Separator
+import com.autoscript.ui.components.Cell
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.ScheduleKind
@@ -40,7 +41,7 @@ import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
 import com.autoscript.ui.state.describe
 import com.autoscript.ui.state.label
-import com.autoscript.ui.theme.TgTheme
+import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.domain.host.ScreenRequirement
 
 /**
@@ -91,8 +92,8 @@ fun TaskCenterScreen(
         unit = "条任务（含已停用）",
     )
 
-    Column(modifier.fillMaxWidth().background(TgTheme.colors.background)) {
-        TgActionBar(
+    Column(modifier.fillMaxWidth().background(ThemeColors.background)) {
+        ActionBar(
             title = "任务中心",
             subtitle = status.text,
             subtitleTone = status.tone,
@@ -126,7 +127,7 @@ fun TaskCenterScreen(
                         },
                         enabled = !state.opInFlight,
                     )
-                    TgDivider()
+                    Separator()
                 }
             }
             state.recovery?.text()?.let { text ->
@@ -150,7 +151,10 @@ fun TaskCenterScreen(
                     )
                 }
                 items(state.unfinishedRuns, key = { it.engineRunId }) { run ->
-                    TgRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
+                    Cell(
+                        modifier = Modifier.animateItem(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                    ) {
                     ToneText(
                         text = buildString {
                             append("#${run.engineRunId} ${run.scriptPath}：${run.stateLabel}")
@@ -161,18 +165,21 @@ fun TaskCenterScreen(
                         tone = StatusTone.ATTENTION,
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    TgDivider()
+                    Separator()
                 }
                 }
             }
             items(state.tasks, key = { it.id }) { task ->
-                TaskRow(
-                    task = task,
-                    opInFlight = state.opInFlight,
-                    onRunNow = { onRunNow(task) },
-                    onCancel = { pendingCancel = task },
-                )
-                TgDivider()
+                // 登记/取消后列表会增删，animateItem 让增删是"落位/让位"而不是瞬移。
+                Box(Modifier.animateItem()) {
+                    TaskRow(
+                        task = task,
+                        opInFlight = state.opInFlight,
+                        onRunNow = { onRunNow(task) },
+                        onCancel = { pendingCancel = task },
+                    )
+                    Separator()
+                }
             }
         }
     }
@@ -227,7 +234,7 @@ private fun TaskRow(
     val badges = task.badges()
     // 行首圆点取"最严重"那一档：停用 > 降级 > 一次性（顺序即严重度）。
     val worst = badges.firstOrNull()?.first ?: StatusTone.OK
-    TgRow(
+    Cell(
         leading = { Dot(worst) },
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
         trailing = {

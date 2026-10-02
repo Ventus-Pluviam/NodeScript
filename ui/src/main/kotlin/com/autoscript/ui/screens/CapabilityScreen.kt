@@ -20,15 +20,15 @@ import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.Dot
 import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.SectionHeader
-import com.autoscript.ui.components.TgActionBar
-import com.autoscript.ui.components.TgDivider
-import com.autoscript.ui.components.TgRow
+import com.autoscript.ui.components.ActionBar
+import com.autoscript.ui.components.Separator
+import com.autoscript.ui.components.Cell
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.CapabilityRowState
 import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
-import com.autoscript.ui.theme.TgTheme
+import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.domain.permission.Capability
 
 /**
@@ -60,8 +60,8 @@ fun CapabilityScreen(
         notLoadedText = "尚未读取（点右上「刷新」现问系统）",
         loadedText = "${state.rows.size} 项能力（三态现问系统，不缓存）",
     )
-    Column(modifier.fillMaxWidth().background(TgTheme.colors.background)) {
-        TgActionBar(
+    Column(modifier.fillMaxWidth().background(ThemeColors.background)) {
+        ActionBar(
             title = "能力中心",
             subtitle = status.text,
             subtitleTone = status.tone,
@@ -77,7 +77,7 @@ fun CapabilityScreen(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     )
-                    TgDivider()
+                    Separator()
                 }
             }
             if (state.degradedAlarmTaskIds.isNotEmpty()) {
@@ -91,12 +91,12 @@ fun CapabilityScreen(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     )
-                    TgDivider()
+                    Separator()
                 }
             }
             items(state.rows, key = { it.capability.name }) { row ->
                 CapabilityRow(row, onOpenSettings)
-                TgDivider()
+                Separator()
             }
         }
     }
@@ -109,7 +109,7 @@ fun CapabilityScreen(
  */
 @Composable
 private fun CapabilityRow(row: CapabilityRowState, onOpenSettings: (Capability) -> Unit) {
-    TgRow(
+    Cell(
         leading = { Dot(row.tone) },
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
         trailing = if (row.canRequestGrant) {

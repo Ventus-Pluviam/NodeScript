@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 与 TgTheme.kt 的 TgLightColors.background 同值（#FFFFFF） -->
-    <color name="tg_window_background">#FFFFFFFF</color>
+    <!-- 与 Theme.kt 的 LightColors.background 同值（#FFFFFF） -->
+    <color name="app_window_background">#FFFFFFFF</color>
 </resources>

@@ -8,17 +8,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.LabeledRow
 import com.autoscript.ui.components.SectionHeader
-import com.autoscript.ui.components.TgDivider
+import com.autoscript.ui.components.Separator
 import com.autoscript.ui.components.ActionBarAction
-import com.autoscript.ui.components.TgScaffoldScreen
+import com.autoscript.ui.components.ScaffoldScreen
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.StatusTone
-import com.autoscript.ui.theme.TgTheme
+import com.autoscript.ui.theme.ThemeColors
 
 /**
  * 首屏（UI 轨第一片竖切：壳状态 + 漏投账本 + 手动刷新）。
  *
- * 版式照 Telegram 的「个人资料页」：标题进 [TgScaffoldScreen] 的顶栏，主体是一列
+ * 版式照 Telegram 的「个人资料页」：标题进 [ScaffoldScreen] 的顶栏，主体是一列
  * 两栏键值行（`项 / 值`），项一栏固定 88dp —— 这正是 TG 设置类页面的读法，
  * 比旧版「一行一个 24dp 标题 + 一行一个句子」省一半高度。
  *
@@ -33,7 +33,7 @@ fun HomeScreen(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    TgScaffoldScreen(
+    ScaffoldScreen(
         title = "AutoScript",
         modifier = modifier,
         subtitle = shellSubtitle(state),
@@ -41,7 +41,7 @@ fun HomeScreen(
         action = { ActionBarAction("刷新", onRefresh) },
     ) { contentModifier ->
         LazyColumn(
-            modifier = contentModifier.background(TgTheme.colors.background),
+            modifier = contentModifier.background(ThemeColors.background),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             item {
@@ -52,7 +52,7 @@ fun HomeScreen(
                     value = if (state.summaryWired) "已接线" else "未接线",
                     tone = if (state.summaryWired) StatusTone.OK else StatusTone.PROBLEM,
                 )
-                TgDivider()
+                Separator()
             }
             item {
                 SectionHeader("保活与调度")

@@ -1,6 +1,7 @@
 package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,9 +17,9 @@ import com.autoscript.ui.components.CountBadge
 import com.autoscript.ui.components.EmptyHint
 import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.SectionHeader
-import com.autoscript.ui.components.TgActionBar
-import com.autoscript.ui.components.TgDivider
-import com.autoscript.ui.components.TgRow
+import com.autoscript.ui.components.ActionBar
+import com.autoscript.ui.components.Separator
+import com.autoscript.ui.components.Cell
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleLineState
@@ -26,7 +27,7 @@ import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
-import com.autoscript.ui.theme.TgTheme
+import com.autoscript.ui.theme.ThemeColors
 
 /**
  * 控制台（§7.3 数据面游标拉取 + §8.3 在途执行两端对照）。
@@ -61,8 +62,8 @@ fun ConsoleScreen(
         notLoadedText = "尚未读取（点右上「刷新」现取）",
         loadedText = "已读 ${state.lines.size} 行日志",
     )
-    Column(modifier.fillMaxWidth().background(TgTheme.colors.background)) {
-        TgActionBar(
+    Column(modifier.fillMaxWidth().background(ThemeColors.background)) {
+        ActionBar(
             title = "控制台",
             subtitle = status.text,
             subtitleTone = status.tone,
@@ -107,8 +108,16 @@ fun ConsoleScreen(
                     SectionHeader("在途执行 ${state.activeRuns.size}")
                 }
                 items(state.activeRuns, key = { it.runId }) { run ->
-                    ActiveRunRow(run, stopInFlight = state.stopInFlight, onStop = { onStopRun(run) })
-                    TgDivider()
+                    // animateItem 要有 key 才生效（在途行有 runId）：新起一次执行时
+                    // 这行是**淡入落位**进来的，而不是凭空出现。
+                    Box(Modifier.animateItem()) {
+                        ActiveRunRow(
+                            run,
+                            stopInFlight = state.stopInFlight,
+                            onStop = { onStopRun(run) },
+                        )
+                        Separator()
+                    }
                 }
             } else if (state.load.isLoaded && state.loadErrorOrNull() == null) {
                 item {
@@ -120,7 +129,9 @@ fun ConsoleScreen(
                 // 读成功且行空才说「暂无日志」—— 那是真的没有输出。
                 item { EmptyHint("读到了，暂无日志") }
             }
-            items(state.lines, key = { it.seq }) { LineRow(it) }
+            // 控制台是**累积**列表：新行落在尾部。有 key（seq）+ animateItem，
+            // 新行才是"滑进来"的；否则一屏日志是整块往下跳。
+            items(state.lines, key = { it.seq }) { LineRow(it, Modifier.animateItem()) }
         }
     }
 }
@@ -148,7 +159,7 @@ private fun FeedbackLine(text: String, tone: StatusTone) {
  */
 @Composable
 private fun ActiveRunRow(run: ActiveRunState, stopInFlight: Boolean, onStop: () -> Unit) {
-    TgRow(
+    Cell(
         leading = {
             CountBadge("#${run.runId}")
         },
@@ -183,7 +194,7 @@ private fun ActiveRunRow(run: ActiveRunState, stopInFlight: Boolean, onStop: () 
  * 只有 `error` 通栏红 —— 这是"密"与"可读"在这屏的取舍点。
  */
 @Composable
-private fun LineRow(line: ConsoleLineState) {
+private fun LineRow(line: ConsoleLineState, modifier: Modifier = Modifier) {
     ToneText(
         text = buildString {
             append(line.timeText)
@@ -197,6 +208,6 @@ private fun LineRow(line: ConsoleLineState) {
         },
         tone = line.tone,
         style = MaterialTheme.typography.bodySmall,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp),
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 1.dp),
     )
 }

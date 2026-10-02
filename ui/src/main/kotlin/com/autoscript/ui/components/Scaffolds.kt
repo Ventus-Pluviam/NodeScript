@@ -1,7 +1,10 @@
 package com.autoscript.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,13 +20,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.state.StatusTone
-import com.autoscript.ui.theme.TgTheme
+import com.autoscript.ui.theme.ThemeColors
 
 /**
  * 状态色 → 主题色的**唯一**映射（[StatusTone] 的语义出口）。
@@ -36,14 +44,14 @@ import com.autoscript.ui.theme.TgTheme
  */
 @Composable
 fun StatusTone.color(): Color {
-    val tg = TgTheme.colors
+    val palette = ThemeColors
     return when (this) {
-        StatusTone.OK -> tg.success
-        StatusTone.ATTENTION -> tg.warning
-        StatusTone.PROBLEM -> tg.error
-        StatusTone.LINK -> tg.accent
-        StatusTone.NEUTRAL -> tg.text
-        StatusTone.MUTED -> tg.textTertiary
+        StatusTone.OK -> palette.success
+        StatusTone.ATTENTION -> palette.warning
+        StatusTone.PROBLEM -> palette.error
+        StatusTone.LINK -> palette.accent
+        StatusTone.NEUTRAL -> palette.text
+        StatusTone.MUTED -> palette.textTertiary
     }
 }
 
@@ -82,26 +90,26 @@ fun ToneText(
 fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
-        color = TgTheme.colors.textTertiary,
+        color = ThemeColors.textTertiary,
         style = MaterialTheme.typography.labelMedium,
         modifier = modifier.padding(horizontal = 16.dp, vertical = 6.dp),
     )
 }
 
 /**
- * 一条分隔线（1dp，[TgTheme.colors.divider]）。
+ * 一条分隔线（1dp，[ThemeColors.divider]）。
  *
  * TG 的分隔线是**贴着内容的**（列表行底部一条，而不是每行上下都夹一条），
  * 所以默认只画 [indentDp] 左边距 —— 让它从正文列起点开始，跟左边的图标列错开。
  */
 @Composable
-fun TgDivider(indentDp: Int = 16, modifier: Modifier = Modifier) {
+fun Separator(indentDp: Int = 16, modifier: Modifier = Modifier) {
     Spacer(
         modifier
             .fillMaxWidth()
             .padding(start = indentDp.dp)
             .height(1.dp)
-            .background(color = TgTheme.colors.divider),
+            .background(color = ThemeColors.divider),
     )
 }
 
@@ -119,7 +127,7 @@ fun EmptyHint(text: String, modifier: Modifier = Modifier) {
     ) {
         Text(
             text = text,
-            color = TgTheme.colors.textTertiary,
+            color = ThemeColors.textTertiary,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
@@ -143,21 +151,36 @@ fun Dot(tone: StatusTone, modifier: Modifier = Modifier, size: Int = 8) {
 /**
  * 计数徽标（未读计数那种蓝底白字的小圆角块）。
  *
+ * 计数**变化时弹一下**（先胀到 1.18 再回落）：这是 TG 里唯一一处"数字会动"的地方，
+ * 用处不是好看 —— 控制台/任务中心的计数都在页面底部或顶栏，不弹这一下，用户根本
+ * 注意不到"刚才多了一条"。动画只作用在 `graphicsLayer` 上（缩放不参与布局，
+ * 不会把旁边的文字挤来挤去）；计数没变时 `LaunchedEffect` 不重跑，故不会每帧抖。
+ *
  * @property text 计数本身；null 或空串不画 —— 「0」不是一件事，藏起来。
  */
 @Composable
 fun CountBadge(text: String?, modifier: Modifier = Modifier) {
     if (text.isNullOrEmpty()) return
-    val tg = TgTheme.colors
+    val palette = ThemeColors
+    val pop = remember { Animatable(1f) }
+    LaunchedEffect(text) {
+        pop.snapTo(1f)
+        pop.animateTo(1.18f, tween(durationMillis = 90))
+        pop.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = 900f))
+    }
     Box(
         modifier = modifier
-            .background(tg.badge, RoundedCornerShape(10.dp))
+            .graphicsLayer {
+                scaleX = pop.value
+                scaleY = pop.value
+            }
+            .background(palette.badge, RoundedCornerShape(10.dp))
             .padding(horizontal = 6.dp, vertical = 1.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = text,
-            color = tg.onBadge,
+            color = palette.onBadge,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -170,7 +193,7 @@ fun CountBadge(text: String?, modifier: Modifier = Modifier) {
  * 观感里最显眼的一致性来源（内容左边距统一 16dp，右侧动作贴右）。
  */
 @Composable
-fun TgRow(
+fun Cell(
     modifier: Modifier = Modifier,
     leading: (@Composable () -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
@@ -181,7 +204,7 @@ fun TgRow(
     val row = Row(
         modifier = modifier
             .fillMaxWidth()
-            .let { m -> if (onClick == null) m else m.clickable(onClick = onClick) },
+            .let { m -> if (onClick == null) m else m.pressable(onClick = onClick) },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leading?.let {
@@ -210,17 +233,27 @@ fun PillButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    val tg = TgTheme.colors
-    val bg = if (selected) tg.accent.copy(alpha = 0.14f) else Color.Transparent
-    val fg = when {
-        !enabled -> tg.textTertiary
-        selected -> tg.accent
-        else -> tg.textSecondary
-    }
+    val palette = ThemeColors
+    // 选中态**渐变**而不是硬切：分段控件（如页签式的排期选择）连点几下时，
+    // 底色/字色一帧一跳很像"没点上"，渐变过去才读得出"选中跑到这一格了"。
+    val bg by animateColorAsState(
+        targetValue = if (selected) palette.accent.copy(alpha = 0.14f) else Color.Transparent,
+        animationSpec = tween(durationMillis = 160),
+        label = "pillBg",
+    )
+    val fg by animateColorAsState(
+        targetValue = when {
+            !enabled -> palette.textTertiary
+            selected -> palette.accent
+            else -> palette.textSecondary
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "pillFg",
+    )
     Box(
         modifier = modifier
             .background(bg, RoundedCornerShape(16.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .pressable(enabled = enabled, role = Role.RadioButton, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         Text(text, color = fg, style = MaterialTheme.typography.labelMedium)
@@ -240,7 +273,7 @@ fun LabeledRow(
     tone: StatusTone = StatusTone.NEUTRAL,
     modifier: Modifier = Modifier,
 ) {
-    val tg = TgTheme.colors
+    val palette = ThemeColors
     Row(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -248,7 +281,7 @@ fun LabeledRow(
     ) {
         Text(
             text = label,
-            color = tg.textTertiary,
+            color = palette.textTertiary,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.width(88.dp),
         )

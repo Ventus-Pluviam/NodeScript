@@ -6,6 +6,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
@@ -27,14 +28,14 @@ import androidx.compose.ui.unit.sp
  * **为什么不用 Material3 的 ColorScheme 承载**：`ColorScheme` 没有「未读计数底/字」、
  * 「页签下划线」、「置顶遮罩」这类槽位，而这些正是 TG 观感里最认得出的几处（会话列表
  * 的蓝底白字计数、底部页签的 2dp 蓝线）。硬塞进 `primary/onPrimary` 只会让「主题里
- * 这个颜色到底是什么」变得不可读。故 [TgColors] 是本仓的语义调色板，
+ * 这个颜色到底是什么」变得不可读。故 [Colors] 是本仓的语义调色板，
  * `ColorScheme` 只作为 `MaterialTheme` 的最小适配（部分 M3 组件仍要它）。
  *
  * 「GPL-2.0-or-later」下**未抄任何 TG 源码**：这里只有颜色数值（事实）与版式约定
  * （顶栏 + 底页签 + 密排列表），代码是本仓自己的。
  */
 @Immutable
-data class TgColors(
+data class Colors(
     /** 屏底（`windowBackgroundWhite`）。 */
     val background: Color,
     /** 卡片/顶栏底（`actionBarDefault`）。 */
@@ -74,7 +75,7 @@ data class TgColors(
 )
 
 /** 浅色（`day.attheme`）。 */
-val TgLightColors = TgColors(
+val LightColors = Colors(
     background = Color(0xFFFFFFFF),
     surface = Color(0xFFFFFFFF),
     surfaceMuted = Color(0xFFF1F1F3),
@@ -96,7 +97,7 @@ val TgLightColors = TgColors(
 )
 
 /** 深色（`night.attheme`）。 */
-val TgDarkColors = TgColors(
+val DarkColors = Colors(
     background = Color(0xFF181819),
     surface = Color(0xFF232326),
     surfaceMuted = Color(0xFF1C1C1E),
@@ -129,19 +130,21 @@ fun ThemeMode.isDark(): Boolean = when (this) {
     ThemeMode.DARK -> true
 }
 
-val LocalTgColors: ProvidableCompositionLocal<TgColors> = staticCompositionLocalOf { TgLightColors }
+val LocalColors: ProvidableCompositionLocal<Colors> = staticCompositionLocalOf { LightColors }
 
-/** 便捷取色：`TgTheme.colors`。 */
-object TgTheme {
-    val colors: TgColors
-        @Composable get() = LocalTgColors.current
-}
+/**
+ * 便捷取色：界面里的颜色一律走 `ThemeColors.accent` 这样读。
+ *
+ * 不直接暴露 [LocalColors]：取色口只有这一个，换主题时才不会有"某处绕过了它"。
+ */
+val ThemeColors: Colors
+    @Composable @ReadOnlyComposable get() = LocalColors.current
 
 /**
  * 版式：TG 的排版节奏是「标题 17sp 500、次级 15sp、时间 13sp」，比 M3 默认略小一号
  * —— 会话列表之所以显密，靠的是这个而不是留白。这里照那三档写死。
  */
-val TgTypography = Typography(
+val TextStyles = Typography(
     titleLarge = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Medium),
     titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium),
     titleSmall = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium),
@@ -154,34 +157,34 @@ val TgTypography = Typography(
 )
 
 /**
- * 应用主题：把 [TgColors] 与一份最小 [MaterialTheme] 一起下发。
+ * 应用主题：把 [Colors] 与一份最小 [MaterialTheme] 一起下发。
  *
  * M3 那份 `ColorScheme` 是**适配产物**（`OutlinedTextField`/`AlertDialog` 等仍按它取色），
- * 不是本仓的语义色来源 —— 界面里的颜色一律走 [TgTheme.colors]。
+ * 不是本仓的语义色来源 —— 界面里的颜色一律走 [ThemeColors]。
  */
 @Composable
-fun TgTheme(
+fun Theme(
     mode: ThemeMode,
     content: @Composable () -> Unit,
 ) {
     val dark = mode.isDark()
-    val tg = if (dark) TgDarkColors else TgLightColors
+    val palette = if (dark) DarkColors else LightColors
     val m3 = if (dark) {
         darkColorScheme(
-            primary = tg.accent,
-            background = tg.background,
-            surface = tg.surface,
-            error = tg.error,
+            primary = palette.accent,
+            background = palette.background,
+            surface = palette.surface,
+            error = palette.error,
         )
     } else {
         lightColorScheme(
-            primary = tg.accent,
-            background = tg.background,
-            surface = tg.surface,
-            error = tg.error,
+            primary = palette.accent,
+            background = palette.background,
+            surface = palette.surface,
+            error = palette.error,
         )
     }
-    CompositionLocalProvider(LocalTgColors provides tg) {
-        MaterialTheme(colorScheme = m3, typography = TgTypography, content = content)
+    CompositionLocalProvider(LocalColors provides palette) {
+        MaterialTheme(colorScheme = m3, typography = TextStyles, content = content)
     }
 }
