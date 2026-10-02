@@ -3,6 +3,7 @@ package com.autoscript.ui.state
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.host.ScriptFilesSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskRegistration
@@ -45,4 +46,7 @@ open class FakeHost(
 
     override suspend fun stopRun(runId: Long): Boolean =
         throw UnsupportedOperationException("本替身未提供 stopRun（用例按需覆盖）")
+
+    override suspend fun scriptFiles(): ScriptFilesSnapshot =
+        throw UnsupportedOperationException("本替身未提供 scriptFiles（用例按需覆盖）")
 }

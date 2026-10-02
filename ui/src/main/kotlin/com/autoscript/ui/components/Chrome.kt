@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -69,6 +70,12 @@ fun ActionBar(
     subtitleTone: StatusTone = StatusTone.MUTED,
     onBack: (() -> Unit)? = null,
     actions: (@Composable () -> Unit)? = null,
+    /**
+     * 标题样式覆盖（合并到 `titleLarge` 之上）。缺省 null = 全仓统一的 17sp Medium；
+     * 主页（TG `DialogsActivity`）的标题是**品牌位**：20sp 粗体 + `telegram_color_dialogsLogo`
+     * 蓝（createTitleTextView 的 bold 20dp 口径），只有它有权覆盖。
+     */
+    titleStyle: TextStyle? = null,
 ) {
     val palette = ThemeColors
     val shellAction = LocalBarAction.current
@@ -113,8 +120,8 @@ fun ActionBar(
             Column(Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    color = palette.text,
-                    style = MaterialTheme.typography.titleLarge,
+                    color = titleStyle?.color ?: palette.text,
+                    style = MaterialTheme.typography.titleLarge.merge(titleStyle),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

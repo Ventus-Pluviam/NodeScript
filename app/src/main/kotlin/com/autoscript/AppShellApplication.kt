@@ -12,6 +12,7 @@ import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.permission.Capability
+import com.autoscript.domain.host.ScriptFilesSnapshot
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
 import com.autoscript.engine.nodeprocess.NodeProcessEngine
@@ -38,6 +39,7 @@ import com.autoscript.shell.ForegroundKeeper
 import com.autoscript.shell.PlatformWiring
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
+import com.autoscript.shell.ScriptFilesRead
 import com.autoscript.shell.ScreenGateAndroid
 import com.autoscript.shell.ScreenInteractive
 import com.autoscript.shell.launchGuaranteed
@@ -555,6 +557,16 @@ class AppShellApplication : Application(), HostSummary {
             ?: throw IllegalStateException("壳未装配（装配中或失败）：无法停止执行")
         return built.stopRun(runId)
     }
+
+    /**
+     * 脚本文件清单（[HostSummary] 的生产实现，项目页文件列表）。
+     *
+     * 壳没装好也**不抛**：文件列表读的是落盘目录（`files/scripts/`），不依赖壳里
+     * 任何寄存器 —— 装配中/失败时目录照样可读，列出来是事实（此时"有文件但跑不了"
+     * 恰恰是用户该看到的全貌）。只有读目录本身抛（IO 异常）才向上传。
+     */
+    override suspend fun scriptFiles(): ScriptFilesSnapshot =
+        ScriptFilesRead.snapshot(filesDir.toPath())
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
     fun missedAlarms(): Map<String, Long> = alarmDispatch.missed()

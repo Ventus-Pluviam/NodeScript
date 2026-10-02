@@ -76,6 +76,12 @@ data class Colors(
     val pressedOverlay: Color,
     /** 输入框/搜索底：比 [surface] 略深一档，浅色下用灰、深色下用黑。 */
     val fieldBackground: Color,
+
+    /**
+     * 文件类型头像的底色表（TG `AvatarDrawable` 的 `avatar_background*` 色序）：
+     * 扩展名哈希取槽位（`getColorIndex(id)` 的读法），同一扩展名恒同色。
+     */
+    val fileAvatarColors: List<Color>,
 )
 
 /** 浅色（`day.attheme`）。 */
@@ -97,6 +103,16 @@ val LightColors = Colors(
     tabIdle = Color(0xFF777C7F),
     pressedOverlay = Color(0x14000000),
     fieldBackground = Color(0xFFF1F1F3),
+    // avatar_background{Red,Orange,Violet,Cyan,Blue,Pink} + Green（ThemeColors.java 默认值）。
+    fileAvatarColors = listOf(
+        Color(0xFFFF845E),
+        Color(0xFFFEBB5B),
+        Color(0xFFB694F9),
+        Color(0xFF9AD164),
+        Color(0xFF5BCBE3),
+        Color(0xFF5CAFFA),
+        Color(0xFFFF8AAC),
+    ),
 )
 
 /** 深色（`night.attheme`）。 */
@@ -120,6 +136,15 @@ val DarkColors = Colors(
     tabIdle = Color(0xFF8E8E8F),
     pressedOverlay = Color(0x1AFFFFFF),
     fieldBackground = Color(0xFF0F0F11),
+    fileAvatarColors = listOf(
+        Color(0xFFFF845E),
+        Color(0xFFFEBB5B),
+        Color(0xFFB694F9),
+        Color(0xFF9AD164),
+        Color(0xFF5BCBE3),
+        Color(0xFF5CAFFA),
+        Color(0xFFFF8AAC),
+    ),
 )
 
 /** 主题档位。`SYSTEM` 跟随系统，另两档由用户在顶栏手动切。 */

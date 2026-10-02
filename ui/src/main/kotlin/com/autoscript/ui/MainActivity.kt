@@ -31,6 +31,7 @@ import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalBarAction
 import com.autoscript.ui.components.TabItem
 import com.autoscript.ui.components.TabBar
+import com.autoscript.ui.screens.ProjectScreen
 import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
 import com.autoscript.ui.screens.HomeScreen
@@ -38,6 +39,7 @@ import com.autoscript.ui.screens.TaskCenterScreen
 import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.HomeState
+import com.autoscript.ui.state.ProjectState
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
@@ -78,6 +80,9 @@ class MainActivity : ComponentActivity() {
 
     /** 首屏状态：compose 可观察单槽（Activity 持有，配置变更随重建重读，无跨进程共享诉求）。 */
     private var homeState: HomeState by mutableStateOf(HomeState.UNWIRED)
+
+    /** 项目页（文件列表）状态（同上；挂起读口，由页签切换/回前台驱动）。 */
+    private var projectState: ProjectState by mutableStateOf(ProjectState.NOT_LOADED)
 
     /** 设置页的状态（同上；数据面仍是能力快照）。 */
     private var capabilityState: CapabilityCenterState by mutableStateOf(CapabilityCenterState.NOT_LOADED)
@@ -149,9 +154,9 @@ class MainActivity : ComponentActivity() {
                             // pager 的修饰符是它自己的（滚动/裁剪/尺寸），发给页内容等于
                             // 把同一份约束套两层。
                             when (Tab.entries[current]) {
-                                Tab.HOME -> HomeScreen(
-                                    state = homeState,
-                                    onRefresh = { homeState = HomeState.read(hostSummary()) },
+                                Tab.HOME -> ProjectScreen(
+                                    state = projectState,
+                                    onRefresh = { reloadProjectFiles() },
                                     modifier = Modifier,
                                 )
                                 Tab.TASKS -> TaskCenterScreen(
@@ -188,7 +193,7 @@ class MainActivity : ComponentActivity() {
             HomeRetryEffect(state = { homeState }) { homeState = HomeState.read(hostSummary()) }
             TabReloadEffect(resumeTick, pagerState) { tab ->
                 when (tab) {
-                    Tab.HOME -> Unit
+                    Tab.HOME -> reloadProjectFiles()
                     Tab.TASKS -> reloadTasks()
                     Tab.CONSOLE -> reloadConsole()
                     Tab.SETTINGS -> reloadCapabilities()
@@ -214,6 +219,29 @@ class MainActivity : ComponentActivity() {
      *   （现场要靠它区分"ROM 查询崩了"与"装配没接线"）；
      * - 成功 → 全量行 + 降级任务账。
      */
+    /**
+     * 现取脚本文件清单（项目页；挂起；只写 [projectState]）。
+     *
+     * 与 [reloadTasks] 同构的三落点，差异一处：读口未接线**也不冒充空目录** ——
+     * 留 `NOT_LOADED`（"还没读到"），因为"读成功且没有文件"与"根本没读到"是两句
+     * 不同的话（后者装配完成后重取就会变，前者不会）。
+     */
+    private suspend fun reloadProjectFiles() {
+        val host = hostSummary()
+        if (host == null) {
+            projectState = ProjectState.NOT_LOADED
+            return
+        }
+        projectState = try {
+            ProjectState.of(
+                snapshot = host.scriptFiles(),
+                nowMillis = System.currentTimeMillis(),
+            )
+        } catch (t: Throwable) {
+            ProjectState.failed(t)
+        }
+    }
+
     private suspend fun reloadCapabilities() {
         val host = hostSummary()
         if (host == null) {

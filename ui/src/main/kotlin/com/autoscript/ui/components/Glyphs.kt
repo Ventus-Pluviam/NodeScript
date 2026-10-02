@@ -57,6 +57,24 @@ enum class GlyphKind {
 
     /** 设置页签（底栏第 4 格）：齿轮。 */
     SETTINGS,
+
+    /** 搜索（项目页搜索栏左端的放大镜）。 */
+    SEARCH,
+
+    /** JS 脚本文件：圆角方块内一对尖括号。 */
+    FILE_JS,
+
+    /** Markdown/文本文档：文档页 + 折角。 */
+    FILE_DOC,
+
+    /** 网页文件：地球（圆 + 经纬线）。 */
+    FILE_HTML,
+
+    /** Shell 脚本：命令行提示符块。 */
+    FILE_SH,
+
+    /** 其余类型（二进制/数据/无扩展名）：立方体。 */
+    FILE_GENERIC,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -183,6 +201,66 @@ fun Glyph(
                 drawPath(path(0.50f to 0.80f, 0.50f to 0.92f), tint, style = stroke)
                 drawPath(path(0.08f to 0.50f, 0.20f to 0.50f), tint, style = stroke)
                 drawPath(path(0.80f to 0.50f, 0.92f to 0.50f), tint, style = stroke)
+            }
+
+            // 搜索：放大镜 = 斜柄 + 圆环（环心偏离几何中心，柄在右下）。
+            GlyphKind.SEARCH -> {
+                drawCircle(tint, radius = 0.28f * u, center = at(0.44f, 0.44f), style = stroke)
+                drawPath(path(0.65f to 0.65f, 0.86f to 0.86f), tint, style = stroke)
+            }
+
+            // JS：圆角方块（语言徽标的底）+ 内嵌一对尖括号 < >。
+            GlyphKind.FILE_JS -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = at(0.12f, 0.12f),
+                    size = Size(0.76f * u, 0.76f * u),
+                    cornerRadius = CornerRadius(0.16f * u),
+                    style = stroke,
+                )
+                drawPath(path(0.42f to 0.40f, 0.30f to 0.50f, 0.42f to 0.60f), tint, style = stroke)
+                drawPath(path(0.58f to 0.40f, 0.70f to 0.50f, 0.58f to 0.60f), tint, style = stroke)
+            }
+
+            // 文档：竖长页 + 右上折角 + 两行文字线。
+            GlyphKind.FILE_DOC -> {
+                drawPath(
+                    path(0.24f to 0.10f, 0.62f to 0.10f, 0.76f to 0.26f, 0.76f to 0.90f, 0.24f to 0.90f).apply { close() },
+                    tint,
+                    style = stroke,
+                )
+                drawPath(path(0.62f to 0.10f, 0.62f to 0.26f, 0.76f to 0.26f), tint, style = stroke)
+                drawPath(path(0.36f to 0.48f, 0.64f to 0.48f), tint, style = stroke)
+                drawPath(path(0.36f to 0.62f, 0.64f to 0.62f), tint, style = stroke)
+            }
+
+            // 网页：地球 = 外圆 + 竖向椭圆（两条经线的近似）+ 赤道横线。
+            GlyphKind.FILE_HTML -> {
+                drawCircle(tint, radius = 0.38f * u, center = at(0.5f, 0.5f), style = stroke)
+                drawPath(path(0.50f to 0.12f, 0.50f to 0.88f), tint, style = stroke)
+                drawPath(path(0.24f to 0.28f, 0.76f to 0.28f), tint, style = stroke)
+                drawPath(path(0.24f to 0.72f, 0.76f to 0.72f), tint, style = stroke)
+                drawPath(path(0.12f to 0.50f, 0.88f to 0.50f), tint, style = stroke)
+            }
+
+            // Shell：终端提示符（与 CONSOLE 同形的简化版，少了外框 —— 文件图标要满框）。
+            GlyphKind.FILE_SH -> {
+                drawPath(path(0.18f to 0.34f, 0.36f to 0.50f, 0.18f to 0.66f), tint, style = stroke)
+                drawPath(path(0.44f to 0.66f, 0.70f to 0.66f), tint, style = stroke)
+            }
+
+            // 其余：立方体 = 正面方块 + 右侧面（体量感）。
+            GlyphKind.FILE_GENERIC -> {
+                drawPath(
+                    path(0.16f to 0.28f, 0.58f to 0.28f, 0.58f to 0.72f, 0.16f to 0.72f).apply { close() },
+                    tint,
+                    style = stroke,
+                )
+                drawPath(
+                    path(0.58f to 0.28f, 0.84f to 0.42f, 0.84f to 0.86f, 0.58f to 0.72f),
+                    tint,
+                    style = stroke,
+                )
             }
 
             // 通知：铃铛（钟形）+ 顶部小柄 + 底部小舌。

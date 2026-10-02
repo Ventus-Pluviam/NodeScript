@@ -115,6 +115,15 @@ interface HostSummary {
      * 不受调度单槽覆盖影响）。控制台在途块按行给停止按钮，走本口不走单槽口。
      */
     suspend fun stopRun(runId: Long): Boolean
+
+    /**
+     * 脚本文件清单快照（项目页文件列表读口；`files/scripts/` 一棵树的平铺）。
+     *
+     * 挂起：要遍历项目根目录（IO）；读失败**抛**（与 [taskCenter]/[console] 同一条纪律），
+     * 项目根不存在回**空清单** —— "还没部署过任何项目"是真实事实，不是失败。
+     * 实现方排除 `node_modules` 与点开头条目（依赖缓存/版本控制噪声，不是用户资产）。
+     */
+    suspend fun scriptFiles(): ScriptFilesSnapshot
 }
 
 /**
@@ -190,4 +199,33 @@ data class ShellSummary(
     val shellReady: Boolean,
     val missedAlarms: Int,
     val keepAliveActive: Boolean,
+)
+
+/**
+ * 脚本文件清单快照（项目页文件列表）。
+ *
+ * @property rows 排序由实现方定（`:app` 侧按修改时间倒序 —— TG 会话列表"最近在前"
+ *   的同一读法）；本层不做二次排序。
+ */
+data class ScriptFilesSnapshot(
+    val rows: List<ScriptFileRow>,
+)
+
+/**
+ * 一个脚本文件行（项目页文件列表的一行 = TG 会话列表的一行会话）。
+ *
+ * @property projectId 所属项目（`files/scripts/` 下第一级目录名）。
+ * @property relPath 相对项目根的路径 —— 列表显示名（同名的 `main.js` 靠它区分）。
+ * @property name 文件名（不含目录）。
+ * @property ext 小写扩展名（无扩展名 = ""；文件类型图标用它取色/取字）。
+ * @property sizeBytes 文件长度（字节数；格式化在呈现层）。
+ * @property modifiedMillis 最后修改时刻（epoch ms；排序与"时间日期"列都出自它）。
+ */
+data class ScriptFileRow(
+    val projectId: String,
+    val relPath: String,
+    val name: String,
+    val ext: String,
+    val sizeBytes: Long,
+    val modifiedMillis: Long,
 )
