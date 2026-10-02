@@ -61,12 +61,21 @@
    - **`lockKey` 仍 `null`**（T2 的签/验与快照导出都不发生；全仓无 `KeyProvider` 实现，
      接缝形状 2026-10-01 已就位 —— 见第 3 条）。
    - **`scriptExecutor` 仍 `Unavailable`**（T1 门禁过了也跑不起来，spawn 桥属 P1）。
-   - **素材版本落差**：vendored 的是 **npm 11.19.0**（Node 24.21.0 的 `deps/npm`），不是 §10.1
+   - ~~**素材版本落差**：vendored 的是 **npm 11.19.0**（Node 24.21.0 的 `deps/npm`），不是 §10.1
      脊梁写的 npm 12.x —— npm 12 的「拒绝全部 lifecycle」官方默认不在位，T1 的护栏当前**只由
      硬编码 `--ignore-scripts` 一层承担**（与版本无关），且**非脚本** spawn 路径的第二层兜底
      （§10.12 末行 child_process 拦截 shim）未落。**且这条落差短期消不掉**：2026-10-01 实测
      `nodejs.org/dist/index.json`（868 条官方发布）**没有一条携带 npm 12.x** —— 「等 Node 线携带」
-     不成立，要 12.x 只能另找素材来源。口径见 [`design-decisions.md`](../design-decisions.md#已推翻--已改口径)。
+     不成立，要 12.x 只能另找素材来源。~~ **作废（2026-10-02 批 9 换源，落差已消解）** ——
+     素材来源换 **registry 发布态 tarball `npm@12.2.0`**（`VERSIONS.env` 钉版本 + sha1，
+     `fetch-and-build.sh` §9 双闸），§10.1 脊梁满足。**实测的官方默认语义**（解包产物直跑）：
+     **依赖** lifecycle 默认拒（`allow-scripts` 白名单缺省为空，拦时 `npm warn install-scripts`
+     播报被拦包与脚本名，不静默；`npm install-scripts approve <pkg>` 放行）、
+     `allow-git=none` / `allow-remote=none`；**项目自身** lifecycle 仍执行（历代如此）
+     → 所以硬编码 `--ignore-scripts` 仍是主控的**一半**，不撤；**非脚本** spawn 路径的第二层
+     兜底（§10.12 末行 child_process 拦截 shim）**仍未落**。口径见
+     [`design-decisions.md`](../design-decisions.md) 第 26 项，实测注见
+     [`10-npm.md`](10-npm.md) §10.1 与 §10.12 风险表。
 
    即：**设计上写着「已接线」的那几道 npm 防线，当前在生产路径上只接上了一道（执行体）**；这是接线缺口，不是设计缺口。
 

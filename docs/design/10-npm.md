@@ -6,15 +6,20 @@
 
 **脊梁：vendored 真 npm CLI（npm 12.x 系，要求 Node≥24.15，由 24.21.0 满足）在专用安装会话进程内「进程内执行」。**
 
-> **接线现状（2026-10-01）**：素材来源已拍板为 **Node 源码树自带的 `deps/npm`**
-> （随 libnode 同批出库：`node-runtime-build` 的 `OUT/npm` → gradle `prepareNpmCliAssets`
+> ~~**接线现状（2026-10-01）**：素材来源已拍板为 **Node 源码树自带的 `deps/npm`**~~
+> ~~（随 libnode 同批出库：`node-runtime-build` 的 `OUT/npm` → gradle `prepareNpmCliAssets`
 > 随包 `assets/npm/` → 启动期 `AssetTreeCliSource` 幂等落位 `files/npm/` → 注入
-> `HostNodeExecutor`），口径见 [`design-decisions.md`](../design-decisions.md#已推翻--已改口径)。
-> **代价必须写明**：Node 24.21.0 携带的是 **npm 11.19.0**，低于本行写的「npm 12.x 系」
+> `HostNodeExecutor`），口径见 [`design-decisions.md`](../design-decisions.md#已推翻--已改口径)。~~
+> ~~**代价必须写明**：Node 24.21.0 携带的是 **npm 11.19.0**，低于本行写的「npm 12.x 系」
 > —— 落差、补偿与升级路径见 §10.12 风险表该行与 [`backlog.md`](../backlog.md)（升级是独立一件事）。
 > 且 2026-10-01 实测 `nodejs.org/dist/index.json`：**868 条官方发布里没有任何一条携带 npm 12.x**
 > （最新 v26.10.0 / 2026-09-21 带的是 npm 11.19.1）—— 所以「等 Node 线携带 12.x」这条升级路径
-> **原理上不成立**，要 12.x 只能另找素材来源。
+> **原理上不成立**，要 12.x 只能另找素材来源。~~
+> **作废（2026-10-02 批 9 换源）**：素材来源已换 **registry 发布态 tarball `npm@12.2.0`** ——
+> 「从 Node 源码树取 `deps/npm`」与「Node 24.21.0 携带 11.19.0」两句**都不再是现状**（原文保留作历史）。
+> **接线链不变**（`node-runtime-build` 的 `OUT/npm` → gradle `prepareNpmCliAssets` 随包
+> `assets/npm/` → 启动期 `AssetTreeCliSource` 幂等落位 `files/npm/` → 注入 `HostNodeExecutor`），
+> 换的只是**素材怎么来的**。详见下一段。
 >
 > **已兑现（2026-10-02，backlog A6 落地）**：另找的素材来源 = **registry 发布态
 > tarball `npm@12.2.0`**（sha1 `9b58e3ad…` 钉 `VERSIONS.env`，`fetch-and-build.sh` §9
