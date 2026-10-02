@@ -104,4 +104,7 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.archunit.junit5)
+    // P0LoopbackTest 的宿主 npm 发现器取自 :app-service:npm 的测试夹具（backlog D9）：
+    // 此前 `:app` 测试源集自己抄了一份、与那边**已分叉**，现在物理上只有一份。
+    testImplementation(testFixtures(project(":app-service:npm")))
 }

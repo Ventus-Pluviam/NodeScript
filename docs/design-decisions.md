@@ -375,6 +375,38 @@
       `gh api repos/… --jq .visibility` = `public`）」，同段「该私仓权限」一并改掉。**外审 D6 报的
       「仓库可见性口径不明」由此关闭**（实测证伪了「私有仓」这句）。
 
+30. **结构面批（同日第三件）：测试助手去重只并该并的那份 + `bridge/` 目录索引 + 冻结面指到人（D9 / D10 / D12）**：
+    - **D9 只做一半，另一半明确不做**：`HostNpm`（宿主 npm CLI 发现，真 npm E2E 的环境前置）
+      两份**并成一份** —— 源码住 `build-logic/testkit-shared/`（与 `build-logic/arch-shared` 同为
+      **注源**手法，不进模块图），由 `:app-service:npm` 注进它的 `testFixtures` 源集，`:app` 用
+      `testImplementation(testFixtures(project(":app-service:npm")))` 消费。**判据是「两份是否已经
+      分叉」**：`HostNpm` 两份已分叉（`:app` 那份缺 `root`/`hasNode`，只剩 KDoc 里「改一处必须改
+      另一处」这句口头约定撑着）→ 该并；`platform/capabilities` 的 `HandlerRequests.kt` 两份
+      **维持**（只有包名/KDoc/工厂名不同，是 D5「测试树逐包镜像 main」的产物，合并会把两个
+      namespace 的测试绑在一起，**与 D5 口径相反**）。**这条是本批唯一的口径**：同名 ≠ 该并，
+      要看「分叉了没有」。
+      - **注源刻意写在模块 build 脚本、不写进 `autoscript.jvm` 约定**：约定一改就把它塞给全部
+        13 个测试模块，而实际消费方只有两个。
+      - **代价如实记**：`:app` 的测试从此**编译期依赖** `:app-service:npm` 的 testFixtures
+        配置。`ModuleGraphTest` 看不见这条边（它的正则只认 `project(":…")`，不认
+        `testFixtures(project(…))` 形状）；但方向合法（`:app → :app-service:npm` 本在 §6 允许集内），
+        故不违规 —— **是「门看不见」而不是「门放行」**，记在这里免得下次误以为已量化。
+    - **D10 只写索引，不改结构**：新增 `bridge/README.md` 说清 `bridge/` 底下**五种东西**
+      （三个 Gradle 模块 + 一个 npm 包 + 一个生成物源）各是什么、怎么构建/测。同批写明两处
+      **惯例位之外**的事实：C++ 宿主机语义门禁住 `bridge/image/test/cpp/`（不是 Gradle 的
+      `src/test`，因为该模块没有 JVM 代码）；**CI 不编 addon** —— `bridge_native.node`/`noden`
+      只由 `engine/node-process/scripts/build-native.sh` 在本机按需编，CI 的两条 C++ workflow
+      都只编 `libopencv.so`。**没有动任何目录布局**（那是 D13 的事，排最后）。
+    - **D12 把规则指到人**：新增 `.github/CODEOWNERS`（默认 `* @Ventus-Pluviam` + 冻结面/契约面/
+      安全面逐条），并在 `CONTRIBUTING.md` 与 `CLAUDE.md` 的协作纪律里把「协调者」**指名**为
+      维护者 `@Ventus-Pluviam`。**此前的问题不是没规则，是规则指不到人** —— 两处都写「提给协调者」，
+      而「协调者是谁」在人类向文档里从未定义。维护者身份取自仓库事实（`gh api …/collaborators`
+      里唯一 `admin:true` 即仓库 owner），非杜撰。**口径**：CODEOWNERS 是机器可读的那份，
+      文档里的指名人读镜像，不一致时以 CODEOWNERS 为准。
+      - **本批没做的**：D12 与 D5（「人类/agent 规则混写」）在 backlog 里标注「同批做」，本批只落
+        了 CODEOWNERS 这一半；D5 那半（把 `CLAUDE.md` 的 agent 规则与 `CONTRIBUTING.md` 的
+        人类规则切开）未动，仍留在池里。
+
 2026-09-30 拍板（外部审查整改步骤 7；非 §18 编号项，原口径不涉）：
 
 13. **`images` 匹配链路提速方案**（2026-09-30 评审拍板；A2–A4 实测 ❌ 后的出路裁决）：

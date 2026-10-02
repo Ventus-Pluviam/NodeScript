@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import com.autoscript.testkit.HostNpm
 
 /**
  * 真实 npm 端到端（§10 P0 实证切片）：

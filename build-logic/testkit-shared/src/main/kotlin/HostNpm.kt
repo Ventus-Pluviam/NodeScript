@@ -1,11 +1,11 @@
-package com.autoscript.appservice.npm
+package com.autoscript.testkit
 
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /**
- * 宿主 npm CLI 发现（**测试源集专用**，E2E 的环境前置）。
+ * 宿主 npm CLI 发现（**测试专用**，E2E 的环境前置）。
  *
  * 为什么不是写死 `/usr/lib/node_modules/npm`：那是 Debian 系 nodejs 包的位置，只在本机
  * 成立。GitHub runner 上 node 由 setup-node / 预装镜像放进
@@ -19,15 +19,28 @@ import java.util.concurrent.TimeUnit
  *  ③ 老静态位兜底（本机 Debian 系）。
  *
  * 探不到就是 null，调用侧 `assumeTrue`（不假扮通过）；本对象**绝不抛异常**。
- * 与 `:app` 测试源集的 `com.autoscript.shell.HostNpm` 同源 —— 模块间测试源集不可见，
- * 改一处必须改另一处（两处都用同一套三来源算法，键名一致）。
+ *
+ * **为什么住这里**（backlog D9）：这段算法有两个消费方（`:app-service:npm` 的
+ * `HostNodeNpmE2ETest`/`NpmCliDeployerTest`/`NpmCacheSeedDeployerTest` 与 `:app` 的
+ * `P0LoopbackTest`），而 **Gradle 模块间测试源集互不可见** —— 原先各抄一份，两份
+ * **已经分叉**（`:app` 那份缺 [root]/[hasNode]，KDoc 靠「改一处必须改另一处」这句
+ * 口头约定撑着）。现在只有一份：源码住本目录（`build-logic/testkit-shared/`，与
+ * `build-logic/arch-shared/` 同为**注源**手法 —— 不进模块图），由
+ * `:app-service:npm` 的 build 脚本注进它的 **testFixtures** 源集；消费方一句
+ * `testImplementation(testFixtures(project(":app-service:npm")))` 取用。
+ *
+ * 注源刻意写在**模块 build 脚本**而不是 `autoscript.jvm` 约定里：约定一改就把它塞给
+ * 全部 13 个测试模块，而实际消费方只有两个。
+ *
+ * 住 `com.autoscript.testkit` 包：各模块 archUnit 黑名单按包名写，本包不在任何黑名单里，
+ * 被测类依赖它不违规（与 `com.autoscript.build` 的 `ArchGate` 同一条口径）。
  */
-internal object HostNpm {
+object HostNpm {
 
     /** 宿主 npm-cli.js 绝对路径；探不到 = null。 */
     val cliJs: Path? = candidates().firstOrNull { Files.isRegularFile(it) }
 
-    /** npm 安装根（`<root>/bin/npm-cli.js` 的上两级）；`cliJs` 为 null 时同样为 null。 */
+    /** npm 安装根（`<root>/bin/npm-cli.js` 的上两级）；[cliJs] 为 null 时同样为 null。 */
     val root: Path? = cliJs?.parent?.parent
 
     /** 宿主有 node 可执行文件吗（PATH 口径，与 [cliJs] 独立：两者可分别缺）。 */

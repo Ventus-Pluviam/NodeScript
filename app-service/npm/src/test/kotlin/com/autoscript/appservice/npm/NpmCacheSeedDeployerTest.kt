@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import com.autoscript.testkit.HostNpm
 
 /**
  * 精选缓存种子部署器单测（§10.11 P0 缓存种子）+ 离线首装金标准（§10.12）：

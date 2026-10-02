@@ -28,6 +28,7 @@
 | [`SECURITY.md`](SECURITY.md) | 安全策略：支持范围、怎么报告、密钥怎么管 |
 | [`CLAUDE.md`](CLAUDE.md) | 面向 AI 协作者的仓库导览与协作纪律 |
 | `app` / `app-service` / `bridge` / `domain` / `engine` / `platform` / `ui` | Gradle 模块（模块表见 `settings.gradle.kts`；依赖方向铁律见 [`docs/design/06-modules.md`](docs/design/06-modules.md)） |
+| [`bridge/`](bridge/README.md) | **三种构建体系并置**：`:bridge:java` / `:bridge:native` / `:bridge:image` 是 Gradle 模块，`bridge/js` 是 npm 包，`bridge/schema` 是生成物源 —— 各怎么构建/测见该目录的 README |
 | `bridge/js` | npm 包 `@autoscript/bridge-js`（TS facade SDK；`private`，不发布；非 Gradle 模块） |
 | `node-runtime-build` | CI 构建管线：Node 24 源码与 OpenCV 交叉编译 recipe（产物不入 git） |
 

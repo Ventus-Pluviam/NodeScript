@@ -1,0 +1,23 @@
+# CODEOWNERS —— 谁必须审这个 PR（GitHub 会按下面第一条命中的模式自动请求评审）。
+#
+# 为什么有这份文件（backlog D12）：`CONTRIBUTING.md` 与 `CLAUDE.md` 一直说冻结文件的改动
+# 「先提给**协调者**」，但「协调者是谁」在人类向文档里从未指名。规则写在文档里、指不到人，
+# 等于没有规则 —— 这里把它落成机器可读的一份。
+#
+# 语法：**后面的模式优先于前面的**（不是合并）。故默认行放最上，逐条例外放下面。
+
+# 默认：本仓目前是单一维护者（§18 第 3 项「不发行正式版」，无发布流程、无第二维护者）。
+*                       @Ventus-Pluviam
+
+# ── 冻结面（改这些要先提出来，别夹在别的 PR 里 —— 见 CONTRIBUTING.md「改代码」）──
+/settings.gradle.kts            @Ventus-Pluviam   # 模块表（含「15 个模块」的派生源）
+/gradle/libs.versions.toml      @Ventus-Pluviam   # 版本目录
+/build.gradle.kts               @Ventus-Pluviam   # 根构建脚本
+/build-logic/                   @Ventus-Pluviam   # 约定插件 + 共享架构门/测试夹具源
+
+# ── 契约与安全面 ──
+# `docs/design/` 是**契约的单一事实来源**（改契约 = 改行为，必须与代码同批）；
+# `.github/workflows/` 是门禁本身；`SECURITY.md` 是支持范围与密钥口径。
+/docs/design/                   @Ventus-Pluviam
+/.github/                       @Ventus-Pluviam
+/SECURITY.md                    @Ventus-Pluviam

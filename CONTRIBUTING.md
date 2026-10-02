@@ -36,6 +36,10 @@
 - **`settings.gradle.kts`、`gradle/libs.versions.toml`、根 `build.gradle.kts` 是冻结文件**：
   模块表、版本目录、根构建脚本的改动**先提出来**再动，别夹在别的 PR 里。新增 / 删除模块还要同步
   登记 `ModuleGraphTest` 的允许集与模块表。
+  **「提给谁」= 维护者 [`@Ventus-Pluviam`](https://github.com/Ventus-Pluviam)** —— 冻结面在
+  [`.github/CODEOWNERS`](.github/CODEOWNERS) 里逐条指了人（本仓目前是单一维护者，无第二人可指；
+  见 `docs/design/18-19-ledger.md` §18 第 3 项「不发行正式版」）。CODEOWNERS 是**机器可读**的那份，
+  本行是人读的镜像；两者不一致时以 CODEOWNERS 为准。
 - **升级依赖 = 一件事一个提交**，并跑全量门。
 
 ## 提交信息
@@ -99,3 +103,4 @@ bash .github/scripts/check-doc-links.sh   # 文档相对链接门
 
 **不要开公开 issue。** 走私密渠道：[Security → Report a vulnerability](https://github.com/Ventus-Pluviam/NodeScript/security/advisories/new)
 （GitHub 私密漏洞上报，2026-10-01 开通，只有维护者可见）；支持范围、密钥管理、已知缺口见 [`SECURITY.md`](SECURITY.md)。
+维护者 = [`@Ventus-Pluviam`](https://github.com/Ventus-Pluviam)（同上，与 [`.github/CODEOWNERS`](.github/CODEOWNERS) 同源）。

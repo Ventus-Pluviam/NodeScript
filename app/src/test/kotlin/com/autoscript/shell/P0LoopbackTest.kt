@@ -2,6 +2,7 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.npm.NpmShellKit
 import com.autoscript.appservice.npm.HostNodeExecutor
+import com.autoscript.testkit.HostNpm
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.domain.bridge.BridgeRequest
