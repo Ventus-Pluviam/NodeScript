@@ -16,7 +16,7 @@
 
 | 组件 | 版本 | 许可 | 随包形态 |
 |---|---|---|---|
-| Node.js | v24.21.0（含 vendored npm 11.19.0） | MIT（npm 段为 Artistic License 2.0，逐字列在原文对应节） | 见 [原文](node-runtime-build/licenses/node-LICENSE) |
+| Node.js | v24.21.0（含 vendored npm 12.2.0） | MIT（npm 段为 Artistic License 2.0，逐字列在原文对应节） | 见 [原文](node-runtime-build/licenses/node-LICENSE) |
 | Android NDK / libc++ | r28c（bionic API 26，arm64） | Apache License 2.0 **WITH LLVM-exception**（NDK 工具链本体另有第三方条款，见其 NOTICE） | 见 NDK 随附 NOTICE（未随包） |
 | OpenCV（静态链接进 libopencv.so） | 4.14.0（commit `0654a42e19215ef25b1d367d822f3c630447e7c7`） | Apache License 2.0 | 见 [原文](node-runtime-build/licenses/opencv-LICENSE) |
 | KleidiCV（OpenCV 的 AArch64 HAL） | 26.03（软降级：下载失败则不启用，结论写进 SHASUMS256 审计行） | Apache License 2.0 | 见 [原文](node-runtime-build/licenses/kleidicv-LICENSE) |
@@ -26,7 +26,7 @@
 
 ## 2. 各组件的随包位置（随包 = 进了 APK 或落进 filesDir）
 
-### Node.js — v24.21.0（含 vendored npm 11.19.0）
+### Node.js — v24.21.0（含 vendored npm 12.2.0）
 
 - `lib/arm64-v8a/libnode.so`（jniLibs，随包）
 - `lib/arm64-v8a/libnoden.so`（`:engine:node-process` 的进程宿主；noden 改名入 jniLibs —— PackageManager 只提取 `*.so`，而 exec 要真文件，见 `autoscript.engine-natives`）

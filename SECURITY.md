@@ -69,8 +69,11 @@
 6. **npm 生产装配只接上了一道**：执行体已接线（2026-10-01，且**依赖素材随包** —— 没跑过
    `node-runtime-build` 的 APK 就是「无素材」那档，npm.* 如实 `ERR_NOT_IMPLEMENTED`），
    签名/快照（`lockKey` 缺省 `null`）与脚本门禁（`scriptExecutor`，P1）仍未接 —— lock 验签当前
-   **不可用**。另：vendored 的是 **npm 11.19.0**（Node 24.21.0 的 `deps/npm`），低于 §10 脊梁写的
-   npm 12.x，「拒绝全部 lifecycle」的官方默认不在位，护栏当前只由硬编码 `--ignore-scripts` 承担
-   （见 §11.3 第 8 条、[`docs/design/10-npm.md`](docs/design/10-npm.md) §10.12 风险表）。
+   **不可用**。另：~~vendored 的是 **npm 11.19.0**（Node 24.21.0 的 `deps/npm`），低于 §10 脊梁写的
+   npm 12.x，「拒绝全部 lifecycle」的官方默认不在位，护栏当前只由硬编码 `--ignore-scripts` 承担~~
+   （**2026-10-02 已换源**：vendored = registry `npm@12.2.0`，脊梁 12.x 满足；实测官方默认 =
+   **依赖** lifecycle 拒（白名单空 + 播报）+ `allow-git/remote=none` 在位，**项目自身**仍执行 →
+   硬编码 `--ignore-scripts` 仍是主控的一半；非脚本 spawn 的第二兜底 child_process 拦截 shim
+   **仍未落**）（见 §11.3 第 8 条、[`docs/design/10-npm.md`](docs/design/10-npm.md) §10.1 实测注与 §10.12 风险表）。
 
 以上每一条在 `docs/design/11-security.md` §11.3 都有对应登记。两处若有出入，以设计文档为准。
