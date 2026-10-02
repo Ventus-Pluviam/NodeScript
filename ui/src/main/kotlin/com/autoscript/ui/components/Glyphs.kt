@@ -40,8 +40,23 @@ enum class GlyphKind {
     /** 控制台（命令行）：终端窗口。 */
     CONSOLE,
 
-    /** 能力中心（三态门禁）：盾牌。 */
-    CAPABILITIES,
+    /** 无障碍服务：人形。 */
+    ACCESSIBILITY,
+
+    /** 屏幕采集：显示器。 */
+    SCREEN,
+
+    /** 悬浮窗：叠层方块。 */
+    OVERLAY,
+
+    /** 通知：铃铛。 */
+    BELL,
+
+    /** root：盾牌。 */
+    SHIELD,
+
+    /** 设置页签（底栏第 4 格）：齿轮。 */
+    SETTINGS,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -108,8 +123,8 @@ fun Glyph(
                 drawPath(path(0.54f to 0.60f, 0.71f to 0.60f), tint, style = stroke)
             }
 
-            // 盾牌：上宽下尖的六边形。能力中心管的是"授权/拒绝"，盾牌是最不容易读错的形。
-            GlyphKind.CAPABILITIES -> {
+            // 盾牌：上宽下尖的六边形。root/授权类条目管的是"开/关"，盾牌最不容易读错。
+            GlyphKind.SHIELD -> {
                 drawPath(
                     path(
                         0.50f to 0.11f,
@@ -122,6 +137,69 @@ fun Glyph(
                     tint,
                     style = stroke,
                 )
+            }
+
+            // 无障碍：头（圆）+ 躯干（一竖）+ 平举的双臂（一横）。
+            GlyphKind.ACCESSIBILITY -> {
+                drawCircle(tint, radius = 0.09f * u, center = at(0.5f, 0.16f), style = stroke)
+                drawPath(path(0.20f to 0.34f, 0.80f to 0.34f), tint, style = stroke)
+                drawPath(path(0.50f to 0.34f, 0.50f to 0.62f), tint, style = stroke)
+                drawPath(path(0.50f to 0.62f, 0.36f to 0.88f), tint, style = stroke)
+                drawPath(path(0.50f to 0.62f, 0.64f to 0.88f), tint, style = stroke)
+            }
+
+            // 屏幕采集：显示器外框（圆角矩形）+ 底座（短横 + 竖颈）。
+            GlyphKind.SCREEN -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = at(0.10f, 0.16f),
+                    size = Size(0.80f * u, 0.54f * u),
+                    cornerRadius = CornerRadius(0.10f * u),
+                    style = stroke,
+                )
+                drawPath(path(0.50f to 0.70f, 0.50f to 0.82f), tint, style = stroke)
+                drawPath(path(0.34f to 0.84f, 0.66f to 0.84f), tint, style = stroke)
+            }
+
+            // 悬浮窗：底层方块 + 右上叠出的小方块（层级感）。
+            GlyphKind.OVERLAY -> {
+                drawPath(
+                    path(0.14f to 0.30f, 0.62f to 0.30f, 0.62f to 0.78f, 0.14f to 0.78f).apply { close() },
+                    tint,
+                    style = stroke,
+                )
+                drawPath(
+                    path(0.38f to 0.22f, 0.86f to 0.22f, 0.86f to 0.70f),
+                    tint,
+                    style = stroke,
+                )
+            }
+
+            // 设置：齿轮 = 外圈（圆）+ 齿（四向短刺）+ 中孔（小圆）。
+            GlyphKind.SETTINGS -> {
+                drawCircle(tint, radius = 0.30f * u, center = at(0.5f, 0.5f), style = stroke)
+                drawCircle(tint, radius = 0.10f * u, center = at(0.5f, 0.5f), style = stroke)
+                drawPath(path(0.50f to 0.08f, 0.50f to 0.20f), tint, style = stroke)
+                drawPath(path(0.50f to 0.80f, 0.50f to 0.92f), tint, style = stroke)
+                drawPath(path(0.08f to 0.50f, 0.20f to 0.50f), tint, style = stroke)
+                drawPath(path(0.80f to 0.50f, 0.92f to 0.50f), tint, style = stroke)
+            }
+
+            // 通知：铃铛（钟形）+ 顶部小柄 + 底部小舌。
+            GlyphKind.BELL -> {
+                drawPath(
+                    path(
+                        0.50f to 0.14f,
+                        0.22f to 0.42f,
+                        0.22f to 0.68f,
+                        0.78f to 0.68f,
+                        0.78f to 0.42f,
+                        0.50f to 0.14f,
+                    ),
+                    tint,
+                    style = stroke,
+                )
+                drawPath(path(0.42f to 0.82f, 0.58f to 0.82f), tint, style = stroke)
             }
         }
     }

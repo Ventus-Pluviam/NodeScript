@@ -30,7 +30,7 @@ import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalBarAction
 import com.autoscript.ui.components.TabItem
 import com.autoscript.ui.components.TabBar
-import com.autoscript.ui.screens.CapabilityScreen
+import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
 import com.autoscript.ui.screens.HomeScreen
 import com.autoscript.ui.screens.TaskCenterScreen
@@ -56,7 +56,7 @@ import kotlinx.coroutines.launch
  * 实现），未实现即 `HomeState.UNWIRED` / `CapabilityCenterState.NOT_LOADED` 如实显示。
  *
  * 四个页签：首屏（壳/保活/漏投）、任务中心（§8.6 排期 + §8.5 档案/恢复账）、
- * 控制台（§7.3 游标拉取 + 在途执行）、能力中心（§9.5 三态）。刷新时机分两种，**不能混**：
+ * 控制台（§7.3 游标拉取 + 在途执行）、设置（§9.5 三态权限账，TG 设置页版式）。刷新时机分两种，**不能混**：
  * - 首屏状态是**同步**读（`shellSummary()`）：`onCreate` 首读 + 每次 `onResume` 重读 +
  *   冷启后一条**有界**的重问（见 [HomeRetryEffect]）；
  * - 能力态/任务态/控制台都是**挂起**的（`capabilityCenter()` 每次现问系统，含 root 探测的
@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
     /** 首屏状态：compose 可观察单槽（Activity 持有，配置变更随重建重读，无跨进程共享诉求）。 */
     private var homeState: HomeState by mutableStateOf(HomeState.UNWIRED)
 
-    /** 能力中心状态（同上）。 */
+    /** 设置页的状态（同上；数据面仍是能力快照）。 */
     private var capabilityState: CapabilityCenterState by mutableStateOf(CapabilityCenterState.NOT_LOADED)
 
     /** 任务中心状态（同上）。 */
@@ -168,7 +168,7 @@ class MainActivity : ComponentActivity() {
                                     onStopRun = { run -> scope.launch { stopRunOp(run) } },
                                     modifier = Modifier,
                                 )
-                                Tab.CAPABILITIES -> CapabilityScreen(
+                                Tab.SETTINGS -> SettingsScreen(
                                     state = capabilityState,
                                     onRefresh = { reloadCapabilities() },
                                     onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
                     Tab.HOME -> Unit
                     Tab.TASKS -> reloadTasks()
                     Tab.CONSOLE -> reloadConsole()
-                    Tab.CAPABILITIES -> reloadCapabilities()
+                    Tab.SETTINGS -> reloadCapabilities()
                 }
             }
         }
@@ -388,7 +388,7 @@ class MainActivity : ComponentActivity() {
         HOME("首屏", GlyphKind.HOME),
         TASKS("任务", GlyphKind.TASKS),
         CONSOLE("控制台", GlyphKind.CONSOLE),
-        CAPABILITIES("能力", GlyphKind.CAPABILITIES),
+        SETTINGS("设置", GlyphKind.SETTINGS),
     }
 
     private companion object {

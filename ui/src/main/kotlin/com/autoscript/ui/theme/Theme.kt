@@ -40,7 +40,7 @@ data class Colors(
     val background: Color,
     /** 卡片/顶栏底（`actionBarDefault`）。 */
     val surface: Color,
-    /** 次级底：分组头、输入框底（`windowBackgroundGray`）。 */
+    /** 设置页底（灰底上浮白卡片的那层灰；`windowBackgroundGray`）。 */
     val surfaceMuted: Color,
     /** 分隔线（`divider`）。 */
     val divider: Color,
@@ -103,7 +103,9 @@ val LightColors = Colors(
 val DarkColors = Colors(
     background = Color(0xFF181819),
     surface = Color(0xFF232326),
-    surfaceMuted = Color(0xFF1C1C1E),
+    // TG 的设置页灰底（night.attheme `windowBackgroundGray` = #000000，纯黑）：
+    // 深色下白卡片浮在黑底上，卡片与底的对比来自明度差，不靠描边。
+    surfaceMuted = Color(0xFF000000),
     divider = Color(0xFF2F2F33),
     text = Color(0xFFFFFFFF),
     textSecondary = Color(0xFF828282),
@@ -141,6 +143,16 @@ val LocalColors: ProvidableCompositionLocal<Colors> = staticCompositionLocalOf {
  */
 val ThemeColors: Colors
     @Composable @ReadOnlyComposable get() = LocalColors.current
+
+/**
+ * 「当前主题是不是深色」的组合内读口。
+ *
+ * 设置页的图标方块要用它决定画不画那圈 1dp 描边（`SettingCell.Background` 的
+ * `border` 口径）：这个事实属于主题而不属于任何一屏，收在这里才不会各屏自己
+ * 再写一份 `themeMode.isDark()`。
+ */
+@Composable
+fun isDarkTheme(): Boolean = ThemeColors == DarkColors
 
 /**
  * 版式：TG 的排版节奏是「标题 17sp 500、次级 15sp、时间 13sp」，比 M3 默认略小一号

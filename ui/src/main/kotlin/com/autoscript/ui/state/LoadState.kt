@@ -4,7 +4,7 @@ package com.autoscript.ui.state
  * 「这一屏读到了没有」的三态。
  *
  * **为什么把这条纪律做成一个类型，而不是每个 State 各带 `loaded`/`loadError` 两个字段**：
- * 四个屏（首屏/任务中心/控制台/能力中心）都踩过同一个坑 —— 把 `loaded=false, loadError=null`
+ * 四个屏（首屏/任务中心/控制台/设置）都踩过同一个坑 —— 把 `loaded=false, loadError=null`
  * 与 `loaded=false, loadError="xxx"` 画成同一句"尚未读取"，等于把「读失败」说成「没读」，
  * 现场（ROM 查询崩了 vs 装配没接线）就此丢失。两个字段自由组合还会长出第三种
  * 「loaded=true 且 loadError≠null」这种自相矛盾的态，没有类型约束就迟早有人写出来。
