@@ -45,6 +45,7 @@ import com.autoscript.ui.theme.Theme
 import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.ui.theme.ThemeMode
 import com.autoscript.ui.theme.isDark
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -56,7 +57,8 @@ import kotlinx.coroutines.launch
  *
  * 四个页签：首屏（壳/保活/漏投）、任务中心（§8.6 排期 + §8.5 档案/恢复账）、
  * 控制台（§7.3 游标拉取 + 在途执行）、能力中心（§9.5 三态）。刷新时机分两种，**不能混**：
- * - 首屏状态是**同步**读（`shellSummary()`）：`onCreate` 首读 + 每次 `onResume` 重读；
+ * - 首屏状态是**同步**读（`shellSummary()`）：`onCreate` 首读 + 每次 `onResume` 重读 +
+ *   冷启后一条**有界**的重问（见 [HomeRetryEffect]）；
  * - 能力态/任务态/控制台都是**挂起**的（`capabilityCenter()` 每次现问系统，含 root 探测的
  *   IO 切换；`taskCenter()` 要读两个持久寄存器；`console(seq, max)` 是游标增量拉取）：
  *   由 `LaunchedEffect(resumeTick, tab)` 驱动 —— 回前台、或切到该页签时重取一次。
@@ -182,6 +184,8 @@ class MainActivity : ComponentActivity() {
             // 中间每一页，那样划一次会连读三遍；settledPage 只在停稳后变一次。
             // 重读的触发权只在这两条（回前台/切页签）与手动刷新手里 —— 读失败不会
             // 反过来改 resumeTick 形成自激（见 reloadCapabilities）。
+            // 冷启那几秒：装配在 IO 域异步完成，onCreate 的首读大概率赶在它前面。
+            HomeRetryEffect(state = { homeState }) { homeState = HomeState.read(hostSummary()) }
             TabReloadEffect(resumeTick, pagerState) { tab ->
                 when (tab) {
                     Tab.HOME -> Unit
@@ -452,6 +456,46 @@ private fun MainShell(
             pagerState = pagerState,
             onSelect = onSelectTab,
         )
+    }
+}
+
+/** 冷启重问的间隔（见 [HomeRetryEffect]）。 */
+private const val HOME_RETRY_INTERVAL_MILLIS = 500L
+
+/**
+ * 冷启重问的次数上限（10 × 500ms ≈ 5s：够装配跑完；真失败就以红字收尾，不无限等）。
+ *
+ * 与 [HOME_RETRY_INTERVAL_MILLIS] 放在文件级而不是 `MainActivity` 的伴生对象里：
+ * 读它们的是文件级的 [HomeRetryEffect]，伴生对象的 `private` 成员出了类就看不见。
+ */
+private const val HOME_RETRY_ATTEMPTS = 10
+
+/**
+ * 冷启重问：壳还没就绪就过一会儿再问一次，**有界**。
+ *
+ * 为什么需要（2026-10-02 真机实测）：装配在 IO 域异步完成，而 `onCreate` 的首读
+ * 大概率赶在它前面 —— 那一刻首屏显示「壳未就绪（装配中或失败）」与「保活未生效」
+ * 两行红字，而首屏的读口只在 `onCreate` / `onResume` / 手动刷新三处被调，
+ * **它不会自己变绿**：用户装完 App 一打开看到的就是"这 App 坏了"。
+ *
+ * 两条自我约束，免得把"重试"变成"粉饰"：
+ * - **有界**：问满 [HOME_RETRY_ATTEMPTS] 次就停 —— 真失败照样以红字收尾，
+ *   只是不再把过渡态（装配中）当终态显示；
+ * - **接线与否另说**：[HomeState.summaryWired] 为 false 是"宿主没实现读口"，
+ *   再问多少次都是这个答案，立即停（否则白等一轮）。
+ *
+ * @param state 现读当前状态（读的是 Activity 上那个可观察单槽）。
+ * @param onReload 重问一次（由调用方给，本函数不碰 `hostSummary()`）。
+ */
+@Composable
+private fun HomeRetryEffect(state: () -> HomeState, onReload: () -> Unit) {
+    LaunchedEffect(Unit) {
+        repeat(HOME_RETRY_ATTEMPTS) {
+            val now = state()
+            if (now.shellReady || !now.summaryWired) return@LaunchedEffect
+            delay(HOME_RETRY_INTERVAL_MILLIS)
+            onReload()
+        }
     }
 }
 
