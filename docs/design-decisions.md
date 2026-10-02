@@ -441,6 +441,27 @@
       （全仓仅 1 条此类边，投机性一般化）。
 
 
+32. **许可证改 GPL-2.0-or-later（2026-10-02，本仓首次换许可）**：
+    - **拍板**：仓库本体（Kotlin / C++ / TypeScript 源码 + `bridge/js` 这个 npm 包）由 **MIT 改
+      `GPL-2.0-or-later`**。落地五处：`LICENSE` 换 GPL v2 全文（339 行，逐字取自 GPL 官方文本）、
+      `README.md` 许可段、`THIRD_PARTY_NOTICES.md` 自身声明、`bridge/js/package.json` 的
+      `license` 字段（`MIT` → `GPL-2.0-or-later`）、本项。
+    - **为何 `or later` 而不是 `only`**：GPL v2 的 "or later" 一节（`LICENSE` 末段）让受任人可把整体
+      按 GPL-3.0 再分发。选它 = 保留将来单向升级到 GPLv3 的路（Apache-2.0 时代的兼容性问题、
+      GPLv3 的专利与反 Tivoization 条款将来若要接，不必再找齐全部版权人重新授权）。**代价如实记**：
+      `or later` 也让受任人可以只挑 GPLv3 走，比 `only` 少一层"停在 v2"的确定性。
+    - **第三方素材不受影响（不吞并、也不冲突）**：GPL 只覆盖**本项目自身源码**。Node.js / npm /
+      OpenCV / libjpeg-turbo 等第三方仍按各自原许可（`node-runtime-build/licenses/` 逐字留档，
+      `THIRD_PARTY_NOTICES.md` 列名）。**注意**：GPL-2.0 与部分第三方许可（如 Apache-2.0）的兼容
+      问题**只在本项目源码与那些代码互相链接成单一作品时**才成立；本仓与第三方是**分发聚合**
+      （各自独立文件、各自许可），不构成衍生。这条判断的前提是当前事实（无第三方源码被改写进本项目源码），
+      **将来若真有源码级合入，须重新评估**。
+    - **动机**：本仓近期开始参考 Telegram Android（GPL-2.0）的实现（前端质感重构，见
+      [`log/2026-10-02.md`](log/2026-10-02.md) 批 13）。GPL 与 GPL 参考件同向，避免"参考了 GPL 代码
+      却以 MIT 分发"的许可不自洽。
+    - **未做**：未加 `COPYING`/`LICENSE` 双份、未在源文件头加 SPDX 注释块（全仓现状是零文件头声明）、
+      未改 `SECURITY.md`（其内容与许可无关）。这些留作将来的可选项，本次不铺开。
+
 2026-09-30 拍板（外部审查整改步骤 7；非 §18 编号项，原口径不涉）：
 
 13. **`images` 匹配链路提速方案**（2026-09-30 评审拍板；A2–A4 实测 ❌ 后的出路裁决）：

@@ -58,7 +58,8 @@
 
 ## 3. 本仓自有代码
 
-AutoScript 自身的 Kotlin / C++ / TypeScript 源码是 MIT，见 [`LICENSE`](LICENSE)。
+AutoScript 自身的 Kotlin / C++ / TypeScript 源码是 **GPL-2.0-or-later**，见
+[`LICENSE`](LICENSE)。
 上面列的是**随包分发的第三方二进制与素材**，不含本仓源码。
 
 ## 4. 不在随包范围（故不在上面清单里）

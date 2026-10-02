@@ -130,7 +130,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 许可
 
-本项目本体是 MIT，见 [`LICENSE`](LICENSE)。随包分发的第三方组件（Node.js / OpenCV /
+本项目本体是 **GPL-2.0-or-later**，见 [`LICENSE`](LICENSE)（GPL v2 全文；`or later`
+一节允许受任人把整体升级到 GPL-3.0 发布）。随包分发的第三方组件（Node.js / OpenCV /
 KleidiCV / libc++ / libjpeg-turbo / libpng / zlib / vendored npm）的许可清单见
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，逐字许可原文在
 [`node-runtime-build/licenses/`](node-runtime-build/licenses/)。
