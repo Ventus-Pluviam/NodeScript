@@ -2,6 +2,7 @@ package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -10,7 +11,9 @@ import com.autoscript.ui.components.LabeledRow
 import com.autoscript.ui.components.SectionHeader
 import com.autoscript.ui.components.Separator
 import com.autoscript.ui.components.ActionBarAction
+import com.autoscript.ui.components.RefreshableBox
 import com.autoscript.ui.components.ScaffoldScreen
+import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
@@ -26,53 +29,60 @@ import com.autoscript.ui.theme.ThemeColors
  * 不把「装配中」渲染成「就绪」，也不把漏投吞成 0。
  * 自动刷新（ON_RESUME 已由 Activity 承担）之外提供手动刷新按钮：
  * 装配完成时刻不可预知，按钮是「现在再看一眼」的兜底。
+ *
+ * 刷新有**两个入口、一个动作**：顶栏那颗按钮与下拉手势走同一个 `RefreshAction`
+ * （转圈持续到读口返回、挂起中不重复触发）。首屏不摆「回到顶部」——两段键值行撑不出
+ * 一次滚动，摆上去是个永远不出现的按钮。
  */
 @Composable
 fun HomeScreen(
     state: HomeState,
-    onRefresh: () -> Unit,
+    onRefresh: suspend () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val refresh = rememberRefreshAction(onRefresh)
     ScaffoldScreen(
         title = "AutoScript",
         modifier = modifier,
         subtitle = shellSubtitle(state),
         subtitleTone = state.shellTone,
-        action = { ActionBarAction("刷新", onRefresh) },
+        action = { ActionBarAction("刷新", refresh::trigger) },
     ) { contentModifier ->
-        LazyColumn(
-            modifier = contentModifier.background(ThemeColors.background),
-            contentPadding = PaddingValues(bottom = 24.dp),
-        ) {
-            item {
-                SectionHeader("运行状态")
-                LabeledRow("壳状态", state.shellText, tone = state.shellTone)
-                LabeledRow(
-                    label = "宿主摘要",
-                    value = if (state.summaryWired) "已接线" else "未接线",
-                    tone = if (state.summaryWired) StatusTone.OK else StatusTone.PROBLEM,
-                )
-                Separator()
-            }
-            item {
-                SectionHeader("保活与调度")
-                // 保活（§8.7）：false 时熄屏的 SCREEN_ON 任务会被如实拒绝 —— 这条对用户是
-                // "任务为什么没跑"的直接答案，所以摆在首屏第一屏，不藏在二级页里。
-                LabeledRow(
-                    label = "保活",
-                    value = if (state.keepAliveActive) {
-                        "已生效（前台服务 + 唤醒锁）"
-                    } else {
-                        "未生效：熄屏的亮屏任务会被拒绝（点亮屏幕可正常运行）"
-                    },
-                    tone = if (state.keepAliveActive) StatusTone.OK else StatusTone.PROBLEM,
-                )
-                LabeledRow(
-                    label = "漏投闹钟",
-                    // 有漏投不藏：那是「闹钟响了但调度未就绪」的账（§4.1），用户该知道。
-                    value = "${state.missedAlarms} 条",
-                    tone = if (state.missedAlarms > 0) StatusTone.ATTENTION else StatusTone.MUTED,
-                )
+        RefreshableBox(refresh, contentModifier) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().background(ThemeColors.background),
+                contentPadding = PaddingValues(bottom = 24.dp),
+            ) {
+                item {
+                    SectionHeader("运行状态")
+                    LabeledRow("壳状态", state.shellText, tone = state.shellTone)
+                    LabeledRow(
+                        label = "宿主摘要",
+                        value = if (state.summaryWired) "已接线" else "未接线",
+                        tone = if (state.summaryWired) StatusTone.OK else StatusTone.PROBLEM,
+                    )
+                    Separator()
+                }
+                item {
+                    SectionHeader("保活与调度")
+                    // 保活（§8.7）：false 时熄屏的 SCREEN_ON 任务会被如实拒绝 —— 这条对用户是
+                    // "任务为什么没跑"的直接答案，所以摆在首屏第一屏，不藏在二级页里。
+                    LabeledRow(
+                        label = "保活",
+                        value = if (state.keepAliveActive) {
+                            "已生效（前台服务 + 唤醒锁）"
+                        } else {
+                            "未生效：熄屏的亮屏任务会被拒绝（点亮屏幕可正常运行）"
+                        },
+                        tone = if (state.keepAliveActive) StatusTone.OK else StatusTone.PROBLEM,
+                    )
+                    LabeledRow(
+                        label = "漏投闹钟",
+                        // 有漏投不藏：那是「闹钟响了但调度未就绪」的账（§4.1），用户该知道。
+                        value = "${state.missedAlarms} 条",
+                        tone = if (state.missedAlarms > 0) StatusTone.ATTENTION else StatusTone.MUTED,
+                    )
+                }
             }
         }
     }

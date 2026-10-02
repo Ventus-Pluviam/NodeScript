@@ -3,9 +3,10 @@ package com.autoscript.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,8 +83,8 @@ class MainActivity : ComponentActivity() {
     /** 控制台状态（同上；行与游标随失败保留 —— 见 `ConsoleState.failed`）。 */
     private var consoleState: ConsoleState by mutableStateOf(ConsoleState.NOT_LOADED)
 
-    /** 当前页签。 */
-    private var tab: Tab by mutableStateOf(Tab.HOME)
+    // 「当前页签」不再是一个字段：它由 pager 的滚动位置派生（见 setContent 里的 pagerState）。
+    // 存两份必然漂移 —— 手指划过去时字段说 A、pager 说 B。
 
     /** 主题档位（跟随系统/浅/深）。 */
     private var themeMode: ThemeMode by mutableStateOf(ThemeMode.SYSTEM)
@@ -96,22 +97,27 @@ class MainActivity : ComponentActivity() {
         homeState = HomeState.read(hostSummary())
         setContent {
             val scope = rememberCoroutineScope()
+            val pagerState = rememberPagerState(pageCount = { Tab.entries.size })
             Theme(mode = themeMode) {
                 MainShell(
-                    tab = tab,
-                    onSelectTab = { tab = it },
+                    pagerState = pagerState,
+                    // 点页签 = 让 pager 自己滑过去。**不直接改状态**：pager 的滚动位置是
+                    // 唯一事实来源，指示线/重读/内容三者都从它派生，绕过去就又会漂移。
+                    onSelectTab = { scope.launch { pagerState.animateScrollToPage(it) } },
                     themeMode = themeMode,
                     onCycleTheme = { themeMode = themeMode.next() },
                 ) { shellModifier ->
-                    // 页签切换**淡入淡出**而不是硬切：四屏各有各的顶栏（标题、副标题、
-                    // 行尾动作都不同），硬切时标题是"啪"地换掉。时长压到 140ms ——
-                    // 再长就会有"点了没反应"的迟滞感（TG 的页签切换也是这种短淡入）。
-                    Crossfade(
-                        targetState = tab,
-                        animationSpec = tween(durationMillis = 140),
-                        label = "tabScreen",
+                    // 四屏装进 **HorizontalPager**：这是 TG 主页签的做法
+                    // （`MainTabsActivity extends ViewPagerActivity`），换来两件事 ——
+                    // ① 点页签是**横向滑动**过去，不是淡入淡出；② 内容可以**横划切页**。
+                    // 页签条上的指示线也因此能跟手（见 TabBar 的 pageOffsetFraction）。
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = shellModifier,
+                        // 邻页预组合：横划时邻页已经在了，不会划到一半才现画。
+                        beyondViewportPageCount = 1,
                     ) { current ->
-                        when (current) {
+                        when (Tab.entries[current]) {
                             Tab.HOME -> HomeScreen(
                                 state = homeState,
                                 onRefresh = { homeState = HomeState.read(hostSummary()) },
@@ -119,7 +125,7 @@ class MainActivity : ComponentActivity() {
                             )
                             Tab.TASKS -> TaskCenterScreen(
                                 state = taskState,
-                                onRefresh = { scope.launch { reloadTasks() } },
+                                onRefresh = { reloadTasks() },
                                 onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
                                 onCancel = { task -> scope.launch { cancelTaskOp(task) } },
                                 onRegister = { form -> scope.launch { registerTaskOp(form) } },
@@ -127,13 +133,13 @@ class MainActivity : ComponentActivity() {
                             )
                             Tab.CONSOLE -> ConsoleScreen(
                                 state = consoleState,
-                                onRefresh = { scope.launch { reloadConsole() } },
+                                onRefresh = { reloadConsole() },
                                 onStopRun = { run -> scope.launch { stopRunOp(run) } },
                                 modifier = shellModifier,
                             )
                             Tab.CAPABILITIES -> CapabilityScreen(
                                 state = capabilityState,
-                                onRefresh = { scope.launch { reloadCapabilities() } },
+                                onRefresh = { reloadCapabilities() },
                                 onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
                                 modifier = shellModifier,
                             )
@@ -141,11 +147,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            // 键里带 tab：切到本页签本身就该现取，而不是显示上次离开时的快照。
+            // 键里带页签：切到本页签本身就该现取，而不是显示上次离开时的快照。
+            // 用 **settledPage** 而不是 currentPage：横划跨多页时 currentPage 会途经
+            // 中间每一页，那样划一次会连读三遍；settledPage 只在停稳后变一次。
             // 重读的触发权只在这两条（回前台/切页签）与手动刷新手里 —— 读失败不会
             // 反过来改 resumeTick 形成自激（见 reloadCapabilities）。
-            LaunchedEffect(resumeTick, tab) {
-                when (tab) {
+            LaunchedEffect(resumeTick, pagerState.settledPage) {
+                when (Tab.entries[pagerState.settledPage]) {
                     Tab.HOME -> Unit
                     Tab.TASKS -> reloadTasks()
                     Tab.CONSOLE -> reloadConsole()
@@ -380,8 +388,8 @@ private fun ThemeMode.label(): String = when (this) {
  */
 @Composable
 private fun MainShell(
-    tab: MainActivity.Tab,
-    onSelectTab: (MainActivity.Tab) -> Unit,
+    pagerState: PagerState,
+    onSelectTab: (Int) -> Unit,
     themeMode: ThemeMode,
     onCycleTheme: () -> Unit,
     content: @Composable (Modifier) -> Unit,
@@ -404,8 +412,11 @@ private fun MainShell(
                 // 混上去等于造出第四种读法。计数一律在各自屏内说。
                 TabItem(label = it.short, badge = null)
             },
-            selected = tab.ordinal,
-            onSelect = { onSelectTab(MainActivity.Tab.entries[it]) },
+            page = pagerState.currentPage,
+            // 跟手：pager 的连续位置 = currentPage + currentPageOffsetFraction
+            // （偏移在滚向下一页时为正，故两者相加在世界坐标里是连续的）。
+            pageOffsetFraction = pagerState.currentPageOffsetFraction,
+            onSelect = onSelectTab,
         )
     }
 }

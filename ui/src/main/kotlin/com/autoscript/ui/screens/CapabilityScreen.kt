@@ -1,17 +1,21 @@
 package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -23,13 +27,17 @@ import com.autoscript.ui.components.SectionHeader
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.Separator
 import com.autoscript.ui.components.Cell
+import com.autoscript.ui.components.RefreshableBox
+import com.autoscript.ui.components.ScrollToTopButton
 import com.autoscript.ui.components.ToneText
+import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.CapabilityRowState
 import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.domain.permission.Capability
+import kotlinx.coroutines.launch
 
 /**
  * 能力中心（§9.5）：枚举所有能力 + 三态 + 引导文案 + 一键跳转系统页。
@@ -47,11 +55,15 @@ import com.autoscript.domain.permission.Capability
  * - 降级中的定时任务单列一段：那是 §8.6 承诺要标注「可能偏差」的账，不是权限问题。
  * - 安装体积单列一段（§15 E1「接受并明示」）：超支是既成事实，披露的时机是**装之前**
  *   用户能读到的那一屏，而不是装完才发现。
+ *
+ * 交互：下拉刷新（与顶栏那颗同一个动作）+ 「回到顶部」（能力有十几项，滚到下面想回
+ * 第一项时，手指要在系统手势区边缘往上蹭好几下）。**不做长按菜单** —— 这一屏每行的
+ * 动作只有一个（去授权），摆成菜单反而是把唯一的动作藏起来。
  */
 @Composable
 fun CapabilityScreen(
     state: CapabilityCenterState,
-    onRefresh: () -> Unit,
+    onRefresh: suspend () -> Unit,
     onOpenSettings: (Capability) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -60,44 +72,56 @@ fun CapabilityScreen(
         notLoadedText = "尚未读取（点右上「刷新」现问系统）",
         loadedText = "${state.rows.size} 项能力（三态现问系统，不缓存）",
     )
+    val refresh = rememberRefreshAction(onRefresh)
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     Column(modifier.fillMaxWidth().background(ThemeColors.background)) {
         ActionBar(
             title = "能力中心",
             subtitle = status.text,
             subtitleTone = status.tone,
-            actions = { ActionBarAction("刷新", onRefresh) },
+            actions = { ActionBarAction("刷新", refresh::trigger) },
         )
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-            state.installSize?.let { size ->
-                item {
-                    SectionHeader("安装体积")
-                    ToneText(
-                        text = size.text(),
-                        tone = if (size.engineFilesPresent) StatusTone.MUTED else StatusTone.ATTENTION,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                    )
-                    Separator()
+        Box(Modifier.weight(1f)) {
+            RefreshableBox(refresh, Modifier.fillMaxSize()) {
+                LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
+                    state.installSize?.let { size ->
+                        item {
+                            SectionHeader("安装体积")
+                            ToneText(
+                                text = size.text(),
+                                tone = if (size.engineFilesPresent) StatusTone.MUTED else StatusTone.ATTENTION,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            )
+                            Separator()
+                        }
+                    }
+                    if (state.degradedAlarmTaskIds.isNotEmpty()) {
+                        item {
+                            // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
+                            // 排期**可能偏差**（§8.6 的承诺）。
+                            SectionHeader("可能偏差")
+                            ToneText(
+                                text = "以下定时任务已降级（可能偏差）：${state.degradedAlarmTaskIds.joinToString("、")}",
+                                tone = StatusTone.ATTENTION,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            )
+                            Separator()
+                        }
+                    }
+                    items(state.rows, key = { it.capability.name }) { row ->
+                        CapabilityRow(row, onOpenSettings)
+                        Separator()
+                    }
                 }
             }
-            if (state.degradedAlarmTaskIds.isNotEmpty()) {
-                item {
-                    // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
-                    // 排期**可能偏差**（§8.6 的承诺）。
-                    SectionHeader("可能偏差")
-                    ToneText(
-                        text = "以下定时任务已降级（可能偏差）：${state.degradedAlarmTaskIds.joinToString("、")}",
-                        tone = StatusTone.ATTENTION,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                    )
-                    Separator()
-                }
-            }
-            items(state.rows, key = { it.capability.name }) { row ->
-                CapabilityRow(row, onOpenSettings)
-                Separator()
-            }
+            ScrollToTopButton(
+                visible = listState.firstVisibleItemIndex > 0,
+                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            )
         }
     }
 }

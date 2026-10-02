@@ -1,10 +1,16 @@
 package com.autoscript.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -291,5 +298,41 @@ fun LabeledRow(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f),
         )
+    }
+}
+
+/**
+ * 「回到顶部」浮动按钮（TG 会话列表滚下去之后那枚圆钮）。
+ *
+ * 出现/消失是淡入 + 轻微上浮，不是硬切：它盖在列表上，硬切会让人以为列表闪了一下。
+ * 用 [AnimatedVisibility] 而不是自己算透明度，是为了让**离场也有动画**（手写 alpha
+ * 时按钮一旦 `visible=false` 就被移除，没有机会播完离场）。
+ *
+ * @param visible 由调用方按滚动位置判定（`firstVisibleItemIndex > 0`）。
+ */
+@Composable
+fun ScrollToTopButton(
+    visible: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = ThemeColors
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + slideInVertically { it / 2 },
+        exit = fadeOut() + slideOutVertically { it / 2 },
+        modifier = modifier,
+    ) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .background(palette.surface, CircleShape)
+                .border(1.dp, palette.divider, CircleShape)
+                .pressable(role = Role.Button, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            // 字形当图标（同顶栏的返回箭头）：不引图标依赖，不为一个箭头多拉一个包。
+            Text("↑", color = palette.accent, style = MaterialTheme.typography.titleLarge)
+        }
     }
 }

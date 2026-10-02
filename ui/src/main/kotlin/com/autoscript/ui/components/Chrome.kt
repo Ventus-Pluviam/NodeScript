@@ -2,7 +2,6 @@ package com.autoscript.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -150,9 +149,10 @@ fun ActionBarAction(
 @Composable
 fun TabBar(
     tabs: List<TabItem>,
-    selected: Int,
+    page: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    pageOffsetFraction: Float = 0f,
 ) {
     val palette = ThemeColors
     Column(modifier.fillMaxWidth().background(palette.surface)) {
@@ -160,7 +160,7 @@ fun TabBar(
         BoxWithConstraints(Modifier.fillMaxWidth().height(56.dp)) {
             Row(Modifier.fillMaxSize()) {
                 tabs.forEachIndexed { index, tab ->
-                    val active = index == selected
+                    val active = index == page
                     val labelColor by animateColorAsState(
                         targetValue = if (active) palette.accent else palette.tabIdle,
                         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
@@ -185,21 +185,12 @@ fun TabBar(
                 }
             }
             if (tabs.isNotEmpty()) {
-                // 四格等宽，所以目标位置是纯算术：第 selected 格的中心减去半条线宽。
-                // 首次组合时 animateDpAsState 直接落在目标值（不从 0 滑过来），
-                // 故开屏不会出现"指示线从最左飞过去"。
+                // 位置**纯算术**，刻意不做动画：真正的动效由 pager 自己的滚动提供
+                // （`page + pageOffsetFraction` 是连续量，跟手拖动与 `animateScrollToPage`
+                // 都直接反映在它上面）。给这里再套一层 animateDpAsState，指示线反而会
+                // 慢手指半拍 —— 动画套动画，永远追不上。
                 val tabWidth = maxWidth / tabs.size
-                val targetX = tabWidth * selected + (tabWidth - TabIndicatorWidth) / 2
-                val x by animateDpAsState(
-                    targetValue = targetX,
-                    animationSpec = spring(
-                        // 略带回弹（dampingRatio < 1）：TG 的指示线到位时有一点"刹车"感，
-                        // 纯 tween 是匀速停，看着发木。
-                        dampingRatio = 0.82f,
-                        stiffness = Spring.StiffnessMedium,
-                    ),
-                    label = "tabIndicator",
-                )
+                val x = tabWidth * (page + pageOffsetFraction) + (tabWidth - TabIndicatorWidth) / 2
                 Box(
                     Modifier
                         .align(Alignment.BottomStart)
@@ -248,7 +239,7 @@ fun ScaffoldScreen(
             content(Modifier.fillMaxSize())
         }
         if (tabs != null) {
-            TabBar(tabs = tabs, selected = selectedTab, onSelect = onSelectTab)
+            TabBar(tabs = tabs, page = selectedTab, onSelect = onSelectTab)
         }
     }
 }

@@ -1,8 +1,10 @@
 package com.autoscript.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
@@ -132,6 +134,33 @@ fun Modifier.pressableSelectable(
         indication = indication,
         enabled = enabled,
         role = role,
+        onClick = onClick,
+    )
+}
+
+/**
+ * 带 TG 按压反馈的 `Modifier.combinedClickable` —— 给"长按出菜单"用。
+ *
+ * 长按是本仓从 TG 借的**招牌交互**：会话列表长按出上下文菜单，而不是把每个操作都摆成
+ * 一行按钮。放在 [Interaction] 这一层是因为它必须和点击共享同一套按压反馈与语义角色 ——
+ * 分开写两份 `combinedClickable` 迟早会出现"点有反馈、长按没反馈"。
+ */
+@OptIn(ExperimentalFoundationApi::class) // combinedClickable 在 foundation 1.7 仍是实验 API
+@Composable
+fun Modifier.pressableLongPress(
+    enabled: Boolean = true,
+    role: Role? = null,
+    onLongClick: () -> Unit,
+    onClick: () -> Unit,
+): Modifier {
+    val indication = rememberPressIndication()
+    val source = remember { MutableInteractionSource() }
+    return combinedClickable(
+        interactionSource = source,
+        indication = indication,
+        enabled = enabled,
+        role = role,
+        onLongClick = onLongClick,
         onClick = onClick,
     )
 }

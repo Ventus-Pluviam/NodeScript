@@ -7,22 +7,31 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.Dot
@@ -32,7 +41,17 @@ import com.autoscript.ui.components.SectionHeader
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.Separator
 import com.autoscript.ui.components.Cell
+import com.autoscript.ui.components.ContextMenu
+import com.autoscript.ui.components.CopyNotice
+import com.autoscript.ui.components.MenuAction
+import com.autoscript.ui.components.RefreshableBox
+import com.autoscript.ui.components.ScrollToTopButton
 import com.autoscript.ui.components.ToneText
+import com.autoscript.ui.components.pressableLongPress
+import com.autoscript.ui.components.rememberCopyAction
+import com.autoscript.ui.components.rememberDeletionParticles
+import com.autoscript.ui.components.rememberLongPressFeedback
+import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.ScheduleKind
 import com.autoscript.ui.state.Status
@@ -43,6 +62,7 @@ import com.autoscript.ui.state.describe
 import com.autoscript.ui.state.label
 import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.domain.host.ScreenRequirement
+import kotlinx.coroutines.launch
 
 /**
  * 任务中心（§8.6 排期 + §8.5 档案/恢复账 + 操作面「登记/取消/立即执行」）。
@@ -64,8 +84,10 @@ import com.autoscript.domain.host.ScreenRequirement
  * - 操作失败（`opError`）**不清任务清单** —— 清单还是上次读到的事实；
  * - 操作成功回执（`opNotice`）只说**调用被接受**：立即执行的成败
  *   在意图日志/控制台，不在此屏断言"跑成功了"；
- * - 挂起中（`opInFlight`）全部操作按钮禁用 —— 立即执行要挂到
- *   本次执行结算（排队 10s + 脚本超时），不禁用就会双击双投；
+ * - 挂起中（`opInFlight`）全部**操作**按钮禁用 —— 立即执行要挂到
+ *   本次执行结算（排队 10s + 脚本超时），不禁用就会双击双投。**「刷新」不在此列**：
+ *   它是幂等读（重复触发由 `RefreshAction` 自己丢弃），而一次立即执行能挂 40s，
+ *   挂起中连看一眼清单都不许是没道理的 —— 怕双击的只有写；
  * - 取消走一次确认对话框（误触成本 = 手工重登记全部字段）；
  * - 表单给 once/daily/cron 三态（cron 表达式格，缺省 `0 9 * * *`）；语义校验
  *   （空串/越界）由 `:app` 闸门统一裁决，原文进 `opError`。
@@ -73,7 +95,7 @@ import com.autoscript.domain.host.ScreenRequirement
 @Composable
 fun TaskCenterScreen(
     state: TaskCenterState,
-    onRefresh: () -> Unit,
+    onRefresh: suspend () -> Unit,
     onRunNow: (TaskRowState) -> Unit,
     onCancel: (TaskRowState) -> Unit,
     onRegister: (RegistrationForm) -> Unit,
@@ -84,6 +106,13 @@ fun TaskCenterScreen(
     var showForm by remember { mutableStateOf(false) }
     var form by remember { mutableStateOf(RegistrationForm()) }
 
+    val refresh = rememberRefreshAction(onRefresh)
+    val copy = rememberCopyAction()
+    val particles = rememberDeletionParticles()
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val particleColor = ThemeColors.accent
+
     val status = Status.count(
         load = state.load,
         notLoadedText = "尚未读取（点右上「刷新」现取）",
@@ -91,6 +120,11 @@ fun TaskCenterScreen(
         emptyText = "读到了，没有已登记的任务",
         unit = "条任务（含已停用）",
     )
+
+    val taskIds = state.tasks.map { it.id }
+    // 任务消失（取消、或一次性任务跑完出册）时在原地炸一簇粒子。判据在
+    // `state/Particles.vanished`（首帧不炸），这里只喂 id 快照。
+    LaunchedEffect(taskIds) { particles.sync(taskIds, particleColor) }
 
     Column(modifier.fillMaxWidth().background(ThemeColors.background)) {
         ActionBar(
@@ -103,84 +137,106 @@ fun TaskCenterScreen(
                     onClick = { showForm = !showForm },
                     enabled = !state.opInFlight,
                 )
-                ActionBarAction("刷新", onRefresh, enabled = !state.opInFlight)
+                ActionBarAction("刷新", refresh::trigger)
             },
         )
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-            if (state.opInFlight) {
-                item { FeedbackLine("执行中…（挂起期间按钮停用）", StatusTone.MUTED) }
-            }
-            state.opError?.let {
-                item { FeedbackLine("操作失败：$it", StatusTone.PROBLEM) }
-            }
-            state.opNotice?.let {
-                item { FeedbackLine(it, StatusTone.OK) }
-            }
-            if (showForm) {
-                item {
-                    RegistrationBlock(
-                        form = form,
-                        onChange = { form = it },
-                        onSubmit = {
-                            // 解析抛错（形状非法）也走操作回执通道：原文进 opError，不吞。
-                            onRegister(form)
-                        },
-                        enabled = !state.opInFlight,
-                    )
-                    Separator()
+        Box(Modifier.weight(1f)) {
+            // 下拉与顶栏那颗「刷新」是同一个动作（同一份挂起状态，见 RefreshAction）。
+            RefreshableBox(refresh, Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                ) {
+                    item { CopyNotice(copy) }
+                    if (state.opInFlight) {
+                        item { FeedbackLine("执行中…（挂起期间按钮停用）", StatusTone.MUTED) }
+                    }
+                    state.opError?.let {
+                        item { FeedbackLine("操作失败：$it", StatusTone.PROBLEM) }
+                    }
+                    state.opNotice?.let {
+                        item { FeedbackLine(it, StatusTone.OK) }
+                    }
+                    if (showForm) {
+                        item {
+                            RegistrationBlock(
+                                form = form,
+                                onChange = { form = it },
+                                onSubmit = {
+                                    // 解析抛错（形状非法）也走操作回执通道：原文进 opError，不吞。
+                                    onRegister(form)
+                                },
+                                enabled = !state.opInFlight,
+                            )
+                            Separator()
+                        }
+                    }
+                    state.recovery?.text()?.let { text ->
+                        item {
+                            SectionHeader("恢复账")
+                            FeedbackLine(
+                                text = text,
+                                tone = if (state.recovery?.failureText != null) StatusTone.PROBLEM else StatusTone.MUTED,
+                            )
+                        }
+                    }
+                    if (state.unfinishedRuns.isNotEmpty()) {
+                        item {
+                            SectionHeader("未结算的执行 ${state.unfinishedRuns.size}")
+                            // 非空不藏：生产实现里这一栏应当恒空，非空 = 有执行没结算（§8.5 孤儿）。
+                            ToneText(
+                                text = "档案未结算 —— 不是此刻正在跑",
+                                tone = StatusTone.ATTENTION,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                            )
+                        }
+                        items(state.unfinishedRuns, key = { it.engineRunId }) { run ->
+                            Cell(
+                                modifier = Modifier.animateItem(),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                            ) {
+                            ToneText(
+                                text = buildString {
+                                    append("#${run.engineRunId} ${run.scriptPath}：${run.stateLabel}")
+                                    run.intentRunId?.let { append("（意图 #$it）") }
+                                        ?: append("（无意图关联）")
+                                    run.startedText?.let { append("，起于 $it") }
+                                },
+                                tone = StatusTone.ATTENTION,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Separator()
+                        }
+                        }
+                    }
+                    items(state.tasks, key = { it.id }) { task ->
+                        // 登记/取消后列表会增删，animateItem 让增删是"落位/让位"而不是瞬移。
+                        // onGloballyPositioned 把行位报给粒子层（取消时炸的就是这一块地方）。
+                        Box(
+                            Modifier
+                                .animateItem()
+                                .onGloballyPositioned { particles.place(task.id, it.boundsInParent()) },
+                        ) {
+                            TaskRow(
+                                task = task,
+                                opInFlight = state.opInFlight,
+                                onRunNow = { onRunNow(task) },
+                                onCancel = { pendingCancel = task },
+                                onCopyPath = { copy.copy("已复制脚本路径", task.scriptPath) },
+                            )
+                            Separator()
+                        }
+                    }
                 }
             }
-            state.recovery?.text()?.let { text ->
-                item {
-                    SectionHeader("恢复账")
-                    FeedbackLine(
-                        text = text,
-                        tone = if (state.recovery?.failureText != null) StatusTone.PROBLEM else StatusTone.MUTED,
-                    )
-                }
-            }
-            if (state.unfinishedRuns.isNotEmpty()) {
-                item {
-                    SectionHeader("未结算的执行 ${state.unfinishedRuns.size}")
-                    // 非空不藏：生产实现里这一栏应当恒空，非空 = 有执行没结算（§8.5 孤儿）。
-                    ToneText(
-                        text = "档案未结算 —— 不是此刻正在跑",
-                        tone = StatusTone.ATTENTION,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-                    )
-                }
-                items(state.unfinishedRuns, key = { it.engineRunId }) { run ->
-                    Cell(
-                        modifier = Modifier.animateItem(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                    ) {
-                    ToneText(
-                        text = buildString {
-                            append("#${run.engineRunId} ${run.scriptPath}：${run.stateLabel}")
-                            run.intentRunId?.let { append("（意图 #$it）") }
-                                ?: append("（无意图关联）")
-                            run.startedText?.let { append("，起于 $it") }
-                        },
-                        tone = StatusTone.ATTENTION,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Separator()
-                }
-                }
-            }
-            items(state.tasks, key = { it.id }) { task ->
-                // 登记/取消后列表会增删，animateItem 让增删是"落位/让位"而不是瞬移。
-                Box(Modifier.animateItem()) {
-                    TaskRow(
-                        task = task,
-                        opInFlight = state.opInFlight,
-                        onRunNow = { onRunNow(task) },
-                        onCancel = { pendingCancel = task },
-                    )
-                    Separator()
-                }
-            }
+            // 粒子层与列表同层（同一套坐标），且不吞触摸。
+            particles.Overlay(Modifier.matchParentSize())
+            ScrollToTopButton(
+                visible = listState.firstVisibleItemIndex > 0,
+                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            )
         }
     }
 
@@ -223,6 +279,14 @@ private fun FeedbackLine(text: String, tone: StatusTone) {
  * 摘要两行合一：`scheduleText` 与 `nextFireText` 拼一段——TG 会话列表就是这种
  * "主行 + 灰字摘要"的两栏；分成两行会让列表高度虚增一倍。
  * [TaskRowState.badges] 给的提示挂摘要后面，不另开一段。
+ *
+ * **两个手势**（TG 列表的读法）：
+ * - **点一下展开**：折叠行是把三句标记挤在一行里（尾句会被省略号吃掉），展开后
+ *   每条标记各占一行、脚本路径也完整给出 —— 不展开就没法读到"降级投递"这种长句；
+ * - **长按出菜单**：立即执行 / 取消 / 复制脚本路径。行尾那两颗胶囊**照旧保留** ——
+ *   长按是另一个入口，不是把功能藏起来。
+ *
+ * 菜单里那两项跟着 [opInFlight] 停用（与胶囊同一条口径）：挂起中再点一次会双投。
  */
 @Composable
 private fun TaskRow(
@@ -230,42 +294,88 @@ private fun TaskRow(
     opInFlight: Boolean,
     onRunNow: () -> Unit,
     onCancel: () -> Unit,
+    onCopyPath: () -> Unit,
 ) {
     val badges = task.badges()
     // 行首圆点取"最严重"那一档：停用 > 降级 > 一次性（顺序即严重度）。
     val worst = badges.firstOrNull()?.first ?: StatusTone.OK
-    Cell(
-        leading = { Dot(worst) },
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-        trailing = {
-            Row {
-                PillButton("立即执行", selected = false, onClick = onRunNow, enabled = !opInFlight)
-                Spacer(Modifier.width(4.dp))
-                PillButton("取消", selected = false, onClick = onCancel, enabled = !opInFlight)
-            }
-        },
-    ) {
-        Column {
-            ToneText(
-                text = task.name,
-                tone = if (task.enabled) StatusTone.NEUTRAL else StatusTone.MUTED,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            ToneText(
-                text = buildString {
-                    append(task.scheduleText)
-                    task.nextFireText?.let { append(" · 下次 $it") }
-                    badges.forEach { append(" · ${it.second}") }
+    // 展开态跨滚动留住（LazyColumn 会回收划走的项，普通 remember 会被回收掉）。
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    val longPressFeedback = rememberLongPressFeedback()
+
+    Box {
+        Cell(
+            modifier = Modifier.pressableLongPress(
+                role = Role.Button,
+                onLongClick = {
+                    longPressFeedback()
+                    menuOpen = true
                 },
-                tone = if (task.enabled) StatusTone.MUTED else StatusTone.MUTED,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            ToneText(
-                text = task.scriptPath,
-                tone = StatusTone.MUTED,
-                style = MaterialTheme.typography.labelSmall,
-            )
+                onClick = { expanded = !expanded },
+            ),
+            leading = { Dot(worst) },
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            trailing = {
+                Row {
+                    PillButton("立即执行", selected = false, onClick = onRunNow, enabled = !opInFlight)
+                    Spacer(Modifier.width(4.dp))
+                    PillButton("取消", selected = false, onClick = onCancel, enabled = !opInFlight)
+                }
+            },
+        ) {
+            Column {
+                ToneText(
+                    text = task.name,
+                    tone = if (task.enabled) StatusTone.NEUTRAL else StatusTone.MUTED,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                ToneText(
+                    text = buildString {
+                        append(task.scheduleText)
+                        task.nextFireText?.let { append(" · 下次 $it") }
+                        badges.forEach { append(" · ${it.second}") }
+                    },
+                    tone = StatusTone.MUTED,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (expanded) {
+                    // 展开：每条标记独占一行（折叠时它们挤在摘要行尾，会被省略号截掉）。
+                    for ((tone, text) in badges) {
+                        ToneText(
+                            text = "· $text",
+                            tone = tone,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+                ToneText(
+                    text = task.scriptPath,
+                    tone = StatusTone.MUTED,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
+        ContextMenu(
+            expanded = menuOpen,
+            onDismiss = { menuOpen = false },
+            actions = listOf(
+                MenuAction(
+                    label = "立即执行",
+                    onClick = onRunNow,
+                    enabled = !opInFlight,
+                    tone = StatusTone.LINK,
+                ),
+                MenuAction(
+                    label = "取消任务",
+                    onClick = onCancel,
+                    enabled = !opInFlight,
+                    // 红字：这一项撤销排期（TG 的删除项也是红的），与"立即执行"必须一眼分开。
+                    tone = StatusTone.PROBLEM,
+                ),
+                MenuAction(label = "复制脚本路径", onClick = onCopyPath),
+            ),
+        )
     }
 }
 
