@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import com.autoscript.domain.host.HostSummary
@@ -42,7 +43,6 @@ import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.theme.Theme
-import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.ui.theme.ThemeMode
 import com.autoscript.ui.theme.isDark
 import kotlinx.coroutines.delay
@@ -419,7 +419,7 @@ private fun ThemeMode.label(): String = when (this) {
 }
 
 /**
- * 外壳：内容（四屏的 pager） + 底部页签条。
+ * 外壳：内容（四屏的 pager）+ 底部页签条。
  *
  * 各屏自己画顶栏（它们各有各的副标题与行尾动作，如任务中心的「登记/刷新」），
  * 这里不套一层顶栏 —— 套了每屏就被塞一个重复的标题栏，反而失去"四屏顶栏长得一样"
@@ -431,9 +431,10 @@ private fun ThemeMode.label(): String = when (this) {
  * 那是"切页卡死"的根因（2026-10-02 实测）。页签条自己在**它那一层**读
  * `currentPage`（每翻一页变一次），跟手的观感由颜色动画补完。
  *
- * 主题切换曾经是页签条之上的一条 28dp 细行，已改挂各屏顶栏（见 [LocalBarAction]）：
- * 那不是 TG 的版面（TG 底栏之上没有东西），而且一条只有文字的横条夹在列表与底栏之间
- * 看起来像没画完的设置页。
+ * 底栏是 TG 的**悬浮胶囊**（2026-10-03 批 21 起）：不再占版面的一行，而是与内容
+ * 同层、盖在内容之上 —— 所以 Column 不再需要给自己铺底色（每屏自己铺），也不用
+ * 给 pager 让出高度。主题切换曾经是页签条之上的一条 28dp 细行，已改挂各屏顶栏
+ * （见 [LocalBarAction]）。
  */
 @Composable
 private fun MainShell(
@@ -441,21 +442,25 @@ private fun MainShell(
     onSelectTab: (Int) -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(ThemeColors.background)) {
-        // pager 拿 weight 而不是 fillMaxSize：底栏要占它自己那一份（含导航栏 inset）。
+    Column(Modifier.fillMaxSize()) {
+        // pager 占满整个屏高（**不留**底栏的那份）：底栏改成 TG 的悬浮胶囊后它不再
+        // 是"占一行的一块版面"，而是浮在内容之上的一条 —— 与内容同层（Box），内容
+        // 滚动时会从胶囊底下穿过（TG 同款：会话列表从底栏下面滚过去）。
         Box(Modifier.weight(1f)) {
             content(Modifier.fillMaxSize())
+            // 胶囊盖在内容之上：后画的在上层。它自己的 8dp 外边距让四周露出内容。
+            TabBar(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                tabs = MainActivity.Tab.entries.map {
+                    // 刻意**不挂页签徽标**：徽标在 TG 里是"未读"语义，
+                    // 与本仓的"在途 / 漏投 / 未结算"三种账都不是一回事 ——
+                    // 混上去等于造出第四种读法。计数一律在各自屏内说。
+                    TabItem(label = it.short, glyph = it.glyph, badge = null)
+                },
+                pagerState = pagerState,
+                onSelect = onSelectTab,
+            )
         }
-        TabBar(
-            tabs = MainActivity.Tab.entries.map {
-                // 刻意**不挂页签徽标**：徽标在 TG 里是"未读"语义，
-                // 与本仓的"在途 / 漏投 / 未结算"三种账都不是一回事 ——
-                // 混上去等于造出第四种读法。计数一律在各自屏内说。
-                TabItem(label = it.short, glyph = it.glyph, badge = null)
-            },
-            pagerState = pagerState,
-            onSelect = onSelectTab,
-        )
     }
 }
 

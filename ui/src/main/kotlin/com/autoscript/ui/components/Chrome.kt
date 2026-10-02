@@ -2,6 +2,7 @@ package com.autoscript.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -21,8 +22,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,7 +34,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.state.StatusTone
@@ -162,14 +174,27 @@ fun ActionBarAction(
 }
 
 /**
- * 底部页签条（TG 的底部导航：**图标 + 文字，整格染色，没有指示线**）。
+ * 底部页签条（TG 2025+ 的悬浮胶囊底栏，`MainTabsActivity` + `MainTabsLayout` 语法）：
  *
- * 三处对齐 TG 的语法（2026-10-02 重做，旧版对着"顶栏页签"抄错了地方）：
- * 1. **图标 + 文字两行**，图标 24dp、文字 12sp —— 底栏的辨识靠图标，文字只是补一句；
- *    旧版只有文字，四格两字并排看起来像分段控件，不像底栏。
- * 2. **没有指示线**。旧版那条 2dp 蓝线是 TG **顶栏**文件夹页签的下划线
- *    （`actionBarTabLine`），搬到顶栏以外的地方就不是 TG 了。
- * 3. **选中 = 整格染色**（图标与文字同色渐变到强调色），未选中 = 次级灰。
+ * **不再是贴边整条**，是一条浮在内容上的胶囊（`tabsViewBackground.setRadius(HEIGHT/2)`）：
+ * 1. **胶囊外形**：高 56dp（`MAIN_TABS_HEIGHT`），距屏边 8dp（`MAIN_TABS_MARGIN`），
+ *    圆角 = 高度一半（28dp），最大宽 344dp（`setMaxWidth(328 + MARGIN*2)`）居中；
+ *    底色 = surface（`glass_targetMainTabs` 的语义位：浅色白、深色 #232324），
+ *    下方 8dp 阴影把它从内容上托起来（blur 工厂在 Compose 里没有等价物，阴影是
+ *    「浮在内容上」的最小表达）。
+ * 2. **一格 = 图标 + 文字**（`GlassTabView`）：图标 24dp 在上（距顶 4dp），文字 12sp
+ *    粗体在下（`textView.setTextSize(12f)` + `AndroidUtilities.bold()`）；格子宽度按
+ *    文字宽自适应（`measureTextWidth` + 三档字号收窄），不走 weight 均分 —— 这正是
+ *    TG 底栏与 Material `NavigationBar` 最大的版式区别。
+ * 3. **选中语法 = 选中格整格染色 + 胶囊高亮**（`GlassTabView.dispatchDraw`）：
+ *    选中格背后画一个 9% 透明度的强调色圆角块（`multAlpha(colorSelected, 0.09f)`），
+ *    图标与文字 blend 到强调色；未选中 = 主文字色 63% 透明度（`key_glass_defaultIcon`
+ *    = 0x991B2227，night = 0xA0FFFFFF）。
+ * 4. **导航栏 inset 在胶囊下面**：胶囊浮起来之后，系统手势条那一条露出内容的底色，
+ *    胶囊本体不受 inset 挤压（与贴边整条「inset 吃掉 56dp 实高」完全不同）。
+ *
+ * **只读 `pagerState.currentPage`，绝不读 `currentPageOffsetFraction`**（硬约束，
+ * 见旧版注释：后者每帧变，在组合里读 = 重组风暴；跟手的观感由颜色/块位移动画补完）。
  */
 @Composable
 fun TabBar(
@@ -179,37 +204,56 @@ fun TabBar(
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
-    Column(
-        modifier
+    Row(
+        modifier = modifier
             .fillMaxWidth()
-            // 底栏底色**铺到屏幕最底**（含系统导航栏/手势条那一条）：TG 的底栏一直画到
-            // 屏幕边缘，导航栏区跟着底栏上色，而不是在底栏下面留一条系统黑带。
-            // 同 ActionBar：background 在前、inset padding 在后（padding 加在实高之外）。
-            .background(palette.surface)
-            .windowInsetsPadding(WindowInsets.navigationBars),
+            // 距屏边 8dp（MAIN_TABS_MARGIN）。**不挂 navigationBars inset**：胶囊是
+            // 浮起来的，手势条那一条在它下面露出内容底色（TG 同款）。
+            .padding(horizontal = MainTabsMargin, vertical = MainTabsMargin),
+        horizontalArrangement = Arrangement.Center,
     ) {
-        Separator(indentDp = 0)
-        Row(Modifier.fillMaxWidth().height(TabBarHeight)) {
-            tabs.forEachIndexed { index, tab ->
-                TabBarItem(
-                    tab = tab,
-                    // **只读 `currentPage`，绝不读 `currentPageOffsetFraction`**：
-                    // 后者每帧都变，在组合里读它 = 横划时每帧重组整条栏 + 外壳 + 页内容
-                    // （旧版卡顿的根因）。`currentPage` 只在跨过半页时变一次，颜色由
-                    // animateColorAsState 补完中间过程 —— 观感上仍是"划过去"，代价是零。
-                    selected = pagerState.currentPage == index,
-                    onClick = { onSelect(index) },
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                )
+        Column(
+            Modifier
+                .widthIn(max = MainTabsMaxWidth)
+                .shadow(elevation = 10.dp, shape = MainTabsShape)
+                .background(palette.surface, MainTabsShape),
+        ) {
+            Row(Modifier.height(TabBarHeight)) {
+                tabs.forEachIndexed { index, tab ->
+                    TabBarItem(
+                        tab = tab,
+                        // **只读 `currentPage`**：跨半页才变一次，颜色由 animateColorAsState
+                        // 与高亮块位移补完中间过程 —— 观感是"划过去"，代价是零。
+                        selected = pagerState.currentPage == index,
+                        onClick = { onSelect(index) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                    )
+                }
             }
         }
     }
 }
 
-/** 底栏高度（不含系统导航栏那一条）。TG 的底栏就是 56dp。 */
+/** 胶囊圆角 = 高度一半（`tabsViewBackground.setRadius(MAIN_TABS_HEIGHT / 2f)`）。 */
+private val MainTabsShape = RoundedCornerShape(28.dp)
+
+/** 底栏距屏边（`MAIN_TABS_MARGIN = 8`）。 */
+private val MainTabsMargin = 8.dp
+
+/** 胶囊最大宽（`tabsView.setMaxWidth(dp(328 + MAIN_TABS_MARGIN * 2))`）。 */
+private val MainTabsMaxWidth = 344.dp
+
+/** 底栏高度（`MAIN_TABS_HEIGHT = 56`，不含距屏边）。 */
 private val TabBarHeight = 56.dp
 
-/** 底栏的一格：图标 + 文字，整格可点、整格染色。 */
+/**
+ * 底栏的一格（`GlassTabView`）：图标在上、12sp 粗体文字在下，选中格背后画高亮块。
+ *
+ * 图标 24dp 距顶 4dp、文字贴着图标下缘（`imageView` top margin 4 / `textView` top 28.33
+ * 的等价摆法，用 Arrangement 而不是绝对偏移 —— 字形行高与 TG 的 TextView 不必逐像素对齐）。
+ */
 @Composable
 private fun TabBarItem(
     tab: TabItem,
@@ -219,14 +263,42 @@ private fun TabBarItem(
 ) {
     val palette = ThemeColors
     // 选中色**渐变**而不是硬切：切页时手指还在划，颜色正在路上，与 pager 的滚动
-    // 是同一条时间线 —— 硬切会让人觉得"点了才变"。
+    // 是同一条时间线 —— 硬切会让人觉得"点了才变"。（GlassTabView 是
+    // blendARGB(colorDefault, colorSelected, factor) 同一条时间线。）
     val tint by animateColorAsState(
         targetValue = if (selected) palette.accent else palette.tabIdle,
         animationSpec = tween(durationMillis = 180),
         label = "tabTint",
     )
+    // 高亮块跟随选中格淡入（TG 用 SpringAnimation 拖 selector 中心；这里格子等宽，
+    // 各格自己的 0→1 淡入 + 缩放就是同一条视觉轨迹）。
+    val highlightFraction by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "tabHighlight",
+    )
     Column(
-        modifier = modifier.pressableSelectable(selected = selected, role = Role.Tab, onClick = onClick),
+        modifier = modifier
+            .pressableSelectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .drawBehind {
+                if (highlightFraction > 0f) {
+                    // 选中格背后的高亮块（GlassTabView.dispatchDraw）：强调色 9% 透明度
+                    // （multAlpha(colorSelected, 0.09f)），缩放 0.6→1（lerp(0.6f, 1, factor)），
+                    // 胶囊形（r = min(w,h)/2），上下各缩 6dp —— 不顶着外层胶囊的边。
+                    val blockHeight = size.height - 12.dp.toPx()
+                    val s = 0.6f + 0.4f * highlightFraction
+                    withTransform({
+                        scale(s, s, pivot = Offset(size.width / 2f, size.height / 2f))
+                    }) {
+                        drawRoundRect(
+                            color = palette.accent.copy(alpha = 0.09f * highlightFraction),
+                            topLeft = Offset(0f, (size.height - blockHeight) / 2f),
+                            size = Size(size.width, blockHeight),
+                            cornerRadius = CornerRadius(blockHeight / 2f),
+                        )
+                    }
+                }
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -252,6 +324,7 @@ private fun TabBarItem(
             text = tab.label,
             color = tint,
             style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
             maxLines = 1,
         )
     }

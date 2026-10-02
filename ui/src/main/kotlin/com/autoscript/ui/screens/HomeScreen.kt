@@ -51,7 +51,7 @@ fun HomeScreen(
         RefreshableBox(refresh, contentModifier) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().background(ThemeColors.background),
-                contentPadding = PaddingValues(bottom = 24.dp),
+                contentPadding = PaddingValues(bottom = 72.dp),
             ) {
                 item {
                     SectionHeader("运行状态")

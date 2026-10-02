@@ -118,7 +118,7 @@ fun ConsoleScreen(
             RefreshableBox(refresh, Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
-                    contentPadding = PaddingValues(bottom = 24.dp),
+                    contentPadding = PaddingValues(bottom = 72.dp),
                 ) {
                     item { CopyNotice(copy) }
                     if (state.pageFull && state.load.isLoaded) {
@@ -202,7 +202,8 @@ fun ConsoleScreen(
             ScrollToTopButton(
                 visible = listState.firstVisibleItemIndex > 0,
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                // 回顶钮抬到悬浮底栏上方（TG 的 FAB 同款让位：MAIN_TABS_HEIGHT + MARGIN + 呼吸）。
+                modifier = Modifier.align(Alignment.BottomEnd).padding(start = 16.dp, end = 16.dp, bottom = 80.dp),
             )
         }
     }
