@@ -17,8 +17,6 @@ type TimedScheduleInput =
 };
 ```
 
-Defined in: src/workManager.ts:14
-
 ## Union Members
 
 ### Type Literal

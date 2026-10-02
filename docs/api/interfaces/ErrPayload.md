@@ -1,7 +1,5 @@
 # Interface: ErrPayload
 
-Defined in: src/errors.ts:32
-
 桥回包中的可序列化错误骨架（跨进程往返的唯一错误载体）。
 
 ## Properties
@@ -12,8 +10,6 @@ Defined in: src/errors.ts:32
 code: string;
 ```
 
-Defined in: src/errors.ts:33
-
 ***
 
 ### detail?
@@ -21,8 +17,6 @@ Defined in: src/errors.ts:33
 ```ts
 optional detail?: string | null;
 ```
-
-Defined in: src/errors.ts:34
 
 ***
 
@@ -32,8 +26,6 @@ Defined in: src/errors.ts:34
 optional javaClass?: string;
 ```
 
-Defined in: src/errors.ts:37
-
 ***
 
 ### javaStack?
@@ -41,8 +33,6 @@ Defined in: src/errors.ts:37
 ```ts
 optional javaStack?: string;
 ```
-
-Defined in: src/errors.ts:38
 
 ***
 
@@ -52,8 +42,6 @@ Defined in: src/errors.ts:38
 optional method?: string;
 ```
 
-Defined in: src/errors.ts:36
-
 ***
 
 ### module?
@@ -61,5 +49,3 @@ Defined in: src/errors.ts:36
 ```ts
 optional module?: string;
 ```
-
-Defined in: src/errors.ts:35

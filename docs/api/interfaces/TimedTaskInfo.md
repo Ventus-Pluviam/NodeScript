@@ -1,7 +1,5 @@
 # Interface: TimedTaskInfo
 
-Defined in: src/workManager.ts:229
-
 登记后的任务（与 Kotlin `list` 回显同形状）。
 
 ## Extends
@@ -16,8 +14,6 @@ Defined in: src/workManager.ts:229
 readonly optional args?: readonly string[];
 ```
 
-Defined in: src/workManager.ts:222
-
 #### Inherited from
 
 [`CreateTimedTaskInput`](CreateTimedTaskInput.md).[`args`](CreateTimedTaskInput.md#args)
@@ -29,8 +25,6 @@ Defined in: src/workManager.ts:222
 ```ts
 readonly optional enabled?: boolean;
 ```
-
-Defined in: src/workManager.ts:225
 
 #### Inherited from
 
@@ -44,8 +38,6 @@ Defined in: src/workManager.ts:225
 readonly id: string;
 ```
 
-Defined in: src/workManager.ts:230
-
 #### Overrides
 
 [`CreateTimedTaskInput`](CreateTimedTaskInput.md).[`id`](CreateTimedTaskInput.md#id)
@@ -57,8 +49,6 @@ Defined in: src/workManager.ts:230
 ```ts
 readonly name: string;
 ```
-
-Defined in: src/workManager.ts:217
 
 #### Inherited from
 
@@ -72,8 +62,6 @@ Defined in: src/workManager.ts:217
 readonly projectId: string;
 ```
 
-Defined in: src/workManager.ts:218
-
 #### Inherited from
 
 [`CreateTimedTaskInput`](CreateTimedTaskInput.md).[`projectId`](CreateTimedTaskInput.md#projectid)
@@ -85,8 +73,6 @@ Defined in: src/workManager.ts:218
 ```ts
 readonly schedule: TimedSchedule;
 ```
-
-Defined in: src/workManager.ts:220
 
 #### Inherited from
 
@@ -100,8 +86,6 @@ Defined in: src/workManager.ts:220
 readonly optional screen?: ScreenGuarantee;
 ```
 
-Defined in: src/workManager.ts:221
-
 #### Inherited from
 
 [`CreateTimedTaskInput`](CreateTimedTaskInput.md).[`screen`](CreateTimedTaskInput.md#screen)
@@ -113,8 +97,6 @@ Defined in: src/workManager.ts:221
 ```ts
 readonly scriptPath: string;
 ```
-
-Defined in: src/workManager.ts:219
 
 #### Inherited from
 
@@ -128,8 +110,6 @@ Defined in: src/workManager.ts:219
 readonly optional scriptTimeoutMillis?: number | null;
 ```
 
-Defined in: src/workManager.ts:223
-
 #### Inherited from
 
 [`CreateTimedTaskInput`](CreateTimedTaskInput.md).[`scriptTimeoutMillis`](CreateTimedTaskInput.md#scripttimeoutmillis)
@@ -141,8 +121,6 @@ Defined in: src/workManager.ts:223
 ```ts
 readonly optional timezone?: string | null;
 ```
-
-Defined in: src/workManager.ts:224
 
 #### Inherited from
 

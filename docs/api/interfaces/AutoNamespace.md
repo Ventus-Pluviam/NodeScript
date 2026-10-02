@@ -1,7 +1,5 @@
 # Interface: AutoNamespace
 
-Defined in: src/index.ts:38
-
 `auto.*` 命名空间根：脚本 `require('auto')` 拿到的就是它（docs §12.1 唯一入口）。
 
 ## Properties
@@ -17,8 +15,6 @@ readonly a11y: {
   waitFor: Promise<boolean>;
 };
 ```
-
-Defined in: src/index.ts:40
 
 #### canPerformGestures()
 
@@ -127,8 +123,6 @@ readonly app: {
 };
 ```
 
-Defined in: src/index.ts:50
-
 #### currentPackage()
 
 ```ts
@@ -172,8 +166,6 @@ launch(packageName, opts?): Promise<boolean>;
 readonly bridge: RuntimeBridgeImpl;
 ```
 
-Defined in: src/index.ts:39
-
 ***
 
 ### clipboard
@@ -184,8 +176,6 @@ readonly clipboard: {
   setText: Promise<void>;
 };
 ```
-
-Defined in: src/index.ts:56
 
 #### getText()
 
@@ -240,8 +230,6 @@ readonly console: {
   warn: Promise<void>;
 };
 ```
-
-Defined in: src/index.ts:46
 
 #### debug()
 
@@ -355,8 +343,6 @@ readonly datastore: {
   remove: Promise<boolean>;
 };
 ```
-
-Defined in: src/index.ts:52
 
 #### clear()
 
@@ -488,8 +474,6 @@ readonly device: {
 };
 ```
 
-Defined in: src/index.ts:49
-
 #### model()
 
 ```ts
@@ -536,8 +520,6 @@ readonly dialogs: {
   prompt: Promise<DialogResult>;
 };
 ```
-
-Defined in: src/index.ts:47
 
 #### choose()
 
@@ -601,8 +583,6 @@ readonly engines: {
   stop: Promise<boolean>;
 };
 ```
-
-Defined in: src/index.ts:41
 
 #### channel()
 
@@ -759,8 +739,6 @@ readonly envelope: {
 };
 ```
 
-Defined in: src/index.ts:59
-
 #### encodeRequest()
 
 ```ts
@@ -827,8 +805,6 @@ readonly floatingWindow: {
 };
 ```
 
-Defined in: src/index.ts:51
-
 #### close()
 
 ```ts
@@ -893,8 +869,6 @@ readonly images: {
   toGrayscale: Promise<FrameSource>;
 };
 ```
-
-Defined in: src/index.ts:44
 
 #### crop()
 
@@ -1249,8 +1223,6 @@ toGrayscale(frame, opts?): Promise<FrameSource>;
 readonly installed: boolean;
 ```
 
-Defined in: src/index.ts:64
-
 ***
 
 ### notification
@@ -1262,8 +1234,6 @@ readonly notification: {
   post: Promise<void>;
 };
 ```
-
-Defined in: src/index.ts:55
 
 #### cancel()
 
@@ -1348,8 +1318,6 @@ readonly npm: {
   setRegistry: Promise<void>;
 };
 ```
-
-Defined in: src/index.ts:45
 
 #### audit()
 
@@ -1676,8 +1644,6 @@ readonly power: {
 };
 ```
 
-Defined in: src/index.ts:58
-
 #### acquire()
 
 ```ts
@@ -1754,8 +1720,6 @@ readonly screen: {
 };
 ```
 
-Defined in: src/index.ts:43
-
 #### capture()
 
 ```ts
@@ -1813,8 +1777,6 @@ readonly sensors: {
   unregisterAll: Promise<void>;
 };
 ```
-
-Defined in: src/index.ts:57
 
 #### isSupported()
 
@@ -1893,8 +1855,6 @@ readonly settings: {
   putString: Promise<void>;
 };
 ```
-
-Defined in: src/index.ts:54
 
 #### canWrite()
 
@@ -2016,8 +1976,6 @@ readonly shell: {
 };
 ```
 
-Defined in: src/index.ts:48
-
 #### exec()
 
 ```ts
@@ -2081,8 +2039,6 @@ readonly workManager: {
   };
 };
 ```
-
-Defined in: src/index.ts:42
 
 #### cancelTask
 
@@ -2279,8 +2235,6 @@ readonly zip: {
 };
 ```
 
-Defined in: src/index.ts:53
-
 #### compress()
 
 ```ts
@@ -2339,8 +2293,6 @@ extract(
 handleResponse(resp): void;
 ```
 
-Defined in: src/index.ts:63
-
 宿主把 ok/err 响应回投给桥（Kotlin Router → TSF → JS）。配合 install 的第 4 参 [reqId] 使用。
 
 #### Parameters
@@ -2360,8 +2312,6 @@ Defined in: src/index.ts:63
 ```ts
 install(handler): void;
 ```
-
-Defined in: src/index.ts:61
 
 安装桥宿主（单例；重复安装抛错）。
 

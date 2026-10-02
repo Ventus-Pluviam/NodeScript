@@ -1,8 +1,13 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "plugin": ["typedoc-plugin-markdown"],
-  "entryPoints": ["src/index.ts"],
+  "plugin": [
+    "typedoc-plugin-markdown"
+  ],
+  "entryPoints": [
+    "src/index.ts"
+  ],
   "tsconfig": "tsconfig.json",
+  "disableSources": true,
   "out": "../../docs/api",
   "name": "AutoScript 脚本 API（auto.*）",
   "readme": "none",

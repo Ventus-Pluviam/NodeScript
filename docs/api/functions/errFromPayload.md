@@ -4,8 +4,6 @@
 function errFromPayload(p): AutojsError;
 ```
 
-Defined in: src/errors.ts:102
-
 ## Parameters
 
 | Parameter | Type |

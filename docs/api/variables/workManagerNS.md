@@ -22,8 +22,6 @@ const workManagerNS: {
 };
 ```
 
-Defined in: src/index.ts:33
-
 workManager 命名空间（scheduler 面：每日/一次性/cron 排期工具函数，运行态挂全局任务表）。
 
 ## Type Declaration

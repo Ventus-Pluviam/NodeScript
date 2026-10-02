@@ -1,7 +1,5 @@
 # Interface: CreateTimedTaskInput
 
-Defined in: src/workManager.ts:215
-
 建任务输入（与 Kotlin `create` 载荷逐字段对齐；id 缺省服务端分配）。
 
 ## Extended by
@@ -16,8 +14,6 @@ Defined in: src/workManager.ts:215
 readonly optional args?: readonly string[];
 ```
 
-Defined in: src/workManager.ts:222
-
 ***
 
 ### enabled?
@@ -25,8 +21,6 @@ Defined in: src/workManager.ts:222
 ```ts
 readonly optional enabled?: boolean;
 ```
-
-Defined in: src/workManager.ts:225
 
 ***
 
@@ -36,8 +30,6 @@ Defined in: src/workManager.ts:225
 readonly optional id?: string;
 ```
 
-Defined in: src/workManager.ts:216
-
 ***
 
 ### name
@@ -45,8 +37,6 @@ Defined in: src/workManager.ts:216
 ```ts
 readonly name: string;
 ```
-
-Defined in: src/workManager.ts:217
 
 ***
 
@@ -56,8 +46,6 @@ Defined in: src/workManager.ts:217
 readonly projectId: string;
 ```
 
-Defined in: src/workManager.ts:218
-
 ***
 
 ### schedule
@@ -65,8 +53,6 @@ Defined in: src/workManager.ts:218
 ```ts
 readonly schedule: TimedSchedule;
 ```
-
-Defined in: src/workManager.ts:220
 
 ***
 
@@ -76,8 +62,6 @@ Defined in: src/workManager.ts:220
 readonly optional screen?: ScreenGuarantee;
 ```
 
-Defined in: src/workManager.ts:221
-
 ***
 
 ### scriptPath
@@ -85,8 +69,6 @@ Defined in: src/workManager.ts:221
 ```ts
 readonly scriptPath: string;
 ```
-
-Defined in: src/workManager.ts:219
 
 ***
 
@@ -96,8 +78,6 @@ Defined in: src/workManager.ts:219
 readonly optional scriptTimeoutMillis?: number | null;
 ```
 
-Defined in: src/workManager.ts:223
-
 ***
 
 ### timezone?
@@ -105,5 +85,3 @@ Defined in: src/workManager.ts:223
 ```ts
 readonly optional timezone?: string | null;
 ```
-
-Defined in: src/workManager.ts:224

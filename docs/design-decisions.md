@@ -284,7 +284,7 @@
 
 2026-10-02 拍板并落地（backlog C7 + B4 合批；facade 文档面 + 依赖供应链，非 §18 编号项）：
 
-27. **脚本 API 参考用 typedoc 生成、生成物入库并设零 diff 门（C7）；依赖供应链面开 dependency-review 并补 `engines`（B4）**：
+27. **脚本 API 参考用 typedoc 生成、生成物入库并设零 diff 门（C7）；依赖供应链面补 `engines` + audit/SBOM（B4）**（原标题「~~依赖供应链面开 dependency-review 并补 `engines`~~」**作废** —— 2026-10-02 当日勘误，见 B4 条）：
     - **先核实后动手**（backlog C7 的「未评估 typedoc 覆盖度」当天实测）：typedoc
       0.28.20 + `typedoc-plugin-markdown` 4.13.1 跑 `bridge/js/src/index.ts`，**0 error**
       （35 warning 全是「某类型被引用但不在文档里」，非错误）。**但单入口只出 15 页** ——
@@ -305,20 +305,28 @@
       KDoc（生成物里逐字可见）；② `console.QueueErrorListener` 是私有类型却出现在公开签名
       `consoleSink.onQueueError` 上 → 提成 `export type`。两处都**不动行为**（`tsc` + 194
       条 facade 单测逐字不变）。
-    - **B4（依赖供应链面）**：① `package.json` 补 `engines.node` = **npm 12.2.0 自己的
-      engines 逐字**（`^22.22.2 || ^24.15.0 || >=26.0.0`，`/tmp/npm12` 解包产物实读）——
-      不自己发明范围，免得与「vendored npm 的宿主要求」两份口径；② `ci.yml` 新增
-      `dependency-review` job（`actions/dependency-review-action` **v5.0.0** 钉 SHA
-      `a1d282b3…`，`fail-on-severity: low` + `license-check: true`，只在 PR 上跑）。
-      **实测边界（诚实声明）**：该 action 读的是 GitHub **依赖图 API**，而本仓的依赖图
-      对 Gradle 生态**是空的**（`/dependency-graph/sbom` 返 404 已实测）—— 即本 job 当前
-      真正覆盖的是 **npm 面**（facade 的 devDependencies），Gradle 面要等依赖图提交接上
-      （`gradle/actions/dependency-submission`，独立一件事，未排期）。npm 面实测
-      `npm audit` = **0 vulnerabilities**（2026-10-02，对官方 registry 直查）。
+    - **B4（依赖供应链面）**：**2026-10-02 当日勘误（本条原先记的是「开
+      `dependency-review` job」，实测红后撤掉，原口径不删，见下方第二段）**：① `package.json`
+      补 `engines.node` = **npm 12.2.0 自己的
+      engines 逐字**（`^22.22.2 || ^24.15.0 || >=26.0.0`，解包产物实读）—— 不自己发明
+      范围，免得与「vendored npm 的宿主要求」两份口径；② 漏洞扫描与 SBOM 进 CI
+      （`npm audit --audit-level=low` + `npm sbom --sbom-format cyclonedx` → artifact）。
+      **`actions/dependency-review-action` 试过并撤掉（PR #26 实测红）**：报
+      「Dependency review is not supported on this repository. Please ensure that
+      Dependency graph is enabled」—— 本仓**依赖图未开**（`/dependency-graph/sbom` 404、
+      `/dependabot/alerts` 403，两条 API 实测）。开它是**维护者侧的仓库设置开关**
+      （Code security and analysis 页，或 `PATCH /repos/{owner}/{repo}` 的
+      `security_and_analysis`，两者都需 admin 权限 —— 本仓令牌 403），与 C4 那次
+      「只剩维护者动作」同型 → 撤 action、改走**不依赖依赖图**的两条，并把开关登记进
+      backlog B4 行等拍板。
+      **诚实边界（明写）**：`npm audit` + `npm sbom` 覆盖的是 **npm 面**（facade 的
+      devDependencies）；**Gradle 面（`:domain` 之外的 Android 依赖）当前没有漏洞扫描**
+      —— 它要么靠依赖图 + `gradle/actions/dependency-submission`，要么自建（独立一件事，
+      未排期）。npm 面实测 `npm audit` = **0 vulnerabilities**（2026-10-02，官方 registry）。
     - **代价（明写）**：① 生成物入库 = 改 facade 的公开注释/签名要记得重跑生成器（漏跑 CI 红，
       不是静默）；② `docs/api/**` 现在也在文档链接门的扫描面里（341 条链接），typedoc
-      改了链接形状会连带红 —— 这是想要的耦合，不是意外；③ dependency-review 只覆盖 npm 面
-      （见上）；④ 补 `engines` 不动 CI 的 Node 版本（CI 仍 pin node 24 且 `engine-strict`
+      改了链接形状会连带红 —— 这是想要的耦合，不是意外；③ 供应链面当前只覆盖 npm 面
+      （见上，dependency-review 已撤）；④ 补 `engines` 不动 CI 的 Node 版本（CI 仍 pin node 24 且 `engine-strict`
       未开，engines 是声明不是门禁）。
 
 2026-09-30 拍板（外部审查整改步骤 7；非 §18 编号项，原口径不涉）：

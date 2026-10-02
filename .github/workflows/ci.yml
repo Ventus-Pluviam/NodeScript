@@ -100,30 +100,29 @@ jobs:
       - name: facade 单元测试
         working-directory: bridge/js
         run: npm test
-
-  dependency-review:
-    name: 依赖审查（新增依赖的漏洞 / 许可证）
-    # 只在 PR 上跑：本 action 判的是「这个 PR 相对 base 改了什么依赖」，
-    # 没有 base 就无从判（push 事件上它只能靠显式 base-ref/head-ref，那等于自己
-    # 维护一套"上一次是什么"的状态）。仓里的公开依赖面 = bridge/js（npm）+ 
-    # gradle/libs.versions.toml（GitHub 依赖图能识别的生态）；两者都只在这一个 job 看。
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # 公开 action 也钉 commit SHA（与全仓纪律一致）；tag v5.0.0。
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+      # ── 供应链面（backlog B4，2026-10-02 批 10）────────────────────────────
+      # 两条都**不**依赖 GitHub 的 Dependency graph（那条 API 本仓未开、实测 404/403）：
+      #   · audit 打的是 registry 的实时漏洞库（本 job 有网、npm ci 已装树）；
+      #   · sbom 从已装的 node_modules + lock 出 CycloneDX，artifact 供下载核验。
+      # 原本这里放的是 actions/dependency-review-action —— 实测红在
+      # 「Dependency review is not supported on this repository. Please ensure that
+      # Dependency graph is enabled」：开依赖图是**维护者侧的仓库开关**（admin 权限，
+      # 本仓令牌 403），与 C4 那类「只剩维护者动作」同型，登记在 backlog B4 行。
+      - name: 依赖漏洞扫描（npm audit，对 registry 实时漏洞库）
+        working-directory: bridge/js
+        # low 就挡：依赖面很小（facade 的 devDependencies），挡得住才有意义。
+        run: npm audit --audit-level=low
+      # 落 $RUNNER_TEMP 不落仓库：生成物进工作区会变成未跟踪文件，与「生成物必须入库或
+      # 被忽略」的纪律打架（且本 job 里前后都有 git diff 类门，少一个脏文件少一类误红）。
+      - name: 生成 SBOM（CycloneDX，从已装的 node_modules + lock）
+        working-directory: bridge/js
+        run: npm sbom --sbom-format cyclonedx > "$RUNNER_TEMP/bridge-js-sbom.cdx.json"
+      - name: 上传 SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # 与 §11.2 T1–T3 的供应链口径一致：**任何已知漏洞都挡**（默认是 high 才挡）。
-          # 依赖面很小（facade 的 devDependencies + Gradle 的构建期依赖），挡得住才有意义。
-          fail-on-severity: low
-          # 许可证面：本仓随 APK 分发第三方二进制，许可合规是硬约束（见 THIRD_PARTY_NOTICES.md
-          # 与 D8）—— 依赖引入 copyleft 会在分发时变成法律问题，所以开许可证检查。
-          license-check: true
-          # 但**不**在这里设 allow-licenses 白名单：白名单要覆盖 npm + Maven 两个生态的
-          # 全部许可证标识（含 SPDX 表达式），列不全就会把合法的 MIT/Apache 也挡下来。
-          # 先让检查跑起来把现状摸清（首次跑的结果进流水），要收紧再单独一批加白名单。
+          name: bridge-js-sbom
+          path: ${{ runner.temp }}/bridge-js-sbom.cdx.json
+          if-no-files-found: error
 
   docs-check:
     name: 文档链接门（*.md 的相对链接必须存在）

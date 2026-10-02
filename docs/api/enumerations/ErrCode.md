@@ -1,7 +1,5 @@
 # Enumeration: ErrCode
 
-Defined in: src/errors.ts:8
-
 机器可判错误码（与 :domain:core.ErrorCode.code 逐字一致）。
 
 ## Enumeration Members
@@ -12,8 +10,6 @@ Defined in: src/errors.ts:8
 BLACK_FRAME: "ERR_BLACK_FRAME";
 ```
 
-Defined in: src/errors.ts:14
-
 ***
 
 ### CAPTURE\_DENIED
@@ -21,8 +17,6 @@ Defined in: src/errors.ts:14
 ```ts
 CAPTURE_DENIED: "ERR_CAPTURE_DENIED";
 ```
-
-Defined in: src/errors.ts:15
 
 ***
 
@@ -32,8 +26,6 @@ Defined in: src/errors.ts:15
 DISK_FULL: "ERR_DISK_FULL";
 ```
 
-Defined in: src/errors.ts:22
-
 ***
 
 ### ENGINE\_CRASHED
@@ -41,8 +33,6 @@ Defined in: src/errors.ts:22
 ```ts
 ENGINE_CRASHED: "ERR_ENGINE_CRASHED";
 ```
-
-Defined in: src/errors.ts:17
 
 ***
 
@@ -52,8 +42,6 @@ Defined in: src/errors.ts:17
 ENGINE_STOPPED: "ERR_ENGINE_STOPPED";
 ```
 
-Defined in: src/errors.ts:16
-
 ***
 
 ### FILE\_EXISTS
@@ -61,8 +49,6 @@ Defined in: src/errors.ts:16
 ```ts
 FILE_EXISTS: "ERR_FILE_EXISTS";
 ```
-
-Defined in: src/errors.ts:21
 
 ***
 
@@ -72,8 +58,6 @@ Defined in: src/errors.ts:21
 FILE_NOT_FOUND: "ERR_FILE_NOT_FOUND";
 ```
 
-Defined in: src/errors.ts:20
-
 ***
 
 ### INVALID\_PARAM
@@ -81,8 +65,6 @@ Defined in: src/errors.ts:20
 ```ts
 INVALID_PARAM: "ERR_INVALID_PARAM";
 ```
-
-Defined in: src/errors.ts:19
 
 ***
 
@@ -92,8 +74,6 @@ Defined in: src/errors.ts:19
 IO: "ERR_IO";
 ```
 
-Defined in: src/errors.ts:28
-
 ***
 
 ### NOT\_FOUND
@@ -101,8 +81,6 @@ Defined in: src/errors.ts:28
 ```ts
 NOT_FOUND: "ERR_NOT_FOUND";
 ```
-
-Defined in: src/errors.ts:23
 
 ***
 
@@ -112,8 +90,6 @@ Defined in: src/errors.ts:23
 NOT_IMPLEMENTED: "ERR_NOT_IMPLEMENTED";
 ```
 
-Defined in: src/errors.ts:18
-
 ***
 
 ### NOT\_SUPPORTED
@@ -121,8 +97,6 @@ Defined in: src/errors.ts:18
 ```ts
 NOT_SUPPORTED: "ERR_NOT_SUPPORTED";
 ```
-
-Defined in: src/errors.ts:25
 
 ***
 
@@ -132,8 +106,6 @@ Defined in: src/errors.ts:25
 NPM_LOWMEM: "ERR_NPM_LOWMEM";
 ```
 
-Defined in: src/errors.ts:27
-
 ***
 
 ### NPM\_SPAWN\_BLOCKED
@@ -141,8 +113,6 @@ Defined in: src/errors.ts:27
 ```ts
 NPM_SPAWN_BLOCKED: "ERR_NPM_SPAWN_BLOCKED";
 ```
-
-Defined in: src/errors.ts:24
 
 ***
 
@@ -152,8 +122,6 @@ Defined in: src/errors.ts:24
 PERMISSION_DENIED: "ERR_PERMISSION_DENIED";
 ```
 
-Defined in: src/errors.ts:11
-
 ***
 
 ### REGISTRY\_UNAVAILABLE
@@ -161,8 +129,6 @@ Defined in: src/errors.ts:11
 ```ts
 REGISTRY_UNAVAILABLE: "ERR_REGISTRY_UNAVAILABLE";
 ```
-
-Defined in: src/errors.ts:26
 
 ***
 
@@ -172,8 +138,6 @@ Defined in: src/errors.ts:26
 SCREEN_LOCKED: "ERR_SCREEN_LOCKED";
 ```
 
-Defined in: src/errors.ts:13
-
 ***
 
 ### SERVICE\_DISABLED
@@ -181,8 +145,6 @@ Defined in: src/errors.ts:13
 ```ts
 SERVICE_DISABLED: "ERR_SERVICE_DISABLED";
 ```
-
-Defined in: src/errors.ts:12
 
 ***
 
@@ -192,8 +154,6 @@ Defined in: src/errors.ts:12
 STALE_HANDLE: "ERR_STALE_HANDLE";
 ```
 
-Defined in: src/errors.ts:10
-
 ***
 
 ### TIMEOUT
@@ -201,5 +161,3 @@ Defined in: src/errors.ts:10
 ```ts
 TIMEOUT: "ERR_TIMEOUT";
 ```
-
-Defined in: src/errors.ts:9
