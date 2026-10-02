@@ -37,6 +37,7 @@ import com.autoscript.ui.components.ScrollToTopButton
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.rememberRefreshAction
+import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.CapabilityRowState
 import com.autoscript.ui.state.Status
@@ -100,9 +101,9 @@ fun SettingsScreen(
                 LazyColumn(
                     state = listState,
                     // TG 设置页的节奏：卡片离顶栏一小段灰、离底部一小段灰。
-                    // 底部这份要盖过悬浮底栏（56dp 胶囊 + 8dp 边距 = 64dp）：
-                    // 否则最后一张卡滚到底会被胶囊压住。
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 72.dp),
+                    // 底部这份要盖过悬浮底栏（胶囊占位 + 导航 inset）：最后一张卡
+                    // 滚到底不能被胶囊或三键导航压住。
+                    contentPadding = PaddingValues(top = 8.dp, bottom = TabBarBottomClearance()),
                 ) {
                     state.installSize?.let { size ->
                         item {
@@ -137,8 +138,9 @@ fun SettingsScreen(
             ScrollToTopButton(
                 visible = listState.firstVisibleItemIndex > 0,
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                // 回顶钮抬到悬浮底栏上方（TG 的 FAB 同款让位：MAIN_TABS_HEIGHT + MARGIN + 呼吸）。
-                modifier = Modifier.align(Alignment.BottomEnd).padding(start = 16.dp, end = 16.dp, bottom = 80.dp),
+                // 回顶钮抬到悬浮底栏上方（胶囊占位 + 导航 inset，另加 8dp 呼吸 —— TG 的 FAB 同款让位）。
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
             )
         }
     }

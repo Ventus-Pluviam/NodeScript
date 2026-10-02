@@ -14,6 +14,7 @@ import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.RefreshableBox
 import com.autoscript.ui.components.ScaffoldScreen
 import com.autoscript.ui.components.rememberRefreshAction
+import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
@@ -51,7 +52,7 @@ fun HomeScreen(
         RefreshableBox(refresh, contentModifier) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().background(ThemeColors.background),
-                contentPadding = PaddingValues(bottom = 72.dp),
+                contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
             ) {
                 item {
                     SectionHeader("运行状态")

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -45,6 +46,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
@@ -190,8 +192,9 @@ fun ActionBarAction(
  *    选中格背后画一个 9% 透明度的强调色圆角块（`multAlpha(colorSelected, 0.09f)`），
  *    图标与文字 blend 到强调色；未选中 = 主文字色 63% 透明度（`key_glass_defaultIcon`
  *    = 0x991B2227，night = 0xA0FFFFFF）。
- * 4. **导航栏 inset 在胶囊下面**：胶囊浮起来之后，系统手势条那一条露出内容的底色，
- *    胶囊本体不受 inset 挤压（与贴边整条「inset 吃掉 56dp 实高」完全不同）。
+ * 4. **导航栏 inset 抬起整条胶囊**：外层先吃 `navigationBars` inset、再离屏边 8dp ——
+ *    三键导航（三大金刚键）出现时胶囊悬在导航键上方；手势导航的 inset 只是一条细带，
+ *    位置几乎不动。四屏内容让位走 [TabBarBottomClearance]，与胶囊消费同一份 inset。
  *
  * **只读 `pagerState.currentPage`，绝不读 `currentPageOffsetFraction`**（硬约束，
  * 见旧版注释：后者每帧变，在组合里读 = 重组风暴；跟手的观感由颜色/块位移动画补完）。
@@ -207,8 +210,11 @@ fun TabBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            // 距屏边 8dp（MAIN_TABS_MARGIN）。**不挂 navigationBars inset**：胶囊是
-            // 浮起来的，手势条那一条在它下面露出内容底色（TG 同款）。
+            // 先吃导航栏 inset、再离屏边 8dp（MAIN_TABS_MARGIN）：三键导航（三大金刚键）
+            // 出现时整条胶囊抬到导航键之上；手势条那条 inset 很小，观感几乎不变。
+            // 批 21 赌过「inset 在胶囊下面」，被三键导航实测打脸（胶囊被键位盖住）——
+            // 两态都挂 inset，才是「浮、又不被吃」的摆法。
+            .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(horizontal = MainTabsMargin, vertical = MainTabsMargin),
         horizontalArrangement = Arrangement.Center,
     ) {
@@ -247,6 +253,21 @@ private val MainTabsMaxWidth = 344.dp
 
 /** 底栏高度（`MAIN_TABS_HEIGHT = 56`，不含距屏边）。 */
 private val TabBarHeight = 56.dp
+
+/** 胶囊连自身上下屏边距的占位高度（56 + 8×2 = 72dp），**不含**导航栏 inset。 */
+private val TabBarClearance: Dp = TabBarHeight + MainTabsMargin * 2
+
+/**
+ * 悬浮底栏要求内容让出的**总**底部留白 = [TabBarClearance] + 导航栏 inset（[extra] 加呼吸）。
+ *
+ * 胶囊外层吃掉多少 `navigationBars` inset（三键导航 ≈48dp、手势条更小甚至 0），整条
+ * 胶囊就被抬高多少；列表末项、回顶钮若仍按固定 dp 让位，三键一出现就又被盖住
+ * （批 21 的固定 72dp 就是这么被实测打脸的）。各屏让位一律走这里 —— 与胶囊消费
+ * 同一份 inset，两态导航都成立；别在屏里抄数字。
+ */
+@Composable
+fun TabBarBottomClearance(extra: Dp = 0.dp): Dp =
+    TabBarClearance + extra + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
 /**
  * 底栏的一格（`GlassTabView`）：图标在上、12sp 粗体文字在下，选中格背后画高亮块。

@@ -52,6 +52,7 @@ import com.autoscript.ui.components.rememberCopyAction
 import com.autoscript.ui.components.rememberDeletionParticles
 import com.autoscript.ui.components.rememberLongPressFeedback
 import com.autoscript.ui.components.rememberRefreshAction
+import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.ScheduleKind
 import com.autoscript.ui.state.Status
@@ -145,7 +146,7 @@ fun TaskCenterScreen(
             RefreshableBox(refresh, Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
-                    contentPadding = PaddingValues(bottom = 72.dp),
+                    contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
                 ) {
                     item { CopyNotice(copy) }
                     if (state.opInFlight) {
@@ -235,8 +236,9 @@ fun TaskCenterScreen(
             ScrollToTopButton(
                 visible = listState.firstVisibleItemIndex > 0,
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                // 回顶钮抬到悬浮底栏上方（TG 的 FAB 同款让位：MAIN_TABS_HEIGHT + MARGIN + 呼吸）。
-                modifier = Modifier.align(Alignment.BottomEnd).padding(start = 16.dp, end = 16.dp, bottom = 80.dp),
+                // 回顶钮抬到悬浮底栏上方（胶囊占位 + 导航 inset，另加 8dp 呼吸 —— TG 的 FAB 同款让位）。
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
             )
         }
     }

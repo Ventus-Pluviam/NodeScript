@@ -385,9 +385,9 @@ class MainActivity : ComponentActivity() {
      * `glyph` 是页签条上那个画出来的图标（见 `Glyphs.kt`）。
      */
     enum class Tab(val short: String, val glyph: GlyphKind) {
-        HOME("首屏", GlyphKind.HOME),
+        HOME("项目", GlyphKind.HOME),
         TASKS("任务", GlyphKind.TASKS),
-        CONSOLE("控制台", GlyphKind.CONSOLE),
+        CONSOLE("管理", GlyphKind.CONSOLE),
         SETTINGS("设置", GlyphKind.SETTINGS),
     }
 
