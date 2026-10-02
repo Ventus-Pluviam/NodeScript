@@ -37,8 +37,14 @@ class ForegroundKeeperTest {
         var activates = 0
         var deactivates = 0
 
-        override fun startService(): Boolean {
+        /** 最近一次投递带的契约（装配层随 Intent 送进去的那两个值）。 */
+        var lastToken: String? = null
+        var lastTimeout: Long? = null
+
+        override fun startService(token: String, timeoutMillis: Long?): Boolean {
             starts++
+            lastToken = token
+            lastTimeout = timeoutMillis
             if (!startOk) return false
             return true
         }
@@ -103,6 +109,37 @@ class ForegroundKeeperTest {
         assertFalse(keeper.isActive(), "服务只被拉起、尚未进前台：不算生效")
         fg.foregroundRunning = true
         assertTrue(keeper.isActive())
+    }
+
+    @Test
+    fun `装配层投递必须带 token 与期限——服务拒收的代价是整个进程被杀`() {
+        // 2026-10-02 真机回归：`AndroidForegroundOps.startService` 只投了 action、没带
+        // token/期限，服务侧按契约拒收（不 startForeground）→ 系统在 startForegroundService
+        // 的窗口超时后**连进程一起杀**（界面在前台也照杀）。本测钉住 Keeper 这一侧的
+        // 投递参数；Intent extra 的那一段（`AndroidForegroundOps`）只能在真机上验。
+        val (keeper, fg, _) = rig()
+        keeper.start()
+        assertEquals(ForegroundKeeper.FRAMEWORK_TOKEN, fg.lastToken, "token 没投出去 = 服务只能拒收")
+        assertEquals(null, fg.lastTimeout, "框架 token 无期限：投 null（服务侧映射成 0 = 无期限）")
+
+        // 有期限的持有方（P1 的脚本 power_manager 形态）把期限原样带过去
+        fg.lastToken = null
+        fg.lastTimeout = null
+        keeper.start(token = "script:1", timeoutMillis = 30_000L)
+        assertEquals("script:1", fg.lastToken)
+        assertEquals(30_000L, fg.lastTimeout)
+    }
+
+    @Test
+    fun `服务侧记账口不投递——否则 START 与记账会自激成环`() {
+        val (keeper, fg, ledger) = rig()
+        keeper.start()
+        assertEquals(1, fg.starts)
+        // 服务进前台后走记账口：账本照记，但**不再投一条 START**
+        // （再投 → 服务 onStartCommand 又记账 → 又投，永不收敛）。
+        assertTrue(keeper.onServiceForeground(ForegroundKeeper.FRAMEWORK_TOKEN, null))
+        assertEquals(1, fg.starts, "记账口投了 START：这会变成永不停止的 Intent 环")
+        assertEquals(setOf(ForegroundKeeper.FRAMEWORK_TOKEN), ledger.heldTokens())
     }
 
     @Test

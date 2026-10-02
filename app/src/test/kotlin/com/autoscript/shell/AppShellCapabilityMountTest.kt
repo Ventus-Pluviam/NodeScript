@@ -332,7 +332,7 @@ class AppShellCapabilityMountTest {
     fun `喂 keeper 后 power_manager 全链路可达`() = runBlocking {
         val fg = object : ForegroundOps {
             override var foregroundRunning: Boolean = true
-            override fun startService(): Boolean = true
+            override fun startService(token: String, timeoutMillis: Long?): Boolean = true
             override fun stopService(): Boolean = true
             override fun activateForeground(): Boolean = true
             override fun deactivateForeground(): Boolean = true

@@ -61,12 +61,36 @@ class ForegroundKeeper(
      */
     @Synchronized
     fun start(token: String = FRAMEWORK_TOKEN, timeoutMillis: Long? = null): Boolean {
-        if (!ops.startService()) return false
+        // 契约随 Intent 一起投（见 [ForegroundOps.startService]）：服务侧收到后**不再回调本方法**
+        // （那会变成 START → 记账 → 再投 START 的自激环），而是走 [onServiceForeground] 只记账。
+        if (!ops.startService(token, timeoutMillis)) return false
         if (!wakeLocks.hold(token, timeoutMillis)) {
             // 锁没拿到：服务已拉起但不记账 —— 保住"账上有 token ⇔ 真有锁"这条不变量。
             // 服务留在前台是系统的决定，isActive() 会因账本为空而回 false。
             return false
         }
+        frameworkToken = token
+        startTickerLocked()
+        return true
+    }
+
+    /**
+     * 记账口（**服务侧专用**）：服务已进前台（`startForeground` 成功）时由服务回调。
+     *
+     * 为什么不复用 [start]：`start` 会投一条 ACTION_START，而服务收到 START 又会调本方法
+     * —— 两条路撞在一起就是"投 START → 记账 → 再投 START"的**自激环**（每条
+     * `onStartCommand` 再投一条 Intent，永不收敛）。所以"投递"与"记账"在这里分开：
+     * [start] = 投递 + 记账（装配层用），本方法 = 纯记账（服务侧用）。
+     *
+     * 记账本身对同一 token 幂等（[WakeLockLedger.hold] 只刷新到期时刻），所以装配层与
+     * 服务的两次记账不会互相踩。
+     *
+     * @return false = 唤醒锁没取到（**未记账**）—— 服务留在前台是系统的决定，
+     *   `isActive()` 会因账本为空回 false，正是"系统在跑、我们没有休眠保护"的如实表达。
+     */
+    @Synchronized
+    fun onServiceForeground(token: String, timeoutMillis: Long?): Boolean {
+        if (!wakeLocks.hold(token, timeoutMillis)) return false
         frameworkToken = token
         startTickerLocked()
         return true
@@ -115,7 +139,9 @@ class ForegroundKeeper(
         val expired = wakeLocks.sweep()
         if (expired.isNotEmpty()) actions += "释放到期锁：${expired.joinToString(",")}"
         if (wakeLocks.heldTokens().isNotEmpty() && !ops.foregroundRunning) {
-            if (ops.startService()) actions += "补拉保活服务" else actions += "补拉保活服务失败"
+            // 补拉也走带契约那条路：服务侧凭 token/期限才能进前台（见 ForegroundOps.startService）。
+            val pulled = ops.startService(FRAMEWORK_TOKEN, timeoutMillis = null)
+            if (pulled) actions += "补拉保活服务" else actions += "补拉保活服务失败"
         }
         if (wakeLocks.heldTokens().isEmpty() && ops.foregroundRunning) {
             if (ops.stopService()) actions += "停掉无持有方的保活服务" else actions += "停保活服务失败"
@@ -196,5 +222,13 @@ class ForegroundKeeper(
         /** 服务指令 extra（token/到期；见 [ForegroundServiceBase.onStartCommand]）。 */
         const val EXTRA_TOKEN = "com.autoscript.shell.extra.FOREGROUND_TOKEN"
         const val EXTRA_TIMEOUT_MILLIS = "com.autoscript.shell.extra.FOREGROUND_TIMEOUT"
+
+        /**
+         * 期限三态（[EXTRA_TIMEOUT_MILLIS] 的取值域）：**-1 = extra 没来**（契约不完整，
+         * 服务据此不记账但保命）、**0 = 无期限**（框架 token 的形态）、**>0 = 毫秒期限**。
+         * 压成一个布尔是错的：框架 token 天生无期限，把"无期限"当成"非法"会让保活永远起不来。
+         */
+        const val TIMEOUT_MISSING: Long = -1L
+        const val TIMEOUT_UNLIMITED: Long = 0L
     }
 }
