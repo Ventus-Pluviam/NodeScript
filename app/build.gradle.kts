@@ -53,6 +53,20 @@ android {
             jniLibs.srcDir(layout.buildDirectory.dir("generated/engineNativeLibs"))
         }
     }
+    androidResources {
+        // aapt2 的**内置**缺省忽略表里有 `<dir>_*` —— 丢掉一切以 `_` 开头的**目录**。
+        // 对 npm 素材这是一次静默剪裁：`@sigstore/protobuf-specs/dist/__generated__/*.js`
+        // 整个目录不进包，而该包的 `dist/index.js` 在模块顶层 `require('./__generated__/…')`
+        // → 设备上 `require('@sigstore/protobuf-specs')` 直接 MODULE_NOT_FOUND
+        // （npm 的签名/溯源路径；`npm ping`/`npm view` 走不到，所以 B7 的真机冒烟看不见）。
+        // 2026-10-02 实测：merged assets 1659 件 vs 生成位 1674 件，差的正是这一个目录
+        // （`_` 开头的**文件**如 `_elffile.py` 不受影响 —— 缺省表管的是目录）。
+        //
+        // 这里显式覆盖成「缺省表去掉 `<dir>_*`」，其余逐条照抄：点条目（`.*`）、`*~`、
+        // VCS 残留照旧丢。放开的是**所有** `_` 开头的目录，不止 npm 的 —— 改这条前先想清楚
+        // 这一层的资产是谁在放（本模块的四个生成位 + `src/main/assets`）。
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
+    }
     packaging {
         jniLibs {
             // exec 需要**真文件**：默认 extractNativeLibs=false（lib 留在 APK 里给
