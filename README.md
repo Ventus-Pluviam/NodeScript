@@ -111,12 +111,13 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 应用内的**能力中心**列出每项能力的门禁三态（§9.5）与跳转系统设置的引导入口。APK 里没有引擎二进制的
 构建只能用到这里为止 —— 要真跑脚本，按上一节出自带引擎的 APK。
 
-> ⚠️ **自带引擎的 APK 现在也跑不了 `npm install`**：三个 manifest 里**没有声明
-> `android.permission.INTERNET`**（2026-10-02 核实：合并后的 debug manifest 逐条列过，
-> 依赖库也没有任何一家贡献它）→ 进程拿不到网络 socket，npm 取包必失败。修法是加一行声明
-> （普通权限，安装即授），登记在 [`docs/backlog.md`](docs/backlog.md) 的 **B7**，未排期。
-> 另：脚本侧当前**没有** HTTP 命名空间（`auto.http` 不在 §12.1 的 export 面里），所以这一条
-> 卡的**只是** npm 取包这一面。
+> ⚠️ **`android.permission.INTERNET` 已于 2026-10-02 补进 `:app` manifest**（backlog B7 落地：
+> 此前三个 manifest 一个都没声明，自带引擎的 APK 能装能起、`npm install` 必失败）—— 普通权限，
+> 安装即授、无需运行时申请。**真机 A/B 冒烟同日已过**（app uid 下 `npm ping` PONG；对照组去权限后
+> 裸 socket `ERR EPERM`，细节见 `docs/log/2026-10-02.md`）。**仍须如实说明的边界**：
+> ① 冒烟是**本机手工**做的、**没进自动化门**（设备测试道是 backlog E3/B3，要人拍板）；
+> ② 冒烟素材是手工 push 的，**APK 里仍无引擎二进制与 npm 素材**（backlog B5 另案）；
+> ③ 脚本侧本来就不受影响（桥走 abstract unix socket，`auto.*` 没有 HTTP 面）。
 
 运行期已实测过的部分（非 root 设备、Android 13 / arm64）：引擎冷启、桥往返、无障碍读屏与手势、
 截屏帧源；**未**实测：16KB 页设备、SELinux enforcing、`targetSdk` 提取策略、MediaProjection 高清会话。

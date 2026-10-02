@@ -26,6 +26,15 @@
          低版本（<33）本权限自动授予，声明无副作用。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- npm 取包出网（§10.2 调用链的 registry 拉取 / tarball 下载）：**普通权限**，
+         安装即授、无需运行时申请，不入 §9.5 三态门禁（那是危险权限的事）。
+         缺它的症状不是崩溃而是**静默必败**：NpmRegistryVerifier 拉 packument、
+         npm CLI 下 tarball 全部超时/ENOTFOUND —— 即「自带引擎的 APK 能装能起、
+         `npm install` 必失败」（2026-10-02 核实三份 manifest 与合并报告均无此权限，
+         backlog B7）。脚本侧不受影响：桥走 abstract unix socket、auto.* 无 HTTP 面（§12.1），
+         这条权限卡的只是 npm 取包这一面。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- 悬浮窗（§9.4）：普通通道 TYPE_APPLICATION_OVERLAY 需要本权限；
          可信通道 TYPE_ACCESSIBILITY_OVERLAY 随 a11y 服务授权获得，不需要它。
          两者都由能力中心三态门禁管（§9.5），声明权限 ≠ 直接可用。 -->

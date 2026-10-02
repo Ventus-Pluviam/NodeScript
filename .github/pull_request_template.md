@@ -19,4 +19,4 @@
 - [ ] 冻结文件（`settings.gradle.kts` / `gradle/libs.versions.toml` / 根 `build.gradle.kts`）未动，或已事先提出并获准
 
 **结果如实写**：红过就写红过、哪条没跑就写没跑。借助 AI 助手完成的 PR，按
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) 的约定在描述末尾补署名行。
+[`CLAUDE.md`](../CLAUDE.md)「协作纪律」的约定在描述末尾补署名行（约定在那边，本模板只提醒）。

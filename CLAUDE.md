@@ -62,7 +62,7 @@
 1. **改前先读**：动手前读 `docs/design/` 对应分卷（按 § 号定位，如 §7 → `07-bridge.md`；导航见 `docs/framework-design.md` 索引）+ 本文件 + `settings.gradle.kts`；未知默认问协调者。
 2. **只动自己的模块目录**；`settings.gradle.kts`、`gradle/libs.versions.toml`、根 `build.gradle.kts` 由协调者冻结——需要改先提给协调者（**协调者 = 维护者 `@Ventus-Pluviam`**，机器可读的那份在 `.github/CODEOWNERS`，人读镜像在 `CONTRIBUTING.md`）。
 3. **外科手术式读写**：Grep/Glob 定位，Read 带 offset/limit，Edit 用最小唯一匹配，不整库读代码。
-4. **git 提交**：每个逻辑完成点提交，信息 `type(scope): 摘要` + 结尾 `Co-Authored-By: Claude Code <noreply@anthropic.com>`；不提交无关文件；不 init 仓库（已是仓库）。
+4. **git 提交**：每个逻辑完成点提交，信息 `type(scope): 摘要` + 结尾 `Co-Authored-By: Claude Code <noreply@anthropic.com>`；PR 描述末尾补 `🤖 Generated with [Claude Code](https://claude.com/claude-code)`（这两条署名约定的**单一事实来源在此**，`CONTRIBUTING.md` 只留人读指针 —— 2026-10-02 批 12 自那边迁入，外审 D5）；不提交无关文件；不 init 仓库（已是仓库）。
 5. **契约先行**：接口/DTO 以 `:domain` 骨架为准；别自行发明跨模块类型。
 ## NDK
 

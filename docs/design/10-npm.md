@@ -52,6 +52,12 @@
   → post-check（lock 验签 / hasInstallScript 告警 / 防篡改比对）→ 四步 quiesce 回收槽
 ```
 
+- **出网前提（2026-10-02 补，backlog B7 落地）**：APK 必须声明 `android.permission.INTERNET`
+  —— **普通权限**，安装即授、无需运行时申请，不入 §9.5 三态门禁。缺它时上一链的取包段
+  （registry packument 拉取 + pacote 下 tarball）**静默必败**（超时/ENOTFOUND，不是崩溃），
+  即「能装能起、`npm install` 必失败」。脚本侧无感：桥走 abstract unix socket、§12.1 无 HTTP 面。
+  落点 `:app` manifest（唯一 APK 组装点）。
+
 存储布局（**分层到不同生命周期目录**，整改自批判「状态单点系于 filesDir」）：
 - `files/scripts/<projectId>/`：`package.json`、`package-lock.json`(v3)、`node_modules/`、`.npmrc`（项目级）。⚠ `filesDir` 所在分区文件系统由厂商决定（ext4/f2fs 皆有）——f2fs+eMMC 纳入真机红测矩阵，bin-links/符号链接/20k 小文件写方差按最差形态设计超时。
 - `files/.autojs`（**App 私有、安装会话只读、HMAC keyed 于 :main**）：`approve-ledger.json`（审批记录，条目绑定 `pkg+版本+脚本内容哈希`，新版本必须重新审批）、`lock.sig`、`install.journal`（事务日志）、`install-history`（审计）。

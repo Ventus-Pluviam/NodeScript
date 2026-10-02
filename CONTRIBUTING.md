@@ -1,11 +1,22 @@
 # 参与贡献（Contributing）
 
-先读三份东西，再动手 —— 本仓的规矩大半不在这个文件里，而在那三份里：
+## 快速开始（最小路径）
 
-1. [`docs/framework-design.md`](docs/framework-design.md) —— 架构设计的入口（薄索引，按 § 号进分卷）；
-2. [`CLAUDE.md`](CLAUDE.md) —— 仓库地图、模块表、协作纪律；
-3. 你要改的那块的**设计分卷** —— 例如改桥就读 [`docs/design/07-bridge.md`](docs/design/07-bridge.md)，
-   改执行就读 [`08-execution.md`](docs/design/08-execution.md)。
+> 只想改点东西并跑通 —— 五步走完就行；余下章节是「改对」的细则，**不是进场门票**
+> （外审 D5：此前要求先读薄索引 + `CLAUDE.md` + 604 行设计分卷才动手，把门外的人挡在了门外）。
+
+1. 从 `main` 切分支：`git checkout -b feat/…`（命名与 PR 纪律见下「分支与 PR」）。
+2. 改代码。**只有动契约语义**（`docs/design/*.md` 描述的行为）时才需要先读对应分卷；
+   纯 bug 修 / 文案修不用。
+3. 跑门（与 CI 逐字同源，全量命令见下「提交前必跑的门」；最短集 = 文档链接门 +
+   13 个 JVM 测试任务 + `npm --prefix bridge/js test`）。
+4. push 分支、开 PR（描述按模板勾，**结果如实写** —— 红过就说红过）。
+5. CI 绿了等评审合并。**不要为触发 CI 直推 `main`**。
+
+改深了再按级别补读：仓库地图 / 模块表 / 依赖铁律 → [`CLAUDE.md`](CLAUDE.md)；
+动契约或结构 → [`docs/framework-design.md`](docs/framework-design.md) 薄索引入口 + 你要改的那块的
+**设计分卷**（例：改桥读 [`docs/design/07-bridge.md`](docs/design/07-bridge.md)，改执行读
+[`08-execution.md`](docs/design/08-execution.md)）。
 
 ## 文档即契约（本仓最重要的一条）
 
@@ -49,15 +60,14 @@ type(scope): 摘要
 
 （正文：为什么这么改、被推翻的旧口径是什么、门跑的结果。想清楚的话都在这里，
   不是复述 diff。）
-
-Co-Authored-By: Claude Code <noreply@anthropic.com>
 ```
 
 - `type` 用 `feat` / `fix` / `refactor` / `perf` / `test` / `docs` / `ci` / `chore` / `build`；
   `scope` 用模块名或面（`docs` / `settings` / `npm` / `bridge` …）。
 - 正文写**依据与权衡**，一行摘要讲不清的就在这里讲清；引用设计条款请带 § 号。
-- 借助 AI 助手共同完成的提交，按所用工具的约定补 trailer（本仓 agent 约定为
-  `Co-Authored-By: Claude Code <noreply@anthropic.com>`）；人工独立完成的提交不必加。
+- **AI 协作的署名约定不在本文件**（提交 trailer 与 PR 描述署名行的规则统一在
+  [`CLAUDE.md`](CLAUDE.md) 的「协作纪律」里 —— 那是 agent 侧的单一事实来源，
+  本文件只管人读的提交信息纪律）；人工独立完成的提交不必加署名。
 
 ## 提交前必跑的门
 
