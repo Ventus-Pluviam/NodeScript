@@ -64,9 +64,13 @@ data class Colors(
     val badge: Color,
     /** 未读计数字（`chats_unreadCounterText` = 白）。 */
     val onBadge: Color,
-    /** 底页签选中线（`actionBarTabLine`）。 */
-    val tabIndicator: Color,
-    /** 底页签未选中文字（`actionBarTabUnactiveText`）。 */
+    /**
+     * 底页签**未选中**那一档的前景色（图标与文字同色）。
+     *
+     * 这里刻意**没有**「选中线」这个 token：TG 那条 2dp 线是**顶栏**文件夹页签的下划线，
+     * 底栏的选中语法是**整格染色**（用 [accent]），2026-10-02 重做底栏时一并删掉了
+     * 照抄过来的 `tabIndicator` —— 留一个没有调用方的颜色只会让下一个人以为底栏该有线。
+     */
     val tabIdle: Color,
     /** 按下态遮罩（`actionBarDefaultSelector` 那种半透明压暗）。 */
     val pressedOverlay: Color,
@@ -90,7 +94,6 @@ val LightColors = Colors(
     success = Color(0xFF4BCB1C),
     badge = Color(0xFF24AEF7),
     onBadge = Color(0xFFFFFFFF),
-    tabIndicator = Color(0xFF298ACF),
     tabIdle = Color(0xFF777C7F),
     pressedOverlay = Color(0x14000000),
     fieldBackground = Color(0xFFF1F1F3),
@@ -112,7 +115,6 @@ val DarkColors = Colors(
     success = Color(0xFF71D756),
     badge = Color(0xFF399EF3),
     onBadge = Color(0xFFFFFFFF),
-    tabIndicator = Color(0xFF43B7FF),
     tabIdle = Color(0xFF8E8E8F),
     pressedOverlay = Color(0x1AFFFFFF),
     fieldBackground = Color(0xFF0F0F11),

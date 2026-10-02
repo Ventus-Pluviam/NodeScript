@@ -1,0 +1,128 @@
+package com.autoscript.ui.components
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+/**
+ * 页签图标（§6 底栏）：**本仓不引图标依赖，这几个图标是画出来的**。
+ *
+ * 为什么画而不是拉一套图标包：底栏只用得到四个字形，而任何一套图标库（material-icons
+ * 那类）都要为一个 24dp 的矢量多带一份依赖 + 一份许可声明，且它们的画风（Material 的
+ * 圆头粗线）与 TG 的观感并不一致。这几个按 TG 底栏的语法自己画：**一格一形、线性等宽、
+ * 选中靠染色而不是换形**，线条粗细与留白按同一个比例（见 [StrokeRatio]）。
+ *
+ * 形状用的都是最简单的几何（房子 = 折线 + 折线、时钟 = 圆 + 两针、终端 = 圆角矩形 +
+ * 折线 + 短横、盾牌 = 六边形），在这四个形状上"像不像"的容错很大 —— 反倒是照抄某个
+ * 图标库的路径数据更可能在 24dp 下发糊。
+ *
+ * 画在 0..1 的归一化坐标里再乘实际尺寸：同一份形状在 24dp 的底栏、20dp 的紧凑位都成立，
+ * 不必为每个尺寸调一遍坐标。
+ */
+enum class GlyphKind {
+    /** 首屏（壳/保活）：房子。 */
+    HOME,
+
+    /** 任务中心（定时/排期）：时钟。 */
+    TASKS,
+
+    /** 控制台（命令行）：终端窗口。 */
+    CONSOLE,
+
+    /** 能力中心（三态门禁）：盾牌。 */
+    CAPABILITIES,
+}
+
+/** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
+private const val StrokeRatio = 0.085f
+
+/**
+ * 画一个页签图标。
+ *
+ * @param tint 线条色（调用方给：选中 = 强调色，未选中 = 次级灰）。
+ * @param weight 线宽倍率。**选中项略微加粗** —— 这套图标是线性的，没有"填充版"可切，
+ *   加粗就是它这一档语言里的"实心"（TG 底栏选中项也是靠视觉重量拉开，不是靠颜色一条）。
+ */
+@Composable
+fun Glyph(
+    kind: GlyphKind,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    size: Dp = 24.dp,
+    weight: Float = 1f,
+) {
+    Canvas(modifier.size(size)) {
+        val u = this.size.minDimension
+        val stroke = Stroke(
+            width = u * StrokeRatio * weight,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round,
+        )
+        fun at(x: Float, y: Float) = Offset(x * u, y * u)
+        fun path(vararg points: Pair<Float, Float>): Path = Path().apply {
+            points.forEachIndexed { i, (x, y) ->
+                if (i == 0) moveTo(x * u, y * u) else lineTo(x * u, y * u)
+            }
+        }
+
+        when (kind) {
+            // 房子：屋顶两笔 + 屋身三笔（左下→右下→右侧竖边）。不画门 ——
+            // 24dp 里再塞一扇门就只剩一团黑。
+            GlyphKind.HOME -> {
+                drawPath(path(0.09f to 0.48f, 0.50f to 0.13f, 0.91f to 0.48f), tint, style = stroke)
+                drawPath(
+                    path(0.23f to 0.45f, 0.23f to 0.87f, 0.77f to 0.87f, 0.77f to 0.45f),
+                    tint,
+                    style = stroke,
+                )
+            }
+
+            // 时钟：外圈 + 时针（朝上）+ 分针（朝右下）。任务是"什么时候跑"，钟面比清单更贴。
+            GlyphKind.TASKS -> {
+                drawCircle(tint, radius = 0.37f * u, center = at(0.5f, 0.5f), style = stroke)
+                drawPath(path(0.50f to 0.50f, 0.50f to 0.27f), tint, style = stroke)
+                drawPath(path(0.50f to 0.50f, 0.69f to 0.61f), tint, style = stroke)
+            }
+
+            // 终端：窗口外框 + 提示符 ">" + 光标 "_"。
+            GlyphKind.CONSOLE -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = at(0.09f, 0.17f),
+                    size = Size(0.82f * u, 0.66f * u),
+                    cornerRadius = CornerRadius(0.14f * u),
+                    style = stroke,
+                )
+                drawPath(path(0.30f to 0.40f, 0.42f to 0.50f, 0.30f to 0.60f), tint, style = stroke)
+                drawPath(path(0.54f to 0.60f, 0.71f to 0.60f), tint, style = stroke)
+            }
+
+            // 盾牌：上宽下尖的六边形。能力中心管的是"授权/拒绝"，盾牌是最不容易读错的形。
+            GlyphKind.CAPABILITIES -> {
+                drawPath(
+                    path(
+                        0.50f to 0.11f,
+                        0.87f to 0.25f,
+                        0.87f to 0.51f,
+                        0.50f to 0.89f,
+                        0.13f to 0.51f,
+                        0.13f to 0.25f,
+                    ).apply { close() },
+                    tint,
+                    style = stroke,
+                )
+            }
+        }
+    }
+}
