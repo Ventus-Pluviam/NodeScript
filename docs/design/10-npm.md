@@ -21,7 +21,7 @@
 > 下载 + 双闸校验后同管线收敛出库，与 libnode 同一 artifact）—— 上面的「代价」段
 > 随之成为历史（原文保留）。「钉死 + 全链回归」纪律不降级：改 `NPM_CLI_VERSION` /
 > `NPM_CLI_SHA1` 即命中 node-slice paths 触发面。同批 `test/`、`tap-snapshots/`
-> 因发布态本来就没有而天然消失（backlog E4，素材 1846 文件/18M → 1674/9MiB），
+> 因发布态本来就没有而天然消失（backlog E4，素材 1846 → 1674 文件、表观 11 → 9MiB、占盘 18M → 16M），
 > 裁决见 [`design-decisions.md`](../design-decisions.md) 第 26 项。
 
 - **零 spawn 是实证事实**：`npm install` 的实质 = `@npmcli/arborist reify()` + pacote 下载/解包/链接；本机 strace 实测 `npm install --ignore-scripts` 全程 **0 次 execve**。纯 JS 生态（axios/dayjs/lodash/cheerio/ws/express ≈99% 用例）根本不需要子进程。
