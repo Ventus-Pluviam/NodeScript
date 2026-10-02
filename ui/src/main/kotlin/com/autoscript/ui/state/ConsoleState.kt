@@ -1,4 +1,4 @@
-package com.autoscript.ui
+package com.autoscript.ui.state
 
 import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.domain.host.ActiveRunRow
@@ -12,21 +12,20 @@ import java.time.format.DateTimeFormatter
  * 控制台呈现态（纯数据，Compose 之外可 JVM 测）。
  *
  * 与 [TaskCenterState]/[CapabilityCenterState] 同一条纪律，外加控制台特有的一条：
- * - [loaded] = false 且 [loadError] = null —— 还没读到过（首帧哨兵 [NOT_LOADED]）；
- *   [loadError] 非 null —— 最近一次读取失败，**但已读到的行与游标都保留**
- *   （一次瞬时失败不该把用户已经看到的日志抹掉，游标不清零才能续拉）；
+ * - [load] = [LoadState.NotLoaded] 首帧哨兵；[LoadState.Failed] 表示最近一次读取失败，
+ *   **但已读到的行与游标都保留**（一次瞬时失败不该把用户已经看到的日志抹掉，
+ *   游标不清零才能续拉）；
  * - **行是累积的**（[of] 把本批接在既有行后面）：控制台是累计事实，刷新 = 增量拉取，
  *   不是重画；同一游标读两遍（并发刷新）按 seq 去重，不重复入列；
  * - 三样"现值"不累积、每次现取：[pageFull]、[droppedTotal]、[activeRuns] ——
  *   它们答的是"此刻"，留旧值会把过期事实当现状。
  *
- * 时间戳格式化在这一层（[ConsoleLineState] 的 `timeText`，`HH:mm:ss` —— 控制台行
+ * 时间戳格式化在这一层（[ConsoleLineState.timeText]，`HH:mm:ss` —— 控制台行
  * 以秒为粒度，`MM-dd HH:mm` 分辨不出同分钟内的先后）；时刻由 [of] 的参数注入，
  * 类内不读 `System.currentTimeMillis()`（可测 + 同帧一致）。
  */
 data class ConsoleState(
-    val loaded: Boolean,
-    val loadError: String?,
+    val load: LoadState,
     val lines: List<ConsoleLineState>,
     /** 拉取游标（只进不退；失败不清零）。首读前为 0。 */
     val nextSeq: Long,
@@ -35,7 +34,7 @@ data class ConsoleState(
     val activeRuns: List<ActiveRunState>,
     val nowMillis: Long,
     val zone: ZoneId,
-    /** 上一次**停止操作**失败原文（≠ [loadError]：读失败与停失败分开，见 [TaskCenterState] 同纪律）。 */
+    /** 上一次**停止操作**失败原文（≠ 读失败：两条账分开，见 [TaskCenterState] 同纪律）。 */
     val stopError: String? = null,
     /** 上一次**停止操作**成功回执（刷新现取即清，不缓存）。 */
     val stopNotice: String? = null,
@@ -48,8 +47,7 @@ data class ConsoleState(
          * `nowMillis` 取 0：没有行就没有时间戳可渲染。
          */
         val NOT_LOADED = ConsoleState(
-            loaded = false,
-            loadError = null,
+            load = LoadState.NotLoaded,
             lines = emptyList(),
             nextSeq = 0L,
             pageFull = false,
@@ -75,8 +73,7 @@ data class ConsoleState(
             val seen = previous.lines.mapTo(HashSet()) { it.seq }
             val fresh = added.lines.filter { it.seq !in seen }
             return ConsoleState(
-                loaded = true,
-                loadError = null,
+                load = LoadState.Loaded,
                 lines = previous.lines + fresh.map { ConsoleLineState.of(it, zone) },
                 nextSeq = added.nextSeq,
                 pageFull = added.pageFull,
@@ -89,11 +86,10 @@ data class ConsoleState(
 
         /**
          * 读取失败：保留 [previous] 的行与游标，只把失败亮出来（原异常文案，
-         * message 为 null 时退到类名 —— 显示 null 会被渲染成"还没读取"）。
+         * `message` 为 null 时退到类名 —— 显示 null 会被渲染成"还没读取"）。
          */
         fun failed(t: Throwable, previous: ConsoleState): ConsoleState = previous.copy(
-            loaded = false,
-            loadError = t.message ?: t.javaClass.simpleName,
+            load = LoadState.of(t),
         )
     }
 }
@@ -114,6 +110,10 @@ data class ConsoleLineState(
     val text: String,
     val timeText: String,
 ) {
+    /** 这一行的着色档：只有 error 通栏标红，其余走正文色 —— 标红多了就等于没标。 */
+    val tone: StatusTone
+        get() = if (level == "error") StatusTone.PROBLEM else StatusTone.NEUTRAL
+
     companion object {
         fun of(line: ConsoleLineRow, zone: ZoneId): ConsoleLineState = ConsoleLineState(
             seq = line.seq,
@@ -143,6 +143,14 @@ data class ActiveRunState(
     val poolLabel: String,
     val drift: Boolean,
 ) {
+    /** 「池侧 / 宿主」那一行的着色档：读不到宿主或两端分歧都值得注意。 */
+    val tone: StatusTone
+        get() = when {
+            drift -> StatusTone.PROBLEM
+            hostLabel == null -> StatusTone.ATTENTION
+            else -> StatusTone.MUTED
+        }
+
     companion object {
         fun of(run: ActiveRunRow): ActiveRunState = ActiveRunState(
             runId = run.runId,

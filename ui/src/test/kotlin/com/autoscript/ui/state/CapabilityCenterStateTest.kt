@@ -1,4 +1,4 @@
-package com.autoscript.ui
+package com.autoscript.ui.state
 
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.CapabilityRow
@@ -31,23 +31,23 @@ class CapabilityCenterStateTest {
     @Test
     fun `首帧哨兵是未读取 不是空清单`() {
         val s = CapabilityCenterState.NOT_LOADED
-        assertFalse(s.loaded)
-        assertNull(s.loadError, "没读过 ≠ 读失败：两者分开，别拿一个句子盖住两种事实")
+        assertFalse(s.load.isLoaded)
+        assertNull(s.load.failedReason(), "没读过 ≠ 读失败：两者分开，别拿一个句子盖住两种事实")
         assertTrue(s.rows.isEmpty())
     }
 
     @Test
     fun `读失败带原异常文案 不吞成空清单`() {
         val s = CapabilityCenterState.failed(IllegalStateException("ROM 查询崩了"))
-        assertFalse(s.loaded)
-        assertEquals("ROM 查询崩了", s.loadError, "原异常文案是现场唯一的区分线索")
+        assertFalse(s.load.isLoaded)
+        assertEquals("ROM 查询崩了", s.load.failedReason(), "原异常文案是现场唯一的区分线索")
         assertTrue(s.rows.isEmpty())
     }
 
     @Test
     fun `异常无 message 时退到类名 不显示 null`() {
         val s = CapabilityCenterState.failed(RuntimeException())
-        assertEquals("RuntimeException", s.loadError, "loadError=null 会被渲染成「尚未读取」，把失败说成没读")
+        assertEquals("RuntimeException", s.load.failedReason(), "loadError=null 会被渲染成「尚未读取」，把失败说成没读")
     }
 
     @Test
@@ -94,15 +94,15 @@ class CapabilityCenterStateTest {
                 degradedAlarmTaskIds = listOf("task-a", "task-b"),
             ),
         )
-        assertTrue(s.loaded)
+        assertTrue(s.load.isLoaded)
         assertEquals(listOf("task-a", "task-b"), s.degradedAlarmTaskIds)
     }
 
     @Test
     fun `loadError 为 null 只在成功与未读取两条路上`() {
-        assertNull(CapabilityCenterState.of(CapabilityCenterSnapshot(emptyList(), emptyList())).loadError)
-        assertNull(CapabilityCenterState.NOT_LOADED.loadError)
-        assertTrue(CapabilityCenterState.failed(IllegalStateException("x")).loadError != null)
+        assertNull(CapabilityCenterState.of(CapabilityCenterSnapshot(emptyList(), emptyList())).load.failedReason())
+        assertNull(CapabilityCenterState.NOT_LOADED.load.failedReason())
+        assertTrue(CapabilityCenterState.failed(IllegalStateException("x")).load.failedReason() != null)
     }
 
     // ── 安装体积（§15 E1「接受并明示」）────────────────────────────────────

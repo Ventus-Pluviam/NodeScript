@@ -1,4 +1,4 @@
-package com.autoscript.ui
+package com.autoscript.ui.state
 
 import com.autoscript.domain.host.RecoveryRow
 import com.autoscript.domain.host.RunRow
@@ -48,8 +48,8 @@ class TaskCenterStateTest {
     @Test
     fun `首帧哨兵是未读取 不是空清单`() {
         val s = TaskCenterState.NOT_LOADED
-        assertFalse(s.loaded)
-        assertNull(s.loadError, "没读过 ≠ 读失败：两者分开，别拿一个句子盖住两种事实")
+        assertFalse(s.load.isLoaded)
+        assertNull(s.load.failedReason(), "没读过 ≠ 读失败：两者分开，别拿一个句子盖住两种事实")
         assertTrue(s.tasks.isEmpty())
         assertTrue(s.unfinishedRuns.isEmpty())
         assertNull(s.recovery)
@@ -58,24 +58,24 @@ class TaskCenterStateTest {
     @Test
     fun `读失败带原异常文案 不吞成空清单`() {
         val s = TaskCenterState.failed(IllegalStateException("壳未装配"))
-        assertFalse(s.loaded)
-        assertEquals("壳未装配", s.loadError, "原异常文案是现场唯一的区分线索")
+        assertFalse(s.load.isLoaded)
+        assertEquals("壳未装配", s.load.failedReason(), "原异常文案是现场唯一的区分线索")
         assertTrue(s.tasks.isEmpty())
     }
 
     @Test
     fun `异常无 message 时退到类名 不显示 null`() {
         val s = TaskCenterState.failed(RuntimeException())
-        assertEquals("RuntimeException", s.loadError, "loadError=null 会被渲染成「尚未读取」，把失败说成没读")
+        assertEquals("RuntimeException", s.load.failedReason(), "loadError=null 会被渲染成「尚未读取」，把失败说成没读")
     }
 
     @Test
     fun `读到的空清单与未读取分得开`() {
         val empty = TaskCenterState.of(snapshot(), nowMillis = 1L)
-        assertTrue(empty.loaded, "读成功且一条都没有：用户该去新建任务，而不是重试")
-        assertNull(empty.loadError)
+        assertTrue(empty.load.isLoaded, "读成功且一条都没有：用户该去新建任务，而不是重试")
+        assertNull(empty.load.failedReason())
         assertTrue(empty.tasks.isEmpty())
-        assertFalse(TaskCenterState.NOT_LOADED.loaded, "两种「空」对用户是完全不同的结论")
+        assertFalse(TaskCenterState.NOT_LOADED.load.isLoaded, "两种「空」对用户是完全不同的结论")
     }
 
     @Test
@@ -226,8 +226,8 @@ class TaskCenterStateTest {
         val failed = loaded.copy(opError = "任务不存在（可能已被取消）：t1")
         assertEquals(1, failed.tasks.size, "操作失败把清单抹掉 = 用户以为任务全没了")
         assertEquals("任务不存在（可能已被取消）：t1", failed.opError)
-        assertNull(failed.loadError, "opError 与 loadError 分行记账，不互相顶替")
-        assertEquals(true, failed.loaded, "清单还在 = 还是「读成功」的状态")
+        assertNull(failed.load.failedReason(), "opError 与 loadError 分行记账，不互相顶替")
+        assertEquals(true, failed.load.isLoaded, "清单还在 = 还是「读成功」的状态")
     }
 
     @Test

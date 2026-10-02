@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 TgTheme.kt 的 TgDarkColors.background 同值（#FF181819） -->
+    <color name="tg_window_background">#FF181819</color>
+</resources>

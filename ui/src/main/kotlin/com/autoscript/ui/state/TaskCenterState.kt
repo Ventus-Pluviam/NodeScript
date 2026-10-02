@@ -1,11 +1,10 @@
-package com.autoscript.ui
+package com.autoscript.ui.state
 
 import com.autoscript.domain.host.RecoveryRow
+import com.autoscript.domain.host.RunRow
 import com.autoscript.domain.host.ScheduleSpec
 import com.autoscript.domain.host.ScheduledTaskRow
-import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.domain.host.TaskCenterSnapshot
-import com.autoscript.domain.host.RunRow
 import com.autoscript.domain.scripts.RunState
 import java.time.Instant
 import java.time.ZoneId
@@ -14,15 +13,14 @@ import java.time.format.DateTimeFormatter
 /**
  * 任务中心呈现态（纯数据，Compose 之外可 JVM 测）。
  *
- * 与 [CapabilityCenterState] 同一条纪律：三件事分开记账，谁都不替谁说话。
- * - [loaded] = false —— 还没读到（首帧/读取失败）。**不冒充**「一条任务都没有」：
+ * 与 [CapabilityCenterState] 同一条纪律，三件事分开记账，谁都不替谁说话：
+ * - [load] —— 还没读到 / 读失败（带原文）/ 读到了。**不冒充**「一条任务都没有」：
  *   后者是"读成功且真的没登记过任务"，两者对用户是完全不同的结论（前者要重试，
  *   后者要新建任务）；
- * - [loadError] 保留原异常文案（失败原因的唯一线索：ROM 读崩了 vs 壳没装配好）；
  * - 任务行/未结算执行/恢复账各自成段，不揉成一个"状态"（后者见 [RecoveryRowState]）。
  *
  * **操作面三字段与读账分开记账**（§8.6 登记/取消/立即执行）：
- * - [opError] ≠ [loadError]：操作失败（校验不过/壳未装配/收口中）**不清任务清单** ——
+ * - [opError] ≠ 读失败：操作失败（校验不过/壳未装配/收口中）**不清任务清单** ——
  *   清单还是上次读到的事实，把它一并抹掉会让用户以为任务全没了；
  * - [opNotice] 是上一次操作的回执，只由操作成功写入；刷新现取随 [of] 归零
  *   （现取纪律：不缓存陈旧提示）；
@@ -33,15 +31,14 @@ import java.time.format.DateTimeFormatter
  * "刚跑完"），必须可测；`@Composable` 里的 `DateTimeFormatter` 也是每次重组都重建对象。
  */
 data class TaskCenterState(
-    val loaded: Boolean,
-    val loadError: String?,
+    val load: LoadState,
     val tasks: List<TaskRowState>,
     val unfinishedRuns: List<RunRowState>,
     val recovery: RecoveryRowState?,
     /** 渲染时刻（由调用方给，见 [of]）—— 类内不读 `System.currentTimeMillis()`，否则不可测。 */
     val nowMillis: Long,
     val zone: ZoneId,
-    /** 上一次**操作**失败原文（≠ [loadError]：读失败与写失败分开，见类 KDoc）。 */
+    /** 上一次**操作**失败原文（≠ 读失败：两条账分开，见类 KDoc）。 */
     val opError: String? = null,
     /** 上一次**操作**成功回执（刷新/切页现取即清，不缓存）。 */
     val opNotice: String? = null,
@@ -54,8 +51,7 @@ data class TaskCenterState(
          * `nowMillis` 取 0：这个实例不会渲染任何相对时间（没读到就没有行）。
          */
         val NOT_LOADED = TaskCenterState(
-            loaded = false,
-            loadError = null,
+            load = LoadState.NotLoaded,
             tasks = emptyList(),
             unfinishedRuns = emptyList(),
             recovery = null,
@@ -75,8 +71,7 @@ data class TaskCenterState(
             nowMillis: Long,
             zone: ZoneId = ZoneId.systemDefault(),
         ): TaskCenterState = TaskCenterState(
-            loaded = true,
-            loadError = null,
+            load = LoadState.Loaded,
             tasks = snapshot.tasks.map { TaskRowState.of(it, nowMillis, zone) },
             unfinishedRuns = snapshot.runs.map { RunRowState.of(it, nowMillis, zone) },
             recovery = snapshot.recovery?.let { RecoveryRowState.of(it) },
@@ -85,13 +80,11 @@ data class TaskCenterState(
         )
 
         /**
-         * 读取失败。**保留原异常文案**（`message` 为 null 时退到类名）——
-         * 与 `CapabilityCenterState.failed` 同一手法：显示 `null` 会被渲染成"还没读取"，
-         * 把失败说成没读。
+         * 读取失败。**保留原异常文案** —— 与 `CapabilityCenterState.failed` 同一手法：
+         * 显示「尚未读取」会把失败说成没读。
          */
         fun failed(t: Throwable): TaskCenterState = TaskCenterState(
-            loaded = false,
-            loadError = t.message ?: t.javaClass.simpleName,
+            load = LoadState.of(t),
             tasks = emptyList(),
             unfinishedRuns = emptyList(),
             recovery = null,
@@ -123,6 +116,21 @@ data class TaskRowState(
      */
     val once: Boolean = false,
 ) {
+    /**
+     * 卡片左侧那一列的**全部**标记（决定小圆点画几个、什么色）。
+     *
+     * 收在一个方法里而不是让 Composable 自己 `if` 一遍：TG 会话列表左侧就是一个
+     * "置顶/静音/草稿"的图标列，规则同样是集中判读的一条。判据是"用户会因此改变什么动作"：
+     * - 停用 → PROBLEM（该去开回来）；
+     * - 降级 → ATTENTION（会跑，可能偏差，不急）；
+     * - 一次性 → NEUTRAL（调度器语义，不是异常）。
+     */
+    fun badges(): List<Pair<StatusTone, String>> = buildList {
+        if (!enabled) add(StatusTone.PROBLEM to "已停用（不会自动投递；仍可立即执行）")
+        if (degraded) add(StatusTone.ATTENTION to "降级投递（可能偏差）：精确闹钟不可用，已按窗口投递")
+        if (once) add(StatusTone.MUTED to "一次性任务：执行过后自动移出注册表")
+    }
+
     companion object {
         fun of(task: ScheduledTaskRow, nowMillis: Long, zone: ZoneId): TaskRowState = TaskRowState(
             id = task.id,
@@ -169,6 +177,15 @@ data class RecoveryRowState(
     val retried: Int,
     val failureText: String?,
 ) {
+    /** 恢复账那一段的话（有失败时先说失败 —— 那是唯一需要动手的一条）。 */
+    fun text(): String? = failureText?.let { "上次启动恢复失败：$it" } ?: buildString {
+        append("上次启动恢复 $total 条，重投 $retried 条")
+        if (expired > 0) {
+            // 过期不等于没恢复：它是"封口记账、不重投"（§8.6 deadline），单独说。
+            append("，其中 $expired 条已过约定时刻（未重投）")
+        }
+    }
+
     companion object {
         fun of(row: RecoveryRow): RecoveryRowState = RecoveryRowState(
             total = row.total,

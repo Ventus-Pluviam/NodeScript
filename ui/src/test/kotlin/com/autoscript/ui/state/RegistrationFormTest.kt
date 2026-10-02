@@ -1,4 +1,4 @@
-package com.autoscript.ui
+package com.autoscript.ui.state
 
 import com.autoscript.domain.host.ScheduleSpec
 import com.autoscript.domain.host.ScreenRequirement

@@ -1,4 +1,4 @@
-package com.autoscript.ui
+package com.autoscript.ui.state
 
 import com.autoscript.domain.host.ShellSummary
 import org.junit.jupiter.api.Assertions.assertEquals

@@ -1,4 +1,4 @@
-package com.autoscript.ui
+package com.autoscript.ui.state
 
 import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.domain.host.ActiveRunRow
@@ -50,8 +50,8 @@ class ConsoleStateTest {
     @Test
     fun `首帧哨兵是未读取 不是暂无日志`() {
         val s = ConsoleState.NOT_LOADED
-        assertFalse(s.loaded)
-        assertNull(s.loadError, "没读过 ≠ 读失败：两者分开，别拿一个句子盖住两种事实")
+        assertFalse(s.load.isLoaded)
+        assertNull(s.load.failedReason(), "没读过 ≠ 读失败：两者分开，别拿一个句子盖住两种事实")
         assertTrue(s.lines.isEmpty())
         assertEquals(0L, s.nextSeq)
     }
@@ -64,8 +64,8 @@ class ConsoleStateTest {
             nowMillis = 1L,
         )
         val failed = ConsoleState.failed(IllegalStateException("壳未装配"), previous)
-        assertFalse(failed.loaded)
-        assertEquals("壳未装配", failed.loadError, "原异常文案是区分「壳未装配」与「读崩了」的唯一线索")
+        assertFalse(failed.load.isLoaded)
+        assertEquals("壳未装配", failed.load.failedReason(), "原异常文案是区分「壳未装配」与「读崩了」的唯一线索")
         assertEquals(2, failed.lines.size, "瞬时失败不清缓冲：用户已经看到的日志不该被一次失败抹掉")
         assertEquals(2L, failed.nextSeq, "游标不清零 —— 下次从上次成功处续拉，不重读也不跳行")
         assertEquals(2L, failed.lines.last().seq)
@@ -74,16 +74,16 @@ class ConsoleStateTest {
     @Test
     fun `异常无 message 时退到类名 不显示 null`() {
         val failed = ConsoleState.failed(RuntimeException(), ConsoleState.NOT_LOADED)
-        assertEquals("RuntimeException", failed.loadError, "loadError=null 会被渲染成「尚未读取」，把失败说成没读")
+        assertEquals("RuntimeException", failed.load.failedReason(), "loadError=null 会被渲染成「尚未读取」，把失败说成没读")
     }
 
     @Test
     fun `读到的空批与未读取分得开`() {
         val empty = ConsoleState.of(ConsoleState.NOT_LOADED, snap(), nowMillis = 1L)
-        assertTrue(empty.loaded, "读成功且真的没输出：用户该等脚本打日志，而不是重试读取")
-        assertNull(empty.loadError)
+        assertTrue(empty.load.isLoaded, "读成功且真的没输出：用户该等脚本打日志，而不是重试读取")
+        assertNull(empty.load.failedReason())
         assertTrue(empty.lines.isEmpty())
-        assertFalse(ConsoleState.NOT_LOADED.loaded)
+        assertFalse(ConsoleState.NOT_LOADED.load.isLoaded)
     }
 
     @Test
@@ -100,8 +100,8 @@ class ConsoleStateTest {
         )
         assertEquals(listOf(1L, 2L, 3L), second.lines.map { it.seq }, "控制台是累计事实：刷新 = 增量拉取，不是重画")
         assertEquals(3L, second.nextSeq)
-        assertTrue(second.loaded)
-        assertNull(second.loadError)
+        assertTrue(second.load.isLoaded)
+        assertNull(second.load.failedReason())
     }
 
     @Test
@@ -232,6 +232,6 @@ class ConsoleStateTest {
         assertNull(refreshed.stopError, "现取纪律：回执不缓存，刷新即清")
         assertNull(refreshed.stopNotice, "现取纪律：回执不缓存，刷新即清")
         assertFalse(refreshed.stopInFlight, "挂起态不跨刷新：刷新回来按钮恢复可用")
-        assertTrue(refreshed.loaded)
+        assertTrue(refreshed.load.isLoaded)
     }
 }
