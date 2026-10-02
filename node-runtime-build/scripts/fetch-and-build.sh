@@ -234,28 +234,52 @@ bash "$SCRIPT_DIR/check-alignment.sh" "$TOOLCHAIN/bin/llvm-objdump" "$OUT" "$OUT
 (cd "$OUT" && sha256sum node libnode.so* libc++_shared.so config.gypi config.mk | tee SHASUMS256)
 
 # ── 9) vendored npm CLI 素材（§10.2 调用链首段：assets/npm/** → filesDir/npm/）──
-# 素材 = Node 源码树里的 vendored npm（deps/npm），与 libnode.so 同批产出、同一 artifact
-# 出库；:app 的随包任务（build-logic 的 prepareNpmCliAssets）从这里取件，启动期由
-# NpmCliDeployer 原子部署到 filesDir/npm/。为什么不在 gradle 侧现下 registry tarball：
-# 版本必须与 libnode 走同一条「钉死 + 全链回归」纪律（下面的版本断言就是那道闸）。
+# 素材 = **registry 发布态 tarball**（2026-10-02 A6 换源；原「Node 源码树 deps/npm」
+# 口径作废 —— Node 24.21.0 携带 11.19.0 ≠ §10.1 脊梁的 12.x 系，等 Node 线原理上
+# 不通）。原「不另下 registry tarball」的理由是版本纪律 —— 那条纪律**没丢**：版本与
+# sha1 钉在 VERSIONS.env（改那里即命中本脚本的 paths 触发面 → 全链回归），此处再加
+# 内容断言做双闸。素材与 libnode.so 同批产出、同一 artifact 出库；:app 的随包任务
+# （build-logic 的 prepareNpmCliAssets）从这里取件，启动期由 NpmCliDeployer 原子
+# 部署到 filesDir/npm/。
 #
 # 剪裁（动手前先想清楚代价）：
 #   · docs/ man/ —— 只有 `npm help` 用得到，不参与 install/ci/ls/prune 任何一条链；
+#     registry 发布态仍带这两样，照剪。**test/ 与 tap-snapshots/ 不用剪 —— 发布态
+#     本来就没有**（backlog E4 的 2.7MB 表观目标随换源天然达成）；
 #   · 以 . 开头的条目**一律不随包** —— AssetManager 对点条目的可见性在 ROM 间不一致
 #     （历史上有的实现直接跳过 list 结果），留着就是「源里有、设备上没有」的静默差。
 #     npm 树里的点条目只有 node_modules/.bin（npm 自己的 bin 链接；用户项目的
 #     bin-links 由 npm 现建，不读这里）与 node_modules/.package-lock.json（npm 自身
-#     node_modules 的隐藏 lock，只有"在 npm 自己的目录里跑 npm ci"才用得到）。
+#     node_modules 的隐藏 lock，只有"在 npm 自己的目录里跑 npm ci"才用得到），
+#     外加发布态自带的杂项点文件（.release-please-manifest.json 之类）—— 同批清。
 #     根上的 .npmrc 也不是 npm 的运行时配置源（它读的是 <npm 根>/npmrc，无点）。
 #   · 符号链接一律解引用（cp -RL）：assets 与 APK 都装不了符号链接。
-say "收敛 vendored npm CLI 素材到 $OUT/npm（deps/npm，剪裁 docs/man/点条目）..."
-NPM_SRC="$SRC/node-$NODE_VERSION/deps/npm"
-[ -f "$NPM_SRC/bin/npm-cli.js" ] || die "Node 源码树无 deps/npm/bin/npm-cli.js：$NPM_SRC（素材来源变了？见 VERSIONS.env 的 NPM_CLI_VERSION 段）"
-# 版本断言：Node 升级可能静默换掉携带的 npm（§10 的零 spawn 护栏口径随之变），钉住即红
+# 下载/校验与 Node、NDK 同一套路：落 $DL（工作流下载层缓存随 VERSIONS.env 失效重下），
+# sha1 对 registry 发布物的 dist.shasum（发布即事实，改了 = registry 事故）。
+NPM_TARBALL="npm-$NPM_CLI_VERSION.tgz"
+if [ ! -f "$DL/$NPM_TARBALL" ]; then
+    say "下载 npm $NPM_CLI_VERSION（registry tarball）..."
+    curl -fsS --retry 3 -o "$DL/$NPM_TARBALL" \
+        "https://registry.npmjs.org/npm/-/$NPM_TARBALL"
+else
+    say "复用已下载 $DL/$NPM_TARBALL"
+fi
+say "校验 npm tarball sha1（期望 ${NPM_CLI_SHA1:0:16}…）"
+echo "$NPM_CLI_SHA1  $DL/$NPM_TARBALL" | sha1sum -c - >/dev/null \
+    || die "npm tarball sha1 校验失败（registry 发布物 ≠ VERSIONS.env 钉的 $NPM_CLI_VERSION）"
+rm -rf "$SRC/npm-$NPM_CLI_VERSION"
+mkdir -p "$SRC/npm-$NPM_CLI_VERSION"
+tar -xzf "$DL/$NPM_TARBALL" -C "$SRC/npm-$NPM_CLI_VERSION" --strip-components=1
+
+say "收敛 vendored npm CLI 素材到 $OUT/npm（registry tarball，剪裁 docs/man/点条目）..."
+NPM_SRC="$SRC/npm-$NPM_CLI_VERSION"
+[ -f "$NPM_SRC/bin/npm-cli.js" ] || die "npm tarball 无 bin/npm-cli.js：$NPM_SRC（素材形态变了？见 VERSIONS.env 的 NPM_CLI_VERSION 段）"
+# 版本断言（双闸的内容面）：sha1 挡发布物漂移，这里挡 VERSIONS.env 与解包内容脱节 ——
+# 换版本 = 一件事一个提交 + 全链回归，断言红即是逼那次显式决策。
 NPM_GOT_VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$NPM_SRC/package.json")" \
     || die "读不出 $NPM_SRC/package.json 的 version（素材形态变了）"
 [ "$NPM_GOT_VERSION" = "$NPM_CLI_VERSION" ] \
-    || die "vendored npm 版本漂移：源码树 = $NPM_GOT_VERSION，VERSIONS.env 钉的是 $NPM_CLI_VERSION（换版本 = 一件事一个提交 + 全链回归）"
+    || die "vendored npm 版本漂移：解包内容 = $NPM_GOT_VERSION，VERSIONS.env 钉的是 $NPM_CLI_VERSION（换版本 = 一件事一个提交 + 全链回归）"
 rm -rf "$OUT/npm"
 cp -RL "$NPM_SRC" "$OUT/npm"
 rm -rf "$OUT/npm/docs" "$OUT/npm/man"
@@ -266,7 +290,7 @@ find "$OUT/npm" -name '.*' -prune -exec rm -rf {} +
 # 锚文件 + 安装引擎在场断言：npm-cli.js 在但 node_modules 空 = 设备上一跑就缺模块的**半瘫 CLI**，
 # 比没素材更糟（部署的锚校验只看 bin/，看不穿依赖树）。arborist 是 §10 反复点名的安装引擎本体。
 for anchor in bin/npm-cli.js bin/npx-cli.js node_modules/@npmcli/arborist/package.json; do
-    [ -f "$OUT/npm/$anchor" ] || die "npm 素材缺 $anchor（半瘫 CLI 不随包；Node 源码树的 deps/npm 是否带 node_modules？）"
+    [ -f "$OUT/npm/$anchor" ] || die "npm 素材缺 $anchor（半瘫 CLI 不随包；registry 发布态的 node_modules 是否被 files 收敛裁掉？）"
 done
 NPM_FILES="$(find "$OUT/npm" -type f | wc -l)"
 NPM_BYTES="$(du -sb "$OUT/npm" | cut -f1)"

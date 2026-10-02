@@ -15,9 +15,17 @@
 > 且 2026-10-01 实测 `nodejs.org/dist/index.json`：**868 条官方发布里没有任何一条携带 npm 12.x**
 > （最新 v26.10.0 / 2026-09-21 带的是 npm 11.19.1）—— 所以「等 Node 线携带 12.x」这条升级路径
 > **原理上不成立**，要 12.x 只能另找素材来源。
+>
+> **已兑现（2026-10-02，backlog A6 落地）**：另找的素材来源 = **registry 发布态
+> tarball `npm@12.2.0`**（sha1 `9b58e3ad…` 钉 `VERSIONS.env`，`fetch-and-build.sh` §9
+> 下载 + 双闸校验后同管线收敛出库，与 libnode 同一 artifact）—— 上面的「代价」段
+> 随之成为历史（原文保留）。「钉死 + 全链回归」纪律不降级：改 `NPM_CLI_VERSION` /
+> `NPM_CLI_SHA1` 即命中 node-slice paths 触发面。同批 `test/`、`tap-snapshots/`
+> 因发布态本来就没有而天然消失（backlog E4，素材 1846 文件/18M → 1674/9MiB），
+> 裁决见 [`design-decisions.md`](../design-decisions.md) 第 26 项。
 
 - **零 spawn 是实证事实**：`npm install` 的实质 = `@npmcli/arborist reify()` + pacote 下载/解包/链接；本机 strace 实测 `npm install --ignore-scripts` 全程 **0 次 execve**。纯 JS 生态（axios/dayjs/lodash/cheerio/ws/express ≈99% 用例）根本不需要子进程。
-- **用真 CLI 而非重造轮子**：lockfile v3、audit、`approve-scripts`、`replace-registry-host`、`--prefer-offline` 免费获得且可审计。npm 12 默认「拒绝全部 lifecycle + allow-git=none + allow-remote=none」，把 child_process 缺失从 workaround 变成**官方默认语义**。（**现状是 npm 11.19.0**：这层「官方默认」当前不存在，护栏由硬编码 `--ignore-scripts` 单独承担 —— 见 §10.12 风险表。）
+- **用真 CLI 而非重造轮子**：lockfile v3、audit、~~`approve-scripts`~~ **`install-scripts`（12.2.0 实名，`npm install-scripts approve <pkg>` 放行）**、`replace-registry-host`、`--prefer-offline` 免费获得且可审计。npm 12 默认「拒绝~~全部~~ **依赖** lifecycle + allow-git=none + allow-remote=none」，把 child_process 缺失从 workaround 变成**官方默认语义**。~~（**现状是 npm 11.19.0**：这层「官方默认」当前不存在，护栏由硬编码 `--ignore-scripts` 单独承担 —— 见 §10.12 风险表。）~~（**2026-10-02 A6 落地后，素材 npm 12.2.0 逐字实测**：**依赖** lifecycle 默认拒 —— `allow-scripts` 白名单缺省为空，拦时带 `npm warn install-scripts` 播报（列出被拦包与脚本名，不静默）+ `install-scripts approve` 放行通道；`allow-git=none`、`allow-remote=none` 实测吻合；**项目自身** lifecycle 仍执行（历代如此）→ 硬编码 `--ignore-scripts` 是主控、继续担另一半，不撤。）
 - **三通道合一**：B（零 spawn 编程式）作 P0 主线；A（spawn 桥）作 P1 升级通道（批准后脚本/`npm run`/`npm exec`）；C（离线 bundle + 精选 tarball 种子）作首发与离线通道。
 - 否决纯 B（丢 CLI audit/approve/config 语义，多维护一层）、纯 A（P0 依赖未经验证的真子进程，OEM exec/SIGKILL-only/内存峰值风险最高）、纯 C（桌面预装无法满足「用户自主安装」的硬性需求）。
 - **沙箱关系（2026-09-26 已裁，口径随之简化）**：npm 是 Node 高信任层的能力，而引擎只剩 Node 一条轨 —— 不存在"`:sandbox` 白名单不含 `auto.npm`"这回事，能力中心也不再显示「沙箱不支持」。
@@ -33,7 +41,7 @@
       后台合并：走 SchedulerProvider 统一调度；强停后持久化队列恢复未完成安装
   → EnginePool.acquire(slotTag='npm', maxOldSpace=§10.6) 拉起专用 :nodeN 安装会话
   → 顶层脚本执行 node <filesDir>/npm/bin/npm-cli.js <install|ci|uninstall|ls|prune|dedupe|audit>
-      --cache <cacheDir>/npm-cache --prefer-offline   （npm12 默认 allowScripts=none 等）
+      --cache <cacheDir>/npm-cache --prefer-offline   （npm12 依赖脚本默认拒 · allow-scripts 白名单空，实测注见 §10.1）
       + 强制注入 child_process 拦截 shim（非批准路径 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）
   → 进度/警告/审批事件经 TSF 双队列 JSON-RPC 回 :main → UI 渲染
   → post-check（lock 验签 / hasInstallScript 告警 / 防篡改比对）→ 四步 quiesce 回收槽
@@ -251,7 +259,7 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 |---|---|
 | `--ignore-scripts` 的「假装成功」（postinstall 下载二进制/自检、真原生包装上才炸） | packument `hasInstallScript` 前置扫描 + 显式 warning + 人工审批升级通道，**禁止静默** |
 | 第三方 `.node` V8 ABI 稀缺且难匹配（Node24 `NODE_MODULE_VERSION`=137 与 libnode 快照不一致则 dlopen 崩）；`process.platform` 非 android 会让平台探测失真 | 当前策略**不引入第三方 `.node`**（wasm 优先、纯 JS 兜底；prebuild 工具已移出排期，需要时再立）；自建 libnode 必须 `--dest-os=android` + CI `process.platform/arch` 断言 + 16KB 双门禁（本仓构建线照旧） |
-| vendored npm 12 要求 Node≥24.15，降级 npm11 会恢复「脚本默认执行」使护栏静默消失 | `:node-runtime-build` 钉版本下限。**该落差已发生（2026-10-01）**：素材取自 Node 24.21.0 的 `deps/npm` = **npm 11.19.0**，npm 12 的 `allowScripts=none` 默认语义**不在位**。三条补偿：① **主控与版本无关** —— `HostNodeExecutor` 对每条命令硬编码 `--ignore-scripts`（§11.1 T1 的零 spawn 主路径），"脚本默认执行"这条恢复不了它；② 版本钉死 + 断言 —— `NPM_CLI_VERSION` 与素材树 `package.json` 逐字比对，漂移即 `fetch-and-build.sh` §9 当场红（`npm install` 的 lifecycle 面不会静默换版）；③ 落差登记在 backlog（升级 = 换素材来源；「等 Node 线携带」已实测否掉 —— `nodejs.org/dist/index.json` 的 868 条发布里没有一条带 npm 12.x；改 `NPM_CLI_VERSION` 即触发全链回归）。**残余**：①只是"不跑脚本"，npm 11 与 12 在**非脚本** spawn 路径上的差异没有第二条兜底 —— §10.12 末行的 child_process 拦截 shim 仍未落（P0 未排） |
+| vendored npm 12 要求 Node≥24.15，降级 npm11 会恢复「脚本默认执行」使护栏静默消失 | `:node-runtime-build` 钉版本下限。**该落差已发生（2026-10-01）**：素材取自 Node 24.21.0 的 `deps/npm` = **npm 11.19.0**，npm 12 的 `allowScripts=none` 默认语义**不在位**。三条补偿：① **主控与版本无关** —— `HostNodeExecutor` 对每条命令硬编码 `--ignore-scripts`（§11.1 T1 的零 spawn 主路径），"脚本默认执行"这条恢复不了它；② 版本钉死 + 断言 —— `NPM_CLI_VERSION` 与素材树 `package.json` 逐字比对，漂移即 `fetch-and-build.sh` §9 当场红（`npm install` 的 lifecycle 面不会静默换版）；③ 落差登记在 backlog（升级 = 换素材来源；「等 Node 线携带」已实测否掉 —— `nodejs.org/dist/index.json` 的 868 条发布里没有一条带 npm 12.x；改 `NPM_CLI_VERSION` 即触发全链回归）。**残余**：①只是"不跑脚本"，npm 11 与 12 在**非脚本** spawn 路径上的差异没有第二条兜底 —— §10.12 末行的 child_process 拦截 shim 仍未落（P0 未排）。~~**该落差已发生（2026-10-01）**~~ **已消解（2026-10-02 A6 落地）**：素材换 registry `npm@12.2.0`，npm 12 官方默认（依赖 lifecycle 拒 + allow-git/remote=none，§10.1 实测注）回到在位；①的主控角色不变、②③照旧，残余（child_process shim 未落）不变 |
 | 设备端 100 依赖安装 15–60s（eMMC/f2fs 更差），非「秒级」 | 独立会话 + 分级超时 + FGS + 熄屏仅物化；进度如实展示 |
 | 锁 TOFU；缓存条目与 lock 版本绑定（更新依赖后旧 tarball EINTEGRITY） | 带外信任锚 + 多镜像交叉校验 + 设备端锁降信任标记；提示联网/升级包 |
 | **零 spawn 不变量漂移**（npm 升级引入新 spawn 路径，allowScripts 拦不住非脚本 spawn） | 安装会话**强制注入 child_process 拦截 shim**（非批准 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）；桌面 CI 金标准：child_process 替换为 throw 的 harness 里跑全命令矩阵必须全绿；vendored npm 升级只准通过此闸 |

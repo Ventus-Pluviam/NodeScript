@@ -180,7 +180,8 @@ val prepareEngineNativeLibs = tasks.register("prepareEngineNativeLibs") {
 
 // ── vendored npm CLI 素材随包（§10.2 调用链首段）──────────────────────────────
 // `files/npm/` 的素材来自 `assets/npm/**`，而素材本身**不在 git**（14MB 级，且是
-// node-runtime-build 的产物：`fetch-and-build.sh` §9 从 Node 源码树 deps/npm 收敛，
+// node-runtime-build 的产物：`fetch-and-build.sh` §9 从 registry tarball（npm@钉版本，
+// 2026-10-02 A6 换源）收敛，
 // CI 走 node-slice artifact 出库）。因此与引擎三件套**同一条选填纪律**：
 //   · 有货 → 递归拷进 generated/npmCliAssets/npm/（**解引用符号链接**：assets 装不了）；
 //   · 有货但缺锚（bin/npm-cli.js、bin/npx-cli.js）→ **红**：半瘫 CLI 比没交付更糟
