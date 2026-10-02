@@ -20,7 +20,7 @@ export interface ConsoleQueueError {
   readonly reason: string
 }
 
-type QueueErrorListener = (e: ConsoleQueueError) => void
+export type QueueErrorListener = (e: ConsoleQueueError) => void
 
 const queueErrorListeners = new Set<QueueErrorListener>()
 

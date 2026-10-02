@@ -6,6 +6,7 @@
 - **超时/取消**：`{timeout}` 选项默认给；返回 Promise 的可选 `AbortSignal`（图形接口）。
 - **唯一入口**：脚本 `require('auto')` 返回命名空间根对象（`auto.a11y` / `auto.engines` / …），结构化维护 API。**落位**（2026-09-24 资产交付轨）：装配期 `BridgeDistDeploy` 把随包 dist 放进 `filesDir/node_modules/auto`（`ScriptPaths.autoModuleRoot` 单一出处；无 package.json 走 `index.js` 缺省入口），每个项目脚本沿目录树向上第 3 站解析到；
   桥 handler 由打包入口 kBootstrap 的 `attachNative` 在脚本前装上（见 §12.4 切片路线）。
+  **用户向 API 参考**（逐方法签名与说明；本卷只讲设计）：[`docs/api/`](../api/index.md) —— 由 `bridge/js` 的公开注释经 typedoc 生成（backlog C7），**生成物**、手改无意义。
 - **错误码**：`ERR_*` 目录 + `instanceof AutojsError`，可 try/catch 策略化。
 - 兼容垫片：对知名差异（如 `uc_obj` 语义）通过 `compat` 标志位提供，**不反向攻坚原生语义**。
 

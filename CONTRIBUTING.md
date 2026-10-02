@@ -68,6 +68,7 @@ npm --prefix bridge/js ci && npm --prefix bridge/js run build   # :app 随包任
   :ui:testDebugUnitTest :app:testDebugUnitTest
 npm --prefix bridge/js test          # facade（TS）单测
 npm --prefix bridge/js run gen:wire && git diff --exit-code   # 改过 bridge/schema 就要跑（生成物漂移即红）
+npm --prefix bridge/js run docs:api && git diff --exit-code   # 改过 bridge/js 的公开注释/签名就要跑（typedoc → docs/api/，漂移即红）
 bash .github/scripts/check-doc-links.sh   # 文档相对链接门
 ```
 

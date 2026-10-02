@@ -68,15 +68,21 @@ export const sensors = {
   },
 
   /**
-   * 注册监听并返回订阅。
-   * @param delay 缺省 `NORMAL`（省电侧默认，不是 FASTEST）；wire 传名字面量。
-   * @param ignoresUnsupported v9 兼容折叠：为 true 且宿主报 `ERR_NOT_SUPPORTED` 时回
-   *   `null`（其余错误照常抛 —— 不支持是"没这个传感器"，拒收/句柄错是"现场坏了"，
-   *   后者吞掉就是谎）。
+   * 注册监听并返回订阅（`name` 是传感器名，未知名/设备缺席按上方诚实口径抛错）。
    */
   async register(
     name: string,
-    opts: { delay?: SensorDelay; timeout?: number; ignoresUnsupported?: boolean } = {},
+    opts: {
+      /** 采样档位；缺省 `NORMAL`（省电侧默认，不是 FASTEST）；wire 传名字面量。 */
+      delay?: SensorDelay
+      timeout?: number
+      /**
+       * v9 兼容折叠：为 true 且宿主报 `ERR_NOT_SUPPORTED` 时回 `null`
+       * （其余错误照常抛 —— 不支持是"没这个传感器"，拒收/句柄错是"现场坏了"，
+       * 后者吞掉就是谎）。
+       */
+      ignoresUnsupported?: boolean
+    } = {},
   ): Promise<SensorSubscription | null> {
     const payload: { name: string; delay?: SensorDelay } = { name }
     if (opts.delay !== undefined) payload.delay = opts.delay

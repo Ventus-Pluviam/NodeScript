@@ -16,6 +16,7 @@
 | [`log/`](log/) | 流水**按日期切片**（`<YYYY-MM-DD>.md`；索引 [`log/README.md`](log/README.md)） | **只追加**，新条目加在当天切片顶部；被推翻的原地划掉并注明日期与原因 |
 | [`implementation-notes.md`](implementation-notes.md) | 各分卷的**实现注记**（「已落地 / 实测」叙事，自契约正文外迁） | 搬迁**逐字**、不做压缩；`design-status.md` 留同名空壳标题护着分卷里的 9 条链接 |
 | [`backlog.md`](backlog.md) | **尚未排期的待做项** + 外审建议 | **是收件箱不是承诺**：排期了移走、做完了去流水记、裁定不做了去 decisions 记口径 |
+| [`api/`](api/index.md) | **脚本 API 参考（用户向）** —— `auto.*` 门面逐方法说明，与 `design/12-js-api.md`（设计文档）分工不同 | **生成物**：由 `bridge/js` 的注释经 typedoc 生成（`npm --prefix bridge/js run docs:api`），手改无意义；CI 有零 diff 门看着，漂移即红 |
 | [`archive/`](archive/) | 归档的历史切片（如 [`status-2026-09-25.md`](archive/status-2026-09-25.md)） | 只进不出，逐字保留 |
 
 **推进顺序与接线现状不在契约里**，见 [`design-status.md`](design-status.md) —— 那里是唯一权威

@@ -282,6 +282,45 @@
       npm 升级（各自钉、各自回归）；换来的是脊梁可兑现。§10.12 残余不变：
       child_process 拦截 shim 仍未落（P0 未排），硬编码 `--ignore-scripts` 主控不撤。
 
+2026-10-02 拍板并落地（backlog C7 + B4 合批；facade 文档面 + 依赖供应链，非 §18 编号项）：
+
+27. **脚本 API 参考用 typedoc 生成、生成物入库并设零 diff 门（C7）；依赖供应链面开 dependency-review 并补 `engines`（B4）**：
+    - **先核实后动手**（backlog C7 的「未评估 typedoc 覆盖度」当天实测）：typedoc
+      0.28.20 + `typedoc-plugin-markdown` 4.13.1 跑 `bridge/js/src/index.ts`，**0 error**
+      （35 warning 全是「某类型被引用但不在文档里」，非错误）。**但单入口只出 15 页** ——
+      `auto` 是匿名对象字面量，typedoc 把它渲染成一串 `__type`，用户向参考没有可链接的
+      入口。**修法（本项落地的实质）**：把 `auto` 的形状提成具名 `AutoNamespace` interface
+      （字段类型全是 `typeof <现成的 namespace 对象>` —— 与实现同源，**不引入第二份事实**，
+      手写签名才会漂移），`export const auto: AutoNamespace = …` 标注之。
+    - **形态裁决（生成物入库 + 零 diff 门）**：`docs/api/**` 进 git，CI 的 `js-tests` job
+      加一步 `npm run docs:api && git diff --exit-code` —— 与既有的 wire 生成物门、
+      `THIRD_PARTY_NOTICES.md` 门**同一条纪律**（生成物入库、漂移即红、手改无意义）。
+      选 markdown 而非 HTML：markdown 能被既有的**文档链接门**扫到（相对链接逐条验存在），
+      HTML 不能；且 markdown 在 PR 里 diff 得出来。入口面 = `index.ts` 的 export 面
+      （作者划的边界），内部件（`runtime`/`bridge` 实现细节、各 namespace 的 `pump*`）
+      刻意不进 entryPoints —— 免得把内部件抬成「文档上的 API」。
+    - **同批顺手修的两处 KDoc 缺陷**（都是生成物暴露的，不是顺手改代码）：① `sensors.register`
+      的 `@param delay` / `@param ignoresUnsupported` 写在**方法** KDoc 里、而参数在 `opts`
+      对象里，typedoc 报 "not used" 且用户向文档**看不到这两个选项** → 改成 `opts` 的行内
+      KDoc（生成物里逐字可见）；② `console.QueueErrorListener` 是私有类型却出现在公开签名
+      `consoleSink.onQueueError` 上 → 提成 `export type`。两处都**不动行为**（`tsc` + 194
+      条 facade 单测逐字不变）。
+    - **B4（依赖供应链面）**：① `package.json` 补 `engines.node` = **npm 12.2.0 自己的
+      engines 逐字**（`^22.22.2 || ^24.15.0 || >=26.0.0`，`/tmp/npm12` 解包产物实读）——
+      不自己发明范围，免得与「vendored npm 的宿主要求」两份口径；② `ci.yml` 新增
+      `dependency-review` job（`actions/dependency-review-action` **v5.0.0** 钉 SHA
+      `a1d282b3…`，`fail-on-severity: low` + `license-check: true`，只在 PR 上跑）。
+      **实测边界（诚实声明）**：该 action 读的是 GitHub **依赖图 API**，而本仓的依赖图
+      对 Gradle 生态**是空的**（`/dependency-graph/sbom` 返 404 已实测）—— 即本 job 当前
+      真正覆盖的是 **npm 面**（facade 的 devDependencies），Gradle 面要等依赖图提交接上
+      （`gradle/actions/dependency-submission`，独立一件事，未排期）。npm 面实测
+      `npm audit` = **0 vulnerabilities**（2026-10-02，对官方 registry 直查）。
+    - **代价（明写）**：① 生成物入库 = 改 facade 的公开注释/签名要记得重跑生成器（漏跑 CI 红，
+      不是静默）；② `docs/api/**` 现在也在文档链接门的扫描面里（341 条链接），typedoc
+      改了链接形状会连带红 —— 这是想要的耦合，不是意外；③ dependency-review 只覆盖 npm 面
+      （见上）；④ 补 `engines` 不动 CI 的 Node 版本（CI 仍 pin node 24 且 `engine-strict`
+      未开，engines 是声明不是门禁）。
+
 2026-09-30 拍板（外部审查整改步骤 7；非 §18 编号项，原口径不涉）：
 
 13. **`images` 匹配链路提速方案**（2026-09-30 评审拍板；A2–A4 实测 ❌ 后的出路裁决）：

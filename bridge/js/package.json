@@ -5,13 +5,19 @@
   "description": "AutoScript TS facade SDK（docs §12.4）：auto.* 门面、RuntimeChannel、bootstrap loader、输出 d.ts。非 Gradle 模块，仅 npm 依赖（禁 Gradle 反向依赖）。",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "docs:api": "typedoc",
     "test": "npm run build && node --test",
     "gen:wire": "node ../schema/generate.mjs",
     "gen:wire:check": "node ../schema/generate.mjs --check"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.13.1",
     "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "license": "MIT"
 }

@@ -23,6 +23,7 @@
 | [`docs/log/`](docs/log/) | 流水**按日期切片**（`README.md` 是索引）；历史条目逐字保留 |
 | [`docs/implementation-notes.md`](docs/implementation-notes.md) | 实现注记：自各分卷外迁的「已落地 / 实测」叙事 |
 | [`docs/design-decisions.md`](docs/design-decisions.md) | 决策记录：已拍板项 + 被推翻、改过的口径 |
+| [`docs/api/`](docs/api/index.md) | **脚本 API 参考（用户向）**：`auto.*` 门面的逐方法说明，由 `bridge/js` 的注释经 typedoc 生成（手改无意义，改注释后跑 `npm --prefix bridge/js run docs:api`） |
 | [`docs/backlog.md`](docs/backlog.md) | 待办池（收件箱，不是承诺） |
 | [`SECURITY.md`](SECURITY.md) | 安全策略：支持范围、怎么报告、密钥怎么管 |
 | [`CLAUDE.md`](CLAUDE.md) | 面向 AI 协作者的仓库导览与协作纪律 |
