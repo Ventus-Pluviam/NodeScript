@@ -117,13 +117,28 @@ interface HostSummary {
     suspend fun stopRun(runId: Long): Boolean
 
     /**
-     * 脚本文件清单快照（项目页文件列表读口；`files/scripts/` 一棵树的平铺）。
+     * 脚本文件清单快照（项目页文件列表读口；`files/scripts/` 一棵树，文件与
+     * **文件夹**都进清单 —— TG 会话列表里群与用户混排的同一读法）。
      *
      * 挂起：要遍历项目根目录（IO）；读失败**抛**（与 [taskCenter]/[console] 同一条纪律），
      * 项目根不存在回**空清单** —— "还没部署过任何项目"是真实事实，不是失败。
-     * 实现方排除 `node_modules` 与点开头条目（依赖缓存/版本控制噪声，不是用户资产）。
+     * 实现方排除 `node_modules` 与点开头条目（依赖缓存/版本控制噪声，不是用户资产）；
+     * `node_modules` 之下的内容整个不进清单（不是"只藏目录本身"）。
      */
     suspend fun scriptFiles(): ScriptFilesSnapshot
+
+    /**
+     * 新建文件/文件夹（项目页 FAB 展开的两个动作；落盘 = `files/scripts/<projectId>/<name>`）。
+     *
+     * 挂起：写盘（IO）。失败**抛**（名字非法/撞名/项目不存在 —— 原文给 UI）；
+     * **不覆盖已存在**（静默覆盖会把用户脚本换成空文件）。
+     *
+     * @param projectId 目标项目（`files/scripts/` 下第一级目录名）。
+     * @param name 单段名字（用户输入的是名字不是路径；含 `/`/`..` 拒绝 ——
+     *   要进子文件夹先建子文件夹）。
+     * @param isFolder true = 建文件夹，false = 建空文件。
+     */
+    suspend fun createEntry(projectId: String, name: String, isFolder: Boolean)
 }
 
 /**
@@ -204,8 +219,9 @@ data class ShellSummary(
 /**
  * 脚本文件清单快照（项目页文件列表）。
  *
- * @property rows 排序由实现方定（`:app` 侧按修改时间倒序 —— TG 会话列表"最近在前"
- *   的同一读法）；本层不做二次排序。
+ * @property rows 顺序 = 目录遍历序（**未排序**）—— 排序在呈现层做（TG 文件页
+ *   `sortFileItems` 的同一条分工：读数与排序分家），因为排序档/逆向是用户在界面里
+ *   现选的呈现偏好（"仅应用于此文件夹"），不进读口契约。
  */
 data class ScriptFilesSnapshot(
     val rows: List<ScriptFileRow>,
@@ -215,10 +231,15 @@ data class ScriptFilesSnapshot(
  * 一个脚本文件行（项目页文件列表的一行 = TG 会话列表的一行会话）。
  *
  * @property projectId 所属项目（`files/scripts/` 下第一级目录名）。
- * @property relPath 相对项目根的路径 —— 列表显示名（同名的 `main.js` 靠它区分）。
- * @property name 文件名（不含目录）。
- * @property ext 小写扩展名（无扩展名 = ""；文件类型图标用它取色/取字）。
- * @property sizeBytes 文件长度（字节数；格式化在呈现层）。
+ * @property relPath 相对项目根的路径 —— 列表显示名（同名的 `main.js` 靠它区分）；
+ *   目录以 `/` 结尾（与文件行区分，呈现层不用再另判）。
+ * @property name 文件名（不含目录；目录 = 最后一段目录名）。
+ * @property ext 小写扩展名（无扩展名 = ""；文件类型图标用它取色/取字。目录恒 ""）。
+ * @property isDirectory 是文件夹还是文件（TG 文件页"目录排最前"的判据源）。
+ * @property childCount 文件夹直接子项数（文件的此值无意义，恒 0；UI 用它显示
+ *   "N 项"，TG 会话行"成员数"的对应位）。
+ * @property sizeBytes 文件长度（字节数；格式化在呈现层。目录恒 0 —— 文件夹
+ *   不显示大小，显示 [childCount]）。
  * @property modifiedMillis 最后修改时刻（epoch ms；排序与"时间日期"列都出自它）。
  */
 data class ScriptFileRow(
@@ -226,6 +247,8 @@ data class ScriptFileRow(
     val relPath: String,
     val name: String,
     val ext: String,
+    val isDirectory: Boolean,
+    val childCount: Int,
     val sizeBytes: Long,
     val modifiedMillis: Long,
 )

@@ -25,11 +25,15 @@ class ProjectStateTest {
         size: Long = 2048L,
         modified: Long = now,
         project: String = "demo",
+        isDirectory: Boolean = false,
+        childCount: Int = 0,
     ) = ScriptFileRow(
         projectId = project,
-        relPath = "$project/$name",
+        relPath = if (isDirectory) "$project/$name/" else "$project/$name",
         name = name,
-        ext = ext,
+        ext = if (isDirectory) "" else ext,
+        isDirectory = isDirectory,
+        childCount = childCount,
         sizeBytes = size,
         modifiedMillis = modified,
     )
@@ -72,6 +76,73 @@ class ProjectStateTest {
         assertEquals("1.5 MB", ScriptFileRowUi.formatFileSize(1572864L))
         // TG 的 GB 档是 MB/1000（AndroidUtilities.formatFileSize 原样）：1024MB → 1.02 GB。
         assertEquals("1.02 GB", ScriptFileRowUi.formatFileSize(1073741824L))
+    }
+
+    @Test
+    fun `文件夹行次行是 N 项加时刻且不显示字节数`() {
+        val s = ProjectState.of(
+            ScriptFilesSnapshot(listOf(row("lib", isDirectory = true, childCount = 3))),
+            nowMillis = now,
+            zone = zone,
+        )
+        assertEquals("3 项 · 10:00", s.files[0].subtitle)
+        assertTrue(s.files[0].isDirectory)
+    }
+
+    @Test
+    fun `排序——目录恒在最前逆向只翻文件段四档各按各的键`() {
+        val dirs = listOf(
+            ScriptFileRowUi.of(row("zeta", isDirectory = true, childCount = 1), now, zone),
+            ScriptFileRowUi.of(row("alpha", isDirectory = true, childCount = 2), now, zone),
+        )
+        val files = listOf(
+            ScriptFileRowUi.of(row("b.js", size = 300L, modified = now - 1000), now, zone),
+            ScriptFileRowUi.of(row("a.js", size = 100L, modified = now - 3000), now, zone),
+            ScriptFileRowUi.of(row("c.md", ext = "md", size = 200L, modified = now - 2000), now, zone),
+        )
+        val all = dirs + files
+
+        // 日期档（缺省）：新者在前，目录在最前。
+        assertEquals(
+            listOf("alpha", "zeta", "b.js", "c.md", "a.js"),
+            ScriptFileRowUi.sorted(all, FileSort.DATE, reversed = false).map { it.name },
+        )
+        // 逆向：文件段翻过来，目录段不动。
+        assertEquals(
+            listOf("alpha", "zeta", "a.js", "c.md", "b.js"),
+            ScriptFileRowUi.sorted(all, FileSort.DATE, reversed = true).map { it.name },
+        )
+        // 名称档：大小写不敏感字母序。
+        assertEquals(
+            listOf("alpha", "zeta", "a.js", "b.js", "c.md"),
+            ScriptFileRowUi.sorted(all, FileSort.NAME, reversed = false).map { it.name },
+        )
+        // 大小档：大者在前。
+        assertEquals(
+            listOf("alpha", "zeta", "b.js", "c.md", "a.js"),
+            ScriptFileRowUi.sorted(all, FileSort.SIZE, reversed = false).map { it.name },
+        )
+        // 类型档：扩展名分组（md < js? —— ext 字母序 js < md），组内按名称。
+        assertEquals(
+            listOf("alpha", "zeta", "a.js", "b.js", "c.md"),
+            ScriptFileRowUi.sorted(all, FileSort.TYPE, reversed = false).map { it.name },
+        )
+    }
+
+    @Test
+    fun `重读保留排序与回执——偏好不因刷新消失`() {
+        val first = ProjectState.of(ScriptFilesSnapshot(listOf(row("a.js"))), now, zone)
+            .copy(sort = FileSort.NAME, reversed = true, opNotice = "已新建文件「x.js」")
+        val again = ProjectState.of(
+            ScriptFilesSnapshot(listOf(row("a.js"), row("b.js"))),
+            now,
+            zone,
+            previous = first,
+        )
+        assertEquals(FileSort.NAME, again.sort)
+        assertTrue(again.reversed)
+        assertEquals("已新建文件「x.js」", again.opNotice)
+        assertEquals(2, again.files.size)
     }
 
     @Test

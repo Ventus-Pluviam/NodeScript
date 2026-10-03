@@ -75,6 +75,12 @@ enum class GlyphKind {
 
     /** 其余类型（二进制/数据/无扩展名）：立方体。 */
     FILE_GENERIC,
+
+    /** 文件夹（项目页目录行）：折角文件夹。 */
+    FOLDER,
+
+    /** 新建（FAB 主按钮）：铅笔。 */
+    PENCIL,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -278,6 +284,39 @@ fun Glyph(
                     style = stroke,
                 )
                 drawPath(path(0.42f to 0.82f, 0.58f to 0.82f), tint, style = stroke)
+            }
+
+            // 文件夹：折角文件夹（TG menu_folder_add 的轮廓读法：背板 + 标签突起）。
+            GlyphKind.FOLDER -> {
+                drawPath(
+                    path(
+                        0.10f to 0.74f,
+                        0.10f to 0.30f,
+                        0.36f to 0.30f,
+                        0.44f to 0.38f,
+                        0.90f to 0.38f,
+                        0.90f to 0.74f,
+                    ),
+                    tint,
+                    style = stroke,
+                )
+            }
+
+            // 铅笔（FAB 主钮）：斜杆 + 笔尖三角 + 笔杆横线（TG floating_pencil 的线性读法）。
+            GlyphKind.PENCIL -> {
+                drawPath(
+                    path(
+                        0.24f to 0.76f,
+                        0.24f to 0.62f,
+                        0.66f to 0.20f,
+                        0.80f to 0.34f,
+                        0.38f to 0.76f,
+                    ),
+                    tint,
+                    style = stroke,
+                )
+                drawPath(path(0.24f to 0.76f, 0.38f to 0.76f, 0.24f to 0.62f), tint, style = stroke)
+                drawPath(path(0.62f to 0.24f, 0.76f to 0.38f), tint, style = stroke)
             }
         }
     }

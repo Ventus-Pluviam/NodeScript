@@ -15,9 +15,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -28,15 +39,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
-import com.autoscript.ui.components.ActionBarAction
+import com.autoscript.ui.components.ContextMenu
+import com.autoscript.ui.components.MenuAction
+import com.autoscript.ui.components.MenuGap
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.RefreshableBox
@@ -45,7 +60,7 @@ import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.rememberRefreshAction
-import com.autoscript.ui.state.LoadState
+import com.autoscript.ui.state.FileSort
 import com.autoscript.ui.state.ProjectState
 import com.autoscript.ui.state.ScriptFileRowUi
 import com.autoscript.ui.state.Status
@@ -75,18 +90,33 @@ import kotlinx.coroutines.launch
 fun ProjectScreen(
     state: ProjectState,
     onRefresh: suspend () -> Unit,
+    /** 主题两态切换（⋮ 第一格，TG 日/夜同款 —— 目标模式写菜单项上）。 */
+    onSwitchTheme: () -> Unit,
+    /** 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。 */
+    onCreate: (projectId: String, name: String, isFolder: Boolean) -> Unit,
+    /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */
+    onSortChange: (FileSort, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 搜索词是本屏私有的现值：过滤是呈现，不是读取 —— 不进 ProjectState。
+    // 搜索词/排序/逆向都是本屏私有的现值：过滤与排序是呈现（"仅应用于此文件夹"），
+    // 不是读取 —— 不进读口。排序档在 state 里（⋮ 菜单写入，重读不重置）。
     var query by remember { mutableStateOf("") }
     val refresh = rememberRefreshAction(onRefresh)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    // 新建落在第一个项目（文件树按项目分目录，根级不可写）—— 有文件取第一行的
+    // 项目，没文件回缺省目录名（首装用户先建项目文件夹）。
+    val targetProject = state.files.firstOrNull()?.projectId ?: "demo"
+
+    // 创建对话框是本屏私有的现值（state.creating 记的是"操作面开着"这一事实，
+    // 对话框里的输入框内容不值得进状态类 —— 关掉即丢）。
+    var creatingKind by remember { mutableStateOf<ProjectState.CreationKind?>(null) }
+
     val status = Status.count(
         load = state.load,
         notLoadedText = "尚未读取（点右上「⋮」现取）",
-        total = state.files.size,
+        total = state.files.count { !it.isDirectory },
         emptyText = "读到了，还没有脚本文件（files/scripts/ 为空）",
         unit = "个文件",
     )
@@ -101,7 +131,16 @@ fun ProjectScreen(
             ),
             subtitle = status.text,
             subtitleTone = status.tone,
-            actions = { ProjectMenu { scope.launch { refresh.trigger() } } },
+            actions = {
+                ProjectMenu(
+                    currentSort = state.sort,
+                    reversed = state.reversed,
+                    onRefresh = { scope.launch { refresh.trigger() } },
+                    onSwitchTheme = onSwitchTheme,
+                    onSelectAll = { /* 多选操作随后续批次接（TG 全选后顶栏变批量条） */ },
+                    onSort = { sort, reversed -> onSortChange(sort, reversed) },
+                )
+            },
         )
         SearchField(
             query = query,
@@ -109,7 +148,11 @@ fun ProjectScreen(
         )
         Box(Modifier.weight(1f)) {
             RefreshableBox(refresh, Modifier.fillMaxSize()) {
-                val visible = state.files.filter { it.matches(query) }
+                val visible = ScriptFileRowUi.sorted(
+                    files = state.files.filter { it.matches(query) },
+                    sort = state.sort,
+                    reversed = state.reversed,
+                )
                 LazyColumn(
                     state = listState,
                     contentPadding = PaddingValues(top = 4.dp, bottom = TabBarBottomClearance()),
@@ -126,10 +169,27 @@ fun ProjectScreen(
                 visible = listState.firstVisibleItemIndex > 0,
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
                 modifier = Modifier.align(Alignment.BottomEnd)
-                    .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
+                    .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 64.dp)),
+            )
+            // FAB（TG FragmentFloatingButton：48dp 圆、品牌蓝、白铅笔）+ 展开的两个子项。
+            CreateFab(
+                onCreateFile = { creatingKind = ProjectState.CreationKind.FILE },
+                onCreateFolder = { creatingKind = ProjectState.CreationKind.FOLDER },
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
             )
         }
     }
+    // 创建对话框在屏幕级（不在 Box 里 —— 它盖全屏，不该被列表的裁剪裁到）。
+    CreateEntryDialogs(
+        creating = creatingKind,
+        targetProject = targetProject,
+        onDismiss = { creatingKind = null },
+        onConfirm = { name, isFolder ->
+            creatingKind = null
+            onCreate(targetProject, name, isFolder)
+        },
+    )
 }
 
 /** 主页品牌蓝（TG `key_telegram_color_dialogsLogo` 默认值 #168BDB；深浅主题同值）。 */
@@ -137,11 +197,23 @@ private val NodeScriptBrandColor = Color(0xFF168BDB)
 
 /**
  * 主屏的 `⋮` 菜单（TG `DialogsActivity` 顶栏右侧三个点的对应位）。
- * 现在只有「刷新」一项 —— 文件操作（查看/运行/删除）随各自批次进这里或长按菜单。
+ *
+ * 项序与分组照 TG 新式弹出菜单（`ItemOptions.add…().addGap()…`，`ResaleGiftsFragment`
+ * 同一语法）：功能项一组 → **8dp 间隙**（`GapView`，`MATCH_PARENT × 8`）→ 排序组。
+ * 主题切换在第一格（TG 的日/夜切换是菜单第一项的同一占位）：
+ * 菜单项文案 = **点它切到的那一档**（目标模式），不是当前模式。
  */
 @Composable
-private fun ProjectMenu(onRefresh: () -> Unit) {
+private fun ProjectMenu(
+    currentSort: FileSort,
+    reversed: Boolean,
+    onRefresh: () -> Unit,
+    onSwitchTheme: () -> Unit,
+    onSelectAll: () -> Unit,
+    onSort: (FileSort, Boolean) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
+    var sortMenuOpen by remember { mutableStateOf(false) }
     Box {
         Text(
             text = "⋮",
@@ -151,12 +223,45 @@ private fun ProjectMenu(onRefresh: () -> Unit) {
                 .pressable(role = Role.Button, onClick = { open = true })
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         )
-        com.autoscript.ui.components.ContextMenu(
+        ContextMenu(
             expanded = open,
             onDismiss = { open = false },
-            actions = listOf(
-                com.autoscript.ui.components.MenuAction(label = "刷新", onClick = onRefresh),
-            ),
+            actions = buildList {
+                add(MenuAction(label = "刷新", onClick = onRefresh))
+                // —— 8dp 间隙（TG addGap：分组的"小小的间距"）——
+                add(MenuGap)
+                add(MenuAction(label = "日间/夜间模式", onClick = onSwitchTheme))
+                add(MenuAction(label = "全选", onClick = onSelectAll))
+                add(
+                    MenuAction(label = "排序方式", onClick = {
+                        open = false
+                        sortMenuOpen = true
+                    }),
+                )
+            },
+        )
+        // 排序子菜单（TG 的 swipeback 子菜单在本仓的简化：第二级 DropdownMenu，
+        // 四档 + "仅应用于此文件夹"的逆向开关 —— 文案逐字对 TG `ReverseOrder`）。
+        ContextMenu(
+            expanded = sortMenuOpen,
+            onDismiss = { sortMenuOpen = false },
+            actions = buildList {
+                FileSort.entries.forEach { sort ->
+                    add(
+                        MenuAction(
+                            label = if (sort == currentSort) "✓ ${sort.label}" else sort.label,
+                            onClick = { onSort(sort, reversed) },
+                        ),
+                    )
+                }
+                add(MenuGap)
+                add(
+                    MenuAction(
+                        label = if (reversed) "✓ 逆向排序" else "逆向排序",
+                        onClick = { onSort(currentSort, !reversed) },
+                    ),
+                )
+            },
         )
     }
 }
@@ -208,6 +313,8 @@ private fun SearchField(
 /**
  * 一行文件（TG 会话行 / `SharedDocumentCell` 的合体读法）：
  * 52dp 圆形头像 = 文件类型底色 + 白字扩展名缩写（无扩展名 = 首字母），右侧两行文字。
+ * 文件夹行：头像 = 文件夹字形（accent 色底白线），次行 = "N 项 · 时刻"（TG 文件页
+ * 文件夹行不显示字节数的同一口径）。
  */
 @Composable
 private fun FileRow(file: ScriptFileRowUi) {
@@ -218,7 +325,11 @@ private fun FileRow(file: ScriptFileRowUi) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.width(12.dp))
-        FileTypeAvatar(ext = file.ext, name = file.name)
+        if (file.isDirectory) {
+            FolderAvatar(name = file.name)
+        } else {
+            FileTypeAvatar(ext = file.ext, name = file.name)
+        }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
             Text(
@@ -236,6 +347,25 @@ private fun FileRow(file: ScriptFileRowUi) {
             )
         }
         Spacer(Modifier.width(16.dp))
+    }
+}
+
+/**
+ * 文件夹头像（TG 文件页目录行的同一读法：目录不是"一种文件类型"，给它一个
+ * 专属字形而不是哈希取色 —— 恒 accent 色底，一眼与文件行分开）。
+ */
+@Composable
+private fun FolderAvatar(name: String) {
+    val palette = ThemeColors
+    val slot = name.firstOrNull()?.code?.plus(1)?.mod(palette.fileAvatarColors.size) ?: 0
+    Box(
+        Modifier
+            .size(52.dp)
+            .graphicsLayer { shape = CircleShape }
+            .background(palette.fileAvatarColors[slot], CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Glyph(kind = GlyphKind.FOLDER, tint = Color.White, size = 26.dp, weight = 1.15f)
     }
 }
 
@@ -264,8 +394,8 @@ private fun FileTypeAvatar(ext: String, name: String) {
     Box(
         Modifier
             .size(52.dp)
-            .graphicsLayer { shape = androidx.compose.foundation.shape.CircleShape }
-            .background(bg, androidx.compose.foundation.shape.CircleShape),
+            .graphicsLayer { shape = CircleShape }
+            .background(bg, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         if (knownGlyph != null) {
@@ -289,5 +419,144 @@ private fun EmptyFilesHint(filtered: Boolean) {
         tone = StatusTone.MUTED,
         style = MaterialTheme.typography.bodyMedium,
         modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
+    )
+}
+
+/**
+ * 右下角悬浮创建按钮（TG `FragmentFloatingButton` 的逐字版式）：
+ * 48dp 圆（`SIZE = 48`）、右下边距 20/14dp（`createDefaultLayoutParams` 的 left/right 20、
+ * bottom 14）、TG FAB 蓝（`key_featuredStickers_addButton` = `#229AF0` 的 TELEGRAM_COLOR）、
+ * 白铅笔、按下缩放（`ScaleStateListAnimator` ≈ 0.92 缩回）。
+ *
+ * 点击展开两个子项（新建文件/新建文件夹）：TG 的子按钮是另一颗 48dp 圆浮在主按钮上方
+ * （`createSubButtonLayoutParams` 同位、blur3 背板），这里用同一语法的动画展开 ——
+ * 按住主钮时子项滑入，点空白/主钮收起。子项与主钮同色系（TG 子按钮是白底黑铅笔，
+ * 本仓取菜单项的白底强调字）。
+ */
+@Composable
+private fun CreateFab(
+    onCreateFile: () -> Unit,
+    onCreateFolder: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 45f else 0f,
+        animationSpec = tween(durationMillis = 200),
+        label = "fabRotate",
+    )
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        // 子项自下而上展开（TG：子按钮浮在主按钮上方，逐颗滑出）。
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + scaleIn(initialScale = 0.6f),
+            exit = fadeOut() + scaleOut(targetScale = 0.6f),
+        ) {
+            FabSubItem(label = "新建文件夹", onClick = {
+                expanded = false
+                onCreateFolder()
+            })
+        }
+        Spacer(Modifier.height(8.dp))
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + scaleIn(initialScale = 0.6f),
+            exit = fadeOut() + scaleOut(targetScale = 0.6f),
+        ) {
+            FabSubItem(label = "新建文件", onClick = {
+                expanded = false
+                onCreateFile()
+            })
+        }
+        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier
+                .size(48.dp)
+                .graphicsLayer { shape = CircleShape }
+                .background(FabBlue, CircleShape)
+                .pressable(role = Role.Button, onClick = { expanded = !expanded }),
+            contentAlignment = Alignment.Center,
+        ) {
+            Glyph(
+                kind = GlyphKind.PENCIL,
+                tint = Color.White,
+                size = 24.dp,
+                modifier = Modifier.rotate(rotation),
+            )
+        }
+    }
+}
+
+/** TG FAB 蓝（`TELEGRAM_COLOR = 0xFF229AF0`；`key_featuredStickers_addButton` 的缺省）。 */
+private val FabBlue = Color(0xFF229AF0)
+
+/** FAB 展开的子项（TG 子按钮的合体读法：圆底 + 左侧标签；这里取"胶囊标签"的简化）。 */
+@Composable
+private fun FabSubItem(label: String, onClick: () -> Unit) {
+    val palette = ThemeColors
+    Box(
+        Modifier
+            .background(palette.surface, RoundedCornerShape(20.dp))
+            .pressable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = label,
+            color = palette.text,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * 新建文件/文件夹对话框（TG 的 Alert 命名框分寸：标题点破建什么、输入框占位"名称"）。
+ * 名字合法性在宿主侧裁决（`ScriptFileOps`），这里不预校验 —— 错误原文走 opError 行。
+ */
+@Composable
+private fun CreateEntryDialogs(
+    creating: ProjectState.CreationKind?,
+    targetProject: String,
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, isFolder: Boolean) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    // creating 为 null 时对话框不在组合里，name 随 remember 的 key 重置。
+    remember(creating) { name = ""; true }
+    if (creating == null) return
+    val title = when (creating) {
+        ProjectState.CreationKind.FILE -> "新建文件"
+        ProjectState.CreationKind.FOLDER -> "新建文件夹"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(
+                    text = "将创建在项目「$targetProject」下",
+                    color = ThemeColors.textTertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    placeholder = { Text("名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = name.isNotBlank(),
+                onClick = { onConfirm(name.trim(), creating == ProjectState.CreationKind.FOLDER) },
+            ) { Text("创建") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
     )
 }

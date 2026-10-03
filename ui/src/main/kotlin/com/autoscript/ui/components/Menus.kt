@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -37,25 +39,28 @@ import kotlinx.coroutines.launch
 fun ContextMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
-    actions: List<MenuAction>,
+    actions: List<MenuEntry>,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         for (action in actions) {
-            DropdownMenuItem(
-                text = {
-                    ToneText(
-                        text = action.label,
-                        tone = action.tone,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                },
-                enabled = action.enabled,
-                onClick = {
-                    // 先关菜单再执行：动作里常带对话框/复制回执，菜单还开着会盖住它们。
-                    onDismiss()
-                    action.onClick()
-                },
-            )
+            when (action) {
+                is MenuGap -> Spacer(Modifier.height(8.dp))
+                is MenuAction -> DropdownMenuItem(
+                    text = {
+                        ToneText(
+                            text = action.label,
+                            tone = action.tone,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    },
+                    enabled = action.enabled,
+                    onClick = {
+                        // 先关菜单再执行：动作里常带对话框/复制回执，菜单还开着会盖住它们。
+                        onDismiss()
+                        action.onClick()
+                    },
+                )
+            }
         }
     }
 }
@@ -72,7 +77,19 @@ data class MenuAction(
     val onClick: () -> Unit,
     val tone: StatusTone = StatusTone.LINK,
     val enabled: Boolean = true,
-)
+) : MenuEntry
+
+/**
+ * 菜单内的分组间隙（TG `ItemOptions.addGap()`：`GapView` = MATCH_PARENT × 8dp，
+ * 底色是主题的 divider 那一档的**弱化**版 —— 是"分组"的视觉停顿，不是分隔线）。
+ *
+ * 放进 [MenuAction] 同一张表（而不是调用方在项之间插 Divider）：动作序列与间隙
+ * 是同一份菜单定义，拆开就会出现"加一项忘了挪间隙"的漂移。
+ */
+data object MenuGap : MenuEntry
+
+/** 菜单表的一项：正常动作或分组间隙（[MenuGap]）。 */
+sealed interface MenuEntry
 
 /**
  * 长按触感（`HapticFeedbackType.LongPress`）。

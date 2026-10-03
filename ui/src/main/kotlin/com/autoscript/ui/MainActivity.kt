@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -26,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.TaskRegistration
-import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalBarAction
 import com.autoscript.ui.components.TabItem
@@ -39,6 +37,7 @@ import com.autoscript.ui.screens.TaskCenterScreen
 import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.HomeState
+import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.ProjectState
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.TaskCenterState
@@ -121,8 +120,6 @@ class MainActivity : ComponentActivity() {
             // 否则白底上画一排白图标 = 看不见。`enableEdgeToEdge` 的 auto 只认系统档位，
             // 这里每次重组按当前档位覆盖一次。
             val dark = themeMode.isDark()
-            // 主题档位轮转：三档轮着来（跟随系统 → 浅 → 深 → 回跟随系统）。
-            val onCycleTheme: () -> Unit = { themeMode = themeMode.next() }
             SideEffect {
                 WindowCompat.getInsetsController(window, window.decorView).apply {
                     isAppearanceLightStatusBars = !dark
@@ -130,17 +127,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Theme(mode = themeMode) {
-                // 外壳级动作（主题切换）经 LocalBarAction 下发到四屏顶栏：
-                // 它是**全局**设置，不该挤进四个屏各自的签名（它们既不读也不写它）。
-                CompositionLocalProvider(
-                    LocalBarAction provides { ActionBarAction(themeMode.label(), onCycleTheme) },
-                ) {
-                    MainShell(
-                        pagerState = pagerState,
-                        // 点页签 = 让 pager 自己滑过去。**不直接改状态**：pager 的滚动位置是
-                        // 唯一事实来源，页签条与重读都从它派生，绕过去就又会漂移。
-                        onSelectTab = { scope.launch { pagerState.animateScrollToPage(it) } },
-                    ) { shellModifier ->
+                // 主题档位不再挂顶栏（2026-10-03 批 24）：TG 顶栏右侧没有全局开关格，
+                // 四屏顶栏只放本屏动作 —— 主题切换收进各处自己的菜单/设置面。
+                MainShell(
+                    pagerState = pagerState,
+                    // 点页签 = 让 pager 自己滑过去。**不直接改状态**：pager 的滚动位置是
+                    // 唯一事实来源，页签条与重读都从它派生，绕过去就又会漂移。
+                    onSelectTab = { scope.launch { pagerState.animateScrollToPage(it) } },
+                ) { shellModifier ->
                         // 四屏装进 **HorizontalPager**：这是 TG 主页签的做法
                         // （`MainTabsActivity extends ViewPagerActivity`），换来两件事 ——
                         // ① 点页签是**横向滑动**过去，不是淡入淡出；② 内容可以**横划切页**。
@@ -157,6 +151,13 @@ class MainActivity : ComponentActivity() {
                                 Tab.HOME -> ProjectScreen(
                                     state = projectState,
                                     onRefresh = { reloadProjectFiles() },
+                                    onSwitchTheme = { themeMode = themeMode.next() },
+                                    onCreate = { projectId, name, isFolder ->
+                                        scope.launch { createEntryOp(projectId, name, isFolder) }
+                                    },
+                                    onSortChange = { sort, reversed ->
+                                        projectState = projectState.copy(sort = sort, reversed = reversed, opError = null, opNotice = null)
+                                    },
                                     modifier = Modifier,
                                 )
                                 Tab.TASKS -> TaskCenterScreen(
@@ -179,11 +180,9 @@ class MainActivity : ComponentActivity() {
                                     onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
                                     modifier = Modifier,
                                 )
-                            }
                         }
                     }
                 }
-            }
             // 键里带页签：切到本页签本身就该现取，而不是显示上次离开时的快照。
             // 用 **settledPage** 而不是 currentPage：横划跨多页时 currentPage 会途经
             // 中间每一页，那样划一次会连读三遍；settledPage 只在停稳后变一次。
@@ -197,6 +196,7 @@ class MainActivity : ComponentActivity() {
                     Tab.TASKS -> reloadTasks()
                     Tab.CONSOLE -> reloadConsole()
                     Tab.SETTINGS -> reloadCapabilities()
+                }
                 }
             }
         }
@@ -236,10 +236,46 @@ class MainActivity : ComponentActivity() {
             ProjectState.of(
                 snapshot = host.scriptFiles(),
                 nowMillis = System.currentTimeMillis(),
+                // 排序/回执是用户的呈现偏好与刚才的操作结论，重读不重置
+                // （回执在刷新**之后**盖上去会自相矛盾，见 performTaskOp 同一条）。
+                previous = projectState.takeIf { it.load is LoadState.Loaded },
             )
         } catch (t: Throwable) {
             ProjectState.failed(t)
         }
+    }
+
+    /**
+     * 新建文件/文件夹（项目页 FAB 操作面）。
+     *
+     * 与 [performTaskOp] 同一条纪律的三落点：未接线 → opError；抛（名字非法/撞名）
+     * → opError 原文、**不清清单**；成功 → opNotice 回执 + 现取一次（新条目要出现在
+     * 列表里，回执在刷新之后盖上去）。成功时收掉创建对话框（[ProjectState.creating]）。
+     */
+    private suspend fun createEntryOp(projectId: String, name: String, isFolder: Boolean) {
+        val host = hostSummary()
+        if (host == null) {
+            projectState = projectState.copy(
+                creating = null,
+                opError = "宿主摘要未接线（Application 未实现 HostSummary）",
+            )
+            return
+        }
+        try {
+            host.createEntry(projectId, name, isFolder)
+        } catch (t: Throwable) {
+            projectState = projectState.copy(
+                creating = null,
+                opError = t.message ?: t.javaClass.simpleName,
+            )
+            return
+        }
+        reloadProjectFiles()
+        val kind = if (isFolder) "文件夹" else "文件"
+        projectState = projectState.copy(
+            creating = null,
+            opNotice = "已新建$kind「$name」",
+        )
     }
 
     private suspend fun reloadCapabilities() {
@@ -425,11 +461,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 主题三档轮转：跟随系统 → 浅 → 深 → 回跟随系统。 */
+/**
+ * 主题档位切换（TG 的日/夜同款：两态对翻 —— 再点一次回原档）。
+ * [ThemeMode.SYSTEM] 只在**冷启**当缺省（跟随系统），用户一切换就落 LIGHT/DARK 两档。
+ */
 private fun ThemeMode.next(): ThemeMode = when (this) {
-    ThemeMode.SYSTEM -> ThemeMode.LIGHT
+    ThemeMode.SYSTEM -> ThemeMode.DARK
     ThemeMode.LIGHT -> ThemeMode.DARK
-    ThemeMode.DARK -> ThemeMode.SYSTEM
+    ThemeMode.DARK -> ThemeMode.LIGHT
 }
 
 /**
@@ -442,8 +481,14 @@ private fun ThemeMode.next(): ThemeMode = when (this) {
  */
 private fun ThemeMode.label(): String = when (this) {
     ThemeMode.SYSTEM -> "跟随系统"
-    ThemeMode.LIGHT -> "浅色"
-    ThemeMode.DARK -> "深色"
+    ThemeMode.LIGHT -> "日间模式"
+    ThemeMode.DARK -> "夜间模式"
+}
+
+/** 菜单项文案 = **点它切到的那一档**（TG ⋮ 里写的是目标模式，不是当前模式）。 */
+private fun ThemeMode.targetLabel(): String = when (this) {
+    ThemeMode.DARK -> "夜间模式"
+    else -> "日间模式"
 }
 
 /**

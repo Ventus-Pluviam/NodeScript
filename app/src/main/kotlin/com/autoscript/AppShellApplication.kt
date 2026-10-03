@@ -39,6 +39,7 @@ import com.autoscript.shell.ForegroundKeeper
 import com.autoscript.shell.PlatformWiring
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
+import com.autoscript.shell.ScriptFileOps
 import com.autoscript.shell.ScriptFilesRead
 import com.autoscript.shell.ScreenGateAndroid
 import com.autoscript.shell.ScreenInteractive
@@ -567,6 +568,19 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun scriptFiles(): ScriptFilesSnapshot =
         ScriptFilesRead.snapshot(filesDir.toPath())
+
+    /**
+     * 新建文件/文件夹（[HostSummary] 的生产实现，项目页 FAB 操作面）。
+     *
+     * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：落盘只看 `files/scripts/` 目录。
+     * 合法性/撞名裁决在 [ScriptFileOps]（原文抛给 UI）。
+     */
+    override suspend fun createEntry(projectId: String, name: String, isFolder: Boolean) {
+        when (isFolder) {
+            true -> ScriptFileOps.createFolder(filesDir.toPath(), projectId, name)
+            false -> ScriptFileOps.createFile(filesDir.toPath(), projectId, name)
+        }
+    }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
     fun missedAlarms(): Map<String, Long> = alarmDispatch.missed()
