@@ -8,7 +8,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -105,31 +104,6 @@ fun Modifier.pressable(
     val indication = rememberPressIndication()
     val source = remember { MutableInteractionSource() }
     return clickable(
-        interactionSource = source,
-        indication = indication,
-        enabled = enabled,
-        role = role,
-        onClick = onClick,
-    )
-}
-
-/**
- * 带 TG 按压反馈的 `Modifier.selectable`（页签专用）。
- *
- * 比 [pressable] 多一件事：把 `selected` 交给语义树，读屏会念"已选中 / 未选中"，
- * 而不是把四个页签念成四个无状态的按钮。
- */
-@Composable
-fun Modifier.pressableSelectable(
-    selected: Boolean,
-    enabled: Boolean = true,
-    role: Role? = null,
-    onClick: () -> Unit,
-): Modifier {
-    val indication = rememberPressIndication()
-    val source = remember { MutableInteractionSource() }
-    return selectable(
-        selected = selected,
         interactionSource = source,
         indication = indication,
         enabled = enabled,

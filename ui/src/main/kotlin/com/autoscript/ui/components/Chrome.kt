@@ -6,6 +6,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -41,6 +45,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.semantics.Role
@@ -249,6 +254,12 @@ fun TabBar(
     }
 }
 
+/**
+ * 两色按 factor 线性混合（`ColorUtils.blendARGB(colorA, colorB, factor)` 的本仓等价物
+ * —— compose 的 `lerp` 在 androidx.compose.ui.graphics 里，同一条公式）。
+ */
+private fun blendForPress(a: Color, b: Color, factor: Float): Color = lerp(a, b, factor)
+
 /** 胶囊圆角 = 高度一半（`tabsViewBackground.setRadius(MAIN_TABS_HEIGHT / 2f)`）。 */
 private val MainTabsShape = RoundedCornerShape(28.dp)
 
@@ -290,6 +301,11 @@ private fun TabBarItem(
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
+    // 按压源：批 25 起页签的按压反馈**不再走 FlatPressIndication 的灰色整块覆盖**
+    // （用户实测点名的"矩形灰色特效"），改走 TG GlassTabsView 的路数 —— 按压只调
+    // 颜色（见 pressedTint），选中格背后照旧只剩 9% 高亮块。
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed = interactionSource.collectIsPressedAsState()
     // 选中色**渐变**而不是硬切：切页时手指还在划，颜色正在路上，与 pager 的滚动
     // 是同一条时间线 —— 硬切会让人觉得"点了才变"。（GlassTabView 是
     // blendARGB(colorDefault, colorSelected, factor) 同一条时间线。）
@@ -297,6 +313,20 @@ private fun TabBarItem(
         targetValue = if (selected) palette.accent else palette.tabIdle,
         animationSpec = tween(durationMillis = 180),
         label = "tabTint",
+    )
+    // **按压变色 = 图标与文字一起变**（GlassTabView.updateColors：blendARGB 出来的
+    // 一个 color 同时喂给 PorterDuffColorFilter 与 textView —— 图标整枚换色，不是
+    // 只换某条线）。这里同一语义：按住未选中的格，图标+文字整体向强调色走一段
+    // （factor 0.35 的同款 blend），松手滑回；按住已选中的格则略压暗 ——
+    // 两种都能一眼读出"按住了这一格"。
+    val pressedTint by animateColorAsState(
+        targetValue = when {
+            selected && pressed.value -> palette.accent.copy(alpha = 0.7f)
+            pressed.value -> blendForPress(palette.tabIdle, palette.accent, 0.35f)
+            else -> tint
+        },
+        animationSpec = tween(durationMillis = 120),
+        label = "tabPressTint",
     )
     // 高亮块跟随选中格淡入（TG 用 SpringAnimation 拖 selector 中心；这里格子等宽，
     // 各格自己的 0→1 淡入 + 缩放就是同一条视觉轨迹）。
@@ -307,7 +337,13 @@ private fun TabBarItem(
     )
     Column(
         modifier = modifier
-            .pressableSelectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .selectable(
+                selected = selected,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Tab,
+                onClick = onClick,
+            )
             .drawBehind {
                 if (highlightFraction > 0f) {
                     // 选中格背后的高亮块（GlassTabView.dispatchDraw）：强调色 9% 透明度
@@ -333,7 +369,7 @@ private fun TabBarItem(
         Box(contentAlignment = Alignment.Center) {
             Glyph(
                 kind = tab.glyph,
-                tint = tint,
+                tint = pressedTint,
                 // 线性图标的"选中加重"：线宽略加粗（同色同形，只是更实）。
                 weight = if (selected) 1.3f else 1f,
             )
@@ -350,7 +386,7 @@ private fun TabBarItem(
         Spacer(Modifier.height(2.dp))
         Text(
             text = tab.label,
-            color = tint,
+            color = pressedTint,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             maxLines = 1,

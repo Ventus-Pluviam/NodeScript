@@ -1,6 +1,7 @@
 package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -42,8 +43,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,9 +63,9 @@ import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.FileSort
+import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.ProjectState
 import com.autoscript.ui.state.ScriptFileRowUi
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 import kotlinx.coroutines.launch
@@ -113,13 +115,15 @@ fun ProjectScreen(
     // 对话框里的输入框内容不值得进状态类 —— 关掉即丢）。
     var creatingKind by remember { mutableStateOf<ProjectState.CreationKind?>(null) }
 
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「⋮」现取）",
-        total = state.files.count { !it.isDirectory },
-        emptyText = "读到了，还没有脚本文件（files/scripts/ 为空）",
-        unit = "个文件",
-    )
+    // 顶栏副标题只留给「没读到 / 读失败」两句（诚实边界照旧）；读到了顶栏就只有标题
+    // —— TG 主页顶栏没有第二行，「共 N 个文件」的计数批 25 起不再上顶栏（列表空态
+    // 有 EmptyFilesHint 居中那句，信息不丢）。副标题让位后 ⋮ 与标题同行对齐。
+    val load = state.load
+    val subtitle = when (load) {
+        LoadState.Loaded -> null
+        LoadState.NotLoaded -> "尚未读取（点右上「⋮」现取）"
+        is LoadState.Failed -> load.reason
+    }
 
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         ActionBar(
@@ -129,8 +133,8 @@ fun ProjectScreen(
                 fontWeight = FontWeight.Bold,
                 color = NodeScriptBrandColor,
             ),
-            subtitle = status.text,
-            subtitleTone = status.tone,
+            subtitle = subtitle,
+            subtitleTone = if (load is LoadState.Failed) StatusTone.PROBLEM else StatusTone.MUTED,
             actions = {
                 ProjectMenu(
                     currentSort = state.sort,
@@ -219,6 +223,7 @@ private fun ProjectMenu(
             text = "⋮",
             color = ThemeColors.text,
             style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
             modifier = Modifier
                 .pressable(role = Role.Button, onClick = { open = true })
                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -430,8 +435,8 @@ private fun EmptyFilesHint(filtered: Boolean) {
  *
  * 点击展开两个子项（新建文件/新建文件夹）：TG 的子按钮是另一颗 48dp 圆浮在主按钮上方
  * （`createSubButtonLayoutParams` 同位、blur3 背板），这里用同一语法的动画展开 ——
- * 按住主钮时子项滑入，点空白/主钮收起。子项与主钮同色系（TG 子按钮是白底黑铅笔，
- * 本仓取菜单项的白底强调字）。
+ * 按住主钮时子项滑入，点空白/主钮收起。子项与主钮**同规格**的 48dp 圆徽章（批 25：
+ * 圆标 + 灰底，不再是文字胶囊；见 [FabSubItem]）。
  */
 @Composable
 private fun CreateFab(
@@ -452,7 +457,7 @@ private fun CreateFab(
             enter = fadeIn() + scaleIn(initialScale = 0.6f),
             exit = fadeOut() + scaleOut(targetScale = 0.6f),
         ) {
-            FabSubItem(label = "新建文件夹", onClick = {
+            FabSubItem(label = "新建文件夹", glyph = GlyphKind.FOLDER, onClick = {
                 expanded = false
                 onCreateFolder()
             })
@@ -463,7 +468,7 @@ private fun CreateFab(
             enter = fadeIn() + scaleIn(initialScale = 0.6f),
             exit = fadeOut() + scaleOut(targetScale = 0.6f),
         ) {
-            FabSubItem(label = "新建文件", onClick = {
+            FabSubItem(label = "新建文件", glyph = GlyphKind.FILE_DOC, onClick = {
                 expanded = false
                 onCreateFile()
             })
@@ -490,23 +495,26 @@ private fun CreateFab(
 /** TG FAB 蓝（`TELEGRAM_COLOR = 0xFF229AF0`；`key_featuredStickers_addButton` 的缺省）。 */
 private val FabBlue = Color(0xFF229AF0)
 
-/** FAB 展开的子项（TG 子按钮的合体读法：圆底 + 左侧标签；这里取"胶囊标签"的简化）。 */
+/**
+ * FAB 展开的子项：与主钮同规格的 48dp 圆徽章（`createSubButtonLayoutParams` 的 48×48），
+ * **灰底**（批 25 口径；TG 子按钮底是 `key_dialogBackground` 的模糊背板，语义位对上
+ * 本仓搜索栏同一块灰 [com.autoscript.ui.theme.Colors.fieldBackground]）+ 0.4dp 细描边
+ * （TG 子按钮同款一道边），图标 = 常规图标色字形（`key_actionBarDefaultIcon` 的语义位）。
+ * TG 子按钮同样只有图标没有字 —— 文案进 contentDescription 给读屏。
+ */
 @Composable
-private fun FabSubItem(label: String, onClick: () -> Unit) {
+private fun FabSubItem(label: String, glyph: GlyphKind, onClick: () -> Unit) {
     val palette = ThemeColors
     Box(
         Modifier
-            .background(palette.surface, RoundedCornerShape(20.dp))
+            .size(48.dp)
+            .background(palette.fieldBackground, CircleShape)
+            .border(0.4.dp, palette.divider, CircleShape)
             .pressable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = label,
-            color = palette.text,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Glyph(kind = glyph, tint = palette.text, size = 24.dp)
     }
 }
 
