@@ -61,7 +61,7 @@ import kotlinx.coroutines.launch
  * 前缀 `[HH:mm:ss] 级别 [#runId]` 一律用弱化色，只有 `error` 通栏标红 ——
  * 满屏红字等于没标（这条在旧版是写在 KDoc 里的经验，现在由 [ConsoleLineState.tone] 落地）。
  *
- * 诚实边界（与 [HomeScreen]/[CapabilityScreen]/[TaskCenterScreen] 同一条纪律）：
+ * 诚实边界（与其他屏同一条纪律）：
  * - 没读到（首帧）显示「尚未读取」，读失败显示原因**并保留已读到的行**——
  *   一次瞬时失败抹掉用户已经看到的日志，比报错更糟；
  * - 读成功且行空才说「暂无日志」（那是真的没有输出，[LoadState.Loaded] 才敢这么说）；

@@ -287,6 +287,8 @@ fun Glyph(
             }
 
             // 文件夹：折角文件夹（TG menu_folder_add 的轮廓读法：背板 + 标签突起）。
+            // 首尾闭合（close）—— 底边那一条横线不能少：开放路径在 24dp 下读起来就是
+            // "没合上的文件夹"（批 25 实机截图定案的形状修正）。
             GlyphKind.FOLDER -> {
                 drawPath(
                     path(
@@ -296,7 +298,7 @@ fun Glyph(
                         0.44f to 0.38f,
                         0.90f to 0.38f,
                         0.90f to 0.74f,
-                    ),
+                    ).apply { close() },
                     tint,
                     style = stroke,
                 )

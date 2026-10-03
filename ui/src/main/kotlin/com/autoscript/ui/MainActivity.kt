@@ -6,7 +6,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.background
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -32,7 +31,6 @@ import com.autoscript.ui.components.TabBar
 import com.autoscript.ui.screens.ProjectScreen
 import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
-import com.autoscript.ui.screens.HomeScreen
 import com.autoscript.ui.screens.TaskCenterScreen
 import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.ConsoleState
@@ -141,8 +139,12 @@ class MainActivity : ComponentActivity() {
                         HorizontalPager(
                             state = pagerState,
                             modifier = shellModifier,
-                            // 邻页预组合：横划时邻页已经在了，不会划到一半才现画。
+                            // 邻页预组合：点页签滑动时邻页已经在了，不会划到一半才现画。
                             beyondViewportPageCount = 1,
+                            // **禁横划**（批 25）：屏幕里横划是各屏自己的手势域（列表回弹、
+                            // 未来 Dochirō 式侧滑菜单），pager 抢掉它们就全是误切页。
+                            // 切页只走页签点按（onSelectTab 的 animateScrollToPage）。
+                            userScrollEnabled = false,
                         ) { current ->
                             // 四屏收 **Modifier**（自己那份布局意图）而不是 pager 的修饰符：
                             // pager 的修饰符是它自己的（滚动/裁剪/尺寸），发给页内容等于

@@ -58,7 +58,7 @@ import kotlinx.coroutines.launch
  * + 行尾文字值（`windowBackgroundWhiteBlueText`）。行高带副标题 60dp、不带 50dp
  * （`SettingCell.onMeasure` 的口径）。
  *
- * 诚实边界（与 [HomeScreen] 同一条纪律）：
+ * 诚实边界（与其他屏同一条纪律）：
  * - 没读到（首帧/失败）显示「尚未读取」/失败原因，**不冒充**「一个能力都没有」；
  * - 每行原样显示宿主给的引导文案（`:domain` 那份 `guideText`），呈现层不加工 ——
  *   加工过的引导文案会和系统里的真实路径漂移；

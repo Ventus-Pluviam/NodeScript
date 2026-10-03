@@ -29,9 +29,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -274,6 +274,10 @@ private fun ProjectMenu(
 /**
  * 圆角搜索栏（`FragmentSearchField` 的逐字版式）：高 48dp、圆角 20dp、灰底、
  * 放大镜 24dp 距左 12dp、提示词 15sp 半透明、输入文字 15sp（`editText.setTextSize(15)`）。
+ *
+ * 不用 M3 `TextField`：它自带的 56dp 最小高与大内边距塞不进 48dp 的行高里
+ * （批 25 实机：hint 文字被上下裁掉一截），而这页搜索框用不上它的 label/indicator
+ * 那套装饰 —— 直接 `BasicTextField` + 自己摆 `Row`，内边距就是版式要的那几个 dp。
  */
 @Composable
 private fun SearchField(
@@ -281,38 +285,37 @@ private fun SearchField(
     onChange: (String) -> Unit,
 ) {
     val palette = ThemeColors
-    TextField(
-        value = query,
-        onValueChange = onChange,
-        singleLine = true,
-        placeholder = {
-            Text(
-                text = "搜索文件",
-                color = palette.text.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-        },
-        leadingIcon = {
-            Glyph(kind = GlyphKind.SEARCH, tint = palette.text.copy(alpha = 0.6f))
-        },
-        shape = RoundedCornerShape(20.dp),
-        colors = TextFieldDefaults.colors(
-            focusedContainerColor = palette.fieldBackground,
-            unfocusedContainerColor = palette.fieldBackground,
-            disabledContainerColor = palette.fieldBackground,
-            focusedIndicatorColor = Color.Transparent,
-            unfocusedIndicatorColor = Color.Transparent,
-            disabledIndicatorColor = Color.Transparent,
-            focusedTextColor = palette.text,
-            unfocusedTextColor = palette.text,
-            cursorColor = palette.accent,
-        ),
-        textStyle = MaterialTheme.typography.bodyLarge,
-        modifier = Modifier
+    Row(
+        Modifier
             .fillMaxWidth()
             .padding(horizontal = 7.dp, vertical = 4.dp)
-            .height(48.dp),
-    )
+            .height(48.dp)
+            .background(palette.fieldBackground, RoundedCornerShape(20.dp)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width(12.dp))
+        Glyph(kind = GlyphKind.SEARCH, tint = palette.text.copy(alpha = 0.6f))
+        Spacer(Modifier.width(12.dp))
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) {
+                Text(
+                    text = "搜索文件",
+                    color = palette.text.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.text),
+                cursorBrush = SolidColor(palette.accent),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+    }
 }
 
 /**

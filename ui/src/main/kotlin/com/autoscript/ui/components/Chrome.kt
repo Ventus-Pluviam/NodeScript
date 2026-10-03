@@ -406,32 +406,3 @@ data class TabItem(
     val glyph: GlyphKind,
     val badge: String? = null,
 )
-
-/**
- * 整屏骨架：顶栏 + 内容。
- *
- * **底页签条不在本组件里**：页签条归外壳（`MainShell`）一处画 —— 它是全 App 唯一的一条，
- * 而"每屏自己画一条"会让横划切页时四屏各滑各的页签条（本仓四屏都在 pager 里，2026-10-02 前
- * 就是这样：切页时底栏跟着内容一起滑，像换了一整个界面）。这里只保证"标题在顶栏、
- * 内容从分隔线下开始"这条式四屏一致。
- *
- * 四屏过去各自 `Column { Text(标题, headlineMedium); … }` 起手，标题样式与内边距
- * 各写一遍。这里统一之后，"标题在顶栏、内容从分隔线下开始"这条式在四屏必然一致，
- * 也让页签条落在内容滚动区之外（不会跟着列表滚走）。
- */
-@Composable
-fun ScaffoldScreen(
-    title: String,
-    modifier: Modifier = Modifier,
-    subtitle: String? = null,
-    subtitleTone: StatusTone = StatusTone.MUTED,
-    action: (@Composable () -> Unit)? = null,
-    content: @Composable (Modifier) -> Unit,
-) {
-    Column(modifier.fillMaxSize().background(ThemeColors.background)) {
-        ActionBar(title = title, subtitle = subtitle, subtitleTone = subtitleTone, actions = action)
-        Box(Modifier.weight(1f)) {
-            content(Modifier.fillMaxSize())
-        }
-    }
-}
