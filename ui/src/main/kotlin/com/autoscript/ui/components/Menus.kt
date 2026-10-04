@@ -89,44 +89,22 @@ fun ContextMenu(
 ) {
     // TG 的 cascade 只数"非 GapView 的可见子项"（startAnimation 里 GapView continue）。
     val visibleCount = actions.count { it is MenuAction }
-    val rows = rememberActionsRows(actions, onDismiss)
     MenuPopup(
         expanded = expanded,
         visibleCount = visibleCount,
         onDismissRequest = onDismiss,
     ) {
-        var position = 0
+        // 弹出序（cascade 的 position）只数 MenuAction，且与行的下标是两个序 ——
+        // 混用一个计数器会把排在间隙后面的行顶没（下标超前于弹出序）。
+        var actionPosition = 0
         actions.forEach { entry ->
             when (entry) {
                 is MenuGap -> MenuGapRow()
                 is MenuAction -> {
-                    val at = position
-                    position += 1
-                    rows[at].invoke(this, at)
+                    val at = actionPosition
+                    actionPosition += 1
+                    MenuItemRow(entry, at, onDismiss)
                 }
-            }
-        }
-    }
-}
-
-/**
- * 逐项缓存"画一行"的 lambda（参数是重组稳定的：entry 是 data class、onDismiss 由调用方
- * 铺一层 rememberUpdatedState）—— 否则 cascade 进度每帧变会让整个 content lambda 重算。
- * 位置（弹出序）在遍历时并入闭包。
- */
-@Composable
-private fun rememberActionsRows(
-    actions: List<MenuEntry>,
-    onDismiss: () -> Unit,
-): List<@Composable ColumnScope.(Int) -> Unit> {
-    val latestDismiss = rememberUpdatedState(onDismiss)
-    return actions.map { entry ->
-        when (entry) {
-            is MenuAction -> remember(entry) {
-                { position: Int -> MenuItemRow(entry, position) { latestDismiss.value.invoke() } }
-            }
-            is MenuGap -> remember(Unit) {
-                { _: Int -> }
             }
         }
     }
