@@ -13,7 +13,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
-| 2026-10-04 | 5 | 批 37 菜单圆角精确到 12dp（popup_fixed_alert4 实测 11.88–11.93）+ 主题切换死区修复 + 两处 import 补回 · 批 36 勘误 底栏高亮块底色被 blend 成了灰（`multAlpha` 只改 alpha，色相恒为选中蓝）· 批 36 底栏整条按 TG 重做（不等宽分格 / 三键各自 blend / 删掉自加的按压态）· 批 35 拆掉下拉刷新（参考项目没有这个手势）· 批 34 项目页目录下钻 / 选择模式 / 底部操作面板（TG `ChatAttachAlertDocumentLayout` 的一层一层走 + 搜索跨层） | [`2026-10-04.md`](2026-10-04.md) |
+| 2026-10-04 | 6 | 批 38 菜单开/关动画 + 间隙渐变 + 投影环描边（MenuPopup 自建壳）· 批 37 菜单圆角精确到 12dp（popup_fixed_alert4 实测 11.88–11.93）+ 主题切换死区修复 + 两处 import 补回 · 批 36 勘误 底栏高亮块底色被 blend 成了灰（`multAlpha` 只改 alpha，色相恒为选中蓝）· 批 36 底栏整条按 TG 重做（不等宽分格 / 三键各自 blend / 删掉自加的按压态）· 批 35 拆掉下拉刷新（参考项目没有这个手势）· 批 34 项目页目录下钻 / 选择模式 / 底部操作面板（TG `ChatAttachAlertDocumentLayout` 的一层一层走 + 搜索跨层） | [`2026-10-04.md`](2026-10-04.md) |
 | 2026-10-02 | 19 | 批 10 C7 typedoc API 参考 + B4 依赖供应链 · C9 总索引落地 · C6 分片落地 · A2b 拍板落地 · E1 拍板落地 · E2 拆双门 + 精确兜底 · E5 放宽拍板 · 批 9 A6+E4 素材换源 · 结构面批 D9+D10+D12 | [`2026-10-02.md`](2026-10-02.md) |
 | 2026-10-01 | 17 | 外审整改收尾、批 1–7、两次外审建议入池 | [`2026-10-01.md`](2026-10-01.md) |
 | 2026-09-30 | 15 | 外审整改步骤 1–8、图像提速三案、A 组真机实测 | [`2026-09-30.md`](2026-09-30.md) |
@@ -24,6 +24,7 @@
 
 ### [2026-10-04](2026-10-04.md)（5 条，最新在最上）
 
+- 2026-10-04 —— 批 38：菜单开/关动画 + 间隙渐变 + 投影环描边 —— M3 `DropdownMenu` 的进出场硬编码（120/75ms scale+fade）改不了，自建 `MenuPopup` 壳：打开 = `150+16×可见项`ms 线性 + `backScaleY`/`backAlpha` + 子项 cascade（`AndroidUtilities.cascade(t,pos,count,4)`，disabled 终值 alpha 0.5）；关闭 = 150ms `translationY ∓5dp` + 淡出；间隙补上 `GapView.onDraw` 叠的 `greydivider` 上下渐变（峰值 14/255 —— 批 37 只画实色条所以「宽度不够」）；描边从 1dp 硬边改为 9-patch 实测的 5dp 渐变投影环（贴边 33/255，5 层阶梯）
 - 2026-10-04 —— 批 37：控件圆角/颜色按 TG 校准 —— 菜单圆角 11→12dp（`popup_fixed_alert4.9.png` 四档实测 11.88–11.93dp）；菜单项按压圆角的「12 还是 6」之争由读源码定案（实际走 `updateRadialSelectors()`，字段默认 `selectorRad=12`）；撤掉用负 padding 抵消 M3 `DropdownMenuVerticalPadding` 的自伤写法；`ThemeMode.next(isDark)` 修掉 SYSTEM 档的死 tap；补回 `Menus.kt` 的 `MaterialTheme` 与 `ProjectScreen.kt` 的两个 slide 动画 import（分支 `electric-crocodile`）
 - 2026-10-04 —— 批 36 勘误：底栏高亮块的底色被 blend 成了灰 —— `Theme.multAlpha(colorSelected, 0.09f * alpha)` **只改 alpha 通道**，色相恒为选中蓝；我写成了 `lerp(selected, unselected, f)`，f=0.5 时是蓝与近黑的中点（一坨灰）。同批把透明度那一路对齐成 TG 的**双 DECELERATE**（`0.09f * (1-(1-f)²)`），并把「两套 attheme 都没设 `glass_tab*` 三个键 + 各自回退落点」写进 `Theme.kt` 的 KDoc（分支 `electric-crocodile`）
 

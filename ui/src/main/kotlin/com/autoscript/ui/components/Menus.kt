@@ -1,10 +1,11 @@
 package com.autoscript.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +18,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -32,7 +32,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -43,7 +48,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
-import com.autoscript.ui.theme.isDarkTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -58,22 +62,24 @@ import kotlinx.coroutines.launch
  * **版式逐项对着 TG 的 `ActionBarPopupWindowLayout` + `ActionBarMenuSubItem` 写**：
  *
  * 1. **容器**：圆角 [MenuCornerRadius]、底 [ThemeColors.menuBackground]
- *    （`actionBarDefaultSubmenuBackground`）。TG 是 9-patch（`popup_fixed_alert4.9.png`）
- *    上色，**没有** M3 那套 elevation 阴影 —— 圆角外那圈投影是 9-patch 自带的
- *    （实测半透明边 25px ≈ 8dp，峰值 alpha 33/255）；本仓没有 9-patch，
- *    用一圈低透明度描边顶那圈投影（见 [MenuShadow]），**不**加 M3 的
- *    `shadowElevation`（那是另一种投影，叠上去就重了）。
- * 2. **四周内边距 8dp**（`setPadding(dp(8), dp(8), dp(8), dp(8))`）：纵向那 8dp 由 M3
- *    的 `DropdownMenuVerticalPadding` 自带（恰好同值），横向自己补 [MenuSidePadding]。
+ *    （`actionBarDefaultSubmenuBackground`），壳与开/关动画在 [MenuPopup]
+ *    （M3 `DropdownMenu` 的进出场硬编码且是 M3 那套 scale+fade，不是 TG 的）。
+ * 2. **四周内边距 8dp**（`setPadding(dp(8), dp(8), dp(8), dp(8))`）：横纵向都是
+ *    [MenuSidePadding] —— 自建壳后没有 M3 那层自带的 `DropdownMenuVerticalPadding`
+ *    可搭车，四边都自己补。
  * 3. **条目高 48dp、左右内边距 18dp**（`itemHeight = 48` / `setPadding(dp(18), 0, …)`）、
  *    文字 **16sp 常规字重**（`setTextSize(COMPLEX_UNIT_DIP, 16)`，且全文没有
  *    `setTypeface` —— 菜单项不是 Medium）。
  * 4. **按下整块染色**（`selectorColor = key_dialogButtonSelector`，圆角 12dp）；
  *    M3 的水波不是 TG 的形态，故不用 `DropdownMenuItem` 自带的 ripple，改由
  *    [pressable] 的整块覆盖画（颜色单独传 [StatusTone.menuSelectorColor]）。
- * 5. **分组间隙 8dp + [ThemeColors.menuSeparator] 底色**（`ItemOptions.addGap()` 的
- *    `GapView` = `createLinear(MATCH_PARENT, 8)`）。它是**在容器那 8dp 内边距之内**铺满的
- *    （MATCH_PARENT 量的是 padding 后的内容宽），所以与条目左右边界对齐、不顶到圆角边上。
+ * 5. **分组间隙 8dp**（`ItemOptions.addGap()` 的 `GapView` =
+ *    `createLinear(MATCH_PARENT, 8)`）。TG 里它是**容器画的**：`drawChild` 跳过
+ *    GapView，改在裁成圆角（12dp、四周缩 8dp）的画布上补画 —— 因为 GapView 要画出
+ *    自身上下的投影（`greydivider`：上下各 ~5px 渐变，峰值 alpha 14/255），不裁的话
+ *    投影会顶穿容器圆角。这里等价做法：间隙本体铺 [ThemeColors.menuSeparator]
+ *    （`actionBarDefaultSubmenuSeparator`，深浅两档都比菜单底暗/亮一档），上下沿各画
+ *    一条 [MenuGapShadowAlpha] 的渐变（[MenuGap] 的实现注释）。
  */
 @Composable
 fun ContextMenu(
@@ -81,80 +87,68 @@ fun ContextMenu(
     onDismiss: () -> Unit,
     actions: List<MenuEntry>,
 ) {
-    val palette = ThemeColors
-    val dark = isDarkTheme()
-    DropdownMenu(
+    // TG 的 cascade 只数"非 GapView 的可见子项"（startAnimation 里 GapView continue）。
+    val visibleCount = actions.count { it is MenuAction }
+    val rows = rememberActionsRows(actions, onDismiss)
+    MenuPopup(
         expanded = expanded,
+        visibleCount = visibleCount,
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(MenuCornerRadius),
-        containerColor = palette.menuBackground,
-        tonalElevation = 0.dp,
-        // 9-patch 自带的那圈投影，用一层极低透明度的外描边顶（见本函数 KDoc 第 1 条）。
-        border = BorderStroke(MenuShadowWidth, MenuShadow(dark)),
     ) {
-        for (action in actions) {
-            when (action) {
-                // 与条目同宽：`GapView` 的 MATCH_PARENT 量的是容器 padding 后的内容宽，
-                // 故这里同样左右各缩 MenuSidePadding（见 KDoc 第 5 条）。
-                is MenuGap -> Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = MenuSidePadding)
-                        .height(MenuGapHeight)
-                        .background(palette.menuSeparator),
-                )
-                is MenuAction -> MenuItemRow(action, onDismiss)
+        var position = 0
+        actions.forEach { entry ->
+            when (entry) {
+                is MenuGap -> MenuGapRow()
+                is MenuAction -> {
+                    val at = position
+                    position += 1
+                    rows[at].invoke(this, at)
+                }
             }
         }
     }
 }
 
-/** 弹出菜单的圆角（`popup_fixed_alert4.9.png` 实测：11.90 / 11.90 / 11.93 / 11.88dp，取 12）。 */
-private val MenuCornerRadius = 12.dp
-
 /**
- * 菜单容器**左右**两侧的内边距（`ActionBarPopupWindowLayout` 的 `setPadding(dp(8), …)`）。
- *
- * 纵向那 8dp **不用自己加**：M3 的内容区自带 `DropdownMenuVerticalPadding = 8dp`，
- * 与 TG 的四边 8dp 恰好同值 —— 自己再加一遍会变成 16dp，拿负 padding 去"抵掉"它
- * 更是把纵向压成 0（菜单项会贴着上下边）。所以这里只有横向一个数。
- */
-private val MenuSidePadding = 8.dp
-
-/** 分组间隙高（`ItemOptions.addGap()` 的 `createLinear(MATCH_PARENT, 8)`）。 */
-private val MenuGapHeight = 8.dp
-
-/** 菜单项的左右内边距（`ActionBarMenuSubItem.setPadding(dp(18), 0, dp(18), 0)`）。 */
-private val MenuItemHorizontalPadding = 18.dp
-
-/**
- * 菜单项的文字：**16sp 常规字重**（`ActionBarMenuSubItem` 只设 `setTextSize(16)`，
- * 全文没有 `setTypeface` —— 用 `titleMedium` 那种 Medium 会让菜单比 TG 重一档）。
- */
-private val MenuItemTextStyle = TextStyle(fontSize = 16.sp)
-
-/** 菜单容器那圈"投影"的宽度与色（9-patch 自带的半透明边，实测约 8dp、峰值 alpha 33/255）。 */
-private val MenuShadowWidth = 1.dp
-
-private fun MenuShadow(dark: Boolean) =
-    if (dark) Color.White.copy(alpha = 0.04f) else Color.Black.copy(alpha = 0.06f)
-
-/**
- * 菜单里的一行。
- *
- * 不用 `DropdownMenuItem`：它的按压反馈是 M3 水波（`rippleOrFallbackImplementation`
- * 不读 `LocalIndication`），而 TG 的菜单项是**整块纯色**（`dialogButtonSelector`）。
- * 自己画一行换来的是：按压色与圆角都能对上 TG，代价是内边距/高度要自己摆
- * （那几个数就是上面那几条注释里的 TG 值）。
+ * 逐项缓存"画一行"的 lambda（参数是重组稳定的：entry 是 data class、onDismiss 由调用方
+ * 铺一层 rememberUpdatedState）—— 否则 cascade 进度每帧变会让整个 content lambda 重算。
+ * 位置（弹出序）在遍历时并入闭包。
  */
 @Composable
-private fun MenuItemRow(action: MenuAction, onDismiss: () -> Unit) {
+private fun rememberActionsRows(
+    actions: List<MenuEntry>,
+    onDismiss: () -> Unit,
+): List<@Composable ColumnScope.(Int) -> Unit> {
+    val latestDismiss = rememberUpdatedState(onDismiss)
+    return actions.map { entry ->
+        when (entry) {
+            is MenuAction -> remember(entry) {
+                { position: Int -> MenuItemRow(entry, position) { latestDismiss.value.invoke() } }
+            }
+            is MenuGap -> remember(Unit) {
+                { _: Int -> }
+            }
+        }
+    }
+}
+
+/** 菜单里的一行（带 TG 的 cascade 浮现：从 [MenuPopup] 的 local 读进度）。 */
+@Composable
+private fun MenuItemRow(action: MenuAction, position: Int, onDismiss: () -> Unit) {
+    val palette = ThemeColors
+    val anim = LocalMenuAnim.current
     val selector = action.tone.menuSelectorColor()
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = MenuSidePadding)
             .heightIn(min = MenuItemHeight)
+            // cascade 进度在 draw 期读（graphicsLayer 块里）：动画每帧只重绘不重组。
+            .graphicsLayer {
+                val a = anim.itemProgress(position)
+                translationY = (1f - a) * if (anim.belowMenu) -MenuItemShift.toPx() else MenuItemShift.toPx()
+                alpha = a * if (action.enabled) 1f else 0.5f
+            }
             .clip(RoundedCornerShape(MenuItemSelectorRadius))
             .pressable(
                 enabled = action.enabled,
@@ -171,13 +165,76 @@ private fun MenuItemRow(action: MenuAction, onDismiss: () -> Unit) {
     ) {
         Text(
             text = action.label,
-            color = if (action.enabled) action.tone.menuColor() else ThemeColors.textTertiary,
+            color = if (action.enabled) action.tone.menuColor() else palette.textTertiary,
             style = MenuItemTextStyle,
         )
     }
 }
 
-/** 菜单项高（`ActionBarMenuSubItem.itemHeight = 48`）。 */
+/**
+ * 分组间隙（TG `ItemOptions.addGap()` 的 `GapView`：MATCH_PARENT × 8dp）。
+ *
+ * `GapView` = 底色（`actionBarDefaultSubmenuSeparator`）+ `onDraw` 里叠一片
+ * `greydivider`（MULTIPLY 上 `windowBackgroundGrayShadow` 纯黑）：xxhdpi 实测
+ * 上下各 ~5px 的白色渐变、贴边 alpha 14/255 往中间衰减到 0 —— 是"凹槽"的投影，
+ * 不是一条实线。裁剪与"谁画它"是容器的事（KDoc 第 5 条），间隙本体只负责把
+ * 这两层画对：底色铺满、上下沿各一条 [MenuGapShadowAlpha] 渐变。
+ */
+@Composable
+private fun MenuGapRow() {
+    val palette = ThemeColors
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(MenuGapHeight)
+            .background(palette.menuSeparator)
+            .drawBehind {
+                val shadow = MenuGapShadowAlpha
+                drawRect(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = shadow),
+                        1f to Color.Black.copy(alpha = 0f),
+                    ),
+                    size = Size(size.width, size.height / 2),
+                )
+                drawRect(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = 0f),
+                        1f to Color.Black.copy(alpha = shadow),
+                    ),
+                    topLeft = Offset(0f, size.height / 2),
+                    size = Size(size.width, size.height / 2),
+                )
+            },
+    )
+}
+
+/** 间隙上下沿的投影峰值（`greydivider.9.png` xxhdpi 实测 14/255）。 */
+private const val MenuGapShadowAlpha = 14f / 255f
+
+/**
+ * 菜单容器**四周**的内边距（`ActionBarPopupWindowLayout` 的 `setPadding(dp(8), …)`）。
+ *
+ * 自建壳后不再有 M3 自带的 `DropdownMenuVerticalPadding` 可搭车（批 37 借的是它，
+ * 现在还回来了）：四边都是这同一个数。
+ */
+private val MenuSidePadding = 8.dp
+
+/** 分组间隙高（`ItemOptions.addGap()` 的 `createLinear(MATCH_PARENT, 8)`）。 */
+private val MenuGapHeight = 8.dp
+
+/** 菜单项的左右内边距（`ActionBarMenuSubItem.setPadding(dp(18), 0, dp(18), 0)`）。 */
+private val MenuItemHorizontalPadding = 18.dp
+
+/**
+ * 菜单项的文字：**16sp 常规字重**（`ActionBarMenuSubItem` 只设 `setTextSize(16)`，
+ * 全文没有 `setTypeface` —— 用 `titleMedium` 那种 Medium 会让菜单比 TG 重一档）。
+ */
+private val MenuItemTextStyle = TextStyle(fontSize = 16.sp)
+
+/**
+ * 菜单项高（`ActionBarMenuSubItem.itemHeight = 48`）。
+ */
 private val MenuItemHeight = 48.dp
 
 /**
@@ -189,10 +246,6 @@ private val MenuItemHeight = 48.dp
  * `selectorRad = 12`（`ActionBarMenuSubItem.java:47`）—— 而 `ActionBarMenuItem.showPopup`
  * 走的正是第三条（`popupLayout.updateRadialSelectors()`），故 **12** 才是这条路要的值；
  * blur 那侧也独立写着 `setRadius(dp(12))`，两条旁证同一个数。
- *
- * **批 37 修订**：上一版这里写的是「走的是前者（`setupSelectors`）」—— 读源码后确认
- * 走的是第三条（`updateRadialSelectors`，`ActionBarMenuItem.java:885`），结论仍是 12，
- * 但理由换成了读得出来的那一条。
  */
 private val MenuItemSelectorRadius = 12.dp
 
@@ -334,8 +387,7 @@ data class MenuAction(
 ) : MenuEntry
 
 /**
- * 菜单内的分组间隙（TG `ItemOptions.addGap()`：`GapView` = MATCH_PARENT × 8dp，
- * 底色是主题的 divider 那一档的**弱化**版 —— 是"分组"的视觉停顿，不是分隔线）。
+ * 菜单内的分组间隙（TG `ItemOptions.addGap()`：`GapView` = MATCH_PARENT × 8dp）。
  *
  * 放进 [MenuAction] 同一张表（而不是调用方在项之间插 Divider）：动作序列与间隙
  * 是同一份菜单定义，拆开就会出现"加一项忘了挪间隙"的漂移。
