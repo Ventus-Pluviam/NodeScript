@@ -224,7 +224,7 @@ fun ProjectScreen(
                     ProjectMenu(
                         currentSort = state.sort,
                         reversed = state.reversed,
-                        onRefresh = { scope.launch { refresh.trigger() } },
+                        onRefresh = refresh::trigger,
                         onSwitchTheme = onSwitchTheme,
                         onSelectAll = { selected = ProjectState.toggleSelectAll(selected, visible) },
                         onSort = { sort, reversed -> onSortChange(sort, reversed) },
@@ -237,7 +237,7 @@ fun ProjectScreen(
             onChange = { query = it },
         )
         Box(Modifier.weight(1f)) {
-            RefreshableBox(refresh, Modifier.fillMaxSize()) {
+            RefreshableBox(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
                     contentPadding = PaddingValues(top = 4.dp, bottom = TabBarBottomClearance()),

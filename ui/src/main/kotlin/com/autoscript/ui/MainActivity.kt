@@ -502,7 +502,7 @@ private fun ThemeMode.targetLabel(): String = when (this) {
  *
  * **本函数不读 pager 的滚动位置**（这一点是硬约束，不是风格）：`pagerState` 只往下
  * 传给页签条。这里若读一次 `currentPageOffsetFraction`，横划的每一帧都会把本函数
- * 连同它下面的 pager 子树重组一遍 —— 四个屏各自带着 LazyColumn / 下拉刷新容器，
+ * 连同它下面的 pager 子树重组一遍 —— 四个屏各自带着自己的列表子树，
  * 那是"切页卡死"的根因（2026-10-02 实测）。页签条自己在**它那一层**读
  * `currentPage`（每翻一页变一次），跟手的观感由颜色动画补完。
  *

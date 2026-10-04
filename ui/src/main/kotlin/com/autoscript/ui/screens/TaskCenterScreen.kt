@@ -142,8 +142,7 @@ fun TaskCenterScreen(
             },
         )
         Box(Modifier.weight(1f)) {
-            // 下拉与顶栏那颗「刷新」是同一个动作（同一份挂起状态，见 RefreshAction）。
-            RefreshableBox(refresh, Modifier.fillMaxSize()) {
+            RefreshableBox(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
                     contentPadding = PaddingValues(bottom = TabBarBottomClearance()),

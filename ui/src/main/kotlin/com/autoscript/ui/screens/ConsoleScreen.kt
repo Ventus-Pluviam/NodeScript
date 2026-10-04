@@ -79,8 +79,7 @@ import kotlinx.coroutines.launch
  * - **点一下日志行 = 复制该行**（原文进剪贴板，顶部回执一句"已复制该行"）——
  *   控制台的用处一半在"把这行贴给别人看"，而文字本身不可选（密排单行）；
  * - **长按在途执行行 = 菜单**（停止该执行 / 复制摘要）：停止按钮照旧留在行尾；
- * - **停止后那一行会消失**（在途表刷新后不再有它），消失处炸一簇粒子（同任务中心）；
- * - 下拉刷新与顶栏那颗「刷新」同一个动作。
+ * - **停止后那一行会消失**（在途表刷新后不再有它），消失处炸一簇粒子（同任务中心）。
  *
  * 丢弃的行（`droppedTotal` 涨）**不炸粒子**：它们是从列表**顶部**滚出去的，
  * 而用户的视线在底部新行上 —— 炸了也看不见，白白铺一层动画。
@@ -116,7 +115,7 @@ fun ConsoleScreen(
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         Box(Modifier.weight(1f)) {
-            RefreshableBox(refresh, Modifier.fillMaxSize()) {
+            RefreshableBox(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
                     contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
