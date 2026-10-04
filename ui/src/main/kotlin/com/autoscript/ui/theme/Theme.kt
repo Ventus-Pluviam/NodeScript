@@ -111,6 +111,14 @@ data class Colors(
      * 是把深色那半抄反了（TG 的 tint 是白，叠上去只会更亮）。
      */
     val fieldBackground: Color,
+    /**
+     * 分组头底（TG `graySection`：GraySectionCell 那条 32dp 的分组条底色）。
+     * 浅色在白卡上比卡底浅一档灰、深色比屏底微亮（`0xFF0B0B0C` vs `0xFF181819` 有意更暗 ——
+     * 深色下 TG 的 graySection 本来就是"近黑的条"，`Theme.java` 深色缺省即 `0xff0b0b0c`）。
+     */
+    val graySection: Color,
+    /** 分组头文字（TG `graySectionText`，14sp Medium 的分组标签色）。 */
+    val graySectionText: Color,
     /** 弹出菜单底（`actionBarDefaultSubmenuBackground`）。 */
     val menuBackground: Color,
     /** 弹出菜单的分组间隙（`actionBarDefaultSubmenuSeparator`，TG `GapView` 的底色）。 */
@@ -208,6 +216,8 @@ val LightColors = Colors(
     pressedOverlay = Color(0x14000000),
     // `windowBackgroundWhiteBlackText`(0xFF1A1D21) 5% 叠白（TG 的 5%）。
     fieldBackground = Color(0xFFF4F4F4),
+    graySection = Color(0xFFF6F6F6),
+    graySectionText = Color(0xFF84878A),
     // 这三个键 day.attheme **都没设** → 走 ThemeColors.java 的默认值。
     menuBackground = Color(0xFFFFFFFF),
     menuSeparator = Color(0xFFF5F5F5),
@@ -272,6 +282,8 @@ val DarkColors = Colors(
     // 白 7% 叠 [background](0xFF181819) —— 与下面 menuBackground 同值纯属巧合（TG 的
     // 深色子菜单底也是"比底亮一档的深灰"），两个键在 TG 里各是各的，别合并。
     fieldBackground = Color(0xFF282829),
+    graySection = Color(0xFF0B0B0C),
+    graySectionText = Color(0xFF838384),
     // 这三个键 night.attheme 都设了。
     menuBackground = Color(0xFF282829),
     menuSeparator = Color(0xFF1E1E1F),

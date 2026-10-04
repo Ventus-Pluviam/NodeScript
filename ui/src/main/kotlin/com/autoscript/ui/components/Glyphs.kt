@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -81,6 +82,15 @@ enum class GlyphKind {
 
     /** 新建（FAB 主按钮）：铅笔。 */
     PENCIL,
+
+    /** 立即执行（任务行尾的实心播放三角）。 */
+    PLAY,
+
+    /** 排序切换钮——切到**按字母**（三条横杠 + 字母 A；TG `msg_contacts_name`）。 */
+    SORT_NAME,
+
+    /** 排序切换钮——切到**按时间**（三条横杠 + 时钟；TG `msg_contacts_time`）。 */
+    SORT_TIME,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -319,6 +329,35 @@ fun Glyph(
                 )
                 drawPath(path(0.24f to 0.76f, 0.38f to 0.76f, 0.24f to 0.62f), tint, style = stroke)
                 drawPath(path(0.62f to 0.24f, 0.76f to 0.38f), tint, style = stroke)
+            }
+
+            // 播放三角（任务行尾「立即执行」）：实心（TG 这颗是填充形，线性描边读不出"按了会跑"）。
+            GlyphKind.PLAY -> {
+                drawPath(
+                    path(0.30f to 0.20f, 0.30f to 0.80f, 0.80f to 0.50f).apply { close() },
+                    tint,
+                    style = Fill,
+                )
+            }
+
+            // 排序切换（TG msg_contacts_name/time 的 webp 实测几何：三条圆头横杠
+            // y≈0.23/0.45/0.67，长度递减 x→0.75/0.58/0.44；尾缀 = 切过去的那一档——
+            // 按时间排序时显示字母 A（切到字母），按字母时显示时钟（切到时间），与 TG 同款）。
+            GlyphKind.SORT_NAME -> {
+                drawPath(path(0.11f to 0.23f, 0.75f to 0.23f), tint, style = stroke)
+                drawPath(path(0.11f to 0.45f, 0.58f to 0.45f), tint, style = stroke)
+                drawPath(path(0.11f to 0.67f, 0.44f to 0.67f), tint, style = stroke)
+                drawPath(path(0.62f to 0.80f, 0.74f to 0.50f, 0.86f to 0.80f), tint, style = stroke)
+                drawPath(path(0.655f to 0.70f, 0.825f to 0.70f), tint, style = stroke)
+            }
+
+            GlyphKind.SORT_TIME -> {
+                drawPath(path(0.11f to 0.23f, 0.75f to 0.23f), tint, style = stroke)
+                drawPath(path(0.11f to 0.45f, 0.58f to 0.45f), tint, style = stroke)
+                drawPath(path(0.11f to 0.67f, 0.44f to 0.67f), tint, style = stroke)
+                drawCircle(tint, radius = 0.165f * u, center = at(0.755f, 0.655f), style = stroke)
+                drawPath(path(0.755f to 0.655f, 0.755f to 0.545f), tint, style = stroke)
+                drawPath(path(0.755f to 0.655f, 0.83f to 0.655f), tint, style = stroke)
             }
         }
     }

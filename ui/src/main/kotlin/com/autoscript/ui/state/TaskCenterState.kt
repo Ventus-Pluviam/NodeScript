@@ -9,6 +9,7 @@ import com.autoscript.domain.scripts.RunState
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * 任务中心呈现态（纯数据，Compose 之外可 JVM 测）。
@@ -44,6 +45,13 @@ data class TaskCenterState(
     val opNotice: String? = null,
     /** 有操作在挂起中（立即执行要等执行结算）—— 按钮禁用防双击双投。 */
     val opInFlight: Boolean = false,
+    /**
+     * 挂起中的「立即执行」落在**哪条**任务上（其余操作为 null）。挂起要挂到执行结算
+     * （排队 10s + 脚本超时，最长 ~40s），那一行尾的播放钮在这期间画成**转圈的开口弧**
+     * 而不是静止的三角 —— 「它真的在跑」与「其他按钮暂时不可用」是两件事，
+     * 一个全局布尔画不出这个区分。
+     */
+    val opTargetTaskId: String? = null,
 ) {
     companion object {
         /**
@@ -115,6 +123,8 @@ data class TaskRowState(
      * 回执要点破"跑完就出册"，否则刷新后卡片消失会被读成"被取消了"。
      */
     val once: Boolean = false,
+    /** 下一跳原始时刻（epoch ms）——「按时间排序」档的键；null = 算不出（排序时排最后）。 */
+    val nextFireAtMillis: Long? = null,
 ) {
     /**
      * 卡片左侧那一列的**全部**标记（决定小圆点画几个、什么色）。
@@ -141,8 +151,42 @@ data class TaskRowState(
             enabled = task.enabled,
             degraded = task.degraded,
             once = task.schedule is ScheduleSpec.Once,
+            nextFireAtMillis = task.nextFireAtMillis,
         )
     }
+}
+
+/**
+ * 任务列表的排序档（TG 联系人页的 by-name / by-time 两态，
+ * `SharedConfig.toggleSortContactsByName`）。
+ *
+ * 图标语义与 TG 同款：**顶栏画的是「切过去的那一档」**（`ContactsActivity`：
+ * `sortItem.setIcon(sortByName ? msg_contacts_time : msg_contacts_name)`）——
+ * 按名称排序时顶栏显示时钟（点它切到按时间），按时间时显示字母 A。
+ */
+enum class TaskSort { NAME, TIME }
+
+/**
+ * 任务行的排序（呈现层的视图，不进读口 —— 与项目页 `FileSort` 同一条分工）。
+ *
+ * - 按名称：大小写不敏感的字典序；
+ * - 按时间：下一跳早的在先；**算不出下一跳的排最后**（它们没有时刻可比，不该
+ *   冒充最早也不该把有时刻的挤散），同刻并列按名称收尾 —— 排序稳定可预期。
+ */
+fun sortedTasks(tasks: List<TaskRowState>, sort: TaskSort): List<TaskRowState> = when (sort) {
+    TaskSort.NAME -> tasks.sortedBy { it.name.lowercase(Locale.ROOT) }
+    TaskSort.TIME -> tasks.sortedWith(
+        compareBy<TaskRowState> { it.nextFireAtMillis ?: Long.MAX_VALUE }
+            .thenBy { it.name.lowercase(Locale.ROOT) },
+    )
+}
+
+/** 任务行的搜索命中：名称或脚本路径含词（大小写不敏感；空词全命中）。 */
+fun TaskRowState.matches(query: String): Boolean {
+    if (query.isBlank()) return true
+    val q = query.trim().lowercase(Locale.ROOT)
+    return name.lowercase(Locale.ROOT).contains(q) ||
+        scriptPath.lowercase(Locale.ROOT).contains(q)
 }
 
 /**

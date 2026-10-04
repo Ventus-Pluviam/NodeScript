@@ -243,4 +243,76 @@ class TaskCenterStateTest {
         assertEquals(true, once.once, "Once：立即执行后出册是调度器语义，回执要说破")
         assertEquals(false, daily.once)
     }
+
+    // ---- 新版式（TG 联系人页复刻）的呈现层：排序 / 搜索 / 挂起目标 ----
+
+    private fun row(
+        id: String,
+        name: String = "任务$id",
+        nextFireAtMillis: Long? = null,
+    ) = TaskRowState(
+        id = id, name = name, scriptPath = "p/$id.js", scheduleText = "", nextFireText = null,
+        enabled = true, degraded = false, once = false, nextFireAtMillis = nextFireAtMillis,
+    )
+
+    @Test
+    fun `按名称排序 大小写不敏感 字典序`() {
+        val sorted = sortedTasks(
+            listOf(row("c", "beta"), row("a", "Alpha"), row("b", "apple")),
+            TaskSort.NAME,
+        )
+        assertEquals(listOf("a", "b", "c"), sorted.map { it.id }, "Alpha 与 apple 应相邻（同典序），beta 在后")
+    }
+
+    @Test
+    fun `按时间排序 下一跳早的在先 算不出的排最后`() {
+        val sorted = sortedTasks(
+            listOf(
+                row("late", nextFireAtMillis = 3000L),
+                row("none", nextFireAtMillis = null),
+                row("early", nextFireAtMillis = 1000L),
+                row("none2", nextFireAtMillis = null),
+            ),
+            TaskSort.TIME,
+        )
+        assertEquals(
+            listOf("early", "late", "none", "none2"),
+            sorted.map { it.id },
+            "null 下一跳没有时刻可比，排最后（不冒充最早，也不把有时刻的挤散）",
+        )
+    }
+
+    @Test
+    fun `按时间排序 同刻并列按名称收尾`() {
+        val sorted = sortedTasks(
+            listOf(row("b", "乙", nextFireAtMillis = 1000L), row("a", "甲", nextFireAtMillis = 1000L)),
+            TaskSort.TIME,
+        )
+        // 「乙」(U+4E59) 的码点在「甲」(U+7532) 之前 —— 字典序收尾让 b 在先。
+        assertEquals(listOf("b", "a"), sorted.map { it.id }, "并列时按名称的字典序收尾，排序才可预期")
+    }
+
+    @Test
+    fun `搜索命中名称或脚本路径 空词全命中`() {
+        assertTrue(row("a", "每日备份").matches("备份"))
+        assertTrue(row("a").matches("p/a"))
+        assertFalse(row("a", "每日备份").matches("清理"))
+        assertTrue(row("a").matches("   "), "空词（含空白）不过滤：没有搜索意图时不动列表")
+    }
+
+    @Test
+    fun `nextFireAtMillis 原样投影 自 domain 不改写`() {
+        val s = TaskCenterState.of(snapshot(task(nextFireAtMillis = 5678L)), nowMillis = 1L)
+        assertEquals(5678L, s.tasks.single().nextFireAtMillis, "排序键是原始时刻，呈现层不做二次加工")
+        val none = TaskCenterState.of(snapshot(task(nextFireAtMillis = null)), nowMillis = 1L)
+        assertNull(none.tasks.single().nextFireAtMillis)
+    }
+
+    @Test
+    fun `opTargetTaskId 独立记账 缺省 null`() {
+        val s = TaskCenterState.of(snapshot(task()), nowMillis = 1L)
+        assertNull(s.opTargetTaskId, "没挂起就没有目标行；该字段只由立即执行写")
+        val busy = s.copy(opInFlight = true, opTargetTaskId = "t1")
+        assertEquals("t1", busy.opTargetTaskId)
+    }
 }

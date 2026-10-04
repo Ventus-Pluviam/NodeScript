@@ -33,6 +33,7 @@ import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
 import com.autoscript.ui.screens.TaskCenterScreen
 import com.autoscript.ui.state.CapabilityCenterState
+import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.LoadState
@@ -40,7 +41,6 @@ import com.autoscript.ui.state.ProjectState
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
-import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.theme.Theme
 import com.autoscript.ui.theme.ThemeMode
 import com.autoscript.ui.theme.isDark
@@ -167,10 +167,12 @@ class MainActivity : ComponentActivity() {
                                 )
                                 Tab.TASKS -> TaskCenterScreen(
                                     state = taskState,
+                                    console = consoleState,
                                     onRefresh = { reloadTasks() },
                                     onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
                                     onCancel = { task -> scope.launch { cancelTaskOp(task) } },
                                     onRegister = { form -> scope.launch { registerTaskOp(form) } },
+                                    onStopRun = { run -> scope.launch { stopRunOp(run) } },
                                     modifier = Modifier,
                                 )
                                 Tab.CONSOLE -> ConsoleScreen(
@@ -198,7 +200,9 @@ class MainActivity : ComponentActivity() {
             TabReloadEffect(resumeTick, pagerState) { tab ->
                 when (tab) {
                     Tab.HOME -> reloadProjectFiles()
-                    Tab.TASKS -> reloadTasks()
+                    // 任务屏现在也画在途执行（控制台的运行列表）：切到本页签两侧都现取，
+                    // 否则运行中那组会停在离开时的快照上（与"切页签即现取"同一条纪律）。
+                    Tab.TASKS -> { reloadTasks(); reloadConsole() }
                     Tab.CONSOLE -> reloadConsole()
                     Tab.SETTINGS -> reloadCapabilities()
                 }
@@ -377,12 +381,20 @@ class MainActivity : ComponentActivity() {
      * 回执措辞点破两条语义：成败不在本口（在意图日志/控制台）；Once 触发即出册
      * （刷新后卡片消失是调度器语义，不是被取消了）。
      */
-    private suspend fun runTaskNowOp(task: TaskRowState) = performTaskOp { host ->
-        host.runTaskNow(task.id)
-        if (task.once) {
-            "已执行「${task.name}」并出册（一次性任务；执行成败见控制台）"
-        } else {
-            "已触发「${task.name}」（执行成败见控制台）"
+    private suspend fun runTaskNowOp(task: TaskRowState) {
+        // 挂起目标先落账：那一行的播放钮要画成"转圈的开口弧"（其余行不受影响）。
+        taskState = taskState.copy(opTargetTaskId = task.id)
+        try {
+            performTaskOp { host ->
+                host.runTaskNow(task.id)
+                if (task.once) {
+                    "已执行「${task.name}」并出册（一次性任务；执行成败见控制台）"
+                } else {
+                    "已触发「${task.name}」（执行成败见控制台）"
+                }
+            }
+        } finally {
+            taskState = taskState.copy(opTargetTaskId = null)
         }
     }
 
