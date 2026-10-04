@@ -38,6 +38,47 @@ class ProjectStateTest {
         modifiedMillis = modified,
     )
 
+    /**
+     * 按**项目内相对路径**造行：`name` = 末段、`ext` 从末段取 —— 与生产侧
+     * `ScriptFilesRead` 的 `name = path.name` 同口径（[row] 那份只够造第一层）。
+     *
+     * @param relPath 项目内路径（不含 projectId 前缀，如 `"lib/helper.js"`）——
+     *   生产侧 `relPath` 是**带** projectId 前缀的整串，故这里拼上。
+     */
+    private fun rowAt(
+        relPath: String,
+        project: String = "demo",
+        isDirectory: Boolean = false,
+        childCount: Int = 0,
+    ): ScriptFileRow {
+        val leaf = relPath.removeSuffix("/").substringAfterLast('/')
+        return ScriptFileRow(
+            projectId = project,
+            relPath = if (isDirectory) "$project/$relPath/" else "$project/$relPath",
+            name = leaf,
+            ext = if (isDirectory) "" else leaf.substringAfterLast('.', ""),
+            isDirectory = isDirectory,
+            childCount = childCount,
+            sizeBytes = if (isDirectory) 0L else 2048L,
+            modifiedMillis = now,
+        )
+    }
+
+    /**
+     * 项目那一层的目录行（`files/scripts/<project>/` 本身也是清单里的一行 ——
+     * 生产侧 `ScriptFilesRead` 只滤掉根，项目目录照进）。
+     */
+    private fun projectRow(project: String, childCount: Int = 2) = ScriptFileRow(
+        projectId = project,
+        relPath = "$project/",
+        name = project,
+        ext = "",
+        isDirectory = true,
+        childCount = childCount,
+        sizeBytes = 0L,
+        modifiedMillis = now,
+    )
+
     @Test
     fun `of 逐行成行且次行是大小加时刻`() {
         val s = ProjectState.of(ScriptFilesSnapshot(listOf(row("main.js", size = 2048L))), nowMillis = now, zone = zone)
@@ -153,5 +194,111 @@ class ProjectStateTest {
         assertEquals("09:00", ScriptFileRowUi.formatTime(today, now, zone))
         assertEquals("09-14", ScriptFileRowUi.formatTime(thisYear, now, zone))
         assertEquals("2025-03-02", ScriptFileRowUi.formatTime(lastYear, now, zone))
+    }
+
+    @Test
+    fun `childrenOf 一层只回一层且目录文件都算`() {
+        val files = listOf(
+            ScriptFileRowUi.of(projectRow("demo"), now, zone),
+            ScriptFileRowUi.of(projectRow("demo2", childCount = 1), now, zone),
+            ScriptFileRowUi.of(rowAt("main.js"), now, zone),
+            ScriptFileRowUi.of(rowAt("lib", isDirectory = true, childCount = 2), now, zone),
+            ScriptFileRowUi.of(rowAt("lib/helper.js"), now, zone),
+            ScriptFileRowUi.of(rowAt("lib/sub", isDirectory = true, childCount = 1), now, zone),
+            ScriptFileRowUi.of(rowAt("other.js", project = "demo2"), now, zone),
+        )
+        // 全库根：列的是**各项目**那一层（demo/ 与 demo2/），不递归到项目里面。
+        val root = ProjectState.childrenOf(files, folder = null)
+        assertEquals(listOf("demo", "demo2"), root.map { it.name })
+
+        // 项目层：main.js 与 lib/ 两个直接子项；lib/helper.js 与 lib/sub/ 是下一层。
+        val project = ProjectState.childrenOf(files, folder = "demo/")
+        assertEquals(listOf("main.js", "lib"), project.map { it.name })
+
+        val lib = ProjectState.childrenOf(files, folder = "demo/lib/")
+        assertEquals(listOf("helper.js", "sub"), lib.map { it.name })
+
+        val sub = ProjectState.childrenOf(files, folder = "demo/lib/sub/")
+        assertTrue(sub.isEmpty())
+    }
+
+    @Test
+    fun `搜索时候选集是整棵树而不是当前一层`() {
+        val files = listOf(
+            ScriptFileRowUi.of(projectRow("demo"), now, zone),
+            ScriptFileRowUi.of(rowAt("main.js"), now, zone),
+            ScriptFileRowUi.of(rowAt("lib", isDirectory = true, childCount = 2), now, zone),
+            ScriptFileRowUi.of(rowAt("lib/helper.js"), now, zone),
+            ScriptFileRowUi.of(rowAt("other.js", project = "demo2"), now, zone),
+        )
+        // 不搜索 = 当前一层的直接子项（"demo/" 那层只有 main.js 与 lib/）。
+        assertEquals(
+            listOf("main.js", "lib"),
+            ProjectState.poolFor(files, folder = "demo/", searching = false).map { it.name },
+        )
+        // 搜索 = 整棵树（否则在 "demo/" 层搜 "helper.js" 会一个都搜不到 —— 它在下一层）。
+        assertEquals(
+            files.map { it.name },
+            ProjectState.poolFor(files, folder = "demo/", searching = true).map { it.name },
+        )
+        // 命中判定：整棵树里 matches 能捞到深层与别的项目。
+        assertEquals(
+            listOf("helper.js"),
+            ProjectState.poolFor(files, folder = "demo/", searching = true)
+                .filter { it.matches("helper") }.map { it.name },
+        )
+        assertEquals(
+            listOf("other.js"),
+            ProjectState.poolFor(files, folder = "demo/", searching = true)
+                .filter { it.matches("other") }.map { it.name },
+        )
+    }
+
+    @Test
+    fun `parentFolder 逐层回退到根收口`() {
+        assertEquals(null, ProjectState.parentFolder(null))
+        // 项目那一层再退 = 全库根。
+        assertEquals(null, ProjectState.parentFolder("demo/"))
+        assertEquals("demo/", ProjectState.parentFolder("demo/lib/"))
+        assertEquals("demo/lib/", ProjectState.parentFolder("demo/lib/sub/"))
+    }
+
+    @Test
+    fun `folderTitle 取目录名根层为空`() {
+        // 全库根不是"某个目录"—— 顶栏保持项目页标题（null），不冒充一个目录名。
+        assertEquals(null, ProjectState.folderTitle(folder = null))
+        assertEquals("demo", ProjectState.folderTitle(folder = "demo/"))
+        assertEquals("lib", ProjectState.folderTitle(folder = "demo/lib/"))
+        assertEquals("sub", ProjectState.folderTitle(folder = "demo/lib/sub/"))
+    }
+
+    @Test
+    fun `多选 逐行开关与全选取消全选`() {
+        val files = listOf(
+            ScriptFileRowUi.of(projectRow("demo"), now, zone),
+            ScriptFileRowUi.of(rowAt("main.js"), now, zone),
+            ScriptFileRowUi.of(rowAt("lib", isDirectory = true, childCount = 2), now, zone),
+            ScriptFileRowUi.of(rowAt("other.js", project = "demo2"), now, zone),
+        )
+        val visible = ProjectState.childrenOf(files, folder = "demo/")
+        val mainKey = ProjectState.keyOf(visible[0])
+
+        // 逐行开关：加进去、再点一次去掉。
+        val one = ProjectState.toggleSelection(emptySet(), mainKey)
+        assertEquals(setOf(mainKey), one)
+        assertTrue(ProjectState.toggleSelection(one, mainKey).isEmpty())
+
+        // 全选 = 当前可见集（不是整棵树：demo2/ 那层不在当前目录里）。
+        val all = ProjectState.toggleSelectAll(emptySet(), visible)
+        assertEquals(visible.map { ProjectState.keyOf(it) }.toSet(), all)
+        assertTrue(ProjectState.allSelected(all, visible))
+        // 再按一次 = 取消全选（同一格开关）。
+        assertTrue(ProjectState.toggleSelectAll(all, visible).isEmpty())
+        // 只选了一半时按 = 补满，不是清空。
+        val half = ProjectState.toggleSelection(emptySet(), mainKey)
+        assertEquals(all, ProjectState.toggleSelectAll(half, visible))
+        // 空可见集：全选不动已选（"全选了 0 行"没有意义，别把已选清掉）。
+        assertEquals(half, ProjectState.toggleSelectAll(half, emptyList()))
+        assertTrue(!ProjectState.allSelected(half, emptyList()))
     }
 }

@@ -69,10 +69,9 @@ import kotlinx.coroutines.launch
  * - 安装体积单列一段（§15 E1「接受并明示」）：超支是既成事实，披露的时机是**装之前**
  *   用户能读到的那一屏，而不是装完才发现。
  *
- * 交互：整行可点（有引导可跳的行去系统页），下拉刷新（与顶栏那颗同一个动作）+
- * 「回到顶部」（权限有十几项，滚到下面想回第一项时，手指要在系统手势区边缘往上
- * 蹭好几下）。**不做长按菜单** —— 这一屏每行的动作只有一个（去授权），摆成菜单
- * 反而是把唯一的动作藏起来。
+ * 交互：整行可点（有引导可跳的行去系统页）+ 「回到顶部」（权限有十几项，滚到下面
+ * 想回第一项时，手指要在系统手势区边缘往上蹭好几下）。**不做长按菜单** —— 这一屏
+ * 每行的动作只有一个（去授权），摆成菜单反而是把唯一的动作藏起来。
  */
 @Composable
 fun SettingsScreen(
@@ -97,7 +96,7 @@ fun SettingsScreen(
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         Box(Modifier.weight(1f)) {
-            RefreshableBox(refresh, Modifier.fillMaxSize()) {
+            RefreshableBox(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
                     // TG 设置页的节奏：卡片离顶栏一小段灰、离底部一小段灰。
