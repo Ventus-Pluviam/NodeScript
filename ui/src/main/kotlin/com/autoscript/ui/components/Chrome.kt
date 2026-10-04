@@ -74,6 +74,12 @@ fun ActionBar(
     subtitle: String? = null,
     subtitleTone: StatusTone = StatusTone.MUTED,
     onBack: (() -> Unit)? = null,
+    /**
+     * 左侧那颗按钮的字形。缺省 `‹` = "退回上一层"；选择模式（action mode）传 `✕`
+     * —— TG 的选择模式那颗是**关闭**不是返回（按它退的是模式，不是页面），
+     * 同一个位置画同一个箭头会让两种语义读成一件事。
+     */
+    backGlyph: String = "‹",
     actions: (@Composable () -> Unit)? = null,
     /**
      * 标题样式覆盖（合并到 `titleLarge` 之上）。缺省 null = 全仓统一的 17sp Medium；
@@ -118,7 +124,7 @@ fun ActionBar(
                         .pressable(role = Role.Button, onClick = it),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("‹", color = palette.accent, style = MaterialTheme.typography.titleLarge)
+                    Text(backGlyph, color = palette.accent, style = MaterialTheme.typography.titleLarge)
                 }
                 Spacer(Modifier.width(4.dp))
             }

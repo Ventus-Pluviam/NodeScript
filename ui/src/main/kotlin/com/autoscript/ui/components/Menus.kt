@@ -4,12 +4,21 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
@@ -21,9 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.state.StatusTone
+import com.autoscript.ui.theme.ThemeColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -62,6 +73,62 @@ fun ContextMenu(
                 )
             }
         }
+    }
+}
+
+/**
+ * TG 式底部操作面板：用于一条内容的上下文操作，不把一串按钮硬塞进列表行。
+ *
+ * 顶栏或锚点附近的短菜单继续使用 [ContextMenu]；文件详情和多步操作提升成底部
+ * 面板，触控目标更大、上下文也更清楚。组件只负责壳，调用方仍决定动作和副作用。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ActionBottomSheet(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp),
+        ) {
+            Text(
+                text = title,
+                color = ThemeColors.text,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            content()
+        }
+    }
+}
+
+/** 底部面板的一条大触控目标，沿用 TG 的整行按压反馈。 */
+@Composable
+fun ActionBottomSheetItem(
+    label: String,
+    tone: StatusTone = StatusTone.LINK,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pressable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+    ) {
+        ToneText(
+            text = label,
+            tone = if (enabled) tone else StatusTone.MUTED,
+            style = MaterialTheme.typography.bodyLarge,
+        )
     }
 }
 
