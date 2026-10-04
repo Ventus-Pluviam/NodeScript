@@ -3,6 +3,9 @@ package com.autoscript.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -26,6 +29,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -42,10 +47,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -58,6 +65,10 @@ import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.ContextMenu
+import com.autoscript.ui.components.EaseOutQuint
+import com.autoscript.ui.components.OvershootEasing
+import com.autoscript.ui.components.rememberPressIndication
+import com.autoscript.ui.theme.isDarkTheme
 import com.autoscript.ui.components.CopyNotice
 import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.MenuGap
@@ -71,7 +82,6 @@ import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.pressableLongPress
 import com.autoscript.ui.components.rememberCopyAction
 import com.autoscript.ui.components.rememberLongPressFeedback
-import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.FileSort
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.ProjectState
@@ -85,7 +95,7 @@ import kotlinx.coroutines.launch
  *
  * - **顶栏**：品牌标题「NodeScript」—— 20sp 粗体 + TG 主页那格蓝（`createTitleTextView`
  *   的 bold 20dp + `key_telegram_color_dialogsLogo` = #168BDB 的口径；全仓唯一一个
- *   覆盖 [ActionBar] 缺省标题样式的屏），右上角 `⋮`（本屏菜单，缺省只有"刷新"）；
+ *   覆盖 [ActionBar] 缺省标题样式的屏），右上角 `⋮`（本屏菜单，缺省只有"日间/夜间模式"）；
  * - **搜索栏**：灰底圆框（`FragmentSearchField`：圆角 20dp、左右图标 12dp 内缩、
  *   提示词半透明）+ 放大镜 + 「搜索文件」提示词（TG 的 hint 位）；
  * - **文件列表 = 会话列表**：一行 = 52dp 圆形头像（TG `DialogCell` 的 avatar 52dp）
@@ -101,9 +111,16 @@ import kotlinx.coroutines.launch
 @Composable
 fun ProjectScreen(
     state: ProjectState,
-    onRefresh: suspend () -> Unit,
     /** 主题两态切换（⋮ 第一格，TG 日/夜同款 —— 目标模式写菜单项上）。 */
     onSwitchTheme: () -> Unit,
+    /**
+     * 那一格的**文案** = 点它切到的那一档（TG `DialogsActivity` 的日夜项：
+     * 当前深色写 "Day Mode"、当前浅色写 "Night Mode"）。
+     *
+     * 由外壳下发而不是本屏自己算：本屏拿不到 `ThemeMode`（那是 `:ui` 外壳的状态），
+     * 而"当下是明是暗"这个事实在 `MainActivity` 里已经有了（`themeMode.isDark()`）。
+     */
+    themeSwitchLabel: String,
     /** 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。 */
     onCreate: (projectId: String, name: String, isFolder: Boolean) -> Unit,
     /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */
@@ -125,7 +142,6 @@ fun ProjectScreen(
         ),
     ) { mutableStateOf(emptySet<String>()) }
     var sheetTarget by remember { mutableStateOf<ScriptFileRowUi?>(null) }
-    val refresh = rememberRefreshAction(onRefresh)
     val copy = rememberCopyAction()
     val longPressFeedback = rememberLongPressFeedback()
     val listState = rememberLazyListState()
@@ -189,15 +205,15 @@ fun ProjectScreen(
 
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         if (selectionMode) {
-            // 选择模式顶栏（TG 的 action mode）：✕ 退出 / 已选计数 / 全选那一格是**同一个
-            // 开关** —— 选满了它自己变成"取消全选"。
+            // 选择模式顶栏（TG 的 action mode）：✕ 退出 / 已选计数 / 那一格是**同一个
+            // 开关** —— 选满了它自己变成"取消全选"（TG `SelectAll` / `DeselectAll`）。
             ActionBar(
                 title = "已选 ${selected.size} 项",
                 onBack = { selected = emptySet() },
                 backGlyph = "✕",
                 actions = {
                     ActionBarAction(
-                        text = if (allSelected) "取消全选" else "全选",
+                        text = if (allSelected) "取消全选" else "选择全部",
                         onClick = { selected = ProjectState.toggleSelectAll(selected, visible) },
                     )
                 },
@@ -224,8 +240,8 @@ fun ProjectScreen(
                     ProjectMenu(
                         currentSort = state.sort,
                         reversed = state.reversed,
-                        onRefresh = refresh::trigger,
                         onSwitchTheme = onSwitchTheme,
+                        themeSwitchLabel = themeSwitchLabel,
                         onSelectAll = { selected = ProjectState.toggleSelectAll(selected, visible) },
                         onSort = { sort, reversed -> onSortChange(sort, reversed) },
                     )
@@ -356,7 +372,7 @@ private val NodeScriptBrandColor = Color(0xFF168BDB)
 private fun ProjectMenu(
     currentSort: FileSort,
     reversed: Boolean,
-    onRefresh: () -> Unit,
+    themeSwitchLabel: String,
     onSwitchTheme: () -> Unit,
     onSelectAll: () -> Unit,
     onSort: (FileSort, Boolean) -> Unit,
@@ -377,11 +393,11 @@ private fun ProjectMenu(
             expanded = open,
             onDismiss = { open = false },
             actions = buildList {
-                add(MenuAction(label = "刷新", onClick = onRefresh))
-                // —— 8dp 间隙（TG addGap：分组的"小小的间距"）——
+                // 标签 = **点它切到的那一档**（TG `DialogsActivity` 的日夜项：
+                // 当前是深色就写 "Day Mode"，当前是浅色就写 "Night Mode"）。
+                add(MenuAction(label = themeSwitchLabel, onClick = onSwitchTheme))
                 add(MenuGap)
-                add(MenuAction(label = "日间/夜间模式", onClick = onSwitchTheme))
-                add(MenuAction(label = "全选", onClick = onSelectAll))
+                add(MenuAction(label = "选择全部", onClick = onSelectAll))
                 add(
                     MenuAction(label = "排序方式", onClick = {
                         open = false
@@ -455,7 +471,8 @@ private fun SearchField(
                 onValueChange = onChange,
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.text),
-                cursorBrush = SolidColor(palette.accent),
+                // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色**不是一个键**。
+                cursorBrush = SolidColor(palette.cursor),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -487,7 +504,13 @@ private fun FileRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .background(if (selected) palette.accent.copy(alpha = 0.10f) else Color.Transparent)
+            // 遮罩**通栏**（`DialogCell` 的 `rect.set(0, 0, getMeasuredWidth(), …)`），
+            // 只有圆角是内缩的观感 —— 不加左右外边距。
+            .clip(RoundedCornerShape(FileRowSelectedRadius))
+            // 选中遮罩是**中性黑/白 6%**（`chats_tabletSelectedOverlay`，
+            // [ThemeColors.rowSelectedOverlay]），不是强调色淡底 —— TG 的 `DialogCell`
+            // 用 `dialogs_tabletSeletedPaint` 铺一层灰，蓝色只留给未读计数那些真·强调位。
+            .background(if (selected) palette.rowSelectedOverlay else Color.Transparent)
             .pressableLongPress(role = Role.Button, onLongClick = onLongClick, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -519,25 +542,40 @@ private fun FileRow(
     }
 }
 
+/** 选中遮罩的圆角（`DialogCell` 的 `cornersRadius = dp(8) * cornerProgress`）。 */
+private val FileRowSelectedRadius = 8.dp
+
 /**
- * 选中标记（占头像那一格，52dp 见方）：强调色实心圆 + 白勾。
+ * 选中标记（占头像那一格，52dp 见方）：实心圆 + 白勾。
+ *
+ * **配色抄 TG 的 `CheckBox2`**（`DialogCell` 的 `new CheckBox2(context, 21)` +
+ * `setColor(-1, key_windowBackgroundWhite, key_checkboxCheck)` + `setDrawUnchecked(false)`）：
+ * 环不画、底不画，**选中就是一颗实心绿圆 + 白勾** —— 填充是 `key_checkbox`
+ * （[ThemeColors.checkboxFill] = `0xFF5EC245`，两套 attheme 都不覆盖），
+ * 勾是 `key_checkboxCheck`（白）。
+ *
+ * **诚实边界**：TG 的勾选框是 **21dp**（`CheckBox2(context, 21)`）的小方块位，
+ * 挂在头像**左下角**（`chekBoxPaddingTop = 42`）；本仓把整格头像换成勾（52dp 圆），
+ * 是**本仓的取舍**（勾与头像同格同位，勾选时行内其余内容一格都不动），
+ * 尺寸与位置都不是 TG 的值 —— 只有配色与"实心圆 + 白勾"这个形态是抄的。
  *
  * 与头像**同格同位**（不是挤在行尾）：这样勾选时行内其余内容一格都不动 ——
  * 位移会让"我勾的是哪一行"变得需要重新确认。
  */
 @Composable
 private fun SelectionTick() {
+    val palette = ThemeColors
     Box(
         Modifier
             .size(52.dp)
-            .background(ThemeColors.accent, CircleShape),
+            .background(palette.checkboxFill, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = "✓",
-            color = Color.White,
+            color = palette.checkboxCheck,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.Medium,
         )
     }
 }
@@ -637,8 +675,15 @@ private fun FeedbackLine(text: String, tone: StatusTone) {
 /**
  * 右下角悬浮创建按钮（TG `FragmentFloatingButton` 的逐字版式）：
  * 48dp 圆（`SIZE = 48`）、右下边距 20/14dp（`createDefaultLayoutParams` 的 left/right 20、
- * bottom 14）、TG FAB 蓝（`key_featuredStickers_addButton` = `#229AF0` 的 TELEGRAM_COLOR）、
- * 白铅笔、按下缩放（`ScaleStateListAnimator` ≈ 0.92 缩回）。
+ * bottom 14）、底 `featuredStickers_addButton`（[ThemeColors.featuredButton]，
+ * 浅色 `#FF4DA0EB` / 深色 `#FF229AF0` —— 原先写死的 `#229AF0` 只有深色那半对）、
+ * 图标 `chats_actionIcon`（[ThemeColors.featuredButtonText]，白）。
+ *
+ * **按下反馈**（`ScaleStateListAnimator.apply(this)` = `apply(view, .1f, 1.5f)`）：
+ * 按下 → 缩到 **0.9**、**80ms 线性**；松开 → 回 1、**350ms**
+ * `OvershootInterpolator(1.5)`（过冲到约 1.05 再收）。底色的按下档
+ * （`featuredStickers_addButtonPressed`）在 TG 的 `createSimpleSelectorCircleDrawable`
+ * 里是**水波**的目标色，本仓没有水波，故只用缩放这一路。
  *
  * 点击展开两个子项（新建文件/新建文件夹）：TG 的子按钮是另一颗 48dp 圆浮在主按钮上方
  * （`createSubButtonLayoutParams` 同位、blur3 背板），这里用同一语法的动画展开 ——
@@ -654,27 +699,45 @@ private fun CreateFab(
     var expanded by remember { mutableStateOf(false) }
     val rotation by animateFloatAsState(
         targetValue = if (expanded) 45f else 0f,
-        animationSpec = tween(durationMillis = 200),
+        // TG 的主钮在"展开/收起"之间是**换 lottie 动画**（`setAnimation`），
+        // 不是旋转图标；本仓没有 lottie，用 45° 旋转表达同一件事，
+        // 时长与曲线取 TG 那颗钮自己的 `EASE_OUT_QUINT` 380ms。
+        animationSpec = tween(durationMillis = FabAnimDurationMillis, easing = EaseOutQuint),
         label = "fabRotate",
     )
+    // 按下缩放：`ScaleStateListAnimator.apply(this)` —— 按下 80ms 线性缩到 0.9，
+    // 松开 350ms `OvershootInterpolator(1.5)` 弹回（过冲约 1.05 再收）。
+    // 这条状态要自己订阅（`pressable` 内部自建 source，外面读不到按下与否）。
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val fabScale by animateFloatAsState(
+        targetValue = if (pressed) FabPressedScale else 1f,
+        animationSpec = if (pressed) {
+            tween(durationMillis = FabPressDurationMillis)
+        } else {
+            tween(durationMillis = FabReleaseDurationMillis, easing = OvershootEasing(FabReleaseTension))
+        },
+        label = "fabScale",
+    )
+    val subOffsetPx = with(LocalDensity.current) { FabSubRise.roundToPx() }
+    val subEnter = fadeIn(tween(FabAnimDurationMillis, easing = EaseOutQuint)) +
+        // `setAnimatedVisibility`：alpha = f、scale = lerp(0.4, 1, f)；
+        // `setAdditionalTranslationY(dp(64) * (1 - f))` 是子钮"从主钮里长出来"那一段。
+        scaleIn(initialScale = FabSubInitialScale, animationSpec = tween(FabAnimDurationMillis, easing = EaseOutQuint)) +
+        slideInVertically(tween(FabAnimDurationMillis, easing = EaseOutQuint)) { subOffsetPx }
+    val subExit = fadeOut(tween(FabAnimDurationMillis, easing = EaseOutQuint)) +
+        scaleOut(targetScale = FabSubInitialScale, animationSpec = tween(FabAnimDurationMillis, easing = EaseOutQuint)) +
+        slideOutVertically(tween(FabAnimDurationMillis, easing = EaseOutQuint)) { subOffsetPx }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         // 子项自下而上展开（TG：子按钮浮在主按钮上方，逐颗滑出）。
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn() + scaleIn(initialScale = 0.6f),
-            exit = fadeOut() + scaleOut(targetScale = 0.6f),
-        ) {
+        AnimatedVisibility(visible = expanded, enter = subEnter, exit = subExit) {
             FabSubItem(label = "新建文件夹", glyph = GlyphKind.FOLDER, onClick = {
                 expanded = false
                 onCreateFolder()
             })
         }
         Spacer(Modifier.height(8.dp))
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn() + scaleIn(initialScale = 0.6f),
-            exit = fadeOut() + scaleOut(targetScale = 0.6f),
-        ) {
+        AnimatedVisibility(visible = expanded, enter = subEnter, exit = subExit) {
             FabSubItem(label = "新建文件", glyph = GlyphKind.FILE_DOC, onClick = {
                 expanded = false
                 onCreateFile()
@@ -683,15 +746,25 @@ private fun CreateFab(
         Spacer(Modifier.height(12.dp))
         Box(
             Modifier
-                .size(48.dp)
-                .graphicsLayer { shape = CircleShape }
-                .background(FabBlue, CircleShape)
-                .pressable(role = Role.Button, onClick = { expanded = !expanded }),
+                .size(FabSize)
+                .graphicsLayer {
+                    // `ScaleStateListAnimator.apply(this)`：按下 0.9、松开过冲回 1。
+                    shape = CircleShape
+                    scaleX = fabScale
+                    scaleY = fabScale
+                }
+                .background(ThemeColors.featuredButton, CircleShape)
+                .clickable(
+                    interactionSource = source,
+                    indication = rememberPressIndication(),
+                    role = Role.Button,
+                    onClick = { expanded = !expanded },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Glyph(
                 kind = GlyphKind.PENCIL,
-                tint = Color.White,
+                tint = ThemeColors.featuredButtonText,
                 size = 24.dp,
                 modifier = Modifier.rotate(rotation),
             )
@@ -699,14 +772,44 @@ private fun CreateFab(
     }
 }
 
-/** TG FAB 蓝（`TELEGRAM_COLOR = 0xFF229AF0`；`key_featuredStickers_addButton` 的缺省）。 */
-private val FabBlue = Color(0xFF229AF0)
+/** FAB 直径（`FragmentFloatingButton.SIZE = 48`）。 */
+private val FabSize = 48.dp
+
+/** 按下缩放到的档（`ScaleStateListAnimator.apply(this)` = `apply(view, .1f, 1.5f)` → 1 − 0.1）。 */
+private const val FabPressedScale = 0.9f
+
+/** 按下那一段的时长（`pressedAnimator.setDuration(80)`，**无插值器** = 线性）。 */
+private const val FabPressDurationMillis = 80
+
+/** 松开回弹的时长（`defaultAnimator.setDuration(350)`）。 */
+private const val FabReleaseDurationMillis = 350
+
+/** 回弹的张力（`new OvershootInterpolator(tension)`，`apply(view)` 缺省 1.5）。 */
+private const val FabReleaseTension = 1.5f
+
+/** 子钮显隐时长（`BoolAnimator(…, EASE_OUT_QUINT, 380)`）。 */
+private const val FabAnimDurationMillis = 380
+
+/** 子钮入场缩放的起点（`setAnimatedVisibility`：`lerp(0.4f, 1f, f)`）。 */
+private const val FabSubInitialScale = 0.4f
+
+/** 子钮入场的纵向位移（`setAdditionalTranslationY(dp(isSubButton ? 64 : 40) * (1 - f))`）。 */
+private val FabSubRise = 64.dp
 
 /**
- * FAB 展开的子项：与主钮同规格的 48dp 圆徽章（`createSubButtonLayoutParams` 的 48×48），
- * **灰底**（批 25 口径；TG 子按钮底是 `key_dialogBackground` 的模糊背板，语义位对上
- * 本仓搜索栏同一块灰 [com.autoscript.ui.theme.Colors.fieldBackground]）+ 0.4dp 细描边
- * （TG 子按钮同款一道边），图标 = 常规图标色字形（`key_actionBarDefaultIcon` 的语义位）。
+ * FAB 展开的子项：与主钮同规格的 48dp 圆徽章（`createSubButtonLayoutParams` 的 48×48）。
+ *
+ * 背板 = TG 的 `iBlur3Background`（`BlurredBackgroundDrawable`）：
+ * - **圆角 18dp**（`setRadius(dp(18))`）—— 在 48dp 的圆徽章上即"接近圆"的方角，
+ *   不是正圆；
+ * - **描边 0.4dp**（`setStrokeWidth(dpf2(0.4f), dpf2(0.4f))`），色随深浅：
+ *   上边浅色 `0x20000000` / 深色 `0x11FFFFFF`（[FabSubStrokeTop]）；
+ * - 底是**模糊背板**（把身后的内容模糊后上浮），本仓没有实时模糊，
+ *   取 `key_windowBackgroundWhite` 的实色近似 —— 浅色下就是白，深色下是 `#181819`
+ *   （[ThemeColors.surfaceMuted] 的浅色档不适用，故直接用 [ThemeColors.background]）。
+ * - 图标 = `key_actionBarDefaultIcon`（[ThemeColors.barIcon]：浅色偏冷深灰 `#FF404E56`，
+ *   **不是**正文黑）；按下底 = `key_listSelector`（[ThemeColors.menuSelector] 同档）。
+ *
  * TG 子按钮同样只有图标没有字 —— 文案进 contentDescription 给读屏。
  */
 @Composable
@@ -714,16 +817,31 @@ private fun FabSubItem(label: String, glyph: GlyphKind, onClick: () -> Unit) {
     val palette = ThemeColors
     Box(
         Modifier
-            .size(48.dp)
-            .background(palette.fieldBackground, CircleShape)
-            .border(0.4.dp, palette.divider, CircleShape)
-            .pressable(role = Role.Button, onClick = onClick)
+            .size(FabSize)
+            .background(palette.background, RoundedCornerShape(FabSubCornerRadius))
+            .border(0.4.dp, FabSubStrokeTop(), RoundedCornerShape(FabSubCornerRadius))
+            .pressable(
+                role = Role.Button,
+                overlay = palette.menuSelector,
+                onClick = onClick,
+            )
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Glyph(kind = glyph, tint = palette.text, size = 24.dp)
+        Glyph(kind = glyph, tint = palette.barIcon, size = 24.dp)
     }
 }
+
+/** 子钮背板圆角（`iBlur3Background.setRadius(dp(18))`）。 */
+private val FabSubCornerRadius = 18.dp
+
+/**
+ * 子钮那圈 0.4dp 描边（`BlurredBackgroundDrawable.getStrokeColorTop()`：
+ * 浅色 `0x20000000`、深色 `0x11FFFFFF`）。
+ */
+@Composable
+private fun FabSubStrokeTop(): Color =
+    if (isDarkTheme()) Color(0x11FFFFFF) else Color(0x20000000)
 
 /**
  * 新建文件/文件夹对话框（TG 的 Alert 命名框分寸：标题点破建什么、输入框占位"名称"）。

@@ -123,10 +123,17 @@ fun ActionBar(
                 Box(
                     Modifier
                         .size(44.dp)
-                        .pressable(role = Role.Button, onClick = it),
+                        .pressable(
+                            role = Role.Button,
+                            // 顶栏按钮的按下档（`actionBarDefaultSelector`）。
+                            overlay = palette.pressedOverlay,
+                            onClick = it,
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(backGlyph, color = palette.accent, style = MaterialTheme.typography.titleLarge)
+                    // 顶栏图标色是 `actionBarDefaultIcon`（[ThemeColors.barIcon]：浅色偏冷深灰），
+                    // 不是强调蓝 —— 返回箭头在 TG 里与标题同档，不是"链接"。
+                    Text(backGlyph, color = palette.barIcon, style = MaterialTheme.typography.titleLarge)
                 }
                 Spacer(Modifier.width(4.dp))
             }
@@ -184,7 +191,14 @@ fun ActionBarAction(
 ) {
     Box(
         modifier = modifier
-            .pressable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .pressable(
+                enabled = enabled,
+                role = Role.Button,
+                // 顶栏按钮的按下档是 `actionBarDefaultSelector`（[ThemeColors.pressedOverlay]）
+                // —— 与列表行同一档，菜单/面板那两处才是别的键。
+                overlay = ThemeColors.pressedOverlay,
+                onClick = onClick,
+            )
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         ToneText(

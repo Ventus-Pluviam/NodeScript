@@ -12,7 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * 一次刷新的**唯一入口**：四屏顶栏那颗「刷新」都走它（项目页那颗收在 ⋮ 菜单里）。
+ * 一次刷新的**唯一入口**：顶栏那颗「刷新」都走它（任务/管理/设置三屏）。
  *
  * 为什么要有这么一层：四个屏各自"点刷新 → 起协程 → 拉数据"写过一遍之后，出现了两件
  * 各自为政的事 —— 转圈时长跟数据到没到没关系、连点两下会投两份并发读。收在这里之后：
@@ -69,7 +69,10 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  * 列表（`RecyclerListView`）只有滚动，刷新一律是显式动作 —— `ActionBar` 上那颗，
  * 或者 `DialogsActivity` 菜单里的那一项；`ChatAttachAlertDocumentLayout` 的文件列表
  * 连刷新项都没有（它读的是本地目录，进目录即重读）。本仓照此：**刷新入口 = 顶栏
- * 那颗「刷新」**（项目页在 ⋮ 菜单里），列表上没有第二条路径。
+ * 那颗「刷新」**，列表上没有第二条路径。
+ *
+ * 项目页**没有**刷新入口（2026-10-04 批 37）：它读的也是本地目录，与 TG 文件页同款
+ * —— 进目录即重读，切回该页签也会重取（`TabReloadEffect`），不需要一颗手动刷新。
  *
  * 壳为什么还留着（而不是把四屏的 `RefreshableBox { … }` 拆成裸 `Box { … }`）：
  * 四屏的 content lambda 收的是 `BoxScope`，且"填满"由调用方传的 modifier 决定 ——

@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +62,44 @@ fun StatusTone.color(): Color {
         StatusTone.NEUTRAL -> palette.text
         StatusTone.MUTED -> palette.textTertiary
     }
+}
+
+/**
+ * **菜单/面板**里的状态色（与 [color] 分开的一档）。
+ *
+ * TG 的菜单项不是"列表里那种红"：列表用 `chats_sentError`，菜单里的删除项用
+ * `text_RedRegular`（`ItemOptions.add(… isRed)` 那条路径，浅 `#FFCC2929` /
+ * 深 `#FFEE686F`）。两者深浅两套都差一档，合成一个红就是抄错。
+ *
+ * 另一处不同：TG 的菜单项**默认不是蓝的**（`key_actionBarDefaultSubmenuItem` = 正文色），
+ * 所以 [StatusTone.LINK] 在这一档里落到正文色 —— 蓝色只属于"可点的链接"，
+ * 菜单里每一项都可点，全蓝等于没强调。
+ */
+@Composable
+fun StatusTone.menuColor(): Color {
+    val palette = ThemeColors
+    return when (this) {
+        StatusTone.PROBLEM -> palette.dangerText
+        StatusTone.LINK, StatusTone.NEUTRAL -> palette.text
+        StatusTone.OK -> palette.success
+        StatusTone.ATTENTION -> palette.warning
+        StatusTone.MUTED -> palette.textTertiary
+    }
+}
+
+/**
+ * 菜单项按下时的整块底色（TG `ActionBarMenuSubItem` 的 `selectorColor`）。
+ *
+ * 带后果的项（红字）在 TG 里连选择器都是红的：`DialogsActivity` 的删除项
+ * `setSelectorColor(multAlpha(getThemedColor(key_text_RedBold), .12f))` ——
+ * 按压反馈跟着文字色走，不是恒定的中性灰。
+ */
+@Composable
+fun StatusTone.menuSelectorColor(): Color {
+    val palette = ThemeColors
+    // `Theme.multAlpha(color, .12f)` = 保留原 alpha 再乘 0.12（不是直接设 0.12）。
+    return if (this == StatusTone.PROBLEM) palette.dangerText.copy(alpha = palette.dangerText.alpha * 0.12f)
+    else palette.menuSelector
 }
 
 /**
@@ -177,21 +217,34 @@ fun CountBadge(text: String?, modifier: Modifier = Modifier) {
     }
     Box(
         modifier = modifier
+            // 最小宽度 12dp（`countWidth = max(dp(12), ceil(measureText))`）：
+            // 一位数的计数在 TG 里是一颗**比字宽**的胶囊，不是贴着字的圆。
+            .widthIn(min = CountBadgeMinWidth)
             .graphicsLayer {
                 scaleX = pop.value
                 scaleY = pop.value
             }
-            .background(palette.badge, RoundedCornerShape(10.dp))
-            .padding(horizontal = 6.dp, vertical = 1.dp),
+            .background(palette.badge, RoundedCornerShape(CountBadgeRadius))
+            // 水平内边距 = radius − 0.5dp（`rectF` 的右边界比 `countWidth` 多出
+            // `dp(radius - 0.5f)`，左右对称后就是这半个 dp）。
+            .padding(horizontal = CountBadgeRadius - 0.5.dp, vertical = 1.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = text,
             color = palette.onBadge,
-            style = MaterialTheme.typography.labelSmall,
+            // 13dp **加粗**（`CounterView` 的 `textPaint.setTypeface(AndroidUtilities.bold())`
+            // + `setTextSize(dp(13))`）—— TG 的 `bold()` = Medium(500)，不是 Bold(700)。
+            style = MaterialTheme.typography.labelMedium,
         )
     }
 }
+
+/** 计数胶囊圆角（`CounterView.CounterDrawable.radius = 11.5f`）。 */
+private val CountBadgeRadius = 11.5.dp
+
+/** 计数胶囊最小宽度（`countWidth = Math.max(dp(12), …)`）。 */
+private val CountBadgeMinWidth = 12.dp
 
 /**
  * 一行「文字 + 尾部动作」的列表行骨架（TG `RowCell` 那种两栏结构）。
@@ -228,9 +281,21 @@ fun Cell(
 }
 
 /**
- * 一个"胶囊"选择按钮（分段控件 / 筛选条那种小圆角块）。
+ * 一个"胶囊"选择按钮（TG 的 chip：`EnableTopicsActivity.TopicsLayoutSwitcher` 那两颗）。
  *
- * @property selected 选中态；选中用强调色描边+淡底，TG 的筛选按钮就是这个分寸。
+ * **几何与配色逐项抄 TG**：
+ * - 圆角 **13dp**（`Theme.createRoundRectDrawable(dp(13), …)`）、高 **26dp**
+ *   （`createFrame(WRAP_CONTENT, 26, CENTER)`）、水平内边距 **12dp**；
+ * - 选中：底 `featuredStickers_addButton`（[ThemeColors.featuredButton]）、
+ *   字 `windowBackgroundCheckText`（[ThemeColors.featuredButtonText] = 白）；
+ *   未选中：**没有底**，字 `windowBackgroundWhiteGrayText2`（[ThemeColors.chipText]）；
+ * - 字 14dp **Medium**（`makeTextView(…, 14, key, bold = true)`，`bold` 在本仓 = Medium）。
+ *
+ * **选中态是"两片各自缩放淡入淡出"**（TG 是两个 FrameLayout 各自
+ * `scaleX/scaleY 0↔1` + alpha，`EASE_OUT_QUINT` 320ms），不是同一片变色 ——
+ * 本仓只有一层，故把它读成"底与字各自渐变"，曲线与时长照抄 320ms / EASE_OUT_QUINT。
+ *
+ * @property selected 选中态（见上：底色 + 白字）。
  */
 @Composable
 fun PillButton(
@@ -244,28 +309,42 @@ fun PillButton(
     // 选中态**渐变**而不是硬切：分段控件（如页签式的排期选择）连点几下时，
     // 底色/字色一帧一跳很像"没点上"，渐变过去才读得出"选中跑到这一格了"。
     val bg by animateColorAsState(
-        targetValue = if (selected) palette.accent.copy(alpha = 0.14f) else Color.Transparent,
-        animationSpec = tween(durationMillis = 160),
+        targetValue = if (selected) palette.featuredButton else Color.Transparent,
+        animationSpec = tween(durationMillis = ChipSwitchDurationMillis, easing = EaseOutQuint),
         label = "pillBg",
     )
     val fg by animateColorAsState(
         targetValue = when {
             !enabled -> palette.textTertiary
-            selected -> palette.accent
-            else -> palette.textSecondary
+            selected -> palette.featuredButtonText
+            else -> palette.chipText
         },
-        animationSpec = tween(durationMillis = 160),
+        animationSpec = tween(durationMillis = ChipSwitchDurationMillis, easing = EaseOutQuint),
         label = "pillFg",
     )
     Box(
         modifier = modifier
-            .background(bg, RoundedCornerShape(16.dp))
+            .height(ChipHeight)
+            .background(bg, RoundedCornerShape(ChipCornerRadius))
             .pressable(enabled = enabled, role = Role.RadioButton, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = ChipHorizontalPadding)
+            .wrapContentHeight(Alignment.CenterVertically),
     ) {
-        Text(text, color = fg, style = MaterialTheme.typography.labelMedium)
+        Text(text, color = fg, style = MaterialTheme.typography.labelLarge)
     }
 }
+
+/** chip 圆角（`createRoundRectDrawable(dp(13), …)`）。 */
+private val ChipCornerRadius = 13.dp
+
+/** chip 高（`createFrame(WRAP_CONTENT, 26, Gravity.CENTER)`）。 */
+private val ChipHeight = 26.dp
+
+/** chip 水平内边距（`setPadding(dp(12), 0, dp(12), 0)`）。 */
+private val ChipHorizontalPadding = 12.dp
+
+/** chip 选中态切换时长（TG 那两条 `setDuration(320)`）。 */
+private const val ChipSwitchDurationMillis = 320
 
 /**
  * 两栏对齐的键值行（「壳状态    已就绪」）。
@@ -302,11 +381,21 @@ fun LabeledRow(
 }
 
 /**
- * 「回到顶部」浮动按钮（TG 会话列表滚下去之后那枚圆钮）。
+ * 「回到顶部」浮动按钮。
  *
- * 出现/消失是淡入 + 轻微上浮，不是硬切：它盖在列表上，硬切会让人以为列表闪了一下。
- * 用 [AnimatedVisibility] 而不是自己算透明度，是为了让**离场也有动画**（手写 alpha
- * 时按钮一旦 `visible=false` 就被移除，没有机会播完离场）。
+ * **诚实边界**：TG 的会话列表里**没有**这颗按钮（它靠长按拖拽/点状态栏回顶），
+ * 所以这里没有"逐字抄"的对象。本仓取的是 TG 里**最近的那颗悬浮圆钮**的规格 ——
+ * `ChatActivityBlurredRoundButton`（聊天页那颗浮在内容上的圆形按钮）：
+ *
+ * - **44dp 圆**（`BUTTON_SIZE = 44`，半径 `dp(BUTTON_SIZE / 2f)`）；
+ * - 图标色 `glass_defaultIcon`（[ThemeColors.roundButtonIcon]，**半透明**：
+ *   浅色 60% 黑、深色 63% 白 —— 不是强调色）；
+ * - 底 `chat_messagePanelBackground`（[ThemeColors.roundButtonBackground]）+
+ *   按下 `multAlpha(icon, .15f)`、圆角 inset 6dp；
+ * - 状态切换走 `EASE_OUT_QUINT` **320ms**。
+ *
+ * 出现/消失仍是淡入 + 轻微上浮：TG 那颗的显隐也是淡入淡出（`animatorIsEnabled`
+ * 那条 BoolAnimator），不是硬切。
  *
  * @param visible 由调用方按滚动位置判定（`firstVisibleItemIndex > 0`）。
  */
@@ -319,20 +408,32 @@ fun ScrollToTopButton(
     val palette = ThemeColors
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn() + slideInVertically { it / 2 },
-        exit = fadeOut() + slideOutVertically { it / 2 },
+        enter = fadeIn(tween(ScrollToTopDurationMillis, easing = EaseOutQuint)) +
+            slideInVertically(tween(ScrollToTopDurationMillis, easing = EaseOutQuint)) { it / 2 },
+        exit = fadeOut(tween(ScrollToTopDurationMillis, easing = EaseOutQuint)) +
+            slideOutVertically(tween(ScrollToTopDurationMillis, easing = EaseOutQuint)) { it / 2 },
         modifier = modifier,
     ) {
         Box(
             Modifier
-                .size(40.dp)
-                .background(palette.surface, CircleShape)
-                .border(1.dp, palette.divider, CircleShape)
-                .pressable(role = Role.Button, onClick = onClick),
+                .size(ScrollToTopSize)
+                .background(palette.roundButtonBackground, CircleShape)
+                .pressable(
+                    role = Role.Button,
+                    // `multAlpha(color, .15f)`：图标色压到 15% 当按下底。
+                    overlay = palette.roundButtonIcon.copy(alpha = palette.roundButtonIcon.alpha * 0.15f),
+                    onClick = onClick,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             // 字形当图标（同顶栏的返回箭头）：不引图标依赖，不为一个箭头多拉一个包。
-            Text("↑", color = palette.accent, style = MaterialTheme.typography.titleLarge)
+            Text("↑", color = palette.roundButtonIcon, style = MaterialTheme.typography.titleLarge)
         }
     }
 }
+
+/** 回顶钮直径（`ChatActivityBlurredRoundButton.BUTTON_SIZE = 44`）。 */
+private val ScrollToTopSize = 44.dp
+
+/** 回顶钮的显隐时长（`BoolAnimator(…, EASE_OUT_QUINT, 320)`）。 */
+private const val ScrollToTopDurationMillis = 320

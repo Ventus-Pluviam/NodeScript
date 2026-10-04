@@ -273,7 +273,7 @@ class ProjectStateTest {
     }
 
     @Test
-    fun `多选 逐行开关与全选取消全选`() {
+    fun `多选 逐行开关与选择全部取消全选`() {
         val files = listOf(
             ScriptFileRowUi.of(projectRow("demo"), now, zone),
             ScriptFileRowUi.of(rowAt("main.js"), now, zone),
@@ -288,7 +288,7 @@ class ProjectStateTest {
         assertEquals(setOf(mainKey), one)
         assertTrue(ProjectState.toggleSelection(one, mainKey).isEmpty())
 
-        // 全选 = 当前可见集（不是整棵树：demo2/ 那层不在当前目录里）。
+        // 选择全部 = 当前可见集（不是整棵树：demo2/ 那层不在当前目录里）。
         val all = ProjectState.toggleSelectAll(emptySet(), visible)
         assertEquals(visible.map { ProjectState.keyOf(it) }.toSet(), all)
         assertTrue(ProjectState.allSelected(all, visible))
@@ -297,7 +297,7 @@ class ProjectStateTest {
         // 只选了一半时按 = 补满，不是清空。
         val half = ProjectState.toggleSelection(emptySet(), mainKey)
         assertEquals(all, ProjectState.toggleSelectAll(half, visible))
-        // 空可见集：全选不动已选（"全选了 0 行"没有意义，别把已选清掉）。
+        // 空可见集：选择全部不动已选（"选满了 0 行"没有意义，别把已选清掉）。
         assertEquals(half, ProjectState.toggleSelectAll(half, emptyList()))
         assertTrue(!ProjectState.allSelected(half, emptyList()))
     }

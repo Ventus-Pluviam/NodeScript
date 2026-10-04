@@ -115,7 +115,8 @@ data class ProjectState(
             if (key in selected) selected - key else selected + key
 
         /**
-         * 全选 / 取消全选（顶栏那格是**同一个开关**：TG 的"全选"选满后自己变成"取消全选"）。
+         * 选择全部 / 取消全选（顶栏那格是**同一个开关**：TG 的 `SelectAll` 选满后
+         * 自己变成 `DeselectAll`）。
          *
          * 范围是**当前可见集**（当前目录一层，或搜索命中的那些）—— 把看不见的行也圈进来，
          * 复制/删除就会动到用户没看到的东西。
@@ -126,7 +127,7 @@ data class ProjectState(
             return if (keys.all { it in selected }) selected - keys else selected + keys
         }
 
-        /** 可见集是否已全选（顶栏那格显示"全选"还是"取消全选"）。 */
+        /** 可见集是否已全选（顶栏那格显示"选择全部"还是"取消全选"）。 */
         fun allSelected(selected: Set<String>, visible: List<ScriptFileRowUi>): Boolean {
             val keys = visible.map { keyOf(it) }
             return keys.isNotEmpty() && keys.all { it in selected }

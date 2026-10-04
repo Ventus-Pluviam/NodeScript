@@ -80,11 +80,19 @@ private class FlatPressNode(
     }
 }
 
-/** 当前主题下的按压反馈（跟随深浅主题换色：浅色加深、深色提亮）。 */
+/**
+ * 当前主题下的按压反馈（跟随深浅主题换色：浅色加深、深色提亮）。
+ *
+ * @param overlay 覆盖色覆盖（null = 走 [ThemeColors.pressedOverlay]，即列表行那一档）。
+ *   菜单/对话框按钮在 TG 里**不是**同一个键（`dialogButtonSelector` vs
+ *   `actionBarDefaultSelector`，浅色 6% vs 8% 黑），所以这一档要能单独传 ——
+ *   把两者合成一个"按压色"就是抄错。
+ */
 @Composable
-fun rememberPressIndication(): Indication {
-    val overlay = ThemeColors.pressedOverlay
-    return remember(overlay) { FlatPressIndication(overlay) }
+fun rememberPressIndication(overlay: Color? = null): Indication {
+    val fallback = ThemeColors.pressedOverlay
+    val color = overlay ?: fallback
+    return remember(color) { FlatPressIndication(color) }
 }
 
 /**
@@ -94,14 +102,16 @@ fun rememberPressIndication(): Indication {
  * **什么都不画**（不是"默认水波"），这正是重构后"能点但按下去没反应"的来源。
  *
  * @param role 无障碍角色；页签传 [Role.Tab]、按钮传 [Role.Button]，读屏据此改念法。
+ * @param overlay 覆盖色覆盖（见 [rememberPressIndication]）；缺省 null = 列表行那一档。
  */
 @Composable
 fun Modifier.pressable(
     enabled: Boolean = true,
     role: Role? = null,
+    overlay: Color? = null,
     onClick: () -> Unit,
 ): Modifier {
-    val indication = rememberPressIndication()
+    val indication = rememberPressIndication(overlay)
     val source = remember { MutableInteractionSource() }
     return clickable(
         interactionSource = source,
@@ -124,10 +134,11 @@ fun Modifier.pressable(
 fun Modifier.pressableLongPress(
     enabled: Boolean = true,
     role: Role? = null,
+    overlay: Color? = null,
     onLongClick: () -> Unit,
     onClick: () -> Unit,
 ): Modifier {
-    val indication = rememberPressIndication()
+    val indication = rememberPressIndication(overlay)
     val source = remember { MutableInteractionSource() }
     return combinedClickable(
         interactionSource = source,
