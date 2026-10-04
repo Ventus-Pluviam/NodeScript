@@ -166,7 +166,6 @@ fun ActionBar(
                 it()
             }
         }
-        Separator(indentDp = 0)
     }
 }
 
