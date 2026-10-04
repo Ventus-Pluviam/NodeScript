@@ -67,16 +67,28 @@ data class Colors(
     /**
      * 底页签**未选中**档的前景（`glass_tabUnselected`）：图标与文字**共用**这个起点。
      *
+     * **取值要连回退链一起看**（`Theme.java` 的 `fallbackKeys`）：这个键在
+     * `day.attheme` 与 `night.attheme` 里**都没设**，所以两套主题走的都是回退 ——
+     * 浅色 → `ThemeColors.java` 的默认值 `0xFF1A1D21`（≈ 主文字色）；
+     * 深色 → `windowBackgroundWhiteBlackText`（night = **纯白**）。
+     * 拿一套主题的数当"TG 的未选中色"抄进另一套，就是下面那个 [tabSelected] 踩过的坑。
+     *
      * 这里刻意**没有**「选中线」这个 token：TG 那条 2dp 线是**顶栏**文件夹页签的下划线，
      * 底栏的选中语法是**整格染色**，2026-10-02 重做底栏时一并删掉了照抄过来的
      * `tabIndicator` —— 留一个没有调用方的颜色只会让下一个人以为底栏该有线。
      */
     val tabUnselected: Color,
     /**
-     * 底页签**选中**档的**图标**色（`glass_tabSelected`）。
+     * 底页签**选中**档的**图标**色（`glass_tabSelected`），也是选中格背后那块高亮块的
+     * **唯一**取色（`multAlpha(colorSelected, 0.09f * alpha)`）。
      *
      * 图标与文字**不是一个值**（见下条）：`GlassTabView.updateColors` 是两条独立的
      * blend，合成一个 tint 会让文字比图标暗或亮一档 —— 那是抄错，不是简化。
+     *
+     * **别把浅色的值当成"TG 的选中蓝"往深色里搬**：这个键两套 attheme 都没设，
+     * 浅色走 `ThemeColors.java` 默认值 `0xFF1A91E6`，深色走回退键
+     * `chat_messagePanelSend` = **`0xFF229AF0`**（night.attheme 实测值）。
+     * 两者差得不小（hue 202° vs 205°、明度差一档），搬过去会让深色底栏偏暗。
      */
     val tabSelected: Color,
     /**

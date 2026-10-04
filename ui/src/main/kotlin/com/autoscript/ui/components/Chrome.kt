@@ -217,10 +217,10 @@ fun ActionBarAction(
  *    （`textView` top margin 28.33f）。格子宽度**按文字宽自适应**（[TabBarMeasure]），
  *    不走 weight 均分 —— 这正是 TG 底栏与 Material `NavigationBar` 最大的版式区别。
  * 4. **选中语法 = 选中格整格染色**（`GlassTabView.dispatchDraw`）：选中格背后画一个
- *    9% 透明度的圆角块（`multAlpha(colorSelected, 0.09f * alpha)`，底色本身按选中因子
- *    从选中色 blend 回未选中色 —— 于是淡出到无色时不会留一块深底），铺满**整格**
- *    （48dp 高，r = min(w,h)/2），缩放 0.6→1（`lerp(0.6f, 1, factor)`）；
- *    图标与文字各自 blend 到自己的选中色（见 [TabBarItem]）。
+ *    **纯 `colorSelected`（蓝）** 的圆角块，透明度 `0.09 × DECELERATE(f)` ——
+ *    色相**不随选中因子走**（`multAlpha` 只改 alpha 通道），淡入途中是"同一块蓝更淡"，
+ *    不是"换了个颜色"。铺满**整格**（48dp 高，r = min(w,h)/2），缩放 0.6→1
+ *    （`lerp(0.6f, 1, factor)`）；图标与文字各自 blend 到自己的选中色（见 [TabBarItem]）。
  * 5. **导航栏 inset 抬起整条胶囊**：外层先吃 `navigationBars` inset、再离屏边 8dp ——
  *    三键导航（三大金刚键）出现时胶囊悬在导航键上方；手势导航的 inset 只是一条细带，
  *    位置几乎不动。四屏内容让位走 [TabBarBottomClearance]，与胶囊消费同一份 inset。
@@ -412,20 +412,29 @@ private fun TabBarItem(
                 onClick = onClick,
             )
             .drawBehind {
+                // 选中格背后的高亮块（GlassTabView.dispatchDraw）：**铺满整格**
+                // （0,0,viewWidth,getHeight()），r = min(w,h)/2，缩放 lerp(0.6,1,f) 绕格心。
+                //
+                // **底色恒为 `colorSelected`（纯蓝），只有透明度随 f 变**：
+                // `paintCounterBackground.setColor(Theme.multAlpha(colorSelected, 0.09f * alpha))`
+                // —— `multAlpha` 是 `ColorUtils.setAlphaComponent(color, alpha(color) * multiply)`，
+                // 只改 alpha 通道，**一个色相都不动**。
+                // 本仓原先写成 `lerp(selected, unselected, f)` 是错的：那会让 f=0.5 时
+                // 底色变成"蓝混近黑"的一坨灰（选中色 0xFF1A91E6 与未选中色 0xFF1A1D21 的
+                // 中间值），于是淡入途中先看见灰再变蓝 —— 用户实测点名的"灰色背景"就是这个。
+                // 正确形态：f 小 = 同一块蓝更淡，不是同一块地方换了个颜色。
                 if (f > 0f) {
-                    // 选中格背后的高亮块（GlassTabView.dispatchDraw）：**铺满整格**
-                    // （0,0,viewWidth,getHeight()），r = min(w,h)/2，缩放 lerp(0.6,1,f)
-                    // 绕格心。底色从选中色 blend 回未选中色、透明度 0.09×f ——
-                    // `multAlpha(colorSelected, 0.09f * alpha)` 是"替换透明度"而不是"乘"，
-                    // 所以 f→0 时它整体淡出到无色，不会留一块深色。
+                    // 透明度那一路**过一遍 DECELERATE**：TG 的 factor 本身已是缓动值，
+                    // 而 `dispatchDraw` 又拿它喂了一次 `getInterpolation` —— 于是
+                    // `0.09f * f²` 型（f=1-(1-t)²）才是 TG 的实际曲线，不是线性的 `0.09f * f`。
+                    val a = 1f - (1f - f) * (1f - f)
                     val r = min(size.width, size.height) / 2f
                     val s = 0.6f + 0.4f * f
                     withTransform({
                         scale(s, s, pivot = Offset(size.width / 2f, size.height / 2f))
                     }) {
                         drawRoundRect(
-                            color = lerp(palette.tabSelected, palette.tabUnselected, f)
-                                .copy(alpha = 0.09f * f),
+                            color = palette.tabSelected.copy(alpha = 0.09f * a),
                             topLeft = Offset.Zero,
                             size = Size(size.width, size.height),
                             cornerRadius = CornerRadius(r),
