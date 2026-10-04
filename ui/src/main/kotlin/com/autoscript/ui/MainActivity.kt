@@ -526,11 +526,12 @@ private fun MainShell(
             // 胶囊盖在内容之上：后画的在上层。它自己的 8dp 外边距让四周露出内容。
             TabBar(
                 modifier = Modifier.align(Alignment.BottomCenter),
+                // 四格恒为「项目 / 任务 / 管理 / 设置」（`MainActivity.Tab`）。**不挂徽标**：
+                // 徽标在 TG 里是"未读"语义，与本仓的"在途 / 漏投 / 未结算"三种账都不是
+                // 一回事，混上去等于造出第四种读法 —— 计数一律在各自屏内说。`TabItem`
+                // 因此只有 label + glyph 两个字段，没有"留着将来用"的空槽位。
                 tabs = MainActivity.Tab.entries.map {
-                    // 刻意**不挂页签徽标**：徽标在 TG 里是"未读"语义，
-                    // 与本仓的"在途 / 漏投 / 未结算"三种账都不是一回事 ——
-                    // 混上去等于造出第四种读法。计数一律在各自屏内说。
-                    TabItem(label = it.short, glyph = it.glyph, badge = null)
+                    TabItem(label = it.short, glyph = it.glyph)
                 },
                 pagerState = pagerState,
                 onSelect = onSelectTab,

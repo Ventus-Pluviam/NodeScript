@@ -60,7 +60,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
-| 2026-10-04 | 2 | 批 35 拆掉下拉刷新（参考项目没有这个手势）· 批 34 项目页目录下钻 / 选择模式 / 底部操作面板（TG `ChatAttachAlertDocumentLayout` 的一层一层走 + 搜索跨层） | [`log/2026-10-04.md`](log/2026-10-04.md) |
+| 2026-10-04 | 3 | 批 36 底栏整条按 TG 重做（不等宽分格 / 三键各自 blend / 删掉自加的按压态）· 批 35 拆掉下拉刷新（参考项目没有这个手势）· 批 34 项目页目录下钻 / 选择模式 / 底部操作面板（TG `ChatAttachAlertDocumentLayout` 的一层一层走 + 搜索跨层） | [`log/2026-10-04.md`](log/2026-10-04.md) |
 | 2026-10-02 | 19 | 文档面改进批（C10 契约订正 + D2 状态页读法 + D7-② 参考件入档）· 第二轮外审处置（证伪 2 / 收窄 1 / 立刻改 1 / 登记 9）· 批 10 C7 typedoc API 参考 + B4 依赖供应链 · C9 总索引落地 · C6 分片落地 · A2b 拍板落地 · E1 拍板落地 · E2 拆双门 + 精确兜底 · E5 放宽拍板 · 批 9 A6+E4 素材换源 · 结构面批 D9+D10+D12（HostNpm 并份 / bridge/README.md / CODEOWNERS）· 批 12 D5+B7+D14（贡献门槛拆分 / INTERNET 真机 A/B / ModuleGraphTest 证伪） · **批 13 许可改 GPL-2.0-or-later + `:ui` 前端重构（Telegram 质感 / 深浅双主题 / 状态层三态收敛）** · 批 14 命名去 `Tg` 前缀 + 补齐动效（按压反馈 / 页签指示线滑动 / 列表落位） · 批 15 TG 手势与动效补齐（`HorizontalPager` 页面切换 / 删除粒子 / 下拉刷新 / 长按菜单 / 点击语义） · **批 16 本机出「真形态」APK（引擎三件首次随包）+ 随包资产被 aapt2 缺省忽略表静默剪裁的真错（`<dir>_*` 吃掉 `@sigstore/protobuf-specs/dist/__generated__/` 15 件，已修）+ 内置示例脚本 `assets/scripts/demo/`（输出走 `auto.console.*`，附门禁 `DemoScriptTest`；引擎读即弃 stdout 的缺口登记 B11） · **批 17 保活服务的进程级真错（装配层投的 `ACTION_START` 不带 token/期限 → 服务拒收 → `startForegroundService` 的 5 秒窗口无人认领 → 系统连整个 fg TOP 进程一起杀；真机 30 秒必死，修后 `dumpsys` `isForeground=true` + 能力中心「保活 = 已生效」） · **批 18 `:ui` 三处返工（边到边 inset：顶栏/底栏各自 `background` 在前、`windowInsetsPadding` 在后；底栏重做：图标+文字/无指示线/整格染色 —— 旧版抄的是 TG 顶栏页签的下划线；切页重组收口：外壳不再读 `currentPageOffsetFraction`，`settledPage` 收进空壳 `TabReloadEffect`，真机 6 次横划 janky 5.65%/p50 12ms） · **批 19 冷启两行红字不会自己变绿 —— 装配在 IO 域异步完成、`onCreate` 首读赶在它前面，而首屏读口只在 `onCreate`/`onResume`/手动刷新三处被调；新增文件级 `HomeRetryEffect`（500ms × 最多 10 次）**有界**重问，`summaryWired == false`（宿主没实现读口）则立即停；真机复验 5s 仍红 → 再过 6s 自己变绿，全程没碰「刷新」** | [`log/2026-10-02.md`](log/2026-10-02.md) |
 | 2026-10-01 | 17 | 外审整改收尾、批 1–7、两次外审建议入池 | [`log/2026-10-01.md`](log/2026-10-01.md) |
 | 2026-09-30 | 15 | 外审整改步骤 1–8、图像提速三案、A 组真机实测 | [`log/2026-09-30.md`](log/2026-09-30.md) |
@@ -71,7 +71,7 @@
 
 - [2026-09-25 及更早流水（自 §19 结语整段外迁，逐字保留）](archive/status-2026-09-25.md) —— 2026-10-01 归档，原 14,625 字节单行随之搬走。
 - [2026-09-29 – 2026-10-04 流水（分片，逐字保留）](log/) —— 2026-10-02 分片（backlog C6），
-  五个按日期的文件共 42 条，索引见 [`docs/log/README.md`](log/README.md)。
+  五个按日期的文件共 43 条，索引见 [`docs/log/README.md`](log/README.md)。
 
 ## 实现注记（自各分卷外迁，逐字保留）
 
