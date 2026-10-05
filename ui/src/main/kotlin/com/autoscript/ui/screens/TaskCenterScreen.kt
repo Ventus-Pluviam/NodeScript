@@ -1,5 +1,6 @@
 package com.autoscript.ui.screens
 
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -70,7 +71,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.ui.components.ActionBar
-import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.ContextMenu
@@ -92,7 +92,6 @@ import com.autoscript.ui.components.rememberCopyAction
 import com.autoscript.ui.components.rememberDeletionParticles
 import com.autoscript.ui.components.rememberLongPressFeedback
 import com.autoscript.ui.components.rememberPressIndication
-import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleState
@@ -114,20 +113,27 @@ import kotlinx.coroutines.launch
 /**
  * 任务栏（TG 联系人页 `ContactsActivity` 的版式复刻，内容从联系人换成任务）：
  *
- * - **屏底**：`windowBackgroundGray`（[ThemeColors.surfaceMuted]）—— TG 那页灰底
- *   （`contentView.setBackgroundColor(key_windowBackgroundGray)`）；
+ * - **屏底与顶栏同灰**（批 41 拍板）：页面 = `windowBackgroundGray`
+ *   （[ThemeColors.surfaceMuted]），顶栏传 [ActionBar] 的 `background` 用**同一个
+ *   灰** —— 栏与列表连成一块（TG 那页的 actionBarDefault 是白/夜间深灰，用户要的
+ *   灰栏是本仓的定制，落在 `surfaceMuted` 上）；
  * - **顶栏**：标题「任务栏」（对应 TG 的「联系人」：Medium 20sp，`createTitleTextView`
- *   的 portrait 档），右上角**排序切换钮**（TG `msg_contacts_name`/`msg_contacts_time`
- *   两态：图标画的是"切过去的那一档"——按名称排序时显示时钟）+「刷新」；
- * - **搜索栏**：`FragmentSearchField` 版式（52dp 槽位、水平 6dp 边距、圆角 20dp 的
- *   **白色**药丸 + 微投影、15sp 文字、提示词半透明）—— 灰底上这颗药丸是白的
- *   （`createRoundRectDrawableShadowed(key_windowBackgroundWhite)`），与项目页那颗
- *   灰底搜索框（白屏上压 5% 黑）不是同一个键；
+ *   的 portrait 档），右上角只有**排序切换钮**（TG `msg_contacts_name`/`msg_contacts_time`
+ *   两态：图标画的是"切过去的那一档"——按名称排序时显示时钟）。批 41 摘掉「刷新」：
+ *   切页签/回前台现取（`TabReloadEffect`）与操作后现取（`performTaskOp`）已覆盖
+ *   数据会变的所有时机，常驻按钮没有事可做；
+ * - **悬浮搜索栏**（批 41 起**浮在列表上**，TG 的 `searchField` 是 contentView 最后
+ *   加的子 view）：`FragmentSearchField` 版式 —— 52dp 槽位、水平 6dp 边距、内缩 3dp、
+ *   圆角 20dp 的**白色**药丸 + 微投影、`outline_search_1_24` 放大镜（24dp、60%）、
+ *   15sp 文字、提示词 50%。列表 contentPadding.top 让出 44dp，滚动的首行从药丸底下
+ *   穿过（`checkUi_listViewPadding` 的 actionBar 高 + 44dp 同口径）；
  * - **白色圆角卡片**（`setSections(12, 16, false)` 的读法：水平 12dp 边距、圆角 16dp、
  *   无投影 —— `SharedConfig.shadowsInSections` 缺省 false，首行距顶 4dp），**运行中的
  *   任务与定时任务同卡**（用户拍板：一个药丸框包两组，组间留白）；
- * - **分组头**：TG `GraySectionCell`（32dp 条、14sp Medium、`graySection` 底 +
- *   `graySectionText` 字），**整条可点 = 展开/收起**（TG 的 rightTextView 可点位）；
+ * - **分组头**（批 41 重做：TG `CollapseTextCell` 的白底收起行）：46dp 白条、14sp
+ *   Medium 正文色、文字缩进 21dp，右端 14dp **三角**（收起 = 尖朝下、展开 = 180°
+ *   尖朝上、340ms EASE_OUT_QUINT）。**空组不给三角也不许展开**（点击空操作）——
+ *   展开后只有一行空提示的组，"可展开"是假话；
  * - **任务行**：TG `UserCell` 的 call 样式（联系人页实际用的那档：行高 56dp、头像
  *   44dp 圆、名字 15sp Medium、次行 13sp、分隔线缩进 68dp）—— 头像用脚本类型徽标
  *   （项目页 [FileTypeAvatar] 的 44dp 版），行尾「立即执行」= 实心播放三角，
@@ -137,17 +143,20 @@ import kotlinx.coroutines.launch
  * - **FAB**：TG `FragmentFloatingButton`（48dp 圆、按下缩到 0.9、松开过冲回 1），
  *   只有一个动作 = 登记任务（表单弹底部面板）。
  *
- * 诚实边界（与其他屏同一条纪律，一条不松）：
- * - 没读到/读失败**不冒充**空清单：副标题三态各自说话（[Status.count]），卡内空行
- *   也区分「尚未读取」「读失败：原文」「读到了，没有」三种；
+ * 诚实边界（与其他屏同一条纪律，一条不松；批 41 按用户口径收窄了两处）：
+ * - 没读到/读失败**不冒充**空清单：副标题只在有话说时出现（条数/尚未读取/读失败
+ *   原文），「读到了，没有」那句空话摘掉（空组自己会说明：无三角、点不开）；卡内
+ *   空行区分「尚未读取」「读失败：原文」「没有匹配的任务」三种；
+ * - **空组不铺占位提示**（批 41）：「无在途执行」「读到了，没有已登记的任务」两句
+ *   摘掉 —— 空清单的事实由"没有行"本身说，红字/灰字只留给真正有内容的错；
+ * - **恢复账/未结算执行整块摘掉**（批 41 用户拍板）：非空也不显示 —— 那两笔账的
+ *   权威呈现回到控制台与本仓的日志/测试（`AppShellTaskCenterTest` 等仍守着数据面）；
  * - 操作失败（`opError`）**不清任务清单**；成功回执只说"调用被接受"；
  * - 在途执行的数据来自**控制台**的运行列表（[ConsoleState.activeRuns]）：停止的
  *   失败/回执（`stopError`/`stopNotice`）在这里也如实给一行；
- * - 恢复账/未结算执行**不再是列表**（本版不做任务日志），但非空时仍各给**一行**
- *   如实提示 —— 藏事实与铺一屏日志之间取的是"说一句"；
  * - 取消走一次确认对话框（误触成本 = 手工重登记全部字段）；
  * - 挂起中（`opInFlight`）操作按钮全部停用 —— 立即执行要挂到执行结算，
- *   不禁用就会双击双投。「刷新」不在此列（幂等读）。
+ *   不禁用就会双击双投。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -155,7 +164,6 @@ fun TaskCenterScreen(
     state: TaskCenterState,
     /** 控制台状态：本屏只取在途执行那几样（activeRuns/停止三态/读账），不碰日志行。 */
     console: ConsoleState,
-    onRefresh: suspend () -> Unit,
     onRunNow: (TaskRowState) -> Unit,
     onCancel: (TaskRowState) -> Unit,
     onRegister: (RegistrationForm) -> Unit,
@@ -175,7 +183,6 @@ fun TaskCenterScreen(
     var runsExpanded by rememberSaveable { mutableStateOf(true) }
     var tasksExpanded by rememberSaveable { mutableStateOf(true) }
 
-    val refresh = rememberRefreshAction(onRefresh)
     val copy = rememberCopyAction()
     val particles = rememberDeletionParticles()
     val listState = rememberLazyListState()
@@ -184,11 +191,15 @@ fun TaskCenterScreen(
 
     val status = Status.count(
         load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
+        notLoadedText = "尚未读取",
         total = state.tasks.size,
-        emptyText = "读到了，没有已登记的任务",
+        emptyText = "",
         unit = "条任务（含已停用）",
     )
+
+    // 副标题只在**有话说**的时候出现：空清单那句（批 41 摘掉）与空串都不占位 ——
+    // `Status.count` 的空清单档给空串，这里再拦一道，`ActionBar` 就画不出空行。
+    val subtitle = status.text.ifEmpty { null }
 
     // 任务消失（取消、或一次性任务跑完出册）时在原地炸一簇粒子。
     val taskIds = state.tasks.map { it.id }
@@ -203,11 +214,14 @@ fun TaskCenterScreen(
     var containerOrigin by remember { mutableStateOf(Offset.Zero) }
 
     Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted)) {
+        // 顶栏跟页面同灰（批 41 用户拍板）：传 `background` 覆盖 `actionBarDefault`，
+        // 栏与列表连成一块灰，不再是"白栏压灰页"。
         ActionBar(
             title = "任务栏",
             titleStyle = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
-            subtitle = status.text,
+            subtitle = subtitle,
             subtitleTone = status.tone,
+            background = ThemeColors.surfaceMuted,
             actions = {
                 // 排序切换（TG ContactsActivity：图标 = 切过去的那一档 ——
                 // 按名称排序时显示时钟，按时间时显示字母 A）。
@@ -232,13 +246,10 @@ fun TaskCenterScreen(
                         tint = ThemeColors.barIcon,
                     )
                 }
-                ActionBarAction("刷新", refresh::trigger)
             },
         )
-        SearchField(
-            query = query,
-            onChange = { query = it },
-        )
+        // TG ContactsActivity 的叠层读法：listView 先加、searchField 后加 ——
+        // 后加的浮在上面，列表从它底下穿过（这里同样：Box 同格叠放，搜索框后画）。
         Box(
             Modifier
                 .weight(1f)
@@ -247,8 +258,15 @@ fun TaskCenterScreen(
             RefreshableBox(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
-                    // TG ListSectionsDecoration 的读法：段内条目左右 12dp、首行顶 4dp。
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = TabBarBottomClearance()),
+                    // TG checkUi_listViewPadding 的读法：列表顶让出「顶栏高 + 44dp」
+                    // —— 44dp 里装的是悬浮搜索框（52dp 槽位 − 顶栏 4dp 呼吸 + 首行 4dp）；
+                    // 列表滚上来时首行从药丸底下穿过。左右 12dp、底部让位底栏照旧。
+                    contentPadding = PaddingValues(
+                        start = 12.dp,
+                        end = 12.dp,
+                        top = 44.dp,
+                        bottom = TabBarBottomClearance(),
+                    ),
                 ) {
                     item { CopyNotice(copy) }
                     if (state.opInFlight) {
@@ -269,25 +287,6 @@ fun TaskCenterScreen(
                     console.stopNotice?.let {
                         item { FeedbackLine(it, StatusTone.OK) }
                     }
-                    state.recovery?.text()?.let { text ->
-                        item {
-                            SectionHeader("恢复账")
-                            FeedbackLine(
-                                text = text,
-                                tone = if (state.recovery?.failureText != null) StatusTone.PROBLEM else StatusTone.MUTED,
-                            )
-                        }
-                    }
-                    if (state.unfinishedRuns.isNotEmpty()) {
-                        // 不再铺未结算列表（本版不做任务日志），但非空必须说一句：
-                        // "正在跑"与"上一进程遗物"混读会让用户等一个不会结束的东西。
-                        item {
-                            FeedbackLine(
-                                text = "档案有 ${state.unfinishedRuns.size} 条未结算（上一进程遗物，不是此刻正在跑）",
-                                tone = StatusTone.ATTENTION,
-                            )
-                        }
-                    }
                     item {
                         // 白色圆角卡片：两组同卡（clip 先于 background，圆角裁住全部内层）。
                         Column(
@@ -296,19 +295,21 @@ fun TaskCenterScreen(
                                 .clip(RoundedCornerShape(16.dp))
                                 .background(ThemeColors.background),
                         ) {
+                            // 空组不给三角也不许展开（批 41 拍板）：hasContent = false
+                            // 时点击是空操作 —— 组内容的三态（尚未读取/读失败/空）都算
+                            // "没有可展开的东西"。展开后只有一行空提示的组，收起它没有意义。
                             GroupHeader(
                                 title = "运行中的任务",
                                 expanded = runsExpanded,
+                                hasContent = console.activeRuns.isNotEmpty(),
                                 onClick = { runsExpanded = !runsExpanded },
                             )
                             if (runsExpanded) {
                                 when {
                                     !console.load.isLoaded ->
-                                        InCardHint("尚未读取（点右上「刷新」现取）")
+                                        InCardHint("尚未读取")
                                     console.load is LoadState.Failed ->
                                         InCardHint("读失败：${console.load.failedReason()}", StatusTone.PROBLEM)
-                                    console.activeRuns.isEmpty() ->
-                                        InCardHint("无在途执行")
                                     else -> console.activeRuns.forEachIndexed { i, run ->
                                         Box(
                                             Modifier.onGloballyPositioned { coords ->
@@ -327,11 +328,12 @@ fun TaskCenterScreen(
                                     }
                                 }
                             }
-                            // 组间留白：同一张白卡里两条灰色分组头之间的一段卡底。
+                            // 组间留白：同一张白卡里两条分组头之间的一段卡底。
                             Spacer(Modifier.height(8.dp))
                             GroupHeader(
                                 title = "定时任务",
                                 expanded = tasksExpanded,
+                                hasContent = filteredTasks.isNotEmpty(),
                                 onClick = { tasksExpanded = !tasksExpanded },
                             )
                             if (tasksExpanded) {
@@ -339,11 +341,9 @@ fun TaskCenterScreen(
                                     state.load is LoadState.Failed ->
                                         InCardHint("读失败：${state.load.failedReason()}", StatusTone.PROBLEM)
                                     !state.load.isLoaded ->
-                                        InCardHint("尚未读取（点右上「刷新」现取）")
+                                        InCardHint("尚未读取")
                                     filteredTasks.isEmpty() && query.isNotBlank() ->
                                         InCardHint("没有匹配的任务")
-                                    filteredTasks.isEmpty() ->
-                                        InCardHint("读到了，没有已登记的任务（右下角登记）")
                                     else -> filteredTasks.forEachIndexed { i, task ->
                                         Box(
                                             Modifier.onGloballyPositioned { coords ->
@@ -371,6 +371,13 @@ fun TaskCenterScreen(
             }
             // 粒子层与列表同层（同一套坐标），且不吞触摸。
             particles.Overlay(Modifier.matchParentSize())
+            // 悬浮搜索框最后画 = 浮在列表上（TG：searchField 是 contentView 最后加的
+            // 一个子 view）。压住列表首行 —— 所以 contentPadding.top 让出 44dp。
+            SearchField(
+                query = query,
+                onChange = { query = it },
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
             ScrollToTopButton(
                 visible = listState.firstVisibleItemIndex > 0,
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
@@ -509,39 +516,69 @@ private fun FeedbackLine(text: String, tone: StatusTone) {
 }
 
 /**
- * 分组头（TG `GraySectionCell` 的逐项读法）：32dp 条、底 `graySection`、
- * 字 14sp Medium `graySectionText`、左右 16dp；右侧文字槽 = 展开/收起
- * （TG 的 rightTextView 可点位同位 —— 整条可点，动作写在右边）。
+ * 分组头（批 41 按用户口径重做：白底 + 右端三角，TG `CollapseTextCell` 的几何）：
+ *
+ * - **46dp 白条**（`CollapseTextCell` 的 `onMeasure` 恒 46dp）、文字缩进 21dp、
+ *   14sp（`textView.setTextSize(dp(14))`）、正文色（`windowBackgroundWhiteBlackText`）；
+ * - **右端三角**（[GlyphKind.CHEVRON]，14dp 同 `arrow_more` 的格）：收起 = 尖朝下
+ *   （rotation 0）、展开 = 尖朝上（180°，340ms `EASE_OUT_QUINT` —— 与 TG 的
+ *   `collapsedArrow.animate().rotation(…)` 同一条时间线）；
+ * - **空组不给三角也不给展开**（批 41 用户拍板）：[hasContent] = false 时三角不画、
+ *   点击是空操作 —— 一个展开后只有一行空提示的组，"可展开"本身就是假话。
  */
 @Composable
 private fun GroupHeader(
     title: String,
     expanded: Boolean,
+    hasContent: Boolean,
     onClick: () -> Unit,
 ) {
     val palette = ThemeColors
+    // 展开因子驱动旋转：0 = 收起（尖朝下）、1 = 展开（尖朝上）。TG 的插值器
+    // EASE_OUT_QUINT = cubic-bezier(.23, 1, .32, 1)，340ms。
+    val expandFraction by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = tween(durationMillis = 340, easing = EaseOutQuint),
+        label = "groupChevron",
+    )
     Row(
         Modifier
             .fillMaxWidth()
-            .height(32.dp)
-            .background(palette.graySection)
-            .pressable(role = Role.Button, overlay = palette.pressedOverlay, onClick = onClick)
-            .padding(horizontal = 16.dp),
+            .height(46.dp)
+            .background(palette.background)
+            .pressable(
+                role = Role.Button,
+                overlay = palette.pressedOverlay,
+                enabled = hasContent,
+                onClick = onClick,
+            )
+            .padding(start = 21.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = title,
-            color = palette.graySectionText,
-            style = MaterialTheme.typography.labelLarge,
+            color = palette.text,
+            style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium),
         )
         Spacer(Modifier.weight(1f))
-        Text(
-            text = if (expanded) "收起" else "展开",
-            color = palette.graySectionText,
-            style = MaterialTheme.typography.labelLarge,
-        )
+        if (hasContent) {
+            Glyph(
+                kind = GlyphKind.CHEVRON,
+                tint = palette.text,
+                size = 14.dp,
+                modifier = Modifier.graphicsLayer {
+                    rotationZ = 180f * expandFraction
+                },
+            )
+        }
     }
 }
+
+/**
+ * cubic-bezier(.23, 1, .32, 1)（TG `CubicBezierInterpolator.EASE_OUT_QUINT`）：
+ * 快出缓收的五次缓出 —— 与 [OvershootEasing] 一样是「TG 的手感」那组常量。
+ */
+private val EaseOutQuint = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
 /** 卡片内的空/错位一行（不是 [EmptyHint] 那种大留白居中 —— 卡内行要密）。 */
 @Composable
@@ -808,22 +845,30 @@ private fun TaskAvatar(scriptPath: String, name: String) {
 }
 
 /**
- * 圆角搜索栏（TG `FragmentSearchField` 的逐字版式）：52dp 槽位、水平 6dp 边距、
- * 内缩 3dp 的**白色**药丸（圆角 20dp + `createRoundRectDrawableShadowed` 的微投影，
- * 这里用 2dp elevation 近似）、放大镜 24dp 距药丸左 12dp（文字位 48dp 同口径）、
- * 提示词/输入文字 15sp、提示词 50% 透明、图标 60%。
+ * 悬浮搜索框（TG `FragmentSearchField` 的逐项几何，批 41 起**浮在列表上**）：
  *
- * 与项目页 [SearchField] 不是同一个底：那页白屏上压 5% 黑，这页灰底上是白药丸
- * （`key_windowBackgroundWhite`）—— 两个键，不能合成一个组件参数糊过去。
+ * - **52dp 槽位、水平 6dp 边距**：`contentView.addView(searchField, createFrame(MATCH_PARENT,
+ *   52, Gravity.TOP, 6, 0, 6, 0))` —— `setSectionBackground()` 再内缩 3dp（上下同），
+ *   于是药丸高 46dp、圆角 20dp；
+ * - **白药丸 + 微投影**：`createRoundRectDrawableShadowed(dp(20), key_windowBackgroundWhite)`
+ *   = 2dp 投影（y 偏 0.33dp）—— 本仓用 2dp elevation 近似，底 `background`（灰底上的
+ *   白药丸；与项目页那颗灰框不是一个键，不能合成一个参数糊过去）；
+ * - **放大镜 24dp、距药丸左 12dp**，[GlyphKind.SEARCH_FIELD]（`outline_search_1_24`
+ *   的实测几何 —— 比项目页那颗 SEARCH 粗环短柄），着色 = 文字色 60%；
+ * - **文字 15sp**（`editText.setTextSize(dp(15))`）、提示词 50% 透明、输入文字全色、
+ *   距药丸左 48dp（图标 12 + 24 + 12 同口径）。
+ *
+ * 浮动机制在调用方（[TaskCenterScreen]）：本组件只是槽位本身 —— 列表从它底下穿过。
  */
 @Composable
 private fun SearchField(
     query: String,
     onChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(52.dp)
             .padding(horizontal = 6.dp, vertical = 3.dp),
@@ -838,14 +883,14 @@ private fun SearchField(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Spacer(Modifier.width(12.dp))
-            Glyph(kind = GlyphKind.SEARCH, tint = palette.text.copy(alpha = 0.6f))
+            Glyph(kind = GlyphKind.SEARCH_FIELD, tint = palette.text.copy(alpha = 0.6f))
             Spacer(Modifier.width(12.dp))
             Box(Modifier.weight(1f)) {
                 if (query.isEmpty()) {
                     Text(
                         text = "搜索任务",
                         color = palette.text.copy(alpha = 0.5f),
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = TextStyle(fontSize = 15.sp),
                         maxLines = 1,
                     )
                 }
@@ -853,7 +898,7 @@ private fun SearchField(
                     value = query,
                     onValueChange = onChange,
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.text),
+                    textStyle = TextStyle(fontSize = 15.sp, color = palette.text),
                     // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色不是一个键。
                     cursorBrush = SolidColor(palette.cursor),
                     modifier = Modifier.fillMaxWidth(),

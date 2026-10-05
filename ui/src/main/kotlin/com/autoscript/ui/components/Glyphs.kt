@@ -91,6 +91,12 @@ enum class GlyphKind {
 
     /** 排序切换钮——切到**按时间**（三条横杠 + 时钟；TG `msg_contacts_time`）。 */
     SORT_TIME,
+
+    /** 搜索框放大镜（TG `FragmentSearchField` 用的 `outline_search_1_24`：粗环短柄）。 */
+    SEARCH_FIELD,
+
+    /** 展开/收起三角（TG `arrow_more`：CollapseTextCell 右侧的下尖 chevron）。 */
+    CHEVRON,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -358,6 +364,28 @@ fun Glyph(
                 drawCircle(tint, radius = 0.165f * u, center = at(0.755f, 0.655f), style = stroke)
                 drawPath(path(0.755f to 0.655f, 0.755f to 0.545f), tint, style = stroke)
                 drawPath(path(0.755f to 0.655f, 0.83f to 0.655f), tint, style = stroke)
+            }
+
+            // 搜索框放大镜（outline_search_1_24 的 72 视口实测：环心 (0.44, 0.427)、
+            // 外半径 16.02/72≈0.222、环宽 4.6/72≈0.064（≈StrokeRatio 的 0.75 倍 ——
+            // 这颗比底栏那颗 SEARCH 粗一档），柄 (0.62,0.56)→(0.786,0.728)）。
+            // 与 [SEARCH] 不是同一颗：那颗环更细、柄更长，是菜单项的放大镜。
+            GlyphKind.SEARCH_FIELD -> {
+                drawCircle(
+                    tint,
+                    radius = (0.222f - 0.032f) * u,
+                    center = at(0.44f, 0.427f),
+                    style = Stroke(width = 0.064f * u, cap = StrokeCap.Round),
+                )
+                drawPath(path(0.62f to 0.56f, 0.786f to 0.728f), tint, style = stroke)
+            }
+
+            // 展开/收起三角（arrow_more 的 webp 实测：下尖 chevron，三控制点
+            // (0.19,0.36)→(0.50,0.70)→(0.81,0.36)，笔画 6/72≈0.083 ≈ StrokeRatio）。
+            // 收起 = 尖朝下（原样），展开 = 转 180° 尖朝上（CollapseTextCell 的
+            // `rotation(collapsed ? 0 : 180)` 同语义）。
+            GlyphKind.CHEVRON -> {
+                drawPath(path(0.19f to 0.36f, 0.50f to 0.70f, 0.81f to 0.36f), tint, style = stroke)
             }
         }
     }

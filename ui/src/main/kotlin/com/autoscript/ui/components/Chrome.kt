@@ -43,8 +43,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.platform.LocalDensity
@@ -68,6 +68,10 @@ import kotlin.math.min
  *
  * 高度固定 56dp 而非 `TopAppBar` 的自适应：四屏都不是可滚动标题，且固定高度让
  * "顶栏 → 内容" 的起点在四屏完全一致（滚动时内容整体位移不会顶穿标题）。
+ *
+ * **底色可换**（[background]）：TG 的 `actionBarDefault` 本来就是逐屏可覆盖的键
+ * （BaseFragment.createActionBar 统一上色，特殊页自己换底）—— 任务栏要跟页面
+ * 同灰（批 41），其余屏不传就是原样，互不影响。
  */
 @Composable
 fun ActionBar(
@@ -89,6 +93,13 @@ fun ActionBar(
      * 蓝（createTitleTextView 的 bold 20dp 口径），只有它有权覆盖。
      */
     titleStyle: TextStyle? = null,
+    /**
+     * 顶栏底色覆盖（批 41：任务栏要跟页面同灰）。缺省 null = `actionBarDefault`
+     * （[ThemeColors.surface]，白/夜间 0xFF232326）；传色即整栏（含状态栏那一条）
+     * 换底。要"栏与内容连成一块"的屏用它，别去改 [ThemeColors.surface] —— 那是
+     * 四屏共用的键。
+     */
+    background: Color? = null,
 ) {
     val palette = ThemeColors
     val shellAction = LocalBarAction.current
@@ -102,7 +113,7 @@ fun ActionBar(
     Column(
         modifier
             .fillMaxWidth()
-            .background(palette.surface),
+            .background(background ?: palette.surface),
     ) {
         Row(
             Modifier

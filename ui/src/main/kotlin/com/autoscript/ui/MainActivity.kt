@@ -168,7 +168,6 @@ class MainActivity : ComponentActivity() {
                                 Tab.TASKS -> TaskCenterScreen(
                                     state = taskState,
                                     console = consoleState,
-                                    onRefresh = { reloadTasks() },
                                     onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
                                     onCancel = { task -> scope.launch { cancelTaskOp(task) } },
                                     onRegister = { form -> scope.launch { registerTaskOp(form) } },
