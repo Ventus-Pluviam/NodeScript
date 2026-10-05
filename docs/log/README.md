@@ -13,7 +13,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
-| 2026-10-05 | 3 | 批 39 拆掉顶栏底部的全宽分割线（TG `ActionBar` 无底线，本仓自加）；批 40 任务栏重做（TG 联系人页复刻：灰底白卡/GraySection 分组头/UserCell 行/搜索栏/排序钮/FAB）；批 41 任务栏按用户口径收窄（删刷新钮/副标题空话/恢复账未结算块，顶栏同灰，分组头 CollapseTextCell 白底 + 三角，空组不可展开，搜索框悬浮） | [`2026-10-05.md`](2026-10-05.md) |
+| 2026-10-05 | 4 | 批 39 拆掉顶栏底部的全宽分割线（TG `ActionBar` 无底线，本仓自加）；批 40 任务栏重做（TG 联系人页复刻：灰底白卡/GraySection 分组头/UserCell 行/搜索栏/排序钮/FAB）；批 41 任务栏按用户口径收窄（删刷新钮/副标题空话/恢复账未结算块，顶栏同灰，分组头 CollapseTextCell 白底 + 三角，空组不可展开，搜索框悬浮）；批 42 搜索框药丸宽对齐 TG（屏宽−18dp）+ 搜索框下 8dp 空隙 + 运行中/定时拆两卡） | [`2026-10-05.md`](2026-10-05.md) |
 | 2026-10-04 | 6 | 批 38 菜单开/关动画 + 间隙渐变 + 投影环描边（MenuPopup 自建壳）· 批 37 菜单圆角精确到 12dp（popup_fixed_alert4 实测 11.88–11.93）+ 主题切换死区修复 + 两处 import 补回 · 批 36 勘误 底栏高亮块底色被 blend 成了灰（`multAlpha` 只改 alpha，色相恒为选中蓝）· 批 36 底栏整条按 TG 重做（不等宽分格 / 三键各自 blend / 删掉自加的按压态）· 批 35 拆掉下拉刷新（参考项目没有这个手势）· 批 34 项目页目录下钻 / 选择模式 / 底部操作面板（TG `ChatAttachAlertDocumentLayout` 的一层一层走 + 搜索跨层） | [`2026-10-04.md`](2026-10-04.md) |
 | 2026-10-02 | 19 | 批 10 C7 typedoc API 参考 + B4 依赖供应链 · C9 总索引落地 · C6 分片落地 · A2b 拍板落地 · E1 拍板落地 · E2 拆双门 + 精确兜底 · E5 放宽拍板 · 批 9 A6+E4 素材换源 · 结构面批 D9+D10+D12 | [`2026-10-02.md`](2026-10-02.md) |
 | 2026-10-01 | 17 | 外审整改收尾、批 1–7、两次外审建议入池 | [`2026-10-01.md`](2026-10-01.md) |
@@ -23,8 +23,9 @@
 
 ## 逐条索引
 
-### [2026-10-05](2026-10-05.md)（3 条，最新在最上）
+### [2026-10-05](2026-10-05.md)（4 条，最新在最上）
 
+- 2026-10-05 —— 批 42：搜索框尺寸修正 + 搜索框下空隙 + 两组拆两卡 —— `SearchField` 药丸补上 `setSectionBackground()` 的 3dp 自缩（屏宽 −18dp，此前宽了 6dp）；列表 `contentPadding.top` 44→54dp（药丸下 8dp 空隙）；批 40「同卡」口径作废，运行中/定时各自一张白卡、卡间 8dp 灰缝（TG 多 section 本来就是各卡各缝）（分支 `rough-robin`）
 - 2026-10-05 —— 批 41：任务栏按用户口径收窄 —— 删右上「刷新」（`onRefresh` 参数一并摘除，`TabReloadEffect`/`performTaskOp` 现取照旧）；副标题「读到了，没有」换空串；顶栏传 `ActionBar.background = surfaceMuted` 跟页面同灰；恢复账/未结算两块全删；分组头换 CollapseTextCell 白底 46dp + 右端 CHEVRON 三角（340ms EASE_OUT_QUINT，收起尖朝下/展开尖朝上），空组不给三角、`pressable(enabled=false)` 点不开；「无在途执行」「读到了没有已登记」两行占位提示摘除；搜索框挪进列表 Box `align(TopCenter)` 最后画（TG 叠层同款），`contentPadding.top = 44dp`，Glyphs 新增 CHEVRON/SEARCH_FIELD 两字形（分支 `rough-robin`）
 - 2026-10-05 —— 批 40：任务栏重做（TG 联系人页复刻）—— TaskCenterScreen 全量重写：标题「任务栏」+ 排序切换钮（两态字形）/「搜索任务」白药丸/灰底上一张白卡（运行中 + 定时任务两组，GraySection 头可展开收起）/UserCell call 样式行（行尾播放三角，挂起中转圈）/点行弹操作面板/登记收进 FAB；状态层加 TaskSort/sortedTasks/matches/opTargetTaskId（分支 `rough-robin`）
 - 2026-10-05 —— 批 39：拆掉顶栏底部的全宽分割线 —— `ActionBar` 末尾的 `Separator(indentDp = 0)` 是四屏顶栏底下那条全宽 1dp 线，TG 的 `ActionBar` 底下没有分割线（内容直接接栏底）；列表行间分隔线不动（分支 `electric-crocodile`）
