@@ -98,7 +98,6 @@ import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.ScheduleKind
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
@@ -120,7 +119,8 @@ import kotlinx.coroutines.launch
  *   灰** —— 栏与列表连成一块（TG 那页的 actionBarDefault 是白/夜间深灰，用户要的
  *   灰栏是本仓的定制，落在 `surfaceMuted` 上）；
  * - **顶栏**：标题「任务中心」（对应 TG 的「联系人」：Medium 20sp，`createTitleTextView`
- *   的 portrait 档），右上角只有**排序切换钮**（TG `msg_contacts_name`/`msg_contacts_time`
+ *   的 portrait 档；**标题下面没有副标题**——批 45 用户口径，此前那句"共 N 条任务"整条
+ *   摘掉），右上角只有**排序切换钮**（TG `msg_contacts_name`/`msg_contacts_time`
  *   两态：图标画的是"切过去的那一档"——按名称排序时显示时钟）。批 41 摘掉「刷新」：
  *   切页签/回前台现取（`TabReloadEffect`）与操作后现取（`performTaskOp`）已覆盖
  *   数据会变的所有时机，常驻按钮没有事可做；
@@ -146,7 +146,8 @@ import kotlinx.coroutines.launch
  *   尖朝上、340ms EASE_OUT_QUINT）。**空组照样有三角、照样能收放**（批 44 用户拍板，
  *   推翻批 41 的"空组不给三角"）：组头是**开关**不是内容指示器，灰一个、点不动一个，
  *   同一排的两个头就会长得不一样；空组展开后就是空的（不铺"无在途执行"这类占位句，
- *   见下面的边界条），收起它是用户的自由；
+ *   见下面的边界条），收起它是用户的自由。两组**缺省都收起**（批 45 用户口径）——
+ *   进屏先看见两张干净的卡，展开是用户自己按的；
  * - **任务行**：TG `UserCell` 的 call 样式（联系人页实际用的那档：行高 56dp、头像
  *   44dp 圆、名字 15sp Medium、次行 13sp、分隔线缩进 68dp）—— 头像用脚本类型徽标
  *   （项目页 [FileTypeAvatar] 的 44dp 版），行尾「立即执行」= 实心播放三角，
@@ -157,10 +158,10 @@ import kotlinx.coroutines.launch
  *   只有一个动作 = 登记任务（表单弹底部面板）。
  *
  * 诚实边界（与其他屏同一条纪律，一条不松；批 41 按用户口径收窄了两处）：
- * - 没读到/读失败**不冒充**空清单：副标题只在有话说时出现（条数/尚未读取/读失败
- *   原文），「读到了，没有」那句空话摘掉（空组展开后"没有行"本身就是那句说明 ——
- *   批 44 起空组也能收放，见上面分组头那条）；卡内
- *   空行区分「尚未读取」「读失败：原文」「没有匹配的任务」三种；
+ * - 没读到/读失败**不冒充**空清单：「读到了，没有」那句空话摘掉（空组展开后"没有行"
+ *   本身就是那句说明 —— 批 44 起空组也能收放，见上面分组头那条）；卡内空行区分
+ *   「尚未读取」「读失败：原文」「没有匹配的任务」三种 —— **这两行是读账的唯一出口**
+ *   （批 45 摘掉副标题后，顶栏不再复述读状态）；
  * - **空组不铺占位提示**（批 41）：「无在途执行」「读到了，没有已登记的任务」两句
  *   摘掉 —— 空清单的事实由"没有行"本身说，红字/灰字只留给真正有内容的错；
  * - **恢复账/未结算执行整块摘掉**（批 41 用户拍板）：非空也不显示 —— 那两笔账的
@@ -197,8 +198,9 @@ fun TaskCenterScreen(
     // 排序缺省 = 按时间（TG SharedConfig.sortContactsByName 缺省 false 的同款取向）。
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(TaskSort.TIME) }
-    var runsExpanded by rememberSaveable { mutableStateOf(true) }
-    var tasksExpanded by rememberSaveable { mutableStateOf(true) }
+    // 两组缺省**收起**（批 45 用户口径）：进屏先看见两张干净的卡，展开是用户自己按的。
+    var runsExpanded by rememberSaveable { mutableStateOf(false) }
+    var tasksExpanded by rememberSaveable { mutableStateOf(false) }
 
     val copy = rememberCopyAction()
     // 操作回执走外壳浮层（批 44）：此前是搜索框下面的一行，弹一条就把首卡往下推一次。
@@ -214,18 +216,9 @@ fun TaskCenterScreen(
     val scope = rememberCoroutineScope()
     val particleColor = ThemeColors.accent
 
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取",
-        total = state.tasks.size,
-        emptyText = "",
-        unit = "条任务（含已停用）",
-    )
-
-    // 副标题只在**有话说**的时候出现：空清单那句（批 41 摘掉）与空串都不占位 ——
-    // `Status.count` 的空清单档给空串，这里再拦一道，`ActionBar` 就画不出空行。
-    val subtitle = status.text.ifEmpty { null }
-
+    // 副标题整条摘掉（批 45 用户口径：「标题下面不要再有字」）—— 此前是
+    // `Status.count` 的那句"共 N 条任务（含已停用）"。读账不靠它：还没读到/读失败
+    // 由卡内那两行如实说（[InCardHint]），条数由两张卡自己数得出来。
     // 任务消失（取消、或一次性任务跑完出册）时在原地炸一簇粒子。
     val taskIds = state.tasks.map { it.id }
     LaunchedEffect(taskIds) { particles.sync(taskIds, particleColor) }
@@ -244,8 +237,7 @@ fun TaskCenterScreen(
         ActionBar(
             title = "任务中心",
             titleStyle = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
-            subtitle = subtitle,
-            subtitleTone = status.tone,
+            // 不传 subtitle（批 45 用户口径）：标题下面不要任何字。
             background = ThemeColors.surfaceMuted,
             actions = {
                 // 排序切换（TG ContactsActivity：图标 = 切过去的那一档 ——
