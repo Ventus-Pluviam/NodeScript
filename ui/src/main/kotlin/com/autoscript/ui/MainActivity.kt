@@ -77,7 +77,7 @@ import kotlinx.coroutines.launch
  * 统一（四屏顶栏长得一样靠的是同一种排版组件被同一个约定调用），最下面的页签条由外壳
  * 一处画（`MainShell`）—— 页签条是全局唯一的一条，不能跟着页里的内容一起滑走。
  * 主题档位（跟随系统/浅/深）**不挂顶栏**（批 24 起）：TG 顶栏右侧没有全局开关格，
- * 它收在项目页 ⋮ 菜单里（`themeSwitchLabel` 下发那一格的目标模式文案）。
+ * 它收在项目页与设置页的 ⋮ 菜单里（`themeSwitchLabel` 下发那一格的目标模式文案）。
  *
  * 这里也是本模块唯一直接持有 [HostSummary] 的类：各屏只收纯状态 DTO，
  * 因此它们各自可 JVM 测（见 `HomeStateTest`/`CapabilityCenterStateTest` 等）。
@@ -207,8 +207,10 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Tab.SETTINGS -> SettingsScreen(
                                     state = capabilityState,
-                                    onRefresh = { reloadCapabilities() },
                                     onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
+                                    // 与项目页 ⋮ 同一项：标签 = 目标模式（TG 日夜项同款口径）。
+                                    themeSwitchLabel = themeSwitchLabel(dark),
+                                    onSwitchTheme = { themeMode = themeMode.next(dark) },
                                     modifier = Modifier,
                                 )
                         }

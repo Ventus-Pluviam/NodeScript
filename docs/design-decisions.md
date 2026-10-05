@@ -118,6 +118,10 @@
     - **三件都要说全**：总数、其中引擎那一段（超支全在它身上，不分段就答不上"为什么这么大"）、
       引擎 .so 在不在。**量不到就说未量到，不显示 0** —— 0 会被读成"安装包是空的"；
       引擎缺失时体积照报（同一条纪律的另一面：装了个跑不了脚本的壳是事实，隐去比显示更糟）。
+    - **→ 2026-10-05 改口径（批 47）**：设置页**撤下**「安装体积 xxx」那句渲染（用户口径
+      「安装体积xxx那个文字去掉」）—— 本条「明示」的一半作废；「接受超支」的预算记账、
+      §15 证据链、`InstallSizeRead` 实测链与 `InstallSizeState` 换算**全部不变**
+      （测试仍钉着文案）。见本文件「已推翻 / 已改口径」表。
 
 21. **shell 捕获输出超限：静默截断 + 显式日志 Warning + 返回截断标志**（backlog A2b；§9.6 原口径只写「双流并发读干」，没定过上限）：
     - **背景**：`AndroidShellExecutor.PipeReader` 把 stdout/stderr **全量**读进内存，一条 `cat` 大文件
@@ -764,6 +768,7 @@
 | 外审 C5：`versionName` 硬编码 `"0.1.0"` | `app/build.gradle.kts` | **保留硬编码占位**（2026-10-01 拍板）：本仓不发行正式版（§18 第 3 项），没有发版流程 —— 此刻把版本号接到 `gradle.properties` / 版本目录只会**多出一个会漂的事实来源**，换不来任何东西。改为在该行上方写明：这是占位、为什么不引第二个来源、真要发版时该怎么改（两数同改、`versionCode` 单调递增、同步 §13/§14 交付轨） | 2026-10-01 |
 | `LockSigner.KeyProvider.keyBytes(): ByteArray`（应用密钥接缝的原始形状） | `LockSigner.kt`（`:app-service:npm`） | **改 `secretKey(): SecretKey`**（2026-10-01 拍板，backlog A1c）：Keystore 里的密钥材料**不出库**，`getEncoded()` 拿不到字节 ⇒ 原形状**接不上** Keystore，而 Keystore 正是设计口径的密钥存放处。给句柄则两边都成立（Keystore HMAC 密钥与测试用 `SecretKeySpec` 都能喂 `Mac.init(SecretKey)`），语义一字不变（仍 HMAC-SHA256、落盘仍 `v1 <hex>`）。**同时拍板实现落点：Keystore 版住 `:app` 装配层**（Composition Root 已依赖 `:app-service:npm`，零契约变更；`:app-service:npm` 保持零 `android.*`）。**注意：这是接缝形状，不是接线** —— 生产装配的 `lockKey` 仍是 `null`（`SECURITY.md` / §11.3 第 8 条口径不变） | 2026-10-01 |
 | **「vendored npm CLI 素材从哪来」**（backlog A1 的卡点：CI 产 / 入库 / 取本机 npm 目录三选一，2026-10-01 之前未定） | `docs/backlog.md` A1、§10.1 脊梁 | **取 Node 源码树自带的 `deps/npm`，随 libnode 同批出库**（第四选项）：`fetch-and-build.sh` §9 收敛到 `OUT/npm` → `node-slice.yml` artifact → gradle `prepareNpmCliAssets` 随包 `assets/npm/` → 启动期幂等落位 `files/npm/`。**选它的理由**：素材与 `NODE_VERSION` 同一把锁（换 Node 版本时 npm 跟着走，`NPM_CLI_VERSION` 与素材 `package.json` 逐字比对，漂移当场红 —— 逼一次显式决策），不引入第二条下载源与第二套校验，且与 libnode 同批出库（同一个 artifact、同一次构建、同一份基表纪律）。**代价（明写，不当已办）**：Node 24.21.0 携带的是 **npm 11.19.0**，**低于 §10.1 脊梁写的「npm 12.x 系」** —— npm 12 的「拒绝全部 lifecycle + allow-git=none + allow-remote=none」这层**官方默认语义当前不在位**。护栏并没有因此静默消失，但**只剩一层**：`HostNodeExecutor` 对每条命令硬编码 `--ignore-scripts`（§11.1 T1 的零 spawn 主路径），它与 npm 版本无关；而**非脚本** spawn 路径的第二层兜底（§10.12 末行的 child_process 拦截 shim）本就未落。升级到 12.x 是**独立一件事**，已登记 backlog；**同日追加实测**：`nodejs.org/dist/index.json` 的 868 条官方发布里**没有任何一条携带 npm 12.x**（最新 v26.10.0 / 2026-09-21 带的是 npm 11.19.1）→「等 Node 线携带」这条升级路径**原理上不成立**，要 12.x 只能另找素材来源；改 `NPM_CLI_VERSION` 即触发全链回归。**→ 2026-10-02 改口径（第 26 项）**：素材来源换 **registry 发布态 tarball `npm@12.2.0`** —— 「与 `NODE_VERSION` 同一把锁」解除，版本纪律改由 `VERSIONS.env` 的 `NPM_CLI_VERSION` + `NPM_CLI_SHA1` 承担（改钉仍触发全链回归，§9 sha1+版本双闸）；上文原结论保留 | 2026-10-01（→ 2026-10-02 改） |
+| 能力中心**明示安装体积**（决策 20「接受 + 明示」的 UI 披露面：设置页单列一段「安装体积 xxx」，2026-10-02 拍板并落地） | 决策 20（本文件第 20 项）+ §15 表注 + `backlog.md` E1 | **设置页撤下这段渲染**（批 47 用户口径「安装体积xxx那个文字去掉」）：撤的只是 UI —— 「接受超支」的预算记账、§15 证据链、`InstallSizeRead` 实测链、`InstallSizeState` 字段与 `text()` 换算**全部保留**（`CapabilityCenterStateTest` 仍钉着文案），「明示」这一半按用户口径作废；将来要再披露从 `text()` 同源取 | 2026-10-05 |
 ### 附：§12.2 被反转口径原文照抄（2026-09-30 步骤 6 摘录前的原文）
 
 > - **语义层**（handler）住 `:platform:capabilities` 的 `SystemNamespaces.kt`，纯 JVM 可测（假 SPI 注入即可跑）：参数校验（spec 守卫、必填字段、`timeout > 0`）、枚举字面量解析（`ShellMode`/`DialogMode`，拼错即报错不静默套默认）、默认值（shell 超时 30s）、错误分类**透传**（`AutojsException.error` 原码回桥）、响应形状编码（与 `extras.ts` 逐字对齐）；

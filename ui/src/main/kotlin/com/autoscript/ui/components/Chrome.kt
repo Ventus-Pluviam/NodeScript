@@ -62,6 +62,8 @@ import kotlin.math.min
 /**
  * Telegram 式顶栏（`ActionBar`）：56dp 高、标题左对齐、副标题小一号次级色、右侧动作区。
  *
+ * [title] 可空（批 47）：设置页的顶栏只留右上角菜单，`title = null` 即左侧不画标题 ——
+ * 其余屏照旧传标题，调用点不受影响。
  * 为什么顶栏自带 [subtitle] 这一档：TG 的 ActionBar 大量用副标题（在线人数、连接状态、
  * "正在输入…"），而副标题一多，"把状态塞进标题"的老写法就露馅了。这里给标题下方
  * 留一个固定位置，各屏爱用不用，但不用就得把 [subtitle] 传 null 而不是塞进标题。
@@ -75,7 +77,7 @@ import kotlin.math.min
  */
 @Composable
 fun ActionBar(
-    title: String,
+    title: String? = null,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     subtitleTone: StatusTone = StatusTone.MUTED,
@@ -149,13 +151,18 @@ fun ActionBar(
                 Spacer(Modifier.width(4.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = titleStyle?.color ?: palette.text,
-                    style = MaterialTheme.typography.titleLarge.merge(titleStyle),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // 标题可空（批 47 设置页：顶栏不挂标题，标识区在列表第 0 项里）。
+                // 空时整块文字不画，但这一列仍在（weight 占位）—— 右侧动作区的位置
+                // 因此与有标题的屏对齐，不因缺标题而挪动。
+                if (title != null) {
+                    Text(
+                        text = title,
+                        color = titleStyle?.color ?: palette.text,
+                        style = MaterialTheme.typography.titleLarge.merge(titleStyle),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (subtitle != null) {
                     Text(
                         text = subtitle,

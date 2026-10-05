@@ -17,14 +17,17 @@ import com.autoscript.domain.permission.CapabilityState
  * - [load] = [LoadState.NotLoaded] 时 [rows] 为空 —— **不冒充**「一个能力都没有」
  *   （那是 [LoadState.Loaded] 且清单为空；而 `Capability.entries` 恒非空，
  *   所以"loaded 且空"在现实中只会是装配异常，渲染上仍按"真的没有"处理）；
- * - 每行都显示**引导文案**（`PermissionCenter.guideText` 的同一份）：GRANTED 时它也说明了
- *   当前是什么态，不按三态去猜该不该显示；
+ * - 引导文案（`PermissionCenter.guideText` 的同一份）仍在 [CapabilityRowState.guide]
+ *   **原样透传**、不截断不加工；批 47 起设置页**不再渲染**它（用户口径「去除各个权限的
+ *   描述」）—— 撤下的是渲染，字段与透传照旧；
  * - 「去授权」按钮的显隐取 [CapabilityRow.canRequestGrant]（`:domain`
  *   `CapabilityLifecycle` 的判据）—— 呈现层不自己写 `state != GRANTED`，那是第二套判据；
  * - 降级中的定时任务**单列一段**（§8.6 承诺「可能偏差」要在 UI 上标注）：它们不是
  *   权限问题，塞进能力行里会让人找不到；
- * - 安装体积**单列一段**（§15 的 E1 处置：2026-10-02 拍板「接受超支并在能力中心明示」）：
- *   超支是既成事实，不披露等于让用户装完才发现。没量到就说没量到，不显示 0。
+ * - 安装体积的字段与换算照旧（§15 E1 的记账口径不变，`text()` 仍由测试钉着，
+ *   没量到 = null 而不是 0）；批 47 起设置页**不再渲染**那句「安装体积 xxx」
+ *   （用户口径「安装体积xxx那个文字去掉」）—— UI 披露面的撤下见
+ *   `design-decisions.md` 的「已推翻 / 已改口径」表，预算记账不受影响。
  */
 data class CapabilityCenterState(
     val load: LoadState,
@@ -67,7 +70,7 @@ data class CapabilityCenterState(
  *   `CapabilityScreen` 里一个私有 `stateColor()`，既不可测也不可复用。
  * @property stateLabel 三态的中文说法，逐态不同，因为"用户该做什么"逐态不同：
  *   GRANTED 什么都不用做、DEGRADED 能用但受限、DENIED 必须去系统里改。
- * @property guide 引导文案（原样透传，不截断不加工）。
+ * @property guide 引导文案（原样透传，不截断不加工）。批 47 起设置页不渲染它。
  * @property canRequestGrant 「去授权」按钮显隐（`:domain` 判据的投影，见 [CapabilityRow]）。
  */
 data class CapabilityRowState(
@@ -131,15 +134,20 @@ data class CapabilityRowState(
  * **为什么自己算 MiB 而不在装配层算好**：换算口径（MiB vs MB、按什么除）是个会被漂移的
  * 决定，放进纯 JVM 呈现态才能被 `CapabilityCenterStateTest` 钉住。
  *
- * @property engineFilesPresent 引擎 .so 真的在不在。false 时 UI **如实说「引擎未随包」**——
- *   那正是「装了个跑不了脚本的壳」的事实，隐去体积会让人以为装全了。
+ * @property engineFilesPresent 引擎 .so 真的在不在。false 时 [text] **如实说「引擎未随包」**
+ *   —— 那正是「装了个跑不了脚本的壳」的事实。批 47 起设置页不渲染这句话
+ *   （用户口径「安装体积xxx那个文字去掉」），文案与换算保留给记账与测试。
  */
 data class InstallSizeState(
     val totalBytes: Long,
     val engineBytes: Long,
     val engineFilesPresent: Boolean,
 ) {
-    /** 给用户看的那句话。三件事都要在：总数、其中引擎多少、为什么这么大。 */
+    /**
+     * 那句「安装体积」的标准措辞：总数、其中引擎多少、为什么这么大，三件事都要在。
+     * 批 47 起设置页不渲染它（见类 KDoc），文案仍由测试钉住 —— 换算口径要有一个
+     * 可测的落点，将来要再披露时从这里同源取。
+     */
     fun text(): String {
         val total = "${mib(totalBytes)} MiB"
         if (!engineFilesPresent) {
