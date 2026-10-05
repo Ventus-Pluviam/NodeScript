@@ -12,6 +12,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -26,8 +27,12 @@ import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalBarAction
+import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.TabItem
 import com.autoscript.ui.components.TabBar
+import com.autoscript.ui.components.ToastAction
+import com.autoscript.ui.components.ToastHost
+import com.autoscript.ui.components.rememberToastAction
 import com.autoscript.ui.screens.ProjectScreen
 import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
@@ -114,6 +119,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val scope = rememberCoroutineScope()
             val pagerState = rememberPagerState(pageCount = { Tab.entries.size })
+            // 浮层口（批 44）：**一处**建、一处挂（[MainShell] 里那个 ToastHost），
+            // 四屏的复制回执与操作/停止回执都经 `LocalToast` 落到它上面 ——
+            // 此前那些回执是各屏列表里的一行，弹一条就把内容往下推一次。
+            val toast = rememberToastAction()
             // 系统栏图标的明暗跟**本 App 的主题档位**走，不是跟系统深色开关走：
             // 用户在顶栏把主题切成浅色、而系统还是深色时，状态栏图标必须转深色，
             // 否则白底上画一排白图标 = 看不见。`enableEdgeToEdge` 的 auto 只认系统档位，
@@ -133,6 +142,7 @@ class MainActivity : ComponentActivity() {
                     // 点页签 = 让 pager 自己滑过去。**不直接改状态**：pager 的滚动位置是
                     // 唯一事实来源，页签条与重读都从它派生，绕过去就又会漂移。
                     onSelectTab = { scope.launch { pagerState.animateScrollToPage(it) } },
+                    toast = toast,
                 ) { shellModifier ->
                         // 四屏装进 **HorizontalPager**：这是 TG 主页签的做法
                         // （`MainTabsActivity extends ViewPagerActivity`），换来两件事 ——
@@ -519,11 +529,16 @@ private fun themeSwitchLabel(isDark: Boolean): String =
  * 同层、盖在内容之上 —— 所以 Column 不再需要给自己铺底色（每屏自己铺），也不用
  * 给 pager 让出高度。主题切换曾经是页签条之上的一条 28dp 细行，已改挂各屏顶栏
  * （见 [LocalBarAction]）。
+ *
+ * **浮层（toast）也挂在这一层**（批 44）：提示是"浮在内容之上、自己消失"的一条，
+ * 宿主只有这一处 —— 四屏的回执经 [LocalToast] 落上来，各屏不必自己摆位置，
+ * 也不必再往列表里插行（这正是批 44 要修的病）。
  */
 @Composable
 private fun MainShell(
     pagerState: PagerState,
     onSelectTab: (Int) -> Unit,
+    toast: ToastAction,
     content: @Composable (Modifier) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -531,7 +546,16 @@ private fun MainShell(
         // 是"占一行的一块版面"，而是浮在内容之上的一条 —— 与内容同层（Box），内容
         // 滚动时会从胶囊底下穿过（TG 同款：会话列表从底栏下面滚过去）。
         Box(Modifier.weight(1f)) {
-            content(Modifier.fillMaxSize())
+            // 浮层宿主包住内容（而不是并列摆一条）：`LocalToast` 要供到四屏里面去。
+            // 位置让出悬浮胶囊与导航栏 —— 提示贴在胶囊**上方**，不压住页签。
+            ToastHost(
+                action = toast,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = TabBarBottomClearance()),
+            ) {
+                content(Modifier.fillMaxSize())
+            }
             // 胶囊盖在内容之上：后画的在上层。它自己的 8dp 外边距让四周露出内容。
             TabBar(
                 modifier = Modifier.align(Alignment.BottomCenter),

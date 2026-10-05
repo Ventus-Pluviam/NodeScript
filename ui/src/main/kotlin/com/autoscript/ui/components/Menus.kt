@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -23,8 +25,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,6 +49,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autoscript.ui.state.StatusTone
@@ -391,11 +397,129 @@ fun rememberLongPressFeedback(): () -> Unit {
 }
 
 /**
- * 复制到剪贴板 + 一句会自己消失的回执。
+ * 浮层提示（TG `Bulletin` 的**底部条**那一档：复制回执、操作回执、失败原文都走它）。
+ *
+ * **为什么要有这个口**（批 44）：此前这些回执是**列表里的一行** —— 它占的正是搜索框
+ * 底下那一段，弹一条就把第一张卡往下推一次，读列表时整块在跳。TG 的做法从来不是
+ * "插一行"，而是浮在内容之上、自己消失（`Bulletin` 挂在 fragment 的容器里，列表不动）。
+ *
+ * 版式照 TG `Bulletin.Layout`：**最小高 48dp、左右内边距 16dp、上下 8dp、圆角 16dp**
+ * （`setBackground(color)` → `createRoundRectDrawable(dp(16), color)`），底
+ * `key_undo_background`（回退 `key_chat_gifSaveHintBackground`，见
+ * [com.autoscript.ui.theme.Colors.toastBackground]），字 14sp
+ * （`key_undo_infoColor` → `key_chat_gifSaveHintText`）。停留 1.6s —— 与复制回执
+ * 同一条时间线，两种回执不该有两套节奏。
+ */
+@Stable
+class ToastAction internal constructor(
+    private val message: MutableState<String?>,
+    private val visible: MutableState<Boolean>,
+    private val scope: CoroutineScope,
+) {
+    /** 最近一条提示（**不清空**：淡出动画期间还要画它，见 [ToastNotice]）。 */
+    val text: String? get() = message.value
+
+    /** 提示此刻在不在。 */
+    val noticeVisible: Boolean get() = visible.value
+
+    /** 弹一条提示；连弹两条时**后一条顶掉前一条**，计时从头算。 */
+    fun show(label: String) {
+        message.value = label
+        visible.value = true
+        // 令牌：连弹两下时，先起的那次不许把后起的那条提前收掉。
+        val mine = ++token
+        scope.launch {
+            delay(NOTICE_MILLIS)
+            if (token == mine) visible.value = false
+        }
+    }
+
+    private var token = 0
+
+    private companion object {
+        const val NOTICE_MILLIS = 1600L
+    }
+}
+
+/**
+ * 当前屏的浮层口（**唯一**一处：外壳 [ToastHost] 提供，屏内 `copy.copy(…)` 与
+ * 状态回执都落到它上面）。
+ *
+ * 走 CompositionLocal 而不是层层传参：回执的发出点在屏内（行点击、操作回执），
+ * 而宿主只有一处（外壳）—— 传参要把这条线穿过四个屏的签名，且每个屏都得转发一次。
+ */
+val LocalToast: ProvidableCompositionLocal<ToastAction?> = compositionLocalOf { null }
+
+/** 建一份浮层口（只在外壳调一次）。 */
+@Composable
+fun rememberToastAction(): ToastAction {
+    val scope = rememberCoroutineScope()
+    val message = remember { mutableStateOf<String?>(null) }
+    val visible = remember { mutableStateOf(false) }
+    return remember(scope, message, visible) { ToastAction(message, visible, scope) }
+}
+
+/**
+ * 浮层提示的宿主：把 [action] 提供下去（[LocalToast]）**并**在 [modifier] 指的位置
+ * 画出提示本身。调用方负责给位置（本仓是外壳底部、让出底栏与导航栏）。
+ *
+ * 浮层**不吃触摸**：它只是画上去的一条，底下的列表照旧能点（TG 的 Bulletin 同款 ——
+ * 那条提示不是模态，没有"点掉它"这一步）。
+ */
+@Composable
+fun ToastHost(action: ToastAction, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalToast provides action) {
+        content()
+        ToastNotice(action = action, modifier = modifier)
+    }
+}
+
+/**
+ * 浮层提示本体（底部滑入、淡出）。挂在外壳里当**浮层**用，不再是列表里的一行。
+ *
+ * 宽度按内容收（`widthIn(max = 420dp)`）：一句"已复制"铺满整屏宽会像一条横幅，
+ * TG 的 Bulletin 也只在宽屏才固定宽度。窄屏上左右各留 12dp 呼吸。
+ */
+@Composable
+fun ToastNotice(action: ToastAction, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = action.noticeVisible,
+        enter = fadeIn(tween(120)) + slideInVertically(tween(180)) { it / 2 },
+        exit = fadeOut(tween(160)) + slideOutVertically(tween(180)) { it / 2 },
+        modifier = modifier,
+    ) {
+        // 画的是 [ToastAction.text]（不清空），故淡出动画期间不会变成空白。
+        val palette = ThemeColors
+        Box(
+            Modifier
+                .padding(horizontal = 12.dp)
+                .widthIn(max = 420.dp)
+                .heightIn(min = 48.dp)
+                .background(palette.toastBackground, RoundedCornerShape(16.dp))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = action.text.orEmpty(),
+                color = palette.toastText,
+                style = TextStyle(fontSize = 14.sp),
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * 复制到剪贴板 + 一句会自己消失的浮层回执。
  *
  * 回执不是装饰：控制台那一屏**整行都是可复制的**（点一下即复制），而"复制成功"在
  * 系统里是静默的 —— 没有回执，用户只能靠粘贴来确认自己点没点中。TG 的做法也是弹一句
  * "已复制"再自己消失，这里照那个节奏（1.6s）。
+ *
+ * **回执画在哪**：批 44 起统一画在外壳的浮层上（[ToastHost]）—— 此前是列表里的一行，
+ * 弹一条就把列表往下推一次。外壳没装浮层（单测/预览）时 [copy] 静默跳过回执，
+ * 剪贴板照写。
  */
 @Stable
 class CopyAction internal constructor(
@@ -403,18 +527,20 @@ class CopyAction internal constructor(
     private val visible: MutableState<Boolean>,
     private val scope: CoroutineScope,
     private val put: (String) -> Unit,
+    private val toast: ToastAction?,
 ) {
-    /** 最近一次复制的那句（**不清空**：回执淡出时还要画它，见 [CopyNotice]）。 */
+    /** 最近一次复制的那句（**不清空**：回执淡出时还要画它）。 */
     val text: String? get() = message.value
 
-    /** 回执此刻在不在。 */
-    val noticeVisible: Boolean get() = visible.value
+    /** 回执此刻在不在（外壳没装浮层时恒 false —— 没有可画的地方）。 */
+    val noticeVisible: Boolean get() = toast?.noticeVisible == true
 
     /** @param label 回执文案（如"已复制该行"）；@param content 真正进剪贴板的原文。 */
     fun copy(label: String, content: String) {
         put(content)
         message.value = label
         visible.value = true
+        toast?.show(label)
         // 令牌：连点两下时，先起的那次不许把后起的那句提前收掉。
         val mine = ++token
         scope.launch {
@@ -430,7 +556,7 @@ class CopyAction internal constructor(
     }
 }
 
-/** 取一份复制口（一屏一份，跨重组留住）。 */
+/** 取一份复制口（一屏一份，跨重组留住；回执落到外壳的浮层上）。 */
 @Composable
 fun rememberCopyAction(): CopyAction {
     val clipboard = LocalClipboardManager.current
@@ -438,26 +564,9 @@ fun rememberCopyAction(): CopyAction {
     val message = remember { mutableStateOf<String?>(null) }
     val visible = remember { mutableStateOf(false) }
     val latest = rememberUpdatedState(clipboard)
-    return remember(scope, message, visible) {
-        CopyAction(message, visible, scope) { latest.value.setText(AnnotatedString(it)) }
+    val toast = LocalToast.current
+    return remember(scope, message, visible, toast) {
+        CopyAction(message, visible, scope, { latest.value.setText(AnnotatedString(it)) }, toast)
     }
 }
 
-/** 复制回执那一行（顶部滑入、淡出）。列表里当一条 item 用。 */
-@Composable
-fun CopyNotice(action: CopyAction, modifier: Modifier = Modifier) {
-    AnimatedVisibility(
-        visible = action.noticeVisible,
-        enter = fadeIn() + slideInVertically { -it / 2 },
-        exit = fadeOut(),
-        modifier = modifier,
-    ) {
-        // 画的是 [CopyAction.text]（不清空），故淡出动画期间不会变成空白。
-        ToneText(
-            text = action.text.orEmpty(),
-            tone = StatusTone.OK,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        )
-    }
-}

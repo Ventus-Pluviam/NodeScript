@@ -186,6 +186,18 @@ data class Colors(
     val checkboxCheck: Color,
 
     /**
+     * 浮层提示（toast）底（TG `key_undo_background` → 回退 `key_chat_gifSaveHintBackground`）。
+     *
+     * 浅色取 TG 的 `0xE21F2B38`（深蓝灰、89% 不透明）；**深色不照抄**：TG night 的
+     * `undo_background` = `0xF5181818`，与本仓深色屏底 [background]（`0xFF181819`）几乎
+     * 同值 —— 原样贴上去就是"深灰浮层压深灰页"，等于看不见，故取 [surface]（`0xFF232326`）
+     * 这一档，明度差与 TG night 里 `0xFF181818` 压在 `windowBackgroundWhite` 上的关系一致。
+     */
+    val toastBackground: Color,
+    /** 浮层提示的字（`key_undo_infoColor` → 回退 `key_chat_gifSaveHintText` = 白；深浅同值）。 */
+    val toastText: Color,
+
+    /**
      * 文件类型头像的底色表（TG `AvatarDrawable` 的 `avatar_background*` 色序）：
      * 扩展名哈希取槽位（`getColorIndex(id)` 的读法），同一扩展名恒同色。
      */
@@ -241,6 +253,8 @@ val LightColors = Colors(
     // `checkbox` / `checkboxCheck`：两套 attheme 都没设 → ThemeColors.java 的默认值。
     checkboxFill = Color(0xFF5EC245),
     checkboxCheck = Color(0xFFFFFFFF),
+    toastBackground = Color(0xE21F2B38),
+    toastText = Color(0xFFFFFFFF),
     // avatar_background{Red,Orange,Violet,Cyan,Blue,Pink} + Green（ThemeColors.java 默认值）。
     fileAvatarColors = listOf(
         Color(0xFFFF845E),
@@ -303,6 +317,10 @@ val DarkColors = Colors(
     menuSelector = Color(0x19FFFFFF),
     checkboxFill = Color(0xFF5EC245),
     checkboxCheck = Color(0xFFFFFFFF),
+    // TG night 的 `undo_background`（0xF5181818）与本仓深色屏底同值 → 会看不见，
+    // 上抬到 [surface] 那一档（见 [Colors.toastBackground] 的说明）。
+    toastBackground = Color(0xF5232326),
+    toastText = Color(0xFFFFFFFF),
     fileAvatarColors = listOf(
         Color(0xFFFF845E),
         Color(0xFFFEBB5B),

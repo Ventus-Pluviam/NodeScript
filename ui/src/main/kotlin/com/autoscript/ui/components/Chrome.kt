@@ -70,8 +70,8 @@ import kotlin.math.min
  * "顶栏 → 内容" 的起点在四屏完全一致（滚动时内容整体位移不会顶穿标题）。
  *
  * **底色可换**（[background]）：TG 的 `actionBarDefault` 本来就是逐屏可覆盖的键
- * （BaseFragment.createActionBar 统一上色，特殊页自己换底）—— 任务栏要跟页面
- * 同灰（批 41），其余屏不传就是原样，互不影响。
+ * （BaseFragment.createActionBar 统一上色，特殊页自己换底）—— 任务中心要跟
+ * 页面同灰（批 41），其余屏不传就是原样，互不影响。
  */
 @Composable
 fun ActionBar(
@@ -94,7 +94,7 @@ fun ActionBar(
      */
     titleStyle: TextStyle? = null,
     /**
-     * 顶栏底色覆盖（批 41：任务栏要跟页面同灰）。缺省 null = `actionBarDefault`
+     * 顶栏底色覆盖（批 41：任务中心要跟页面同灰）。缺省 null = `actionBarDefault`
      * （[ThemeColors.surface]，白/夜间 0xFF232326）；传色即整栏（含状态栏那一条）
      * 换底。要"栏与内容连成一块"的屏用它，别去改 [ThemeColors.surface] —— 那是
      * 四屏共用的键。

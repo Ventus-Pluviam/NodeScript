@@ -74,10 +74,10 @@ import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.ContextMenu
-import com.autoscript.ui.components.CopyNotice
 import com.autoscript.ui.components.CountBadge
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.LocalToast
 import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.OvershootEasing
 import com.autoscript.ui.components.PillButton
@@ -106,18 +106,20 @@ import com.autoscript.ui.state.TaskSort
 import com.autoscript.ui.state.describe
 import com.autoscript.ui.state.label
 import com.autoscript.ui.state.matches
+import com.autoscript.ui.state.opToastMessage
 import com.autoscript.ui.state.sortedTasks
+import com.autoscript.ui.state.stopToastMessage
 import com.autoscript.ui.theme.ThemeColors
 import kotlinx.coroutines.launch
 
 /**
- * 任务栏（TG 联系人页 `ContactsActivity` 的版式复刻，内容从联系人换成任务）：
+ * 任务中心（TG 联系人页 `ContactsActivity` 的版式复刻，内容从联系人换成任务）：
  *
  * - **屏底与顶栏同灰**（批 41 拍板）：页面 = `windowBackgroundGray`
  *   （[ThemeColors.surfaceMuted]），顶栏传 [ActionBar] 的 `background` 用**同一个
  *   灰** —— 栏与列表连成一块（TG 那页的 actionBarDefault 是白/夜间深灰，用户要的
  *   灰栏是本仓的定制，落在 `surfaceMuted` 上）；
- * - **顶栏**：标题「任务栏」（对应 TG 的「联系人」：Medium 20sp，`createTitleTextView`
+ * - **顶栏**：标题「任务中心」（对应 TG 的「联系人」：Medium 20sp，`createTitleTextView`
  *   的 portrait 档），右上角只有**排序切换钮**（TG `msg_contacts_name`/`msg_contacts_time`
  *   两态：图标画的是"切过去的那一档"——按名称排序时显示时钟）。批 41 摘掉「刷新」：
  *   切页签/回前台现取（`TabReloadEffect`）与操作后现取（`performTaskOp`）已覆盖
@@ -128,17 +130,23 @@ import kotlinx.coroutines.launch
  *   背景 `createRoundRectDrawableShadowed` = `InsetDrawable(defaultDrawable, 3,3,3,3)`；
  *   批 43 补上 —— 批 42 只算了一层，药丸因此比 TG 宽 6dp、高 6dp）= **屏宽 −24dp 的
  *   白药丸**、高 **40dp**、圆角 20dp + 微投影、`outline_search_1_24` 放大镜（24dp、60%）、
- *   15sp 文字、提示词 50%。列表 contentPadding.top 让出 **52dp**（药丸底 40 + 12dp
- *   空隙，批 43：对齐 TG 空态药丸底到首行的留白），滚动的首行从药丸底下穿过
- *   （`checkUi_listViewPadding` 的 actionBar 高 + 44dp 同口径）；
+ *   15sp 文字、提示词 50%。列表 contentPadding.top 让出 **60dp** = 槽位下内边距 6 +
+ *   药丸 40 + **14dp 空隙**（批 44 用户口径「和 TG 的间距一致」：批 43 的 52dp 算下来
+ *   只留了 6dp，不够。TG 侧的锚点是 `ContactsActivity` 空态 `emptyView` 的
+ *   `createFrame(…, 12, 52 + 12, 12, 0)` —— 药丸槽位（52dp）之下再让 12dp 起首行），
+ *   滚动的首行从药丸底下穿过（`checkUi_listViewPadding` 的 actionBar 高 + 44dp 同口径）；
  * - **白色圆角卡片 ×2**（`setSections(12, 16, false)` 的读法：水平 12dp 边距、圆角
- *   16dp、无投影 —— `SharedConfig.shadowsInSections` 缺省 false，首行距顶 4dp），
+ *   16dp、无投影 —— `SharedConfig.shadowsInSections` 缺省 false），
  *   **运行中的任务与定时任务各自成卡**（批 42 用户改口拆组 —— 批 40 的「同卡」口径
- *   作废），两卡之间 8dp 灰缝；
+ *   作废），两卡之间 **12dp 灰缝**（批 44：TG 多 section 页在两组之间插 `ShadowSectionCell`，
+ *   它的缺省高就是 12dp —— `this(context, 12, null)`，那才是 TG 的组间距；`setSections`
+ *   的 12 是**左右边距**，不是组间距）；
  * - **分组头**（批 41 重做：TG `CollapseTextCell` 的白底收起行）：46dp 白条、14sp
  *   Medium 正文色、文字缩进 21dp，右端 14dp **三角**（收起 = 尖朝下、展开 = 180°
- *   尖朝上、340ms EASE_OUT_QUINT）。**空组不给三角也不许展开**（点击空操作）——
- *   展开后只有一行空提示的组，"可展开"是假话；
+ *   尖朝上、340ms EASE_OUT_QUINT）。**空组照样有三角、照样能收放**（批 44 用户拍板，
+ *   推翻批 41 的"空组不给三角"）：组头是**开关**不是内容指示器，灰一个、点不动一个，
+ *   同一排的两个头就会长得不一样；空组展开后就是空的（不铺"无在途执行"这类占位句，
+ *   见下面的边界条），收起它是用户的自由；
  * - **任务行**：TG `UserCell` 的 call 样式（联系人页实际用的那档：行高 56dp、头像
  *   44dp 圆、名字 15sp Medium、次行 13sp、分隔线缩进 68dp）—— 头像用脚本类型徽标
  *   （项目页 [FileTypeAvatar] 的 44dp 版），行尾「立即执行」= 实心播放三角，
@@ -150,15 +158,19 @@ import kotlinx.coroutines.launch
  *
  * 诚实边界（与其他屏同一条纪律，一条不松；批 41 按用户口径收窄了两处）：
  * - 没读到/读失败**不冒充**空清单：副标题只在有话说时出现（条数/尚未读取/读失败
- *   原文），「读到了，没有」那句空话摘掉（空组自己会说明：无三角、点不开）；卡内
+ *   原文），「读到了，没有」那句空话摘掉（空组展开后"没有行"本身就是那句说明 ——
+ *   批 44 起空组也能收放，见上面分组头那条）；卡内
  *   空行区分「尚未读取」「读失败：原文」「没有匹配的任务」三种；
  * - **空组不铺占位提示**（批 41）：「无在途执行」「读到了，没有已登记的任务」两句
  *   摘掉 —— 空清单的事实由"没有行"本身说，红字/灰字只留给真正有内容的错；
  * - **恢复账/未结算执行整块摘掉**（批 41 用户拍板）：非空也不显示 —— 那两笔账的
  *   权威呈现回到控制台与本仓的日志/测试（`AppShellTaskCenterTest` 等仍守着数据面）；
  * - 操作失败（`opError`）**不清任务清单**；成功回执只说"调用被接受"；
+ * - **操作回执走外壳的浮层（toast，批 44）**：挂起/失败原文/成功回执三类不再插进列表
+ *   —— 插一行会把第一张卡往下推一次。文案与判读在 [opToastMessage]/[stopToastMessage]
+ *   （纯层、可 JVM 测），这里只把解析出的那一句交给 `LocalToast`；
  * - 在途执行的数据来自**控制台**的运行列表（[ConsoleState.activeRuns]）：停止的
- *   失败/回执（`stopError`/`stopNotice`）在这里也如实给一行；
+ *   失败/回执（`stopError`/`stopNotice`）在这里也**弹**同一句；
  * - 取消走一次确认对话框（误触成本 = 手工重登记全部字段）；
  * - 挂起中（`opInFlight`）操作按钮全部停用 —— 立即执行要挂到执行结算，
  *   不禁用就会双击双投。
@@ -189,6 +201,14 @@ fun TaskCenterScreen(
     var tasksExpanded by rememberSaveable { mutableStateOf(true) }
 
     val copy = rememberCopyAction()
+    // 操作回执走外壳浮层（批 44）：此前是搜索框下面的一行，弹一条就把首卡往下推一次。
+    // 文案一个字没动（判读见 [opToastMessage]/[stopToastMessage]），只是换了地方 ——
+    // 本屏自己那条（操作）优先于借控制台那条（停止），两边同时有话说时先说自己的。
+    val toast = LocalToast.current
+    val opToast = opToastMessage(state.opError, state.opNotice, state.opInFlight)
+        ?: stopToastMessage(console.stopError, console.stopNotice, console.stopInFlight)
+    // 键是**解析出的那一句**：同一句连着出现不重弹（键没变），换了一句才弹。
+    LaunchedEffect(opToast) { opToast?.let { toast?.show(it) } }
     val particles = rememberDeletionParticles()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -222,7 +242,7 @@ fun TaskCenterScreen(
         // 顶栏跟页面同灰（批 41 用户拍板）：传 `background` 覆盖 `actionBarDefault`，
         // 栏与列表连成一块灰，不再是"白栏压灰页"。
         ActionBar(
-            title = "任务栏",
+            title = "任务中心",
             titleStyle = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
             subtitle = subtitle,
             subtitleTone = status.tone,
@@ -266,47 +286,26 @@ fun TaskCenterScreen(
                     // TG checkUi_listViewPadding 的读法：列表顶让出「顶栏高 + 44dp」
                     // —— 44dp 里装的是悬浮搜索框（52dp 槽位 − 顶栏 4dp 呼吸 + 首行 4dp）；
                     // 列表滚上来时首行从药丸底下穿过。左右 12dp、底部让位底栏照旧。
-                    // 批 43：药丸缩到 40dp（槽位 52 不变），让位随之 54→52 —— 药丸底到
-                    // 第一张卡保持 12dp（= TG 空态药丸底到首行的留白）。
+                    // 批 44：让位 52→60dp —— 药丸底到第一张卡的间距按用户口径对齐 TG
+                    // （14dp，出处见类 KDoc 的搜索栏那条）。
                     contentPadding = PaddingValues(
                         start = 12.dp,
                         end = 12.dp,
-                        top = 52.dp,
+                        top = 60.dp,
                         bottom = TabBarBottomClearance(),
                     ),
                 ) {
-                    item { CopyNotice(copy) }
-                    if (state.opInFlight) {
-                        item { FeedbackLine("执行中…（挂起期间按钮停用）", StatusTone.MUTED) }
-                    }
-                    state.opError?.let {
-                        item { FeedbackLine("操作失败：$it", StatusTone.PROBLEM) }
-                    }
-                    state.opNotice?.let {
-                        item { FeedbackLine(it, StatusTone.OK) }
-                    }
-                    if (console.stopInFlight) {
-                        item { FeedbackLine("正在停止…（挂起期间按钮停用）", StatusTone.MUTED) }
-                    }
-                    console.stopError?.let {
-                        item { FeedbackLine("停止失败：$it", StatusTone.PROBLEM) }
-                    }
-                    console.stopNotice?.let {
-                        item { FeedbackLine(it, StatusTone.OK) }
-                    }
                     // 卡片自身（clip 先于 background，圆角裁住全部内层）—— 抽出来给
                     // 两组各用一份（批 42 拆组：TG 联系人页的多个 section 本来就是
                     // 各自一张卡、卡间留缝，不是一张大卡里塞两个头）。
                     item {
                         // 白色圆角卡片一：运行中的任务。
                         Card {
-                            // 空组不给三角也不许展开（批 41 拍板）：hasContent = false
-                            // 时点击是空操作 —— 组内容的三态（尚未读取/读失败/空）都算
-                            // "没有可展开的东西"。展开后只有一行空提示的组，收起它没有意义。
+                            // 空组照样能收放（批 44 用户拍板）：组头是开关，不是内容指示器 ——
+                            // 有没有行是内容自己的事，灰三角/点不动会让两个头长得不一样。
                             GroupHeader(
                                 title = "运行中的任务",
                                 expanded = runsExpanded,
-                                hasContent = console.activeRuns.isNotEmpty(),
                                 onClick = { runsExpanded = !runsExpanded },
                             )
                             if (runsExpanded) {
@@ -336,14 +335,14 @@ fun TaskCenterScreen(
                         }
                     }
                     item {
-                        // 两卡之间 8dp 灰缝（原「组间留白」的 Spacer，拆组后升为卡间距）。
-                        Spacer(Modifier.height(8.dp))
+                        // 两卡之间 12dp 灰缝（批 44 对到 TG 的组间距：多 section 页两组之间
+                        // 那张 `ShadowSectionCell` 的缺省高就是 12dp）。
+                        Spacer(Modifier.height(12.dp))
                         // 白色圆角卡片二：定时任务。
                         Card {
                             GroupHeader(
                                 title = "定时任务",
                                 expanded = tasksExpanded,
-                                hasContent = filteredTasks.isNotEmpty(),
                                 onClick = { tasksExpanded = !tasksExpanded },
                             )
                             if (tasksExpanded) {
@@ -515,17 +514,6 @@ fun TaskCenterScreen(
     }
 }
 
-/** 反馈行（挂起 / 失败原文 / 成功回执三态共用一条排版）。 */
-@Composable
-private fun FeedbackLine(text: String, tone: StatusTone) {
-    ToneText(
-        text = text,
-        tone = tone,
-        style = MaterialTheme.typography.bodySmall,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-    )
-}
-
 /**
  * 白色圆角卡片（批 42 从「两张分组头共用一卡」拆成一组一卡 —— TG 联系人页的多个
  * section 本来就是各自一张卡、卡间露灰缝）：几何 = `setSections(12, 16, false)`
@@ -551,14 +539,14 @@ private fun Card(content: @Composable () -> Unit) {
  * - **右端三角**（[GlyphKind.CHEVRON]，14dp 同 `arrow_more` 的格）：收起 = 尖朝下
  *   （rotation 0）、展开 = 尖朝上（180°，340ms `EASE_OUT_QUINT` —— 与 TG 的
  *   `collapsedArrow.animate().rotation(…)` 同一条时间线）；
- * - **空组不给三角也不给展开**（批 41 用户拍板）：[hasContent] = false 时三角不画、
- *   点击是空操作 —— 一个展开后只有一行空提示的组，"可展开"本身就是假话。
+ * - **空组照样有三角、照样能收放**（批 44 用户拍板，推翻批 41 那条）：组头是**开关**
+ *   不是内容指示器 —— 拿内容有没有来灰掉三角，同一排的两个头就会长得不一样，而
+ *   "点不动"本身还得靠试才知道。空组展开后就是空的（不铺占位句）。
  */
 @Composable
 private fun GroupHeader(
     title: String,
     expanded: Boolean,
-    hasContent: Boolean,
     onClick: () -> Unit,
 ) {
     val palette = ThemeColors
@@ -577,7 +565,6 @@ private fun GroupHeader(
             .pressable(
                 role = Role.Button,
                 overlay = palette.pressedOverlay,
-                enabled = hasContent,
                 onClick = onClick,
             )
             .padding(start = 21.dp, end = 16.dp),
@@ -589,16 +576,14 @@ private fun GroupHeader(
             style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium),
         )
         Spacer(Modifier.weight(1f))
-        if (hasContent) {
-            Glyph(
-                kind = GlyphKind.CHEVRON,
-                tint = palette.text,
-                size = 14.dp,
-                modifier = Modifier.graphicsLayer {
-                    rotationZ = 180f * expandFraction
-                },
-            )
-        }
+        Glyph(
+            kind = GlyphKind.CHEVRON,
+            tint = palette.text,
+            size = 14.dp,
+            modifier = Modifier.graphicsLayer {
+                rotationZ = 180f * expandFraction
+            },
+        )
     }
 }
 
