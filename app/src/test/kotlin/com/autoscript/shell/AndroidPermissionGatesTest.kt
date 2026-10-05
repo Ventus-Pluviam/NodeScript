@@ -54,6 +54,15 @@ class AndroidPermissionGatesTest {
             AndroidGrantLauncher.pageFor(Capability.POST_NOTIFICATIONS),
             "两类通知能力同页",
         )
+
+        // 批 48：使用情况访问是常驻列表页，action 字面量锁死、且**不带**定位本应用的
+        // extra —— 这页系统不认识 package:/EXTRA，配了也是白配（会被忽略）。
+        val usage = AndroidGrantLauncher.specFor(GrantPage.USAGE_ACCESS, Build.VERSION_CODES.S)
+        assertEquals(Settings.ACTION_USAGE_ACCESS_SETTINGS, usage.action)
+        assertTrue(
+            !usage.withPackageData && !usage.withAppPackageExtra,
+            "使用情况访问列表页没有定位本应用的 extra",
+        )
     }
 
     @Test

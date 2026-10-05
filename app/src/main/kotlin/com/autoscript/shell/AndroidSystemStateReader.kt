@@ -1,9 +1,11 @@
 package com.autoscript.shell
 
 import android.app.AlarmManager
+import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.os.Process
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import android.accessibilityservice.AccessibilityServiceInfo
@@ -40,6 +42,9 @@ interface CapabilityProbes {
 
     /** `su` 是否可用（阻塞式探测，reader 会切到 IO 线程再问）。 */
     fun rootAvailable(): Boolean
+
+    /** `PACKAGE_USAGE_STATS`（使用情况访问）是否已授予 —— AppOps 的 GET_USAGE_STATS 是否 MODE_ALLOWED。 */
+    fun usageAccessGranted(): Boolean
 }
 
 /**
@@ -61,7 +66,9 @@ interface CapabilityProbes {
  * - `ROOT` 探测不到 = `DENIED`（§9.3：无 root 不降级渲染为禁用）；
  * - `ADB_INPUT` = `DEGRADED` 常量：Shizuku 尚未集成，但引导文案承诺的降级路径
  *   （"未就绪时输入走无障碍手势"）真实存在，故不是 DENIED。**也不谎报 GRANTED** ——
- *   本类不查任何 Shizuku 状态，因为平台上还没有那条通道可查。
+ *   本类不查任何 Shizuku 状态，因为平台上还没有那条通道可查；
+ * - `USAGE_ACCESS` 没开 = `DENIED`（批 48）—— `auto.app.currentPackage` 没有降级路径：
+ *   未授权就查不到，引导文案逐字承诺"如实返回 null"，不走"编个空串假装查了"那条路。
  *
  * 探测抛异常不在这里兜底：`PermissionCenter.state` 已把读取异常折成 `DEGRADED`
  * （可用性未知即受限），本类不重复兜底、也不吞异常。
@@ -102,6 +109,9 @@ class AndroidSystemStateReader(
             }
 
         Capability.ADB_INPUT -> CapabilityState.DEGRADED
+
+        Capability.USAGE_ACCESS ->
+            if (probes.usageAccessGranted()) CapabilityState.GRANTED else CapabilityState.DENIED
     }
 }
 
@@ -163,6 +173,22 @@ class AndroidCapabilityProbes(context: Context) : CapabilityProbes {
         }
     } catch (e: Exception) {
         false   // 没有 su 是常态，不是异常路径
+    }
+
+    /**
+     * 使用情况访问（`PACKAGE_USAGE_STATS`，特殊权限，批 48）。
+     *
+     * 问 AppOps 而不是拉 `UsageStatsManager` 列表：拉列表要选时间窗再遍历判空，
+     * "查到空列表"与"没权限"会混成同一个 false；AppOps 直接回答
+     * 「GET_USAGE_STATS 这个 op 允不允许」—— 正是三态要的那一个问题。
+     */
+    override fun usageAccessGranted(): Boolean {
+        val appOps = appContext.getSystemService(AppOpsManager::class.java) ?: return false
+        return appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            appContext.packageName,
+        ) == AppOpsManager.MODE_ALLOWED
     }
 
     private companion object {

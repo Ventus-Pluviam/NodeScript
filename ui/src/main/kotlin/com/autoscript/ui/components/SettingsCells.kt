@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.ui.theme.isDarkTheme
 
@@ -77,11 +79,14 @@ internal fun SettingIconBlock(colors: SettingIconColors, glyph: GlyphKind) {
  * 一行设置项（TG `SettingCell` 的几何，管理面板与设置页**共用这一份**）：
  * 28dp 渐变图标块 + 18dp + 标题 16sp（[MaterialTheme.typography.titleMedium]）+ 可选行尾槽位。
  *
- * 最小高 50dp（`SettingCell.onMeasure` 的单行档），内边距 18dp/9dp，
- * [onClick] 非空即整行可按（触控区含内边距，不按内容缩）。
- * 行间不画分隔线 —— 分隔线是调用方的事，本批两屏都选择不画（见 [SettingsCard]）。
+ * 最小高按 [SettingCell.onMeasure] 的口径：单行 50dp、带 [subtitle] 60dp；
+ * 内边距 18dp/9dp，[onClick] 非空即整行可按（触控区含内边距，不按内容缩）。
+ * 行间不画分隔线 —— 分隔线是调用方的事，两屏都选择不画（见 [SettingsCard]）。
  *
- * @param trailing 行尾槽位（设置页放三态值；管理面板没有就不传，不占位）。
+ * @param subtitle 第二行（13sp）。批 48 起只有「权限」入口用它挂读态；
+ *   权限行本身**没有**副标题（批 47 用户口径「去除各个权限的描述」）。
+ * @param subtitleTone 副标题着色档（读失败走 PROBLEM，与行尾三态值同一套语义）。
+ * @param trailing 行尾槽位（设置页子页放三态值；入口行没有就不传，不占位）。
  */
 @Composable
 internal fun SettingsCellRow(
@@ -89,6 +94,8 @@ internal fun SettingsCellRow(
     colors: SettingIconColors,
     glyph: GlyphKind,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    subtitleTone: StatusTone = StatusTone.MUTED,
     onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
@@ -99,20 +106,31 @@ internal fun SettingsCellRow(
                 if (onClick != null) Modifier.pressable(role = Role.Button, onClick = onClick)
                 else Modifier,
             )
-            .heightIn(min = 50.dp)
+            .heightIn(min = if (subtitle != null) 60.dp else 50.dp)
             .padding(horizontal = 18.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         SettingIconBlock(colors = colors, glyph = glyph)
         Spacer(Modifier.width(18.dp))
-        Text(
-            text = title,
-            color = ThemeColors.text,
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = ThemeColors.text,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle != null) {
+                Spacer(Modifier.height(4.dp))
+                ToneText(
+                    text = subtitle,
+                    tone = subtitleTone,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         trailing?.let {
             Spacer(Modifier.width(12.dp))
             it()

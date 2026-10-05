@@ -103,6 +103,7 @@ data class CapabilityRowState(
             Capability.ROOT -> "root"
             Capability.ADB_INPUT -> "ADB 输入（Shizuku）"
             Capability.POST_NOTIFICATIONS -> "通知发送权限"
+            Capability.USAGE_ACCESS -> "使用情况访问权限"
         }
 
         /**

@@ -97,6 +97,9 @@ enum class GlyphKind {
 
     /** 展开/收起三角（TG `arrow_more`：CollapseTextCell 右侧的下尖 chevron）。 */
     CHEVRON,
+
+    /** 使用情况访问权限（批 48）：三根高低不同的柱子 —— 「哪个应用用了多久」就是这么读的。 */
+    CHART,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -386,6 +389,14 @@ fun Glyph(
             // `rotation(collapsed ? 0 : 180)` 同语义）。
             GlyphKind.CHEVRON -> {
                 drawPath(path(0.19f to 0.36f, 0.50f to 0.70f, 0.81f to 0.36f), tint, style = stroke)
+            }
+
+            // 柱状图：三根圆头柱子（中柱最高）。不画坐标轴 —— 24dp 里轴线与柱子
+            // 共用同一份 StrokeRatio 笔画，会糊成一张表格。
+            GlyphKind.CHART -> {
+                drawPath(path(0.17f to 0.84f, 0.17f to 0.52f), tint, style = stroke)
+                drawPath(path(0.50f to 0.84f, 0.50f to 0.24f), tint, style = stroke)
+                drawPath(path(0.83f to 0.84f, 0.83f to 0.42f), tint, style = stroke)
             }
         }
     }

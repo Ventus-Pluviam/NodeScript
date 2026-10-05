@@ -25,6 +25,8 @@ enum class GrantPage {
     EXACT_ALARM,
     /** 应用详情页：没有专门授权页的能力（截屏/root/Shizuku）统一送到这里，不假装有快捷入口。 */
     APP_DETAILS,
+    /** 特殊访问权限 → 使用情况访问权限（批 48；`ACTION_USAGE_ACCESS_SETTINGS` 列表页，无包名 extra）。 */
+    USAGE_ACCESS,
 }
 
 /**
@@ -97,6 +99,7 @@ class AndroidGrantLauncher(
             Capability.NOTIFICATION, Capability.POST_NOTIFICATIONS -> GrantPage.NOTIFICATIONS
             Capability.SCHEDULE_EXACT_ALARM -> GrantPage.EXACT_ALARM
             Capability.SCREEN_CAPTURE, Capability.ROOT, Capability.ADB_INPUT -> GrantPage.APP_DETAILS
+            Capability.USAGE_ACCESS -> GrantPage.USAGE_ACCESS
         }
 
         /**
@@ -120,6 +123,9 @@ class AndroidGrantLauncher(
                     appDetailsSpec()
                 }
             GrantPage.APP_DETAILS -> appDetailsSpec()
+            // 使用情况访问是常驻列表页（API 21+ 一直在），没有定位本应用的 extra ——
+            // 列表里自己点 AutoScript，配不存在的 extra 反而会被系统忽略。
+            GrantPage.USAGE_ACCESS -> SettingsTarget(Settings.ACTION_USAGE_ACCESS_SETTINGS)
         }
 
         private fun appDetailsSpec(): SettingsTarget =

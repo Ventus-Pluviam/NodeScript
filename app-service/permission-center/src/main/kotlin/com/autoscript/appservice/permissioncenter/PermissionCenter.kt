@@ -86,6 +86,9 @@ class PermissionCenter(
                 "ADB 输入（Shizuku）未就绪：请确保 Shizuku 运行且已授权 AutoScript；未就绪时输入走无障碍手势"
             Capability.POST_NOTIFICATIONS ->
                 "通知发送未允许：请前往系统设置允许通知；拒绝后任务完成提醒静默丢弃并在 UI 明示"
+            Capability.USAGE_ACCESS ->
+                "使用情况访问权限未授予：请前往「设置 → 应用 → 特殊访问权限 → 使用情况访问权限" +
+                    "」允许 AutoScript；未允许时 auto.app.currentPackage 如实返回 null"
         }
     }
 }

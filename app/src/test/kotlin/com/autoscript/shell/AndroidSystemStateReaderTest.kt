@@ -26,6 +26,7 @@ class AndroidSystemStateReaderTest {
         private val exactAlarm: Boolean = false,
         private val capture: Boolean = false,
         private val root: Boolean = false,
+        private val usageAccess: Boolean = false,
     ) : CapabilityProbes {
         override fun accessibilityEnabled(): Boolean = accessibility
         override fun overlayDrawable(): Boolean = overlay
@@ -33,6 +34,7 @@ class AndroidSystemStateReaderTest {
         override fun exactAlarmAllowed(): Boolean = exactAlarm
         override fun screenCaptureActive(): Boolean = capture
         override fun rootAvailable(): Boolean = root
+        override fun usageAccessGranted(): Boolean = usageAccess
     }
 
     private fun reader(probes: CapabilityProbes) = AndroidSystemStateReader(probes)
@@ -134,17 +136,34 @@ class AndroidSystemStateReaderTest {
     }
 
     @Test
+    fun `使用情况访问没开是 DENIED —— currentPackage 没有降级路径`() = runBlocking {
+        // 批 48：未授权时 currentPackage 如实回 null（引导文案逐字承诺），
+        // 没有"降级着也能查"的中间态 —— 所以是 DENIED 不是 DEGRADED。
+        val r = reader(FakeProbes(usageAccess = false))
+        assertEquals(CapabilityState.DENIED, r.readSystemState(Capability.USAGE_ACCESS))
+        val granted = reader(FakeProbes(usageAccess = true))
+        assertEquals(CapabilityState.GRANTED, granted.readSystemState(Capability.USAGE_ACCESS))
+        Unit
+    }
+
+    @Test
     fun `出厂态下的 DENIED 集合被钉死 —— 其余全是 DEGRADED`() = runBlocking {
         // 这条断言守两件事：
         // (1) 新增 Capability 忘了给结论时，when 的穷尽性会在编译期拦住（这里再遍历一遍兜底）；
         // (2) 「被判 DENIED」是个**稀缺**结论 —— 它意味着 ensure 会直接拦人。
-        //     出厂态（什么都没开）只有三种能力够格 DENIED：没有任何降级路径的无障碍、
-        //     以及被拒即静默丢弃的通知发送权限、以及探测不到就是没有的 root。
+        //     出厂态（什么都没开）只有四种能力够格 DENIED：没有任何降级路径的无障碍、
+        //     被拒即静默丢弃的通知发送权限、探测不到就是没有的 root，以及（批 48）
+        //     未授权就查不到使用情况的使用情况访问。
         //     别的能力若哪天变成 DENIED，用户会在引导页开着开着发现某功能彻底用不了 —— 这条会红。
         val r = reader(FakeProbes())
         val denied = Capability.entries.filter { r.readSystemState(it) == CapabilityState.DENIED }.toSet()
         assertEquals(
-            setOf(Capability.ACCESSIBILITY, Capability.POST_NOTIFICATIONS, Capability.ROOT),
+            setOf(
+                Capability.ACCESSIBILITY,
+                Capability.POST_NOTIFICATIONS,
+                Capability.ROOT,
+                Capability.USAGE_ACCESS,
+            ),
             denied,
             "出厂态的 DENIED 集合变了：先确认这是有意的，再改这条断言",
         )

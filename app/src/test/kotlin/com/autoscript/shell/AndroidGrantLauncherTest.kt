@@ -36,6 +36,8 @@ class AndroidGrantLauncherTest {
         assertEquals(GrantPage.APP_DETAILS, AndroidGrantLauncher.pageFor(Capability.SCREEN_CAPTURE))
         assertEquals(GrantPage.APP_DETAILS, AndroidGrantLauncher.pageFor(Capability.ROOT))
         assertEquals(GrantPage.APP_DETAILS, AndroidGrantLauncher.pageFor(Capability.ADB_INPUT))
+        // 批 48：使用情况访问有专页（特殊访问权限列表），不落应用详情。
+        assertEquals(GrantPage.USAGE_ACCESS, AndroidGrantLauncher.pageFor(Capability.USAGE_ACCESS))
     }
 
     @Test

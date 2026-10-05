@@ -13,6 +13,7 @@ enum class Capability {
     ROOT,
     ADB_INPUT,
     POST_NOTIFICATIONS,
+    USAGE_ACCESS,
 }
 
 /**
