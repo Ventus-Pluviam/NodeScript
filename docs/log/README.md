@@ -13,7 +13,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
-| 2026-10-05 | 7 | 批 39 拆掉顶栏底部的全宽分割线（TG `ActionBar` 无底线，本仓自加）；批 40 任务栏重做（TG 联系人页复刻：灰底白卡/GraySection 分组头/UserCell 行/搜索栏/排序钮/FAB）；批 41 任务栏按用户口径收窄（删刷新钮/副标题空话/恢复账未结算块，顶栏同灰，分组头 CollapseTextCell 白底 + 三角，空组不可展开，搜索框悬浮）；批 42 搜索框药丸宽对齐 TG（屏宽−18dp）+ 搜索框下 8dp 空隙 + 运行中/定时拆两卡；批 43 搜索框几何再纠偏（补第二层 3dp InsetDrawable 内缩 → 屏宽−24dp/高 40dp）+ 首卡间距 12dp + 首页搜索框对齐 TG（新字形 SEARCH_FIELD/40dp/灰框）；批 44 任务中心改名（「任务栏」→「任务中心」）+ 搜索框↔首卡 14dp（`contentPadding.top` 60dp）+ 卡间距 12dp（TG `ShadowSectionCell` 缺省高）+ 空组可收放（删 `hasContent`，批 41 那条作废）+ 回执改自绘浮层（TG `Bulletin` 版式；判读在纯层 `state/OpToast.kt`，失败>回执>挂起；`ToastHost` 一处挂四屏共用）；批 45 任务中心顶栏去副标题（`Status.count` 那句「共 N 条任务」整条摘掉，读账归卡内行）+ 两组缺省收起（`rememberSaveable` 初值 true→false） | [`2026-10-05.md`](2026-10-05.md) |
+| 2026-10-05 | 8 | 批 39 拆掉顶栏底部的全宽分割线（TG `ActionBar` 无底线，本仓自加）；批 40 任务栏重做（TG 联系人页复刻：灰底白卡/GraySection 分组头/UserCell 行/搜索栏/排序钮/FAB）；批 41 任务栏按用户口径收窄（删刷新钮/副标题空话/恢复账未结算块，顶栏同灰，分组头 CollapseTextCell 白底 + 三角，空组不可展开，搜索框悬浮）；批 42 搜索框药丸宽对齐 TG（屏宽−18dp）+ 搜索框下 8dp 空隙 + 运行中/定时拆两卡；批 43 搜索框几何再纠偏（补第二层 3dp InsetDrawable 内缩 → 屏宽−24dp/高 40dp）+ 首卡间距 12dp + 首页搜索框对齐 TG（新字形 SEARCH_FIELD/40dp/灰框）；批 44 任务中心改名（「任务栏」→「任务中心」）+ 搜索框↔首卡 14dp（`contentPadding.top` 60dp）+ 卡间距 12dp（TG `ShadowSectionCell` 缺省高）+ 空组可收放（删 `hasContent`，批 41 那条作废）+ 回执改自绘浮层（TG `Bulletin` 版式；判读在纯层 `state/OpToast.kt`，失败>回执>挂起；`ToastHost` 一处挂四屏共用）；批 45 任务中心顶栏去副标题（`Status.count` 那句「共 N 条任务」整条摘掉，读账归卡内行）+ 两组缺省收起（`rememberSaveable` 初值 true→false）；批 46 管理面板重写（四项管理入口同卡、控制台独立卡，TG 设置行与共用圆角卡片）+ 控制台子页返回与进入刷新（四项管理功能先以 toast 提示尚未开放） | [`2026-10-05.md`](2026-10-05.md) |
 | 2026-10-04 | 6 | 批 38 菜单开/关动画 + 间隙渐变 + 投影环描边（MenuPopup 自建壳）· 批 37 菜单圆角精确到 12dp（popup_fixed_alert4 实测 11.88–11.93）+ 主题切换死区修复 + 两处 import 补回 · 批 36 勘误 底栏高亮块底色被 blend 成了灰（`multAlpha` 只改 alpha，色相恒为选中蓝）· 批 36 底栏整条按 TG 重做（不等宽分格 / 三键各自 blend / 删掉自加的按压态）· 批 35 拆掉下拉刷新（参考项目没有这个手势）· 批 34 项目页目录下钻 / 选择模式 / 底部操作面板（TG `ChatAttachAlertDocumentLayout` 的一层一层走 + 搜索跨层） | [`2026-10-04.md`](2026-10-04.md) |
 | 2026-10-02 | 19 | 批 10 C7 typedoc API 参考 + B4 依赖供应链 · C9 总索引落地 · C6 分片落地 · A2b 拍板落地 · E1 拍板落地 · E2 拆双门 + 精确兜底 · E5 放宽拍板 · 批 9 A6+E4 素材换源 · 结构面批 D9+D10+D12 | [`2026-10-02.md`](2026-10-02.md) |
 | 2026-10-01 | 17 | 外审整改收尾、批 1–7、两次外审建议入池 | [`2026-10-01.md`](2026-10-01.md) |
@@ -23,8 +23,9 @@
 
 ## 逐条索引
 
-### [2026-10-05](2026-10-05.md)（7 条，最新在最上）
+### [2026-10-05](2026-10-05.md)（8 条，最新在最上）
 
+- 2026-10-05 —— 批 46：管理面板重写 + 控制台改为独立入口 —— 四项管理入口依序同卡，控制台单独成卡；共用 TG 设置卡片与图标块，四项待实现功能用 toast 提示；控制台子页支持顶栏/系统返回，切页保存层级、进入现取日志（分支 `rough-robin`）
 - 2026-10-05 —— 批 45：任务中心顶栏去副标题 + 两组缺省收起 —— `ActionBar` 不再传 `subtitle`/`subtitleTone`，`Status.count` 计算与 `Status` 导入一并删除（「共 N 条任务（含已停用）」整条摘掉；读账仍由卡内 `InCardHint` 如实说，条数两张卡自己数）；`runsExpanded`/`tasksExpanded` 的初值 `true`→`false`（进屏两张干净的卡）（分支 `rough-robin`）
 - 2026-10-05 —— 批 44：任务中心改名 + 两处间距对齐 TG + 空组可收放 + 回执改浮层 —— 「任务栏」→「任务中心」（`ActionBar` 标题 + KDoc；页签「任务」不动）；列表 `contentPadding.top` 52→60dp（搜索框↔首卡 14dp）；两卡灰缝 8→12dp（TG 多 section 页组间 `ShadowSectionCell` 的缺省高，`setSections` 的 12 是左右边距）；`GroupHeader.hasContent` 整个删掉（恒有三角、恒可点，批 41 的「空组不给三角」作废）；三屏回执（`CopyNotice` + 6/2/3 条 `FeedbackLine`）改走外壳浮层 —— 新组件 `ToastAction`/`LocalToast`/`ToastHost`/`ToastNotice`（TG `Bulletin` 版式：最小高 48dp/内边距 16·8/圆角 16dp/14sp/1.6s），判读在纯层 `state/OpToast.kt`（失败>回执>挂起，新增 `OpToastTest` 5 例），主题加 `toastBackground`/`toastText`（深色不照抄 TG night 的近屏底色）（分支 `rough-robin`）
 - 2026-10-05 —— 批 43：搜索框几何再纠偏 + 首行间距 + 首页搜索框对齐 —— 批 42 漏了药丸背景那层 `InsetDrawable(…, 3,3,3,3)`，补上后真实药丸 = 屏宽 −24dp、高 40dp、距屏边 12dp（槽位 padding 9→12dp、药丸 46→40dp）；列表 `contentPadding.top` 54→52dp（药丸底 40 + 12dp 净留白）；圆角 20dp 落在 40dp 高 = 两端全圆；首页 `ProjectScreen` 搜索框对齐 TG `DialogsActivity` 档（`GlyphKind.SEARCH`→`SEARCH_FIELD`、槽位 12/6、高 40dp、灰框无投影）（分支 `rough-robin`）

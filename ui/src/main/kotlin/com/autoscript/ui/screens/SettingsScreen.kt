@@ -1,7 +1,6 @@
 package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,25 +10,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.ActionBarAction
-import com.autoscript.ui.components.Glyph
+import com.autoscript.ui.components.SettingIconBlock
+import com.autoscript.ui.components.SettingIconColors
+import com.autoscript.ui.components.SettingsCard
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.RefreshableBox
@@ -43,7 +41,6 @@ import com.autoscript.ui.state.CapabilityRowState
 import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
-import com.autoscript.ui.theme.isDarkTheme
 import com.autoscript.domain.permission.Capability
 import kotlinx.coroutines.launch
 
@@ -145,25 +142,6 @@ fun SettingsScreen(
     }
 }
 
-/**
- * 白色圆角分组卡片（TG `setSections` 的逐字版式）：
- * 左右各缩 [SectionHPad]，圆角 16dp、白底（`windowBackgroundWhite`）、无描边无阴影
- * （`SharedConfig.shadowsInSections` 缺省 false —— TG 的卡片是靠灰底衬出来的）。
- *
- * 相邻行合进同一张卡：卡片内行间不空隙，行间分隔线由行自己画。
- */
-@Composable
-private fun SettingsCard(content: @Composable () -> Unit) {
-    Column(
-        Modifier
-            .padding(horizontal = SectionHPad)
-            .fillMaxWidth()
-            .background(ThemeColors.surface, RoundedCornerShape(16.dp)),
-    ) {
-        content()
-    }
-}
-
 /** 两张卡片之间的灰底空隙（TG 卡片间距 4dp 的投影；`asShadow` 的空白段）。 */
 @Composable
 private fun CardGap() {
@@ -193,8 +171,7 @@ private fun CardCaptionRow(text: String, tone: StatusTone) {
  */
 @Composable
 private fun SettingRow(row: CapabilityRowState, onOpenSettings: (Capability) -> Unit) {
-    val dark = isDarkTheme()
-    val colors = SettingIconColors.of(row.capability)
+    val colors = row.capability.iconColors()
     val clickable = if (row.canRequestGrant) {
         Modifier.pressable(role = Role.Button, onClick = { onOpenSettings(row.capability) })
     } else {
@@ -207,7 +184,7 @@ private fun SettingRow(row: CapabilityRowState, onOpenSettings: (Capability) -> 
             .padding(horizontal = 18.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SettingIconBlock(colors = colors, dark = dark, glyph = row.capability.glyph())
+        SettingIconBlock(colors = colors, glyph = row.capability.glyph())
         Spacer(Modifier.width(18.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -239,56 +216,16 @@ private fun SettingRow(row: CapabilityRowState, onOpenSettings: (Capability) -> 
     }
 }
 
-/** 卡片左右缩进（`ListSectionsDecoration` 的 padding 12dp）。 */
-private val SectionHPad = 12.dp
-
-/** 设置图标 28dp 方块的一对纵向渐变色（`IconBackgroundColors` 的色对）。 */
-private data class SettingIconColors(val top: Color, val bottom: Color) {
-    companion object {
-        /** 逐能力配色（`IconBackgroundColors` 那套色值：蓝/橙/绿/红/青/紫）。 */
-        fun of(capability: Capability): SettingIconColors = when (capability) {
-            Capability.ACCESSIBILITY -> SettingIconColors(Color(0xFF1CA5ED), Color(0xFF1488E1))
-            Capability.SCREEN_CAPTURE -> SettingIconColors(Color(0xFF4F85F6), Color(0xFF3568E8))
-            Capability.OVERLAY -> SettingIconColors(Color(0xFF32C0CE), Color(0xFF1D9CC6))
-            Capability.NOTIFICATION -> SettingIconColors(Color(0xFFF45255), Color(0xFFDF3955))
-            Capability.SCHEDULE_EXACT_ALARM -> SettingIconColors(Color(0xFFF09F1B), Color(0xFFE18A11))
-            Capability.ROOT -> SettingIconColors(Color(0xFFF28B31), Color(0xFFE26314))
-            Capability.ADB_INPUT -> SettingIconColors(Color(0xFF55CA47), Color(0xFF27B434))
-            Capability.POST_NOTIFICATIONS -> SettingIconColors(Color(0xFFC46EF4), Color(0xFF9F55DF))
-        }
-    }
-}
-
-/**
- * 28dp 圆角方块 + 居中的 24dp 线性图标。
- *
- * 纵向渐变从 [SettingIconColors] 取；深色下加 1dp 半透明白描边
- * （`SettingCell.Background.draw` 里 `border` 的口径：暗主题下渐变块与深底粘连，
- * TG 用描边把轮廓提出来）。
- */
-@Composable
-private fun SettingIconBlock(colors: SettingIconColors, dark: Boolean, glyph: GlyphKind) {
-    val brush = Brush.verticalGradient(listOf(colors.top, colors.bottom))
-    Box(
-        Modifier
-            .size(28.dp)
-            .background(brush, RoundedCornerShape(10.dp))
-            .then(
-                if (dark) {
-                    Modifier.border(
-                        1.dp,
-                        Color.White.copy(alpha = 0.10f),
-                        RoundedCornerShape(10.dp),
-                    )
-                } else {
-                    Modifier
-                },
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        // 图标画在 24dp 里、白色：彩色渐变块上的白色线性图标是 TG 设置页的识别点。
-        Glyph(kind = glyph, tint = Color.White, size = 24.dp)
-    }
+/** 逐能力配色（TG `IconBackgroundColors` 的色对）；业务映射留在设置页。 */
+private fun Capability.iconColors(): SettingIconColors = when (this) {
+    Capability.ACCESSIBILITY -> SettingIconColors(Color(0xFF1CA5ED), Color(0xFF1488E1))
+    Capability.SCREEN_CAPTURE -> SettingIconColors(Color(0xFF4F85F6), Color(0xFF3568E8))
+    Capability.OVERLAY -> SettingIconColors(Color(0xFF32C0CE), Color(0xFF1D9CC6))
+    Capability.NOTIFICATION -> SettingIconColors(Color(0xFFF45255), Color(0xFFDF3955))
+    Capability.SCHEDULE_EXACT_ALARM -> SettingIconColors(Color(0xFFF09F1B), Color(0xFFE18A11))
+    Capability.ROOT -> SettingIconColors(Color(0xFFF28B31), Color(0xFFE26314))
+    Capability.ADB_INPUT -> SettingIconColors(Color(0xFF55CA47), Color(0xFF27B434))
+    Capability.POST_NOTIFICATIONS -> SettingIconColors(Color(0xFFC46EF4), Color(0xFF9F55DF))
 }
 
 /** 每个能力一个图标形（复用底栏那套画出来的线性字形，不引图标依赖）。 */

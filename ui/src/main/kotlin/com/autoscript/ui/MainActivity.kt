@@ -4,6 +4,7 @@ import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.pager.HorizontalPager
@@ -19,6 +20,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +35,7 @@ import com.autoscript.ui.components.TabBar
 import com.autoscript.ui.components.ToastAction
 import com.autoscript.ui.components.ToastHost
 import com.autoscript.ui.components.rememberToastAction
+import com.autoscript.ui.screens.ManagementScreen
 import com.autoscript.ui.screens.ProjectScreen
 import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
@@ -60,13 +63,13 @@ import kotlinx.coroutines.launch
  * 实现），未实现即 `HomeState.UNWIRED` / `CapabilityCenterState.NOT_LOADED` 如实显示。
  *
  * 四个页签：首屏（壳/保活/漏投）、任务中心（§8.6 排期 + §8.5 档案/恢复账）、
- * 控制台（§7.3 游标拉取 + 在途执行）、设置（§9.5 三态权限账，TG 设置页版式）。刷新时机分两种，**不能混**：
+ * 管理面板（控制台为子页，§7.3 游标拉取 + 在途执行）、设置（§9.5 三态权限账，TG 设置页版式）。刷新时机分两种，**不能混**：
  * - 首屏状态是**同步**读（`shellSummary()`）：`onCreate` 首读 + 每次 `onResume` 重读 +
  *   冷启后一条**有界**的重问（见 [HomeRetryEffect]）；
  * - 能力态/任务态/控制台都是**挂起**的（`capabilityCenter()` 每次现问系统，含 root 探测的
  *   IO 切换；`taskCenter()` 要读两个持久寄存器；`console(seq, max)` 是游标增量拉取）：
- *   由 `LaunchedEffect(resumeTick, tab)` 驱动 —— 回前台、或切到该页签时重取一次。
- *   控制台尤其依赖这条：行是**累积**的，游标只进不退（见 `ConsoleState`）。
+ *   由 [TabReloadEffect] 驱动 —— 回前台、或切到该页签时重取一次；管理面板本身不读日志，
+ *   打开控制台才读，返回面板保留已读行。控制台行是**累积**的，游标只进不退（见 `ConsoleState`）。
  *   这样用户从系统设置页授完权回来，看到的是**刚问过**的结论，而不是离开时那份缓存
  *   （后者正是"授权了但界面还说没授权"的来源）。
  *
@@ -119,6 +122,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val scope = rememberCoroutineScope()
             val pagerState = rememberPagerState(pageCount = { Tab.entries.size })
+            // 管理页的层级放在 pager 外：切页导致预组合被回收时不丢，配置重建也能恢复。
+            // 日志与游标仍属于 consoleState，返回面板只关闭子页，不清读取结果。
+            var consoleOpen by rememberSaveable { mutableStateOf(false) }
+            val closeConsole = { consoleOpen = false }
             // 浮层口（批 44）：**一处**建、一处挂（[MainShell] 里那个 ToastHost），
             // 四屏的复制回执与操作/停止回执都经 `LocalToast` 落到它上面 ——
             // 此前那些回执是各屏列表里的一行，弹一条就把内容往下推一次。
@@ -184,12 +191,20 @@ class MainActivity : ComponentActivity() {
                                     onStopRun = { run -> scope.launch { stopRunOp(run) } },
                                     modifier = Modifier,
                                 )
-                                Tab.CONSOLE -> ConsoleScreen(
-                                    state = consoleState,
-                                    onRefresh = { reloadConsole() },
-                                    onStopRun = { run -> scope.launch { stopRunOp(run) } },
-                                    modifier = Modifier,
-                                )
+                                Tab.MANAGEMENT -> if (consoleOpen) {
+                                    ConsoleScreen(
+                                        state = consoleState,
+                                        onRefresh = { reloadConsole() },
+                                        onStopRun = { run -> scope.launch { stopRunOp(run) } },
+                                        onBack = closeConsole,
+                                        modifier = Modifier,
+                                    )
+                                } else {
+                                    ManagementScreen(
+                                        onOpenConsole = { consoleOpen = true },
+                                        modifier = Modifier,
+                                    )
+                                }
                                 Tab.SETTINGS -> SettingsScreen(
                                     state = capabilityState,
                                     onRefresh = { reloadCapabilities() },
@@ -199,20 +214,21 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-            // 键里带页签：切到本页签本身就该现取，而不是显示上次离开时的快照。
+            ManagementBackHandler(pagerState, consoleOpen, closeConsole)
+            // 键里带页签和管理子页：进入控制台即现取，而不是显示上次离开时的快照。
             // 用 **settledPage** 而不是 currentPage：横划跨多页时 currentPage 会途经
             // 中间每一页，那样划一次会连读三遍；settledPage 只在停稳后变一次。
-            // 重读的触发权只在这两条（回前台/切页签）与手动刷新手里 —— 读失败不会
+            // 重读由回前台/切页签/进入控制台与手动刷新驱动 —— 读失败不会
             // 反过来改 resumeTick 形成自激（见 reloadCapabilities）。
             // 冷启那几秒：装配在 IO 域异步完成，onCreate 的首读大概率赶在它前面。
             HomeRetryEffect(state = { homeState }) { homeState = HomeState.read(hostSummary()) }
-            TabReloadEffect(resumeTick, pagerState) { tab ->
+            TabReloadEffect(resumeTick, pagerState, consoleOpen) { tab ->
                 when (tab) {
                     Tab.HOME -> reloadProjectFiles()
                     // 任务屏现在也画在途执行（控制台的运行列表）：切到本页签两侧都现取，
                     // 否则运行中那组会停在离开时的快照上（与"切页签即现取"同一条纪律）。
                     Tab.TASKS -> { reloadTasks(); reloadConsole() }
-                    Tab.CONSOLE -> reloadConsole()
+                    Tab.MANAGEMENT -> if (consoleOpen) reloadConsole()
                     Tab.SETTINGS -> reloadCapabilities()
                 }
                 }
@@ -477,7 +493,7 @@ class MainActivity : ComponentActivity() {
     enum class Tab(val short: String, val glyph: GlyphKind) {
         HOME("项目", GlyphKind.HOME),
         TASKS("任务", GlyphKind.TASKS),
-        CONSOLE("管理", GlyphKind.CONSOLE),
+        MANAGEMENT("管理", GlyphKind.CONSOLE),
         SETTINGS("设置", GlyphKind.SETTINGS),
     }
 
@@ -614,7 +630,23 @@ private fun HomeRetryEffect(state: () -> HomeState, onReload: () -> Unit) {
 }
 
 /**
- * 「切到本页签就现取一次」的驱动（回前台、或停稳到某一页）。
+ * 管理子页的系统返回，和控制台顶栏共用同一个关闭动作。
+ *
+ * pager 会预组合邻页：只看 consoleOpen 会在其他页签吞返回。可见且停稳在管理页才启用，
+ * 切页动画期间也退让。单开 Composable 读 pager，避免每次滚动把整个外壳重组。
+ */
+@Composable
+private fun ManagementBackHandler(pagerState: PagerState, consoleOpen: Boolean, onBack: () -> Unit) {
+    val managementPage = MainActivity.Tab.MANAGEMENT.ordinal
+    BackHandler(
+        enabled = consoleOpen && !pagerState.isScrollInProgress &&
+            pagerState.currentPage == managementPage && pagerState.settledPage == managementPage,
+        onBack = onBack,
+    )
+}
+
+/**
+ * 「切到本页签就现取一次」的驱动（回前台、停稳到某一页、或打开管理页里的控制台）。
  *
  * 单开一个小 Composable 不是洁癖：`pagerState.settledPage` 是在**组合里**读的，
  * 谁读谁就在它变化时重组。写在 `setContent` 顶层 = 每次停稳都把整个外壳（连同 pager）
@@ -624,9 +656,13 @@ private fun HomeRetryEffect(state: () -> HomeState, onReload: () -> Unit) {
 private fun TabReloadEffect(
     resumeTick: Int,
     pagerState: PagerState,
+    consoleOpen: Boolean,
     onSettled: suspend (MainActivity.Tab) -> Unit,
 ) {
-    LaunchedEffect(resumeTick, pagerState.settledPage) {
-        onSettled(MainActivity.Tab.entries[pagerState.settledPage])
+    // 仅管理页消费子页键：切到别页时改层级，不应取消那一页正在进行的读取。
+    val tab = MainActivity.Tab.entries[pagerState.settledPage]
+    val consoleVisible = tab == MainActivity.Tab.MANAGEMENT && consoleOpen
+    LaunchedEffect(resumeTick, tab, consoleVisible) {
+        onSettled(tab)
     }
 }

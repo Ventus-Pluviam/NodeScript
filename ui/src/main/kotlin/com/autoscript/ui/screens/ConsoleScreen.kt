@@ -56,7 +56,8 @@ import com.autoscript.ui.theme.ThemeColors
 import kotlinx.coroutines.launch
 
 /**
- * 控制台（§7.3 数据面游标拉取 + §8.3 在途执行两端对照）。
+ * 管理面板内的控制台子页（§7.3 数据面游标拉取 + §8.3 在途执行两端对照）。
+ * 顶栏返回交回外壳，外壳同时守系统返回与页签可见性；关闭子页不清日志。
  *
  * 版式照 TG 的日志观感：**行是密的**（13sp、通栏单行、无行间大留白），
  * 前缀 `[HH:mm:ss] 级别 [#runId]` 一律用弱化色，只有 `error` 通栏标红 ——
@@ -93,6 +94,7 @@ fun ConsoleScreen(
     state: ConsoleState,
     onRefresh: suspend () -> Unit,
     onStopRun: (ActiveRunState) -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val status = Status.of(
@@ -121,6 +123,7 @@ fun ConsoleScreen(
     Column(modifier.fillMaxWidth().background(ThemeColors.background)) {
         ActionBar(
             title = "控制台",
+            onBack = onBack,
             subtitle = status.text,
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
