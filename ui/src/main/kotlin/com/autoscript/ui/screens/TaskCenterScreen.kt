@@ -124,12 +124,13 @@ import kotlinx.coroutines.launch
  *   数据会变的所有时机，常驻按钮没有事可做；
  * - **悬浮搜索栏**（批 41 起**浮在列表上**，TG 的 `searchField` 是 contentView 最后
  *   加的子 view）：`FragmentSearchField` 版式 —— 52dp 槽位、水平 6dp 边距 + 药丸自身
- *   再缩 3dp（`createRoundRectDrawableShadowed` 的 InsetDrawable）= **屏宽 −18dp 的
- *   白药丸**、高 46dp、圆角 20dp + 微投影、`outline_search_1_24` 放大镜（24dp、60%）、
- *   15sp 文字、提示词 50%（批 42 修正：此前药丸只让 6dp，比 TG 宽 6dp）。列表
- *   contentPadding.top 让出 **54dp**（药丸底 46 + 8dp 空隙，批 42：搜索框不再贴着
- *   第一张卡），滚动的首行从药丸底下穿过（`checkUi_listViewPadding` 的 actionBar 高
- *   + 44dp 同口径）；
+ *   再缩 3dp（`setSectionBackground` 的 `setPadding(3,3,3,3)`）+ **再缩 3dp**（药丸
+ *   背景 `createRoundRectDrawableShadowed` = `InsetDrawable(defaultDrawable, 3,3,3,3)`；
+ *   批 43 补上 —— 批 42 只算了一层，药丸因此比 TG 宽 6dp、高 6dp）= **屏宽 −24dp 的
+ *   白药丸**、高 **40dp**、圆角 20dp + 微投影、`outline_search_1_24` 放大镜（24dp、60%）、
+ *   15sp 文字、提示词 50%。列表 contentPadding.top 让出 **52dp**（药丸底 40 + 12dp
+ *   空隙，批 43：对齐 TG 空态药丸底到首行的留白），滚动的首行从药丸底下穿过
+ *   （`checkUi_listViewPadding` 的 actionBar 高 + 44dp 同口径）；
  * - **白色圆角卡片 ×2**（`setSections(12, 16, false)` 的读法：水平 12dp 边距、圆角
  *   16dp、无投影 —— `SharedConfig.shadowsInSections` 缺省 false，首行距顶 4dp），
  *   **运行中的任务与定时任务各自成卡**（批 42 用户改口拆组 —— 批 40 的「同卡」口径
@@ -265,11 +266,12 @@ fun TaskCenterScreen(
                     // TG checkUi_listViewPadding 的读法：列表顶让出「顶栏高 + 44dp」
                     // —— 44dp 里装的是悬浮搜索框（52dp 槽位 − 顶栏 4dp 呼吸 + 首行 4dp）；
                     // 列表滚上来时首行从药丸底下穿过。左右 12dp、底部让位底栏照旧。
-                    // 批 42 +10dp：药丸底下加 8dp 空隙（首卡不贴搜索框）+ 原 4dp 首行顶。
+                    // 批 43：药丸缩到 40dp（槽位 52 不变），让位随之 54→52 —— 药丸底到
+                    // 第一张卡保持 12dp（= TG 空态药丸底到首行的留白）。
                     contentPadding = PaddingValues(
                         start = 12.dp,
                         end = 12.dp,
-                        top = 54.dp,
+                        top = 52.dp,
                         bottom = TabBarBottomClearance(),
                     ),
                 ) {
@@ -380,8 +382,8 @@ fun TaskCenterScreen(
             // 粒子层与列表同层（同一套坐标），且不吞触摸。
             particles.Overlay(Modifier.matchParentSize())
             // 悬浮搜索框最后画 = 浮在列表上（TG：searchField 是 contentView 最后加的
-            // 一个子 view）。压住列表首行 —— 所以 contentPadding.top 让出 54dp
-            // （药丸 46dp + 8dp 空隙，批 42：首卡不再贴着搜索框）。
+            // 一个子 view）。压住列表首行 —— 所以 contentPadding.top 让出 52dp
+            // （药丸 40dp + 12dp 空隙，批 43：对齐 TG 首行留白）。
             SearchField(
                 query = query,
                 onChange = { query = it },
@@ -875,11 +877,13 @@ private fun TaskAvatar(scriptPath: String, name: String) {
  *
  * - **52dp 槽位**：`contentView.addView(searchField, createFrame(MATCH_PARENT,
  *   52, Gravity.TOP, 6, 0, 6, 0))` —— 外层水平 6dp；`setSectionBackground()` 的
- *   `setPadding(dp(3), …)` 是药丸自身再缩 3dp（批 42 补上 —— 此前只让了 6dp，
- *   药丸比 TG 宽 6dp），于是**药丸 = 屏宽 −18dp、高 46dp**、圆角 20dp；
- * - **白药丸 + 微投影**：`createRoundRectDrawableShadowed(dp(20), key_windowBackgroundWhite)`
- *   = 2dp 投影（y 偏 0.33dp）—— 本仓用 2dp elevation 近似，底 `background`（灰底上的
- *   白药丸；与项目页那颗灰框不是一个键，不能合成一个参数糊过去）；
+ *   `setPadding(dp(3), …)` 是药丸自身再缩 3dp；**药丸背景又是 `InsetDrawable(...,
+ *   3,3,3,3)`**（`createRoundRectDrawableShadowed` 的包装层，批 43 才补上 —— 批 42
+ *   只算了一层 padding），于是**药丸 = 屏宽 −24dp、高 40dp**、圆角 20dp；
+ * - **边缘**：圆角 20dp 落在 40dp 高上 = **两端全圆**（半圆帽，不是 46dp 高时那种
+ *   四角圆角的方片）；投影是 `setShadowLayer(2dp, 0, 0.33dp, 0x11000000)` —— 本仓用
+ *   2dp elevation 近似（全 API 一致），底 `background`（灰底上的白药丸；与项目页那颗
+ *   灰框不是一个键，不能合成一个参数糊过去）；
  * - **放大镜 24dp、距药丸左 12dp**，[GlyphKind.SEARCH_FIELD]（`outline_search_1_24`
  *   的实测几何 —— 比项目页那颗 SEARCH 粗环短柄），着色 = 文字色 60%；
  * - **文字 15sp**（`editText.setTextSize(dp(15))`）、提示词 50% 透明、输入文字全色、
@@ -898,13 +902,13 @@ private fun SearchField(
         modifier
             .fillMaxWidth()
             .height(52.dp)
-            .padding(horizontal = 9.dp, vertical = 3.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(46.dp)
+                .height(40.dp)
                 .shadow(elevation = 2.dp, shape = RoundedCornerShape(20.dp), clip = false)
                 .background(palette.background, RoundedCornerShape(20.dp)),
             verticalAlignment = Alignment.CenterVertically,
