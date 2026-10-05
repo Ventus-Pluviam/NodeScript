@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.LocalToast
 import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.RefreshableBox
 import com.autoscript.ui.components.ScrollToTopButton
@@ -60,21 +61,25 @@ import com.autoscript.domain.permission.Capability
 import kotlinx.coroutines.launch
 
 /**
- * 设置页（批 48 起「入口 + 子页」两层）：
+ * 设置页（批 49 起「两组纯文字 + 权限列表子页」两层）：
  *
  * **顶页** = 头部标识区（软件图标 90dp 正圆 + `NodeScript` 22sp 粗体 —— TG 设置页
- * `topView` 的对应位，随列表滚动）+ **一条「权限」入口**（副标题挂读态：
- * 尚未读取 / 读失败原文 / N 项）+ 降级定时任务段；顶栏只留右上 `⋮`（主题切换）。
- * **子页** = 点「权限」进入：顶栏换「‹ 返回 + 权限」，全部权限行同卡、无分隔线、
- * 行尾三态值，可授权行整行可点。系统返回先关子页再交外壳（[BackHandler]）。
+ * `topView` 的对应位，随列表滚动）+ 两张纯文字卡：①「权限列表」（点进子页）/
+ *「语言切换」/「帮助文档」；②「反馈」/「关于」/「检查更新」；再加降级定时任务段。
+ * 这些行**无图标、无副标题**（批 49 用户口径「都不需要图标，还有标题下面的小字」——
+ * 连同批 48 挂在入口副标题位的读态一并撤下）；没实现的功能点按 toast 如实说「尚未开放」，
+ * 不画成空页。顶栏只留右上 `⋮`（主题切换）。
+ * **子页** = 点「权限列表」进入：顶栏换「‹ 返回 + 权限列表」，全部权限行同卡、
+ * 无分隔线、行尾三态值，可授权行整行可点（权限行保留图标 —— 那是模块自己的脸）。
+ * 系统返回先关子页再交外壳（[BackHandler]）。
  *
  * 为什么收进子页（批 48 用户口径「顶层入口进二级页」，TG 主设置页
  * 「Privacy and Security」的形态）：顶层要的是**命名的列表结构**，权限九行平铺会把
- * 入口与内容混在一层；读态跟着入口走，说的就是那张清单本身。
+ * 入口与内容混在一层。
  *
  * 诚实边界（与其他屏同一条纪律）：
- * - 读态一句、挂在入口副标题位（[Status] 的三态分派，读到了说 N 项）；子页没读到 /
- *   读失败时卡内如实说一句，**不铺空卡**冒充「一个权限都没有」；
+ * - 读态顶页不再展示（批 49 去掉标题下的小字）；子页没读到 / 读失败时卡内如实说一句
+ *   （[Status] 的三态分派），**不铺空卡**冒充「一个权限都没有」；
  * - 行尾三态中文说法与逐态着色判读在可测的 [CapabilityRowState]，可授权的行整行可点
  *   （[CapabilityRowState.canRequestGrant] 的投影）；
  * - 引导文案**不渲染**（批 47 口径「去除各个权限的描述」）；安装体积**不渲染**
@@ -98,12 +103,13 @@ fun SettingsScreen(
     BackHandler(enabled = permissionsOpen) { permissionsOpen = false }
 
     // 读态三态分派走 Status（`LoadState` 的纪律：界面不自己 when 它）。
-    // 挂在「权限」入口的副标题位 —— 它描述的就是那张清单。
+    // 顶页不再挂它（批 49 去掉标题下的小字）—— 只在子页没读到 / 读失败时如实说。
     val status = Status.of(
         load = state.load,
         notLoadedText = "尚未读取",
         loadedText = "${state.rows.size} 项",
     )
+    val toast = LocalToast.current
     val topListState = rememberLazyListState()
     val pageListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -111,7 +117,7 @@ fun SettingsScreen(
     Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted)) {
         if (permissionsOpen) {
             ActionBar(
-                title = "权限",
+                title = "权限列表",
                 onBack = { permissionsOpen = false },
                 background = ThemeColors.surfaceMuted,
             )
@@ -155,18 +161,43 @@ fun SettingsScreen(
                     ) {
                         item { IdentityHeader() }
                         item {
+                            // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
+                            // 全部纯文字（批 49：无图标、无副标题）。
                             SettingsCard {
                                 SettingsCellRow(
-                                    title = "权限",
-                                    colors = PermissionEntryColors,
-                                    glyph = GlyphKind.SHIELD,
-                                    subtitle = status.text,
-                                    subtitleTone = status.tone,
+                                    title = "权限列表",
                                     onClick = { permissionsOpen = true },
+                                )
+                                SettingsCellRow(
+                                    title = "语言切换",
+                                    onClick = { toast?.show("语言切换尚未开放") },
+                                )
+                                SettingsCellRow(
+                                    title = "帮助文档",
+                                    onClick = { toast?.show("帮助文档尚未开放") },
+                                )
+                            }
+                        }
+                        item { SectionGap() }
+                        item {
+                            // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
+                            SettingsCard {
+                                SettingsCellRow(
+                                    title = "反馈",
+                                    onClick = { toast?.show("反馈尚未开放") },
+                                )
+                                SettingsCellRow(
+                                    title = "关于",
+                                    onClick = { toast?.show("关于尚未开放") },
+                                )
+                                SettingsCellRow(
+                                    title = "检查更新",
+                                    onClick = { toast?.show("检查更新尚未开放") },
                                 )
                             }
                         }
                         if (state.degradedAlarmTaskIds.isNotEmpty()) {
+                            item { SectionGap() }
                             item {
                                 // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
                                 // 排期**可能偏差**（§8.6 的承诺）。它是任务的账，不进权限子页。
@@ -177,7 +208,6 @@ fun SettingsScreen(
                                         tone = StatusTone.ATTENTION,
                                     )
                                 }
-                                CardGap()
                             }
                         }
                     }
@@ -195,10 +225,10 @@ fun SettingsScreen(
     }
 }
 
-/** 两张卡片之间的灰底空隙（TG 卡片间距 4dp 的投影；`asShadow` 的空白段）。 */
+/** 两张卡片之间的灰底空隙（TG `ShadowSectionCell` 缺省高 12dp —— 批 44 实测口径）。 */
 @Composable
-private fun CardGap() {
-    Spacer(Modifier.height(4.dp))
+private fun SectionGap() {
+    Spacer(Modifier.height(12.dp))
 }
 
 /** 卡片内一段说明文字（无图标的整卡文本行；TG `TextInfoPrivacyCell` 在卡内的读法）。 */
@@ -318,9 +348,6 @@ private fun PermissionRow(row: CapabilityRowState, onOpenSettings: (Capability) 
         },
     )
 }
-
-/** 「权限」入口行的图标色对。入口是**导航**、不是某个能力，配色与行内逐能力映射分开。 */
-private val PermissionEntryColors = SettingIconColors(Color(0xFF7A6BF0), Color(0xFF5B4FE0))
 
 /**
  * 顶页 `⋮`（TG 设置页顶栏右侧三个点的对应位，`ic_ab_other`）。
