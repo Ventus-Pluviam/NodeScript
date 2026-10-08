@@ -1,5 +1,17 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 82）
+
+- [2026-10-09 · 批 82：脚本全局环境变量（§8.1 新增契约）](2026-10-09.md)：
+  管理面板「环境变量」落地。**契约面原本没有这一条**（`grep -rn "环境变量" docs/design/*.md`
+  只命中 §11 的 token 段与 §13 的 apksigner 口令段），故本批是**新增契约**：`:domain`
+  `ScriptEnvStore`/`ScriptEnvEntry`/`ScriptEnvKeys` + `:app-service:script-repo`
+  `FileScriptEnvStore`（`files/.autojs/script-env.jsonl`）+ `NodeEngineConfig.scriptEnv: () -> Map`
+  （**每次 spawn 现读**，用户键先写/宿主键后写 = 顺序即契约）+ `:ui` `ScriptEnvScreen`。
+  四条口径：全局非按项目 / 每次 spawn 现读 / 不注入 npm 会话进程 / 拒收 `AUTOSCRIPT_` 保留前缀。
+  口径见 [`design-decisions.md`](../design-decisions.md) 第 52 项。**边界**：真机行为未验；
+  同组的「镜像源管理」仍是 toast 占位。
+
 ## 最新追记（2026-10-09，批 81）
 
 - [2026-10-09 · 批 81：依赖面板 + 审批卡（§10.9.1 / §10.9.2）](2026-10-09.md)：
