@@ -22,7 +22,9 @@ import java.nio.file.Path
  * npm 生产装配（docs §10.2 存储布局 + §12.2 接线现状）。
  *
  * 把散在各处的目录约定收到一处（调用方只给 `filesDir`/`cacheDir`，不再逐个拼路径），
- * 产出直接喂 `AppShell.assemble(npmHandler = …)` 的挂载缝。纯 JVM、无 Android，
+ * 产出直接喂 `AppShell.assemble(npmHandler = …)` 的挂载缝；返回具体类型（而非
+ * [NamespaceHandler]）是为了让装配层还能拿到 [NpmBridgeHandler.facade] —— 呈现面的
+ * 依赖面板/审批卡读口走它，不经桥（§10.9.1）。纯 JVM、无 Android，
  * archUnit 允许（本包只见 `:domain` + 自家 `npm` 子包）。
  *
  * 目录映射（§10 存储布局）：
@@ -37,6 +39,9 @@ import java.nio.file.Path
  * - [scriptExecutor] 缺省 [ScriptOpExecutor.Unavailable] —— T1 lifecycle
  *   门禁照走（解析/哈希/审批自请入队都在协调器内，纯 Kotlin 不依赖执行体），但**已获批也跑不起来**
  *   如实 `ERR_NOT_IMPLEMENTED`（spawn 桥本体未接，§10.3 T1 下半段）；
+ * - [approvalStore] 缺省 = 落盘账本（`filesDir/.autojs/approve-ledger.jsonl`，§10.2 存储布局）；
+ *   传 null = 不落盘（只给"重启即蒸发"的用例用，生产不许走这条 —— 审批是信任决策，
+ *   重启蒸发等于让用户重批，而且 requestId 会从 `apr-1` 重来、与历史票碰撞）；
  * - [lockKey] 缺省 null → 不带 lockSigner：ci 不验签直接走（不假装验过）；
  * - [registryVerifier] 缺省接真 [NpmRegistryVerifier]（纯 JVM + Http 源；只在 install 被调时
  *   发请求，装配本身零网络）。测试要静默跳过校验时显式传 null。
@@ -50,10 +55,16 @@ object NpmShellKit {
         /** T1 lifecycle 执行体（spawn 桥接上后注入；缺省即"门禁过但跑不起来"）。 */
         scriptExecutor: ScriptOpExecutor = ScriptOpExecutor.Unavailable,
         registryVerifier: NpmRegistryVerifier? = NpmRegistryVerifier(),
+        /**
+         * 审批账本持久化（§10.2 `files/.autojs/approve-ledger.jsonl`）。缺省即落盘 ——
+         * 生产路径**不该**传 null：审批是信任决策，重启蒸发 = 用户重批 + requestId
+         * 从 `apr-1` 重来与历史票碰撞（[ApprovalLedger] 的 seq 由 store 的 lastSeq 起算）。
+         */
+        approvalStore: ApprovalStore? = FileApprovalStore(filesDir.resolve(".autojs")),
         lockKey: LockSigner.KeyProvider? = null,
         snapshots: Boolean = true,
         freeSpaceProbe: (Path) -> Long = defaultFreeSpaceProbe(filesDir),
-    ): NamespaceHandler {
+    ): NpmBridgeHandler {
         // 项目根来自契约层（§9.6 单一事实来源）：与 script-repo/调度恢复/装配层同一个函数，
         // 拼错目录名不再可能（曾经这里与 AppShellKit 各写一份字面量）。
         val layout = NpmProjectLayout(ScriptPaths.projectsRoot(filesDir))
@@ -66,7 +77,8 @@ object NpmShellKit {
             layout = layout,
             journal = InstallJournal(autojsDir),
             staging = InstallStaging(layout),
-            ledger = ApprovalLedger(),
+            // 审批账本落盘（§10.2）：不落盘时 seq 从 0 起，重启后新票会与旧票同 id。
+            ledger = ApprovalLedger(approvalStore),
             history = InstallHistory(autojsDir),
             lockSigner = lockKey?.let { LockSigner(autojsDir, it) },
             snapshots = if (snapshots && lockKey != null) NpmSnapshot(layout, autojsDir, lockKey) else null,

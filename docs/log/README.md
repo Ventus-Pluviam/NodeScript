@@ -1,6 +1,17 @@
 # 流水切片（按日期）
 
-## 最新追记（2026-10-09，批 80）
+## 最新追记（2026-10-09，批 81）
+
+- [2026-10-09 · 批 81：依赖面板 + 审批卡（§10.9.1 / §10.9.2）](2026-10-09.md)：
+  实测复核先推翻了「UI 未排期」这条记账 —— 真问题是审批链**结构性地死了**
+  （`resolveApproval`/`pendingApprovals` 零生产调用方、`ApprovalLedger()` 没传 store）。
+  三件：`NpmShellKit` 审批账本缺省落盘；`:domain` `NpmPanelSnapshot` 读口 + `HostSummary`
+  两条（读口**不经桥**）；`:ui` `NpmScreen` + `NpmState`（已装依赖 + 待审批两段，
+  批准/拒绝走 `resolveApproval` = §10.5-2 人机分离的唯一生产落点）。
+  口径见 [`design-decisions.md`](../design-decisions.md) 第 51 项。**边界**：安装半边
+  （输入行/进度条/依赖树）未落；真机行为未验。
+
+
 
 - [2026-10-09 · 批 80：`child_process` 拦截 shim 接线 + 零 spawn 金标准](2026-10-09.md)：
   `npm-spawn-gate.cjs`（classpath 资源）+ `NpmSpawnGate`（落 `files/.autojs/`、`NODE_OPTIONS=--require`

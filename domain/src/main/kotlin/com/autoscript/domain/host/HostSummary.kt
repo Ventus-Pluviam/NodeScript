@@ -1,6 +1,8 @@
 package com.autoscript.domain.host
 
 import com.autoscript.domain.editor.SyntaxHighlighter
+import com.autoscript.domain.npm.ApprovalTicket
+import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.permission.Capability
 import com.autoscript.domain.permission.CapabilityLifecycle
 import com.autoscript.domain.permission.CapabilityState
@@ -184,6 +186,32 @@ interface HostSummary {
      * 默认 NONE：原生解析器缺席时，编辑器保留纯文本能力。
      */
     fun createSyntaxHighlighter(relPath: String): SyntaxHighlighter = SyntaxHighlighter.NONE
+
+    /**
+     * 依赖面板读数（§10.9.1；管理面板 → 依赖管理）。挂起：要读 lockfile 与遍历目录（IO）。
+     *
+     * **全量**（全部项目 + 全局待审队列），不按项目问 —— 理由见 [NpmPanelSnapshot] 的 KDoc。
+     *
+     * 读失败**抛**（与 [taskCenter]/[console] 同一条纪律）：`:ui` 据此如实显示「读依赖失败」，
+     * 而不是画成「一个项目都没有」—— 后者会让用户以为自己的项目丢了。
+     *
+     * 读口**未接线**（宿主没装配 npm）同样**抛**，不返回空快照：空快照是「读成功且真的
+     * 一条都没有」的样子。装配期的失败原文在 `AssembledShell.npmCliFailure`，
+     * 呈现层应显示它而不是显示一个空面板。
+     */
+    suspend fun npmSnapshot(): NpmPanelSnapshot
+
+    /**
+     * 人工审批决定（§10.5-2 **人机分离**的唯一落点）。
+     *
+     * 为什么在 [HostSummary] 而不是桥面：桥面是**脚本侧**的面，而审批的全部意义就是
+     * 「人的动作」—— 脚本只能发请求（`auto.npm.requestApprove` 只入队），决定必须由
+     * UI 回调带进来。本口就是那个回调面；`PackageManagerFacade.resolveApproval` 在
+     * 全仓**只该有这一个生产调用方**。
+     *
+     * 幂等：已决票再调返回原票（不翻案）。票不存在**抛**（原文给 UI）。
+     */
+    suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket
 }
 
 /**

@@ -47,7 +47,15 @@ import com.autoscript.domain.json.DomainJson
  *   （**只入队**；脚本绝无 resolve 权。`scripts` 回显：JS facade 一直带着这个字段，
  *   宿主不校验也不回就是静默丢用户显式声明——与 `setRegistry` 的 scope 同一类问题）。
  */
-class NpmBridgeHandler(private val facade: com.autoscript.domain.npm.PackageManagerFacade) : RpcNamespaceHandler() {
+class NpmBridgeHandler(
+    /**
+     * 门面本体。**public 是给装配层用的，不是给脚本用的**：桥面只有 [handle] 那条路，
+     * 门面上的人机分离方法（`resolveApproval`）不因此变得可从脚本到达 —— 装配层拿它
+     * 喂 `HostSummary` 的呈现面读口（依赖面板 / 审批卡，§10.9.1），那条路走的是
+     * Android 进程内的接口调用，不经过桥。
+     */
+    val facade: com.autoscript.domain.npm.PackageManagerFacade,
+) : RpcNamespaceHandler() {
 
 
     /** 申报方法表（wire-schema 对账挂点）：单源指向生成物 [WireMethods.BY_NS]，不手抄。 */

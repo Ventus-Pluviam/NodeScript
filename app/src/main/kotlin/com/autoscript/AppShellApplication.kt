@@ -6,6 +6,9 @@ import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.npm.ApprovalDecision
+import com.autoscript.domain.npm.ApprovalTicket
+import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
@@ -661,6 +664,41 @@ class AppShellApplication : Application(), HostSummary {
      * 经 [PlatformWiring.syntaxHighlighter] 薄转接 `:platform:editor` 的 EditorHighlighters
      * —— 根包不 import 任何 `com.autoscript.platform..`（ArchitectureTest 看住）。
      */
+    /**
+     * 依赖面板读数（§10.9.1）。
+     *
+     * 读的是**装配产物里那个 handler 背后的 facade**，不是另开一个 `InstallCoordinator`：
+     * 第二个实例会各自持账本/句柄表/事件环，写侧两份即失真（与 `console()`/`taskCenter()`
+     * 读壳自己持有的那两件同一条理）。
+     *
+     * 没接上（壳未装配 / 本次装配没挂 npm）**抛**，不返回空快照 —— 空快照是「读成功且
+     * 一条都没有」的样子，会把「npm 压根没接线」画成「一个项目都没有」。装配期的
+     * 失败原文在 `AssembledShell.npmCliFailure`，呈现层该显示它。
+     */
+    override suspend fun npmSnapshot(): NpmPanelSnapshot {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：依赖面板暂不可读" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：本次装配没挂 npm handler（原因见装配日志的 npmCliFailure）——依赖面板无可读之处"
+        }
+        return facade.snapshot()
+    }
+
+    /**
+     * 人工审批决定（§10.5-2 人机分离的**唯一**生产落点）。
+     *
+     * 脚本侧只能 `auto.npm.requestApprove` 入队（桥面没有 resolve），决定必须由 UI 回调
+     * 带进来 —— 本方法就是那个回调面。`PackageManagerFacade.resolveApproval` 在全仓
+     * 只该有这一个生产调用方。
+     */
+    override suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：审批决定无处落账" }
+        val facade = checkNotNull(built.npmFacade) { "npm 未接线：审批决定无处落账" }
+        return facade.resolveApproval(
+            requestId,
+            if (approve) ApprovalDecision.APPROVE else ApprovalDecision.REJECT,
+        )
+    }
+
     override fun createSyntaxHighlighter(relPath: String): SyntaxHighlighter =
         PlatformWiring.syntaxHighlighter(relPath)
 

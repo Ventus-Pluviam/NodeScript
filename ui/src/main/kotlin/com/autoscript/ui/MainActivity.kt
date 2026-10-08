@@ -77,6 +77,7 @@ import com.autoscript.ui.components.ToastHost
 import com.autoscript.ui.components.rememberToastAction
 import com.autoscript.ui.screens.ManagementScreen
 import com.autoscript.ui.screens.LogManagementScreen
+import com.autoscript.ui.screens.NpmScreen
 import com.autoscript.ui.screens.ProjectScreen
 import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
@@ -86,6 +87,7 @@ import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.LoadState
+import com.autoscript.ui.state.NpmState
 import com.autoscript.ui.state.TaskLogState
 import com.autoscript.ui.state.ProjectState
 import com.autoscript.ui.state.RegistrationForm
@@ -98,6 +100,7 @@ import com.autoscript.ui.theme.Theme
 import com.autoscript.ui.theme.ThemeMode
 import com.autoscript.ui.theme.isDark
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -151,6 +154,12 @@ class MainActivity : ComponentActivity() {
 
     /** 任务日志（日志管理页第二个列表：全部项目的终态历史；读失败保留已读到的行）。 */
     private var taskLogState: TaskLogState by mutableStateOf(TaskLogState.NOT_LOADED)
+
+    /**
+     * 依赖管理页状态（依赖面板 + 审批卡共用一个读口：两件事在数据上同源，
+     * 拆两个读口就会各自现取一次、两次结果可以互相矛盾）。
+     */
+    private var npmState: NpmState by mutableStateOf(NpmState.NOT_LOADED)
 
     // 「当前页签」不再是一个字段：它由 pager 的滚动位置派生（见 setContent 里的 pagerState）。
     // 存两份必然漂移 —— 手指划过去时字段说 A、pager 说 B。
@@ -311,6 +320,18 @@ class MainActivity : ComponentActivity() {
             val closeConsole = { consoleOpen = false }
             var logManagementOpen by rememberSaveable { mutableStateOf(false) }
             val closeLogManagement = { logManagementOpen = false }
+            // 依赖管理子页（批 81）：与日志管理同一层级（pager 外，切页不丢）。
+            var npmOpen by rememberSaveable { mutableStateOf(false) }
+            val closeNpm = { npmOpen = false }
+            // 三个子页开关的**唯一**读法：谁在前台是一个值，不是三个布尔的组合。
+            // 顺序（控制台 → 依赖 → 日志）只写在这一处 —— 本页的路由、返回键让位、
+            // 切页现取读的都是它，三处同序。
+            val subPage = when {
+                consoleOpen -> ManagementPage.CONSOLE
+                npmOpen -> ManagementPage.NPM
+                logManagementOpen -> ManagementPage.LOGS
+                else -> null
+            }
             // 浮层口（批 44）：**一处**建、一处挂（[MainShell] 里那个 ToastHost），
             // 四屏的复制回执与操作/停止回执都经 `LocalToast` 落到它上面 ——
             // 此前那些回执是各屏列表里的一行，弹一条就把内容往下推一次。
@@ -362,30 +383,12 @@ class MainActivity : ComponentActivity() {
                             // pager 的修饰符是它自己的（滚动/裁剪/尺寸），发给页内容等于
                             // 把同一份约束套两层。
                             when (Tab.entries[current]) {
-                                // 编辑器语法高亮的宿主口只供到项目页（编辑面在它里面）。
-                                Tab.HOME -> CompositionLocalProvider(LocalEditorHighlightHost provides highlightHost) {
-                                    ProjectScreen(
-                                        state = projectState,
-                                        active = pagerState.currentPage == Tab.HOME.ordinal,
-                                        onSwitchTheme = themeSwitch.onSwitch,
-                                        // 菜单项写**目标模式**（TG 的日夜项同款）：
-                                        // 冷启缺省跟随系统，此时按"当下是不是深色"定文案。
-                                        themeSwitchLabel = themeSwitchLabel(dark),
-                                        onCreate = { projectId, name, isFolder ->
-                                            scope.launch { createEntryOp(projectId, name, isFolder) }
-                                        },
-                                        // 点文件进编辑面：读/存都**不在这里落状态** —— 成败归编辑器自己
-                                        // 显示（清单没变），保存成功后才重读一次清单（大小/时刻变了）。
-                                        onReadFile = { projectId, relPath -> readScriptFileOp(projectId, relPath) },
-                                        onSaveFile = { projectId, relPath, content ->
-                                            saveScriptFileOp(projectId, relPath, content)
-                                        },
-                                        onSortChange = { sort, reversed ->
-                                            projectState = projectState.copy(sort = sort, reversed = reversed, opError = null, opNotice = null)
-                                        },
-                                        modifier = Modifier,
-                                    )
-                                }
+                                Tab.HOME -> ProjectTab(
+                                    scope = scope,
+                                    themeSwitch = themeSwitch,
+                                    dark = dark,
+                                    active = pagerState.currentPage == Tab.HOME.ordinal,
+                                )
                                 Tab.TASKS -> TaskCenterScreen(
                                     state = taskState,
                                     console = consoleState,
@@ -395,26 +398,23 @@ class MainActivity : ComponentActivity() {
                                     onStopRun = { run -> scope.launch { stopRunOp(run) } },
                                     modifier = Modifier,
                                 )
-                                Tab.MANAGEMENT -> when {
-                                    consoleOpen -> ConsoleScreen(
-                                        state = consoleState,
-                                        onRefresh = { reloadConsole() },
-                                        onStopRun = { run -> scope.launch { stopRunOp(run) } },
-                                        onBack = closeConsole,
-                                        modifier = Modifier,
-                                    )
-                                    logManagementOpen -> LogManagementScreen(
-                                        consoleState = consoleState,
-                                        taskLogState = taskLogState,
-                                        onRefreshConsole = { reloadConsole() },
-                                        onRefreshTaskLog = { reloadTaskLog() },
-                                        onBack = closeLogManagement,
-                                        modifier = Modifier,
-                                    )
-                                    else -> ManagementScreen(
+                                // 管理页分两种形态：某个子页在前台，或者面板本身在前台
+                                // （子屏那几档收在 [ManagementSubPageHost] 里 ——
+                                // onCreate 已贴着 detekt 的长函数线）。
+                                Tab.MANAGEMENT -> if (subPage == null) {
+                                    ManagementScreen(
                                         onOpenConsole = { consoleOpen = true },
                                         onOpenLogManagement = { logManagementOpen = true },
+                                        onOpenNpm = { npmOpen = true },
                                         modifier = Modifier,
+                                    )
+                                } else {
+                                    ManagementSubPageHost(
+                                        page = subPage,
+                                        onCloseConsole = closeConsole,
+                                        onCloseNpm = closeNpm,
+                                        onCloseLogManagement = closeLogManagement,
+                                        scope = scope,
                                     )
                                 }
                                 Tab.SETTINGS -> SettingsScreen(
@@ -430,7 +430,13 @@ class MainActivity : ComponentActivity() {
                     }
                         }
                 }
-            ManagementBackHandler(pagerState, consoleOpen || logManagementOpen) { if (consoleOpen) closeConsole() else closeLogManagement() }
+            ManagementBackHandler(pagerState, subPage != null) {
+                when (subPage) {
+                    ManagementPage.CONSOLE -> closeConsole()
+                    ManagementPage.NPM -> closeNpm()
+                    else -> closeLogManagement()
+                }
+            }
             // 键里带页签和管理子页：进入控制台即现取，而不是显示上次离开时的快照。
             // 用 **settledPage** 而不是 currentPage：横划跨多页时 currentPage 会途经
             // 中间每一页，那样划一次会连读三遍；settledPage 只在停稳后变一次。
@@ -438,21 +444,108 @@ class MainActivity : ComponentActivity() {
             // 反过来改 resumeTick 形成自激（见 reloadCapabilities）。
             // 冷启那几秒：装配在 IO 域异步完成，onCreate 的首读大概率赶在它前面。
             HomeRetryEffect(state = { homeState }) { homeState = HomeState.read(hostSummary()) }
-            TabReloadEffect(resumeTick, pagerState, consoleOpen, logManagementOpen) { tab ->
+            TabReloadEffect(resumeTick, pagerState, subPage) { tab ->
                 when (tab) {
                     Tab.HOME -> reloadProjectFiles()
                     // 任务屏现在也画在途执行（控制台的运行列表）：切到本页签两侧都现取，
                     // 否则运行中那组会停在离开时的快照上（与"切页签即现取"同一条纪律）。
                     Tab.TASKS -> { reloadTasks(); reloadConsole() }
+                    // 管理页按**在前台的那一个**子页现取，而不是"把所有开着的都读一遍"：
+                    // 依赖面板要遍历 node_modules 算尺寸，日志管理要读档案 ——
+                    // 在别的子页上白跑一遍是真金白银的 IO。面板本身（null）不读任何东西。
                     // 日志管理两个列表都要现取：系统日志是控制台游标增量，任务日志读档案。
-                    Tab.MANAGEMENT -> {
-                        if (consoleOpen || logManagementOpen) reloadConsole()
-                        if (logManagementOpen) reloadTaskLog()
+                    Tab.MANAGEMENT -> when (subPage) {
+                        ManagementPage.CONSOLE -> reloadConsole()
+                        ManagementPage.NPM -> reloadNpm()
+                        ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog() }
+                        null -> Unit
                     }
                     Tab.SETTINGS -> reloadCapabilities()
                 }
                 }
             }
+        }
+    }
+
+    /**
+     * 项目页（`Tab.HOME`）那一格。
+     *
+     * 抽出来只为让 [onCreate] 停在 detekt 的长函数线内。它要接的六个回调里五个是
+     * 转发到本类的现取/操作（语义见各自 KDoc），真正属于组合的只有 [scope]
+     * （新建条目要跑在外壳的域上，不能在子屏里 `rememberCoroutineScope()`）与
+     * [themeSwitch] 那两颗 —— 编辑器语法高亮的宿主口只供到这里（编辑面在项目页里）。
+     *
+     * @param active 本页是不是 pager 当前停稳的那一页：预组合的邻页不拦截返回键。
+     */
+    @Composable
+    private fun ProjectTab(scope: CoroutineScope, themeSwitch: ThemeSwitchWiring, dark: Boolean, active: Boolean) {
+        CompositionLocalProvider(LocalEditorHighlightHost provides highlightHost) {
+            ProjectScreen(
+                state = projectState,
+                active = active,
+                onSwitchTheme = themeSwitch.onSwitch,
+                // 菜单项写**目标模式**（TG 的日夜项同款）：
+                // 冷启缺省跟随系统，此时按"当下是不是深色"定文案。
+                themeSwitchLabel = themeSwitchLabel(dark),
+                onCreate = { projectId, name, isFolder ->
+                    scope.launch { createEntryOp(projectId, name, isFolder) }
+                },
+                // 点文件进编辑面：读/存都**不在这里落状态** —— 成败归编辑器自己显示
+                // （清单没变），保存成功后才重读一次清单（大小/时刻变了）。
+                onReadFile = { projectId, relPath -> readScriptFileOp(projectId, relPath) },
+                onSaveFile = { projectId, relPath, content -> saveScriptFileOp(projectId, relPath, content) },
+                onSortChange = { sort, reversed ->
+                    projectState = projectState.copy(sort = sort, reversed = reversed, opError = null, opNotice = null)
+                },
+                modifier = Modifier,
+            )
+        }
+    }
+
+    /**
+     * 管理页的子屏宿主：控制台 / 依赖管理 / 日志管理。
+     *
+     * 抽成成员函数有两个理由，都不是为了好看：
+     * - [onCreate] 已贴着 detekt 的长函数线（三个子屏摊在 `setContent` 里就过线）；
+     * - "子页在前台"与"面板在前台"本来就是两种形态 —— 面板是**入口清单**，
+     *   子屏是**具体面**，放在同一个 `when` 里会读成四选一。
+     *
+     * 三份读数（[consoleState]/[npmState]/[taskLogState]）是 Activity 的字段，直接读；
+     * 关闭回调与重操作要用的 [scope] 才走参数（**scope 必须由外壳传**：在这里
+     * `rememberCoroutineScope()` 会让正在跑的审批/停止操作随子页离开组合而被取消）。
+     */
+    @Composable
+    private fun ManagementSubPageHost(
+        page: ManagementPage,
+        onCloseConsole: () -> Unit,
+        onCloseNpm: () -> Unit,
+        onCloseLogManagement: () -> Unit,
+        scope: CoroutineScope,
+    ) {
+        when (page) {
+            ManagementPage.CONSOLE -> ConsoleScreen(
+                state = consoleState,
+                onRefresh = { reloadConsole() },
+                onStopRun = { run -> scope.launch { stopRunOp(run) } },
+                onBack = onCloseConsole,
+                modifier = Modifier,
+            )
+            ManagementPage.NPM -> NpmScreen(
+                state = npmState,
+                onRefresh = { reloadNpm() },
+                onDecide = { id, approve -> scope.launch { decideApprovalOp(id, approve) } },
+                onSelectProject = { npmState = npmState.copy(selectedProjectId = it) },
+                onBack = onCloseNpm,
+                modifier = Modifier,
+            )
+            ManagementPage.LOGS -> LogManagementScreen(
+                consoleState = consoleState,
+                taskLogState = taskLogState,
+                onRefreshConsole = { reloadConsole() },
+                onRefreshTaskLog = { reloadTaskLog() },
+                onBack = onCloseLogManagement,
+                modifier = Modifier,
+            )
         }
     }
 
@@ -557,6 +650,63 @@ class MainActivity : ComponentActivity() {
         val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
         host.saveScriptFile(projectId, relPath, content)
         reloadProjectFiles()
+    }
+
+    /**
+     * 现取依赖面板读数（挂起；只写 [npmState]）。
+     *
+     * 三落点不撒谎（与 [reloadTaskLog] 同构）：
+     * - 读口未接线 / 壳未装配 → 失败态带原因（**不冒充**「一个项目都没有」）；
+     * - 抛错 → 失败态**保留已读到的那份**（一次瞬时失败不该把依赖清单抹成空）；
+     * - 成功 → 全量覆盖（宿主快照是权威，不累积）。
+     *
+     * 保留用户当前选中的项目：刷新把用户正在看的项目换掉，是"手一滑跳走了"的经典形态
+     * （[NpmState.of] 的 previous 参数就是为这条）。
+     */
+    private suspend fun reloadNpm() {
+        val host = hostSummary()
+        val previous = npmState
+        npmState = try {
+            if (host == null) {
+                NpmState.failed(IllegalStateException("宿主摘要未接线（Application 未实现 HostSummary）"), previous)
+            } else {
+                NpmState.of(host.npmSnapshot(), previous)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Exception) {
+            NpmState.failed(t, previous)
+        }
+    }
+
+    /**
+     * 人工审批决定（§10.5-2 人机分离的落点：脚本只能入队，决定由这里带下去）。
+     *
+     * 与 [performTaskOp] 同一条纪律的三落点：未接线 → opError；抛（票不存在等）
+     * → opError 原文、**不清依赖清单**；成功 → opNotice 回执 + 现取一次
+     * （票从待审队列消失是宿主的账，界面不许自己先把它抹掉 —— 那会在宿主拒绝时
+     * 出现"卡片没了但什么都没发生"）。
+     */
+    private suspend fun decideApprovalOp(requestId: String, approve: Boolean) {
+        val host = hostSummary()
+        if (host == null) {
+            npmState = npmState.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）")
+            return
+        }
+        npmState = npmState.copy(deciding = true, opError = null, opNotice = null)
+        try {
+            host.resolveNpmApproval(requestId, approve)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Exception) {
+            npmState = npmState.copy(deciding = false, opError = t.message ?: t.javaClass.simpleName)
+            return
+        }
+        reloadNpm()
+        npmState = npmState.copy(
+            deciding = false,
+            opNotice = if (approve) "已批准：这张票现在放行对应的脚本" else "已拒绝",
+        )
     }
 
     /**
@@ -779,6 +929,9 @@ class MainActivity : ComponentActivity() {
      * 四个页签。`short`（页签条两字短名）与全称（顶栏标题）分开 —— 窄屏塞不下全称；
      * `glyph` 是页签条上那个画出来的图标（见 `Glyphs.kt`）。
      */
+    /** 管理页在前台的那个子页（面板本身不是子页，用 null 表示）。 */
+    enum class ManagementPage { CONSOLE, NPM, LOGS }
+
     enum class Tab(val short: String, val glyph: GlyphKind) {
         HOME("项目", GlyphKind.HOME),
         TASKS("任务", GlyphKind.TASKS),
@@ -1228,15 +1381,15 @@ private fun ManagementBackHandler(pagerState: PagerState, subPageOpen: Boolean, 
 private fun TabReloadEffect(
     resumeTick: Int,
     pagerState: PagerState,
-    consoleOpen: Boolean,
-    logManagementOpen: Boolean,
+    subPage: MainActivity.ManagementPage?,
     onSettled: suspend (MainActivity.Tab) -> Unit,
 ) {
     // 仅管理页消费子页键：切到别页时改层级，不应取消那一页正在进行的读取。
     val tab = MainActivity.Tab.entries[pagerState.settledPage]
-    val consoleVisible = tab == MainActivity.Tab.MANAGEMENT && consoleOpen
-    val logsVisible = tab == MainActivity.Tab.MANAGEMENT && logManagementOpen
-    LaunchedEffect(resumeTick, tab, consoleVisible, logsVisible) {
+    // 子页键必须进 key：三个子屏都是"进了才现取"，不进 key 就会出现
+    // "点进去看到的是上次的快照 / 首帧的未读取"，而刷新按钮成了唯一的出路。
+    val visibleSubPage = subPage?.takeIf { tab == MainActivity.Tab.MANAGEMENT }
+    LaunchedEffect(resumeTick, tab, visibleSubPage) {
         onSettled(tab)
     }
 }

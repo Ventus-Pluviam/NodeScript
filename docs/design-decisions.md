@@ -12,6 +12,51 @@
 
 ---
 
+## 51. 依赖面板的读口形态与审批决定的生产落点（2026-10-09，批 81）
+
+**背景**：§10.9 第 1/2 条（依赖面板、审批卡）在契约里一直是 P0，而 §11.3 第 6 条把它记成
+「UI 未排期」。实测不是排期问题，是**结构问题**：`PackageManagerFacade.resolveApproval` 与
+`pendingApprovals` 全仓**零生产调用方**（只有测试调），`ApprovalLedger()` 的 `store` 缺省 null
+（重启即蒸发 + `requestId` 从 `apr-1` 重来与历史票碰撞）—— 即「审批链永远停在 PENDING、
+`runScript`/`exec` 永远过不了那道闸」。本项记四条口径。
+
+**拍板四条**：
+
+1. **读口一次现取**全量**快照，不按项目问**。`PackageManagerFacade.snapshot(): NpmPanelSnapshot`
+   （`:domain`）= `projects`（按项目号排序）+ `pendingApprovals`（**全局**队列）。
+   为什么不是 `snapshot(projectId)`：① 面板要能回答「我有哪些项目」，只列一个会让人以为其余
+   项目不存在（与 §9.5 能力中心「列全量能力」同一条理由）；② 审批队列本身没有项目维度
+   （`resolveApproval` 不带 projectId），按项目筛会让用户**漏掉别的项目上等着的那张卡** ——
+   那正是本项要修的缺陷；③ 按项目问 N 次 = N 次目录遍历 + N 套失败语义。
+   项目列表取 `storage()` 的键（= 项目根下的目录）而不是 lockfile 的键：装了依赖但还没落 lock
+   的项目也有一棵 `node_modules` 要管，目录是超集。
+2. **读口不经桥**。桥面（§12.2 的 `npm` 命名空间）是**脚本侧**的面，受 §10.5 人机分离约束；
+   依赖面板是**宿主自己的界面**。故快照 DTO 住 `:domain`（`:ui` 只依赖 `:domain`，够不到
+   `:app-service:npm` 的实现类），经 `HostSummary.npmSnapshot()` 现取。**桥面方法表一条不加**
+   （仍 14 条）。
+3. **`resolveApproval` 的生产落点只有一处**：`HostSummary.resolveNpmApproval(requestId, approve)`
+   → `AppShellApplication` → facade。脚本侧只能 `requestApprove` 入队（桥面没有 resolve，
+   `NpmBridgeHandlerTest` 已钉死这条），决定必须由 UI 回调带下来。本项落地前那句「人机分离」
+   是**纸面约束**（没有"机"的那一侧）；现在两侧都在。
+4. **DTO 命名 `NpmPanelSnapshot`（不叫 `NpmSnapshot`）**：`app-service/npm` 里已有一个
+   `NpmSnapshot`（§10.9.4 高信任快照导出/验签的**执行体**），两个同名类会让
+   `InstallCoordinator` 的 import 撞车（实际编译期已撞）。**名字先到先得，后者改名** ——
+   那个类与 §10.7 的 `SnapshotRef` 是一条线上的，改名会牵动契约措辞。
+
+**呈现面的三条「不冒充」**（落在 `NpmState`/`NpmScreen`，有单测钉）：尺寸没量到（`storage == null`）
+**不画成 0%**（那是在说「这个项目不占地方」）；读失败**保留已读到的那份**并带原文，不抹成空清单；
+配额黄/红两档直接读 `NpmProjectSnapshot.overQuota/quotaWarned` —— 判据只有 `InstallConfig` 一处，
+呈现层不自己写死 512MB/80%（写第二份就会与真拦人的那份漂移）。
+
+**仍未落（本项不涉及，已写进 §10.9）**：安装输入行/旗标/阶段进度条、依赖树、`hasInstallScript`
+前置告警、白名单放行通道。
+
+**仍未接线的旁证（记下来，别当成已做）**：`update`/`exportSnapshot` 有实现、**零生产调用方**，
+也不在桥面 —— 它们要等「依赖面板的变更半边」与「打包向导」；`storage()` 同样是宿主内部读口。
+这三条**不加进桥面**：§10.7 的 facade 是内部面，桥面是脚本面，两件事。
+
+---
+
 ## 50. `child_process` 拦截 shim 的落位、注入与「落不上就不注入执行体」（2026-10-09）
 
 **背景**：§10.11 P0 与 §10.12 末行把「安装会话强制注入 child_process 拦截 shim」写成 P0 承诺，

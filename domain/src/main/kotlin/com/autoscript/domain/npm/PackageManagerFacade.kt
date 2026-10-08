@@ -209,6 +209,16 @@ interface PackageManagerFacade {
     suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String? = null)
     suspend fun storage(): Map<String, NodeModulesStats>
 
+    /**
+     * 依赖面板读数（§10.9.1）：一次现取**全部项目**的已装清单 + 离线缺口 + 尺寸配额，
+     * 外加**全局**待审队列。
+     *
+     * 与上面几条轻操作的关系是「合成」不是「替代」：它内部就是 `list + offlineGap +
+     * storage + ledger`，存在只为让呈现层少一次拼装、少一套失败语义分叉，
+     * 也避免"按项目问四次 = 四次 IO + 四份可以互相矛盾的结论"。
+     */
+    suspend fun snapshot(): NpmPanelSnapshot
+
     // —— 审批（人机分离 §10.5）——
     /** 脚本/内部唯一入口：只入队，返回票；永不在此执行。 */
     suspend fun requestApprove(projectId: String, pkg: String, versionHash: String, action: ApprovalAction): ApprovalTicket
@@ -240,4 +250,65 @@ interface PackageManagerFacade {
 
     // —— 快照（高信任通道）——
     suspend fun exportSnapshot(projectId: String, uri: String): SnapshotRef
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 呈现面只读快照（`:ui` 依赖面板 / 审批卡；2026-10-09 批 81）
+//
+// 为什么住 `:domain` 而不是让 `:ui` 直接读 facade：`:ui` 只依赖 `:domain`，
+// 而 `PackageManagerFacade` 的实现住 `:app-service:npm` —— 呈现层够不到实现类。
+// 与 `HostSummary` 的其余读口同一条分工：快照 DTO 住中间层，两侧各只认它。
+//
+// 为什么这些是**读口**而不是桥面方法：桥面（§12.2 的 npm 命名空间）是**脚本侧**的面，
+// 受 §10.5 人机分离约束；IDE 的依赖面板是**宿主自己的界面**，不是脚本。
+// 两者共用同一个 `InstallCoordinator`，但入口不同、可达性判据也不同
+// （`resolveApproval` 只能从 UI 回调进来，这正是「人机分离」那句话的落点）。
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * 依赖面板的**全量**读数（一次现取，不缓存 —— 与 `capabilityCenter()` 同纪律：
+ * 缓存 = 撒谎的开始）。
+ *
+ * 为什么是"全量"而不是"按项目问一次"：依赖面板要能回答"我到底有哪些项目、
+ * 各自装了什么"，只列一个项目会让人以为其余项目不存在（与 §9.5 能力中心
+ * "列全量能力"同一条理由）。审批队列同理是**全局**的 —— 按项目筛会让用户
+ * 漏掉别的项目上等着的那张卡。
+ *
+ * @property projects 按项目号排序（顺序稳定，界面不用再排）；**空 = 一个项目都没有**
+ *   （还没部署过任何项目），与「没读到」是两句不同的话，后者由调用方抛异常表达。
+ * @property pendingApprovals 待人工决定的审批票（跨项目；`ApprovalStatus.PENDING`）。
+ */
+data class NpmPanelSnapshot(
+    val projects: List<NpmProjectSnapshot>,
+    val pendingApprovals: List<ApprovalRequest>,
+)
+
+/**
+ * 单个项目的依赖面板读数。
+ *
+ * @property installed 已装清单（`list()` 直读 lockfile 的权威结果；**空 = 真的没装**）。
+ * @property offlineGap 离线闭包缺口（lock 闭包 − 缓存），带尺寸；空 = 离线可重建。
+ * @property storage null = 本项目没量到尺寸（不该发生 —— 项目在列表里就说明目录存在；
+ *   非 null 但 `totalBytes=0` 才是「量到了、就是 0 字节」）。
+ * @property quotaBytes / [quotaWarnRatio] 配额口径（来自 `InstallConfig`，**呈现层不自己写死
+ *   512MB** —— 判据只有一处，写第二份就会与真拦人的那份漂移）。
+ */
+data class NpmProjectSnapshot(
+    val projectId: String,
+    val installed: List<PkgNode>,
+    val offlineGap: List<MissingPkg>,
+    val storage: NodeModulesStats?,
+    val quotaBytes: Long,
+    val quotaWarnRatio: Double,
+) {
+    /** 已用 ≥ 配额（与 `InstallCoordinator` 那道 100% 拦的判据同源）。 */
+    val overQuota: Boolean get() = (storage?.totalBytes ?: 0L) >= quotaBytes
+
+    /** 已用 ≥ 80% 黄线（与发 `DISK_QUOTA` 警告的那道判据同源）。 */
+    val quotaWarned: Boolean
+        get() = (storage?.totalBytes ?: 0L) >= (quotaBytes * quotaWarnRatio).toLong()
+
+    /** 已用 / 配额，**只在量到尺寸时**有值（没量到画成 0% 就是在说「这个项目不占地方」）。 */
+    val quotaFraction: Float?
+        get() = storage?.let { (it.totalBytes.toDouble() / quotaBytes.toDouble()).toFloat().coerceIn(0f, 1f) }
 }
