@@ -57,6 +57,25 @@ class NewlineFrameServer(
      */
     private val connectionResources = ConcurrentHashMap<Long, () -> Unit>()
 
+    /**
+     * `runId → connectionId`（A11，§7.5 × §9.2）：让**只认 runId 的调用方**（执行仲裁者
+     * [com.autoscript.appservice.runtime.RuntimeController]）也能问得到"这条 run 的连接上
+     * 挂着什么"，从而在 run 终结时收口。
+     *
+     * **为什么映射住在接入端而不是 controller**：连接号是这里发的（`connectionIds.getAndIncrement()`），
+     * 而 runId 是**认证之后**才与它绑在一起的（[RunIdentityRegistry.authenticate] 用 lease 装填
+     * [AuthenticatedRunContext.engineRunId]）—— 宿主/controller 那侧自始至终不知道连接号。
+     * 反过来把映射塞进 controller 会要求它替接入端记账，两处各记一份必然错位。
+     *
+     * **装填点必须早于任何业务请求**（认证成功后立刻，见 `serve`）：否则存在一个
+     * 「run 已终结、映射才装上」的窗口，撤销会扑空。选在认证之后是因为更早时 runId 还不���在。
+     *
+     * **为什么这条映射能堵住「子进程继承 socket fd」的漏**（A11 的原始病灶）：脚本进程死了
+     * 不产生 EOF，连接不会 abort/dispose，于是挂在这条连接上的进程级资源（投屏会话）没有撤销点。
+     * 补上 runId 侧的撤销入口后，执行终结**不再依赖 socket 断**。
+     */
+    private val runConnections = ConcurrentHashMap<Long, Long>()
+
     private var closed = false
     private val inFlight = Semaphore(maxInFlight)
     private val handshakes = Semaphore(32)
@@ -115,6 +134,25 @@ class NewlineFrameServer(
         connectionResources[connectionId]?.invoke()
     }
 
+    /**
+     * **按 runId 收口这条 run 的连接资源**（A11，§9.2）：执行终结（自然退出 / 被停 / 被掐 /
+     * 宿主急停）时由 [com.autoscript.appservice.runtime.RuntimeController] 调用。
+     *
+     * 与 [abortConnection] 的分工：那条是**从连接外部按连接号**撤（调用方已经握着连接号），
+     * 本条是**按 runId** 撤 —— 而执行仲裁者自始至终只认 runId（连接号在接入端内部发出，
+     * 它无从得知，见 `runConnections` 的 KDoc）。两条落到**同一个幂等收口口**上。
+     *
+     * **刻意不关 IO、只收资源**：run 自然结束时连接可能还在排空尾帧（§7.5 EOF 排空语义），
+     * 那时把 socket 硬关掉会把「脚本正常跑完」误走成硬撤销。收口目标只是「脚本没了，
+     * 投屏会话不该继续挂着」，与连接何时结束是两件事。
+     *
+     * 幂等、不抛；该 run 从未连过桥（没有映射）或连接早已结束，都是无害的 no-op ——
+     * 那两种情况下资源要么不存在、要么已经被 dispose 收过。
+     */
+    fun revokeRunResources(runId: Long) {
+        runConnections[runId]?.let { connectionResources[it]?.invoke() }
+    }
+
     private inner class Connection(private val closer: () -> Unit) {
         val id = connectionIds.getAndIncrement()
         private val stateLock = Any()
@@ -123,6 +161,9 @@ class NewlineFrameServer(
         private var owner: Job? = null
         private var drainTimer: Job? = null
         private var binding: RunIdentityRegistry.Binding? = null
+
+        /** 认证后装填；dispose 时据此摘掉 `runConnections` 条目（0 = 从未绑定）。 */
+        private var boundRunId: Long = 0L
 
         /**
          * 这条连接的资源收口（§7.5 × §9.2）：注册表**在 serve 一开始就建**（早于认证），
@@ -180,6 +221,11 @@ class NewlineFrameServer(
                 // 都能在 abort/dispose 时被统一收掉。装填点必须在这里 —— 早于任何业务请求，
                 // 晚于认证（撤销先发生时 `register` 会立刻兑现，不会漏）。
                 bound.caller.resources = resources
+                // A11：runId ↔ connectionId 在这里成对（认证一成功就是**任何业务请求之前**，
+                // 见 `runConnections` KDoc 的窗口论证）。`boundRunId` 与表项同批写，
+                // 供 dispose 摘除。
+                boundRunId = bound.caller.engineRunId
+                runConnections[boundRunId] = id
                 writeBlocking(output, BridgeHandshake.ack())
                 timeout.cancel()
                 handshakes.release()
@@ -260,6 +306,9 @@ class NewlineFrameServer(
             // 连接结束了：摘掉按号索引的收口口（此后 `abortConnection(id)` 是无害的 no-op，
             // 也不再留一个悬挂引用）。资源本身在上一行已经收过。
             connectionResources.remove(id)
+            // 摘掉 runId 侧的索引（条件 remove：只摘**仍指向本连接**的那一条 —— 连接号不复用，
+            // 但条件形式让「摘不掉」也是无害的，不至于误删别人的映射）。
+            if (boundRunId != 0L) runConnections.remove(boundRunId, id)
             synchronized(lock) { connections.remove(this) }
         }
     }

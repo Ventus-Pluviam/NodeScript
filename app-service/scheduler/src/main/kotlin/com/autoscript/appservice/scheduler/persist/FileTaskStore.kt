@@ -19,7 +19,7 @@ import java.time.ZoneId
  * - `{"op":"put",...全字段...}` —— schedule 直写（upsert，同 id 覆盖）
  * - `{"op":"del","id":"t1"}` —— cancel 落 tombstone（不删行：崩溃截断只丢最后半行，重放收敛）
  *
- * 与 [JournalFileStore] 同纪律：每次写 `force(true)`、启动 replay 全量重建、
+ * 与已退役的 jsonl 意图存储（`JournalFileStore`，2026-10-08 删除）同纪律：每次写 `force(true)`、启动 replay 全量重建、
  * 容忍最后半行。字段全字符串化（`kind`/`a`/`b` 表调度计划：once→a=delaySeconds；
  * daily→a=hour,b=minute；cron→a=expr），参数列表展平为 `argsN` + `arg0…` ——
  * persist 层零第三方依赖，格式漂移在编译期可见。

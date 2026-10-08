@@ -210,7 +210,10 @@ class RunIdentityRegistryTest {
             assertEquals(TrustTierMasks.UNKNOWN_DEFAULT, mask, "缺来源 = 最保守档（UNKNOWN），不升级成全量")
             assertFalse(mask.contains(BridgeCapability.CROSS_SCRIPT_CONTROL))
             assertFalse(mask.contains(BridgeCapability.CROSS_SCRIPT_OBSERVE))
-            assertFalse(mask.contains(BridgeCapability.SCHEDULER_WRITE))
+            // 批 78：SCHEDULER_WRITE 已从保守档放回 —— 脚本可自建定时任务
+            // （`workManager` 是 §14 P0 闭环；跨脚本那一位仍由 authorizeCreate 的
+            //  authorizeStart 单独拦着，不靠这一位）。
+            assertTrue(mask.contains(BridgeCapability.SCHEDULER_WRITE))
             // 现行口径：其余面（a11y/截图/文件/npm）**保持全量**，本批只收跨脚本那条路。
             assertTrue(mask.contains(BridgeCapability.ACCESSIBILITY))
             assertTrue(mask.contains(BridgeCapability.SCREEN_CAPTURE))

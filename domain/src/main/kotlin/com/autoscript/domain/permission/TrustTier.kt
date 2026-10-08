@@ -60,8 +60,16 @@ enum class TrustTier {
  * ## 已裁定：无来源证据档的缺省掩码（2026-10-08）
  *
  * 维护者 2026-10-08 拍板：**[TrustTier.UNKNOWN] 的缺省掩码 = 保守档 A**，即
- * [CapabilityMask.ALL] 减去 `CROSS_SCRIPT_CONTROL`、`CROSS_SCRIPT_OBSERVE`、
- * `SCHEDULER_WRITE` 三位，其余命名空间保持全量。这就是 [UNKNOWN_DEFAULT]。
+ * [CapabilityMask.ALL] 减去 `CROSS_SCRIPT_CONTROL`、`CROSS_SCRIPT_OBSERVE` 两位，
+ * 其余命名空间保持全量。这就是 [UNKNOWN_DEFAULT]。
+ *
+ * **2026-10-08 批 78 修订：`SCHEDULER_WRITE` 从保守档里放回去了**（原三位减成两位）。
+ * 理由：批 76 已裁定**来源分级不做**（`design-decisions.md` 第 45 项），而这一位当初
+ * 收走的理由与第 45 项自己写的「同 UID 脚本绕开桥直接往注册表追加一行即可绕过」**逐字
+ * 相同** —— 它挡不住恶意脚本，只挡老实脚本。留一个「待来源元数据接入后恢复」的口子，
+ * 而恢复它的那条路已被关掉，等于挂一句永远兑现不了的承诺。跨脚本那两位**不动**：
+ * 它们的判据（低信任不得控制高信任执行）不依赖来源分级，且 [CrossScriptAuthorizer]
+ * 的目标侧比较有独立的防护价值。
  *
  * ## 本批真正发生的行为变化（准确口径，别读成"保持现行行为"）
  *
@@ -75,12 +83,12 @@ enum class TrustTier {
  * | datastore / zip / images / npm | 可用 | **仍可用**（不动） |
  * | `engines.status` / `engines.poolStats`（观察其他执行） | 可用 | **拒** `ERR_PERMISSION_DENIED` |
  * | `engines.stop` / `engines.exec`（控制其他执行、拉起新执行） | 可用 | **拒** |
- * | `workManager.create/cancel/list`（脚本建/删定时任务） | 可用 | **拒** |
+ * | `workManager.create/cancel/list`（脚本建/删定时任务） | 可用 | **仍可用**（批 78 起） |
  * | `console.*` / `engines.heartbeat` / `engines.channel*` | 可用 | **仍可用**（`NONE` 要求） |
  *
- * 第四行是**已裁定的功能回退**：缺来源元数据时脚本不能自建定时任务。这是产品决定
- * （2026-10-08 拍板"保守档 A"的直接后果），不是实现细节。需要放开时由**装配层注入**
- * 一个接了来源元数据的 [ScriptAuthorizationPolicy]（按项目给档），或者显式给
+ * 第四行**曾经**是功能回退（批 75 收走、批 78 放回）：缺来源元数据时脚本**可以**自建
+ * 定时任务，与批 74 的现行行为一致。若将来真接了来源元数据、要按来源收窄这一位，
+ * 由**装配层注入**一个带 [ScriptAuthorizationPolicy] 的策略（按项目给档），或者显式给
  * `capabilityMask` 覆盖 —— 不要用全局开关把整批授权绕过去。
  *
  * ## 其余档位：§11 冻结矩阵的原样，不是安全性论断
@@ -97,19 +105,22 @@ enum class TrustTier {
 object TrustTierMasks {
 
     /**
-     * 无来源元数据（[TrustTier.UNKNOWN]）的缺省档 = 已裁定的「保守档 A」：**排除跨脚本面
-     * 与排期写入**，其余全量。
+     * 无来源元数据（[TrustTier.UNKNOWN]）的缺省档 = 已裁定的「保守档 A」：**排除跨脚本面**，
+     * 其余全量（含排期写入 —— 批 78 放回 `SCHEDULER_WRITE`）。
      *
-     * 收走的三位各有理由：
+     * 收走的两位各有理由：
      * - `CROSS_SCRIPT_CONTROL` / `CROSS_SCRIPT_OBSERVE`：§11 与 §16 风险表点名
-     *   「RuntimeChannel 按来源分级过滤；低信任不得控制高信任引擎」—— 这正是 A5 的目标；
-     * - `SCHEDULER_WRITE`：改宿主任务注册表是持久副作用（脚本建的任务会在脚本退出后
-     *   继续投递，掩码管不到那之后的执行），2026-10-08 随"保守档 A"一并收走。
+     *   「RuntimeChannel 按来源分级过滤；低信任不得控制高信任引擎」—— 这正是 A5 的目标。
+     *
+     * **`SCHEDULER_WRITE` 不在其中（批 78 放回）**：批 75 曾把它一并收走，理由是「改宿主
+     * 任务注册表是持久副作用」；但那条理由与批 76 裁定来源分级不做时写下的
+     * 「同 UID 脚本直接往注册表追加一行即可绕过」是同一条事实 —— 掩码收窄挡不住它。
+     * 留着这一位 = 拿一个挡不住恶意的判据去罚老实脚本（脚本再也建不了定时任务，
+     * 而 `workManager` 是 §14 P0 用户故事明写的闭环之一）。
      */
     val UNKNOWN_DEFAULT: CapabilityMask = CapabilityMask.ALL
         .minus(BridgeCapability.CROSS_SCRIPT_CONTROL)
         .minus(BridgeCapability.CROSS_SCRIPT_OBSERVE)
-        .minus(BridgeCapability.SCHEDULER_WRITE)
 
     /**
      * 矩阵本体（来源 → 掩码）。

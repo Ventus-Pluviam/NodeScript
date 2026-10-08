@@ -49,7 +49,7 @@ class IntentStoreWiringTest {
         return f
     }
 
-    /** 与 `JournalFileStore` 落盘形态逐字一致的 start 行（老版本无 args/timeout 两键）。 */
+    /** 与已退役的 jsonl 存储落盘形态逐字一致的 start 行（老版本无 args/timeout 两键）。 */
     private fun startLine(
         runId: Long,
         nonce: String,
@@ -136,7 +136,7 @@ class IntentStoreWiringTest {
         val store = newStore()
         assertEquals(1, IntentStoreWiring.migrate(store, f))
         assertEquals("", store.allRows().single().outcome?.name ?: "")
-        assertFalse(store.hasCommittedNonce("a"), "半行没落完 = 没发生（与 JournalFileStore 同口径）")
+        assertFalse(store.hasCommittedNonce("a"), "半行没落完 = 没发生（与老写侧同口径）")
         store.close()
     }
 

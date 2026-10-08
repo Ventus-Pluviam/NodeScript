@@ -7,7 +7,7 @@ import com.autoscript.appservice.scheduler.core.TimedSchedule
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
-import com.autoscript.appservice.scheduler.persist.JournalFileStore
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.bridge.NewlineFrameServer
 import com.autoscript.domain.permission.CapabilityMask
@@ -164,11 +164,13 @@ class NodeProcessSpawnE2ETest {
         Files.createDirectories(scriptFile.parent)
         Files.write(scriptFile, scriptBody.toByteArray())
 
+        val intentStore = InMemoryIntentStore()
         val assembled = AppShellKit.assemble(
             filesDir = files,
             cacheDir = cache,
             schedulerProvider = RecordingProvider(),
             screenGate = ScreenGate.AllowAll,
+            intentStore = intentStore,
             engineFactory = { engineId, identities ->
                 NodeProcessEngine(
                     engineId,
@@ -256,13 +258,12 @@ class NodeProcessSpawnE2ETest {
             archive.close()
         }
 
-        // ⑤ 意图日志：Succeeded 已封账（任务中心按 runId 读得到"跑成了"）
-        val log = PersistentIntentLog(JournalFileStore(files.resolve(".autojs")))
-        try {
-            assertEquals(RunOutcome.Succeeded, log.all().single { it.projectId == "p9" }.outcome)
-        } finally {
-            log.close()
-        }
+        // ⑤ 意图日志：Succeeded 已封账（任务中心按 runId 读得到"跑成了"）。
+        // 读的是 ① 那个 store 实例的内存视图（本类改用 InMemoryIntentStore，无落盘可重开）——
+        // 本测要证的是「引擎全链跑通后意图日志落终态」，不是"重启后还读得回来"
+        // （那条由 §8.5 的 IntentStoreContract 崩溃重放用例守着）。
+        val log = PersistentIntentLog(intentStore)
+        assertEquals(RunOutcome.Succeeded, log.all().single { it.projectId == "p9" }.outcome)
 
         Unit   // 显式收尾：表达式体 @Test 返回非 Unit 会被 JUnit 静默跳过（假绿）
     }
@@ -294,7 +295,7 @@ class NodeProcessSpawnE2ETest {
             })().catch(e => { console.error(e); process.exit(1); });
         """.trimIndent().toByteArray())
         val assembled = AppShellKit.assemble(
-            files, cache, RecordingProvider(), poolCapacity = 2,
+            files, cache, RecordingProvider(), intentStore = InMemoryIntentStore(), poolCapacity = 2,
             engineFactory = { id, issuer -> NodeProcessEngine(
                 id, NodeEngineConfig(files, Path.of("node"), hostSocketName = socketPath), identityIssuer = issuer,
             ) },

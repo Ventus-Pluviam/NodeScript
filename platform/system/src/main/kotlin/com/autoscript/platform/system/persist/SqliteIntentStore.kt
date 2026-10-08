@@ -9,13 +9,13 @@ import com.autoscript.domain.scripts.IntentStore.StoredRow
 /**
  * 意图日志的 SQLite 实现（docs §8.5「append-only（SQLite，启动即回放）」）。
  *
- * 语义与 `:app-service:scheduler` 的 `JournalFileStore`（jsonl 追加 + fsync）**逐条等价** ——
+ * 语义与已退役的 jsonl 存储（`JournalFileStore`，2026-10-08 删除）**逐条等价** ——
  * 两者共用同一套契约测试（`IntentStoreContract`，见 `:domain` 的 testFixtures）：
  * 崩溃持久、幂等锚点原子、runId 单调不复用、`seal`/`sealAndReopen` 的边界行为。
  *
  * **为什么住 `:platform:system`**：`android.database.sqlite` 是 Android 面，而依赖铁律是
  * `:platform:*` → `:domain`。SPI（[IntentStore]）因此搬去了 `:domain`，本类在这边实现它；
- * 纯 JVM 侧继续用 `JournalFileStore`（scheduler 单测与无 Android 环境照旧跑）。
+ * 纯 JVM 侧改用 `:domain` `testFixtures` 的 `InMemoryIntentStore`（单测与无 Android 环境照旧跑）。
  *
  * **SQL 不在本类里拼**：全部语句由 [IntentStoreSql] 生成（纯函数、零 Android），
  * 于是「表形状/部分唯一索引/条件插入」这些真正决定语义的东西能在本机拿同一份语句跑真
@@ -61,7 +61,7 @@ class SqliteIntentStore(private val runner: Runner) : IntentStore {
             // ux_nonce：该 nonce 已有别的真终态 —— 重复副作用，响亮失败。
             throw IllegalStateException("runNonce 已 COMMIT，拒绝重复副作用（runId=$runId）", e)
         }
-        // 读不回行 = runId 不存在（与 JournalFileStore 的 `rows[runId] ?: return null` 同义）。
+        // 读不回行 = runId 不存在（与已退役的 jsonl 存储的 `rows[runId] ?: return null` 同义）。
         return back.singleOrNull()?.toStoredRow()
     }
 
@@ -74,7 +74,7 @@ class SqliteIntentStore(private val runner: Runner) : IntentStore {
         } catch (e: ConstraintViolationException) {
             throw IllegalStateException("sealAndReopen 违反唯一约束（同 nonce 存活行重复？runId=$oldRunId）", e)
         }
-        // 条件插入没落行 = 旧行不存在或已终态 —— 与 JournalFileStore 同一条边界。
+        // 条件插入没落行 = 旧行不存在或已终态 —— 与已退役的 jsonl 存储同一条边界。
         require(back.long("inserted") == 1L) { "旧 runId 不存在或已 COMMIT，无法重开: $oldRunId" }
         return back.long("new_id")
     }

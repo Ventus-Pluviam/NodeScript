@@ -15,14 +15,16 @@ import java.util.concurrent.atomic.AtomicInteger
  * [IntentStore] 契约套件（§8.5）：**同一组用例打在每一个实现上**。
  *
  * 为什么要有它：§8.5 的存储引擎从 jsonl 换成 SQLite 是**替换**不是重写 ——
- * 「崩溃持久 / 幂等锚点原子 / runId 单调」三条不变量若在两个实现间有任何一条不同，
+ * 「崩溃持久 / 幂等锚点原子 / runId 单调」三条不变量若在各实现间有任何一条不同，
  * 后果都不是"某个实现差一点"，而是"换引擎那天行为变了"（最坏形态：同一次投递
- * 跑两遍副作用）。把口径写成一份可执行的规格、两个实现各跑一遍，是唯一能在本机
+ * 跑两遍副作用）。把口径写成一份可执行的规格、每个实现各跑一遍，是唯一能在本机
  * 把这件事钉住的办法。
  *
  * 子类只需给一个 [open]：
- * - `JournalFileStore`（`:app-service:scheduler`）—— jsonl 追加 + fsync；
- * - `SqliteIntentStore`（`:platform:system`）—— SQLite + 部分唯一索引。
+ * - `InMemoryIntentStore`（本模块 `testFixtures`）—— 零 IO，**无环境门禁**，
+ *   任何机器上都必须真跑（规格"今天确实被执行过"的那份证据）；
+ * - `SqliteIntentStore`（`:platform:system`）—— SQLite + 部分唯一索引，
+ *   要宿主 `sqlite3`，测试侧带 `assumeTrue` 门禁。
  *
  * **「崩溃」怎么模拟**：每次 [open] 都必须是**新实例**，而写入路径的契约是
  * 「返回前已落盘」—— 所以测试里直接把实例丢掉（不 close）就等于进程被杀。

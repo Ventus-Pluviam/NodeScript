@@ -15,7 +15,7 @@ import java.nio.file.StandardOpenOption
 /**
  * jsonl 追加式运行档案（JVM 本机/单测实现；Android 生产由 SQLiteDatabase 实现替换，语义不变）。
  *
- * 与 [JournalFileStore] 同构的崩溃持久纪律（docs §8.5）：
+ * 与已退役的 jsonl 意图存储（`JournalFileStore`，2026-10-08 删除）同构的崩溃持久纪律（docs §8.5）：
  * - 持久形态：`<dir>/run-archive.jsonl`，每行一条 record：
  *   `{"op":"put","id":N,"projectId":"…","scriptPath":"…","runNonce":"…","state":"…",`
  *   `"startedAt":M|null,"finishedAt":M|null,"intentRunId":K|null,`

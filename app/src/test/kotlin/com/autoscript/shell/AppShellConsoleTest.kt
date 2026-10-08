@@ -7,6 +7,7 @@ import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.AuthenticatedRunContext
 import com.autoscript.domain.permission.CapabilityMask
 import com.autoscript.domain.engine.EngineId
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -40,6 +41,7 @@ class AppShellConsoleTest {
     private fun kit(): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
+        intentStore = InMemoryIntentStore(),
         schedulerProvider = NoopProvider(),
         screenGate = ScreenGate.AllowAll,
     )
@@ -109,6 +111,7 @@ class AppShellConsoleTest {
             AppShellKit.assemble(
                 filesDir = dir.resolve("other-files"),
                 cacheDir = dir.resolve("other-cache"),
+                intentStore = InMemoryIntentStore(),
                 schedulerProvider = NoopProvider(),
             ).use { second ->
                 writer.i("Host", "尚未换壳")

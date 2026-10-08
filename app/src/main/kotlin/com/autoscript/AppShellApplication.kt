@@ -234,24 +234,19 @@ class AppShellApplication : Application(), HostSummary {
             // `Paths.get` 而不是 `Path.of`：后者在 Android 上 since=34（`api-versions.xml` 实查），
             // minSdk 26 下 lint 的 NewApi 会红 —— 全仓 main 源已统一回 `Paths.get`（since=26）。
             val nativeDir = Paths.get(applicationInfo.nativeLibraryDir)
-            // §8.5 意图日志的存储引擎：Android 生产走 SQLite（并在打开前做一次性迁移
-            // jsonl → SQLite，带原 runId）。**只有"打不开/迁不动"才回落 jsonl**，回落原因
-            // 记在 choice.fallbackReason 里、随装配日志如实输出 —— 不静默换引擎。
-            // 选型住 PlatformWiring（本类不 import 任何 com.autoscript.platform..，
+            // §8.5 意图日志的存储引擎：SQLite（打开前做一次性迁移 jsonl → SQLite，
+            // 带原 runId）。**打不开不回落**（2026-10-08 裁定）—— 异常直接冒到本函数的
+            // catch，判本次装配失败：壳保持未就绪、闹钟走漏投记账，不拿一条锚点靠
+            // 单写者假设撑着的降级路径冒充"调度还能用"。
+            // 打开住 PlatformWiring（本类不 import 任何 com.autoscript.platform..，
             // ArchitectureTest「平台实现只许装配包碰」看住）。
             val intentStore = PlatformWiring.intentStore(appContext, filesDir.resolve(".autojs"))
-            if (intentStore.fallbackReason != null) {
-                HostLog.w(
-                    TAG,
-                    "意图日志回落 jsonl（${intentStore.backend}）：${intentStore.fallbackReason}",
-                )
-            }
             val built = AppShellKit.assemble(
                 filesDir = filesDir,
                 cacheDir = cacheDir,
                 schedulerProvider = AlarmSchedulerProvider(port = port),
                 screenGate = screenGateOf(this),
-                intentStore = intentStore.store,
+                intentStore = intentStore,
                 engineFactory = { engineId, identities ->
                     NodeProcessEngine(
                         engineId,

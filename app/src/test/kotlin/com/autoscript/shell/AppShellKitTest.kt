@@ -8,7 +8,8 @@ import com.autoscript.appservice.scheduler.core.TimedSchedule
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
-import com.autoscript.appservice.scheduler.persist.JournalFileStore
+import com.autoscript.domain.scripts.InMemoryIntentStore
+import com.autoscript.domain.scripts.IntentStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
@@ -47,6 +48,15 @@ class AppShellKitTest {
     private val files: Path get() = dir.resolve("files")
     private val cache: Path get() = dir.resolve("cache")
 
+    /**
+     * 意图日志替身（§8.5）：`assemble` 的 `intentStore` 是必填参数（无缺省 —— 那条
+     * 「不给就自建 jsonl」的回落 2026-10-08 已删）。用 [InMemoryIntentStore] 而不是
+     * 文件实现：本类要验的是**装配接线**，不是落盘；且 JUnit 每个用例新实例化本类，
+     * 所以这份 State 天然按用例隔离、又能在同用例的多次 `kit()` 之间续上（"重启"语义）。
+     */
+    private val intentStoreState = InMemoryIntentStore.State()
+    private val intentStore: IntentStore = InMemoryIntentStore(intentStoreState)
+
     private class RecordingProvider : SchedulerProvider {
         val registered = mutableListOf<String>()
         override suspend fun registerTrigger(targetFireAtMillis: Long, taskId: String): TriggerHandle {
@@ -66,7 +76,7 @@ class AppShellKitTest {
         scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
         scriptProjects: List<String> = emptyList(),
         assetReader: ((String) -> Map<String, ByteArray>)? = null,
-        intentStore: com.autoscript.domain.scripts.IntentStore? = null,
+        intentStore: IntentStore = this.intentStore,
     ): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
@@ -116,6 +126,7 @@ class AppShellKitTest {
             cacheDir = cache,
             schedulerProvider = RecordingProvider(),
             screenGate = ScreenGate.AllowAll,
+            intentStore = intentStore,
             watchdogScope = mine,
         )
         assertTrue(s.shell.watchdog.isRunning())
@@ -139,7 +150,7 @@ class AppShellKitTest {
         }
 
         // 意图日志：COMMIT 行落盘，outcome = Crashed(真原因)
-        val log = PersistentIntentLog(JournalFileStore(files.resolve(".autojs")))
+        val log = PersistentIntentLog(intentStore)
         try {
             val row = log.all().single { it.projectId == "p1" }
             val outcome = assertInstanceOf(
@@ -172,18 +183,18 @@ class AppShellKitTest {
     }
 
     /**
-     * §8.5 存储引擎注入缝**真的是活的**：给了 [IntentStore] 就走它，没给才自建 jsonl。
+     * §8.5 存储引擎注入缝**真的是活的**：行落在调用方给的 [IntentStore] 上，
+     * 且**任何位置都不出现 jsonl**。
      *
      * 为什么要单测这一条：SQLite 那一半（`SqliteIntentStore`）在本机跑不了 Android，
-     * 于是"装配层到底把哪个引擎接上了"就成了唯一在本机可验的环节 —— 缝要是接错了
-     * （比如 `assemble` 收了参数却仍 `JournalFileStore(autojsDir)`），真机上会静默地
-     * 一直写 jsonl，而所有单测照样全绿。这里用另一个目录的 [JournalFileStore] 当替身，
-     * 断言"日志落在替身那儿、缺省目录里没有"，把这条缝钉住。
+     * 于是"装配层到底把哪个引擎接上了"是本机唯一可验的环节。2026-10-08 删掉回落之后，
+     * `intentStore` 成了必填参数 —— 这条缝不再是"会不会接错"，而是"接上的那个真的被用"。
      */
     @Test
-    fun `注入的意图日志存储真的被用上（缺省目录里不再另写一份）`() = runBlocking {
-        val alt = dir.resolve("alt-store")
-        kit(intentStore = JournalFileStore(alt)).use { assembled ->
+    fun `注入的意图日志存储真的被用上（且任何位置都不落 jsonl）`() = runBlocking {
+        val altState = InMemoryIntentStore.State()
+        val alt = InMemoryIntentStore(altState)
+        kit(intentStore = alt).use { assembled ->
             val shell = assembled.shell
             shell.scheduler.schedule(
                 ScheduledTask("t7", "任务", "p7", "a.js", TimedSchedule.Once(0)),
@@ -192,12 +203,12 @@ class AppShellKitTest {
         }
 
         assertTrue(
-            Files.exists(alt.resolve("intent-log.jsonl")),
-            "注入的存储必须真的收到 START/COMMIT 行（缝接错 = 真机上静默写回 jsonl）",
+            alt.allRows().isNotEmpty(),
+            "注入的存储必须真的收到 START/COMMIT 行（缝接错 = 行落在别处）",
         )
         assertFalse(
             Files.exists(files.resolve(".autojs").resolve("intent-log.jsonl")),
-            "已注入存储时不得再在缺省位置另建一份日志（两份日志各写各的）",
+            "已删回落：任何路径都不该再建 jsonl 意图日志",
         )
         Unit
     }
@@ -210,6 +221,7 @@ class AppShellKitTest {
             schedulerProvider = RecordingProvider(),
             screenGate = ScreenGate.AllowAll,
             engineFactory = { id, _ -> FakeEngineForDispatcher(id, pid = 4242, autoExitAfterMillis = 20) },
+            intentStore = intentStore,
             // 假 /proc：pid 4242 在 CI runner 上是真实进程，裁决输入不能借宿主环境（见 fakeProcMonitor）
         monitor = fakeProcMonitor(),
         )
@@ -254,7 +266,7 @@ class AppShellKitTest {
         } finally {
             archive.close()
         }
-        val log = PersistentIntentLog(JournalFileStore(files.resolve(".autojs")))
+        val log = PersistentIntentLog(intentStore)
         try {
             log.all().forEach {
                 assertEquals(
@@ -296,7 +308,7 @@ class AppShellKitTest {
     @Test
     fun `重启后 bootRecover 从落盘的悬挂意向重投（自装配路径同样成立）`() = runBlocking {
         // 上一次进程：START 落盘、未 COMMIT（崩溃的样子）
-        val first = PersistentIntentLog(JournalFileStore(files.resolve(".autojs")))
+        val first = PersistentIntentLog(intentStore)
         first.appendStart("p3", "a.js", "nonce-crash", TriggerSource.TIMED, System.currentTimeMillis())
         first.close()
 
@@ -330,6 +342,7 @@ class AppShellKitTest {
         AppShellKit.assemble(
             filesDir = files,
             cacheDir = cache,
+            intentStore = InMemoryIntentStore(),
             schedulerProvider = RecordingProvider(),
             scriptSources = mapOf("p1" to mapOf("main.js" to "// 用户手改".toByteArray())),
         ).use { first ->
@@ -383,7 +396,7 @@ class AppShellKitTest {
             assembled.shell.scheduler.onTrigger("t7", TriggerSource.TIMED, System.currentTimeMillis())
         }
 
-        val log = PersistentIntentLog(JournalFileStore(files.resolve(".autojs")))
+        val log = PersistentIntentLog(intentStore)
         try {
             assertTrue(log.all().any { it.projectId == "p7" }, "续排后的任务可正常投递落日志")
         } finally {

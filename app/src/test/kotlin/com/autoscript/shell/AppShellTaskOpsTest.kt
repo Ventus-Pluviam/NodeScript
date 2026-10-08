@@ -5,7 +5,8 @@ import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
-import com.autoscript.appservice.scheduler.persist.JournalFileStore
+import com.autoscript.domain.scripts.InMemoryIntentStore
+import com.autoscript.domain.scripts.IntentStore
 import com.autoscript.domain.host.ScheduleSpec
 import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.domain.host.TaskRegistration
@@ -48,6 +49,13 @@ class AppShellTaskOpsTest {
         override suspend fun cancelTrigger(handle: TriggerHandle) = handle.cancel()
     }
 
+    /**
+     * 意图日志替身（§8.5）：`intentStore` 是 `assemble` 的必填参数（无缺省 —— 那条
+     * 「不给就自建 jsonl」的回落 2026-10-08 已删）。用例之间天然隔离（JUnit 每例新实例化本类）。
+     */
+    private val intentStoreState = InMemoryIntentStore.State()
+    private val intentStore: IntentStore = InMemoryIntentStore(intentStoreState)
+
     private fun kit(
         provider: SchedulerProvider = RecordingProvider(),
         screenGate: ScreenGate = ScreenGate.AllowAll,
@@ -56,6 +64,7 @@ class AppShellTaskOpsTest {
         cacheDir = cache,
         schedulerProvider = provider,
         screenGate = screenGate,
+        intentStore = intentStore,
         // 假 /proc：pid 4242 在 CI runner 上是真实进程，裁决输入不能借宿主环境（见 fakeProcMonitor）
         monitor = fakeProcMonitor(),
     )
@@ -148,7 +157,7 @@ class AppShellTaskOpsTest {
             s.registerTask(reg(id = "t1", schedule = ScheduleSpec.Once(60), enabled = false))
             s.runTaskNow("t1")
         }
-        val log = PersistentIntentLog(JournalFileStore(files.resolve(".autojs")))
+        val log = PersistentIntentLog(intentStore)
         try {
             val row = log.all().single { it.projectId == "p1" }
             assertEquals(TriggerSource.USER_CLICK, row.trigger,
@@ -187,6 +196,7 @@ class AppShellTaskOpsTest {
             cacheDir = cache,
             schedulerProvider = RecordingProvider(),
             screenGate = ScreenGate.AllowAll,
+            intentStore = intentStore,
             engineFactory = { id, _ ->
                 FakeEngineForDispatcher(id, pid = 4242, autoExitAfterMillis = null)
                     .also { engines += it }

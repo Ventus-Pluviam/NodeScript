@@ -17,7 +17,7 @@ import java.nio.file.StandardOpenOption
  * 「版本升级必须重新审批」的两面——同版本也不该重复打扰）；记录条目绑定
  * `pkg + 版本 + 动作`，UI 审计页要能回放全部历史（含 REJECTED）。
  *
- * 格式（jsonl，追加 + fsync + 半行容忍，与 scheduler JournalFileStore /
+ * 格式（jsonl，追加 + fsync + 半行容忍，与 scheduler 已退役的 jsonl 意图存储 /
  * InstallJournal 同款持久化纪律）：
  * - `{"op":"submit","requestId":R,"projectId":P,"pkg":N,"versionHash":H,"action":A,"at":M}`
  * - `{"op":"resolve","requestId":R,"status":"APPROVED"|"REJECTED","at":M}`

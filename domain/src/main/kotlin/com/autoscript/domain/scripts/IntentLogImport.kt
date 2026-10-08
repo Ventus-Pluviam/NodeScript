@@ -10,15 +10,15 @@ import com.autoscript.domain.json.DomainJson
  * 「这个文件该不该导」。把解析与裁定都放这里，两边共用同一份口径，且它是纯函数
  * （零 Android、零 IO），本机 JVM 可测。
  *
- * **格式**：与 `JournalFileStore` 的落盘形态逐字一致（同一份冻结行格式，
- * `docs/design/status` 记的 jsonl）：
+ * **格式**：与**已退役的 jsonl 意图存储**（`JournalFileStore`，2026-10-08 删除）
+ * 的落盘形态逐字一致 —— 这里读的正是老设备上那些文件，格式冻结不动：
  * ```
  * {"op":"start","runId":N,"projectId":…,"scriptPath":…,"runNonce":…,"trigger":…,
  *  "screen":…,"scheduledAt":…,"startedAt":…,"deadlineAt":…|null,"args":[…],"timeoutMillis":…|null}
  * {"op":"seal","runId":N,"outcome":"NAME","detail":…|null,"at":M}
  * ```
  * 老版本的行**缺 `args`/`timeoutMillis` 两键**（B11 之前落盘的）—— 缺键按默认解析
- * （空参数 / 无超时），与 `JournalFileStore` 的 `optStrList`/`optLong` 同口径。
+ * （空参数 / 无超时），与老写侧的 `optStrList`/`optLong` 同口径。
  *
  * **容忍度与写侧对齐**（§8.5「容忍最后一条半行」）：
  * - 尾部没有换行的半行**丢弃**（写中断留下的残行，没落完的组等于没发生）；
@@ -88,7 +88,7 @@ object IntentLogImport {
                     scheduledAtMillis = long(fields, "scheduledAt"),
                     startedAtMillis = long(fields, "startedAt"),
                     deadlineMillis = optLong(fields, "deadlineAt"),
-                    // 老行缺这两键 = 空参数 / 无超时（升级兼容，与 JournalFileStore 同口径）
+                    // 老行缺这两键 = 空参数 / 无超时（升级兼容，与老写侧同口径）
                     args = optStrList(fields, "args"),
                     timeoutMillis = optLong(fields, "timeoutMillis"),
                 )

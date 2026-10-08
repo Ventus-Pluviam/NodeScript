@@ -14,7 +14,7 @@ import java.time.ZoneId
 /**
  * 注册表文件语义（§8.6 调度持久性）：upsert/tombstone 收敛、重启重建、半行截断容忍。
  *
- * 与 [JournalFileStoreTest] 同一地位：崩溃形态（最后半行）必须收敛而不是响亮失败 ——
+ * 与已删除的 `JournalFileStoreTest` 同一地位：崩溃形态（最后半行）必须收敛而不是响亮失败 ——
  * 丢的是最后一次 schedule/cancel，内存重建后仍是一张自洽的表（AlarmManager 侧多响一次
  * 由 onTrigger 查无任务直接 return 兜住，不双跑）。
  */

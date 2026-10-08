@@ -5,21 +5,25 @@ package com.autoscript.domain.scripts
  *
  * 本接口是「意图日志语义」与「存储引擎」之间的唯一边界。
  *
- * **两个实现，按平台选**：
- * - [com.autoscript.appservice.scheduler.persist.JournalFileStore] —— jsonl 追加 + fsync +
- *   启动 replay，**纯 JVM**（无 `android.`），单测与无 Android 环境走它；
- * - `SqliteIntentStore` —— §8.5 契约写的 SQLite 形态，住 `:platform:system`
- *   （`SQLiteOpenHelper` 依赖 `android.`），**Android 生产走它**；
- *   装配层（`:app` `AppShellKit`）按可用性选。
+ * **实现**：
+ * - `SqliteIntentStore`（`:platform:system`）—— §8.5 契约写的 SQLite 形态，
+ *   （`SQLiteOpenHelper` 依赖 `android.`），**生产唯一实现**；
+ * - [InMemoryIntentStore]（本模块 `testFixtures`）—— 零 IO 的测试替身，
+ *   跑同一套契约用例。**它不是生产实现**：不落盘 = 崩溃恢复在它上面不成立。
+ *
+ * **生产没有第二条路，也没有回落**（2026-10-08 裁定）：SQLite 打不开 = 装配失败，
+ * 壳保持未就绪、闹钟走漏投记账（`AppShellApplication.installWithFiles` 的失败分支）。
+ * 原先「打不开就回落 jsonl」的那条路已删 —— 回落目标（jsonl 追加式存储）的
+ * 「runId 不复用」与「幂等锚点原子」两条都靠单写者假设撑着（`max+1` 发号、锁内先查后写），
+ * 那不是降级，是把「调度坏了」伪装成「调度还能用」。
  *
  * **为什么接口住 `:domain` 而不是实现模块**：本接口就是 SPI（与 [RunArchive] 同形），
  * 而依赖铁律是 `:platform:*` → `:domain`（不反向）—— 接口若留在
  * `:app-service:scheduler`，`:platform:system` 够不到它，SQLite 实现只能靠给
- * scheduler 加 Android 依赖来换（那会丢掉这一层的纯 JVM 可测）。搬到这里之后两个实现
- * 各自住自己那层，零反向依赖、零新模块。
+ * scheduler 加 Android 依赖来换（那会丢掉这一层的纯 JVM 可测）。
  *
- * 两条实现都必须满足：
- * - **崩溃持久**：insert/seal 返回前数据已落盘（fsync 或 SQLite synchronous=FULL）；
+ * 每条实现都必须满足：
+ * - **崩溃持久**：insert/seal 返回前数据已落盘（SQLite synchronous=FULL）；
  * - **幂等锚点原子**：同一 runNonce 的「存活行唯一」与「已提交 nonce 唯一」由存储层原子拒绝
  *   （部分唯一索引 / 文件内全量校验 + 单写者锁），不是调用方预检；
  * - **runId 单调**：存储层分配，崩溃后不复用。

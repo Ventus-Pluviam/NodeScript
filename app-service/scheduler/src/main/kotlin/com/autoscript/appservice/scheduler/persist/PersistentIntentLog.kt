@@ -9,8 +9,9 @@ import com.autoscript.domain.scripts.IntentStore
 
 /**
  * 持久化意图日志（docs §8.5 生产实现）：语义与 [InMemoryIntentLog] 严格一致，
- * 存储引擎由 [IntentStore] 注入 —— Android 生产走 SQLite（`SqliteIntentStore`，
- * 装配在 `PlatformWiring.intentStore`），纯 JVM/测试与回落路径走 [JournalFileStore]。
+ * 存储引擎由 [IntentStore] 注入 —— 生产走 SQLite（`SqliteIntentStore`，
+ * 装配在 `PlatformWiring.intentStore`，打不开即装配失败，**无回落**），
+ * 测试走 `:domain` `testFixtures` 的 `InMemoryIntentStore`。
  * 换引擎不改语义：两个实现共用 `:domain` 的 `IntentStoreContract` 同一组用例。
  *
  * 崩溃恢复路径（§8.5「启动即回放，恢复只跟随 COMMIT」）：

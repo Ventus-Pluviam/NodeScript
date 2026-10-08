@@ -4,6 +4,7 @@ import com.autoscript.bridge.BridgeHandshake
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.permission.CapabilityMask
 import com.autoscript.domain.permission.ScriptAuthorizationSnapshot
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -120,6 +121,7 @@ class BridgeSocketListenerTest {
     private fun kit(): AssembledShell = AppShellKit.assemble(
         filesDir = dir.resolve("files"),
         cacheDir = dir.resolve("cache"),
+        intentStore = InMemoryIntentStore(),
         schedulerProvider = RecordingProvider(),
         screenGate = ScreenGate.AllowAll,
     )
@@ -277,6 +279,7 @@ class BridgeSocketListenerTest {
             AppShellKit.assemble(
                 filesDir = dir.resolve("failed-files"),
                 cacheDir = dir.resolve("failed-cache"),
+                intentStore = InMemoryIntentStore(),
                 schedulerProvider = RecordingProvider(),
                 engineFactory = { _, identities -> issuer = identities; error("工厂失败") },
             )

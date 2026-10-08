@@ -48,13 +48,19 @@ class ConnectionResourceLifecycleTest {
     /** 每条连接各自收掉的资源次数（按连接号记账 —— 隔离与否看这个）。 */
     private val closedByConnection = ConcurrentHashMap<Long, AtomicInteger>()
 
+    /** A11 用：按 **runId** 记账（`revokeRunResources` 的入参是 runId，调用方不认连接号）。 */
+    private val closedByRun = ConcurrentHashMap<Long, AtomicInteger>()
+
     private fun record(ctx: AuthenticatedRunContext) {
         ctx.resources.register {
             closedByConnection.computeIfAbsent(ctx.connectionId) { AtomicInteger() }.incrementAndGet()
+            closedByRun.computeIfAbsent(ctx.engineRunId) { AtomicInteger() }.incrementAndGet()
         }
     }
 
     private fun closed(connectionId: Long): Int = closedByConnection[connectionId]?.get() ?: 0
+
+    private fun closedRun(runId: Long): Int = closedByRun[runId]?.get() ?: 0
 
     @Test
     fun `硬撤销 —— 这条连接上的资源恰好收一次`() = runBlocking {
@@ -137,6 +143,76 @@ class ConnectionResourceLifecycleTest {
                         closed(connectionId),
                         "脚本跑完正常退出是最常见的一种结束 —— 也必须收口",
                     )
+                }
+            }
+        }
+        Unit
+    }
+
+    /**
+     * A11：**按 runId** 撤销（脚本把桥 fd 继承给子进程、主进程死掉不产生 EOF 的那条路）。
+     *
+     * 钉的是接线本身 —— 映射装上了、按 runId 能问到那条连接的资源、且**只**收资源不关 IO
+     * （连接此刻仍可能在排空尾帧，硬关会把「脚本正常跑完」误走成硬撤销）。
+     */
+    @Test
+    fun `按 runId 撤销 —— 不依赖 socket 断`() = runBlocking {
+        RunIdentityRegistry().use { identities ->
+            BridgeRouter(RequestRegistry()).use { router ->
+                val entered = CompletableDeferred<Long>()
+                router.register("probe") {
+                    val ctx = currentCoroutineContext()[AuthenticatedRunContext]!!
+                    record(ctx)
+                    entered.complete(ctx.engineRunId)
+                    awaitCancellation()
+                }
+                NewlineFrameServer(router, identities).use { srv ->
+                    val lease = issue(identities, 31)
+                    val input = ByteArrayInputStream(BridgeHandshake.hello(lease.token) + req())
+                    val job = srv.serveConnection(input, ByteArrayOutputStream(), closeConnection = input::close)
+                    val runId = withTimeout(2_000) { entered.await() }
+                    // 这就是 A11 的病灶形态：脚本主进程死了、socket 没断（fd 被子进程继承了），
+                    // 连接不会 abort/dispose —— 但 run 已经终结，资源必须当场收掉。
+                    srv.revokeRunResources(runId)
+                    assertEquals(1, closedRun(31L), "按 runId 也要收口，且只收一次")
+                    // 幂等：连着收两次不许变成 2。
+                    srv.revokeRunResources(runId)
+                    assertEquals(1, closedRun(31L), "收口幂等")
+                    // 未知 runId 是无害的 no-op，不抛。
+                    srv.revokeRunResources(9999L)
+                    withTimeout(2_000) { job.cancel() }
+                    job.join()
+                    assertEquals(1, closedRun(31L), "连接随后自己结束也不许再收一遍")
+                }
+            }
+        }
+        Unit
+    }
+
+    /** A11：run 终结后映射不得留在表里（否则撤销会扑空到一个早已结束的连接上）。 */
+    @Test
+    fun `连接结束后 runId 映射被摘掉 —— 不留悬挂索引`() = runBlocking {
+        RunIdentityRegistry().use { identities ->
+            BridgeRouter(RequestRegistry()).use { router ->
+                val seen = CompletableDeferred<Long>()
+                router.register("probe") {
+                    val ctx = currentCoroutineContext()[AuthenticatedRunContext]!!
+                    record(ctx)
+                    seen.complete(ctx.engineRunId)
+                    BridgeResponse.Ok(it.id, null)
+                }
+                NewlineFrameServer(router, identities).use { srv ->
+                    val lease = issue(identities, 41)
+                    withTimeout(2_000) {
+                        srv.serveConnection(
+                            ByteArrayInputStream(BridgeHandshake.hello(lease.token) + req()),
+                            ByteArrayOutputStream(),
+                        ).join()
+                    }
+                    withTimeout(2_000) { seen.await() }
+                    // 连接早已结束（正常退出被 dispose 收过），再按 runId 撤销不得再收一次。
+                    srv.revokeRunResources(41L)
+                    assertEquals(1, closedRun(41L), "表项已摘 = no-op，不会二次收口")
                 }
             }
         }

@@ -14,6 +14,54 @@
 
 ## 已拍板（原 §18 全部九项：第 1–7 项 2026-09-26、第 8/9 项 2026-09-25；外加后续新增编号项）
 
+2026-10-08 拍板（批 78：jsonl 写入侧删除 + 保守档放回 `SCHEDULER_WRITE`；用户裁定）：
+
+47. **意图日志的 jsonl 回落已删（fail closed）+ 保守档放回 `SCHEDULER_WRITE`**（批 78，两件独立的事）：
+   - **① SQLite 打不开 = 装配失败，不回落**。第 46 项里「打开失败如实回落 jsonl」那条**作废**。
+     理由：回落那份 `JournalFileStore` 的 `runId` 分配（`max+1`）与「锁内先查后写」的幂等锚点
+     **都以单写者为前提**（第 46 项自己写的锚点价值来自 SQLite 的**唯一索引**强制，jsonl 那份
+     只是单写者下的自觉）。打不开就回落 = 把「调度坏了」伪装成「调度还在」，与 `images`/`dialogs`
+     那条「缺件不伪造」纪律**同向但更严** —— 那里是明说降级，这里降级会连带失去锚点。
+     落地：`JournalFileStore` 及其 14 个用例删除；`AppShellKit.intentStore` 由**可选改必填**
+     （缺省值就是那个回落）；`PlatformWiring` 去掉 try/catch 与 `fallbackReason` 记账。
+     **契约测试未缩水**：`InMemoryIntentStore` 落在 `:domain` **自己的 test 源集**（不是 `:app`
+     或 `:platform`），故 16 例规格在任何机器上都不被 `assumeTrue(sqlite3)` 挡掉 —— 放 `:platform`
+     会退回批 77 之前「没 sqlite3 就不跑」的形态。老设备 `intent-log.jsonl` 的**一次性导入仍可用**
+     （读的是**格式**，纯 `:domain` parser，不依赖写入方）。
+   - **② `SCHEDULER_WRITE` 放回保守档**（`UNKNOWN_DEFAULT` 由减三位改为减两位）。收走它的理由
+     与第 45 项自写的「同 UID 脚本可直接往注册表追加一行即可绕过」是**同一条事实** —— 掩码收窄
+     挡不住恶意脚本，只挡老实脚本。而第 45 项已裁定来源分级**不做**，于是「待来源元数据接入后
+     恢复」这条路已关，留着这一位等于挂一句永远兑现不了的承诺。跨脚本那两位**不动**（其判据
+     不依赖来源分级，且 `CrossScriptAuthorizer` 目标侧比较有独立防护价值）。
+   - **③ 实测推翻了我自己的推荐**：只放掩码是**零收益** —— `authorizeCreate` 无条件要求
+     `CROSS_SCRIPT_CONTROL`，掩码含 `SCHEDULER_WRITE` 仍被拒。故一并把该闸拆为二分：
+     caller 的项目号（**由认证点从 lease 装填，非 wire 字段，脚本改不了**）与目标相同 → 自建
+     放行；不同 → 走跨脚本全套；**空串 = 不知道 → 走跨脚本那条**（fail closed，不套默认项目名）。
+     与批 75 把 `engines.stop/status` 的目录级要求降到 `NONE`、判据下沉进 handler 是**同一形状**。
+   - **行为变化（真机口径）**：脚本可用 `auto.workManager.*` 建/删/列**自己项目**的定时任务，
+     与批 74 的现行行为一致；替别人建仍 `ERR_PERMISSION_DENIED`；`engines.exec` 仍拒（目录要
+     `CROSS_SCRIPT_CONTROL` **且** `SCHEDULER_WRITE` 两位，只放后一位不改可达性）；任务中心 UI 走
+     `HostSummary.registerTask`、**不经桥面掩码**，行为不变。
+
+2026-10-08 拍板（批 78：A11 —— run 终结按 runId 收口连接资源）：
+
+48. **会话资源的收口点补在 runId 侧**：批 75 的 `ConnectionResourceRegistry` 挂在**桥连接**上
+    （abort / dispose / EOF 三条路都收），但脚本若把桥 socket fd 继承给子进程，脚本主进程死了
+    **不产生 EOF**，连接不结束 —— 挂在上面的进程级资源（投屏会话：`VirtualDisplay` +
+    `mediaProjection` 前台服务）就没有撤销点。现场形态：通知栏一条「正在投屏」却没有任何脚本在跑。
+    - **判据与映射住在接入端**（`:bridge:java` 的 `NewlineFrameServer`），因为连接号在那里发出
+      （`connectionIds.getAndIncrement()`），而 runId 是**认证之后**才与它绑定（`authenticate`
+      用 lease 装填）。`RuntimeController` 自始至终只认 runId；把映射塞进 controller 会要求它替
+      接入端记账，两处各记一份必然错位。
+    - **装填点**：认证成功后、**任何业务请求之前** —— 更早时 runId 尚不存在，晚了就有
+      「run 已终结、映射才装上」的窗口。`dispose` 里条件摘除，不留悬挂索引。
+    - **刻意只收资源、不关 IO**：run 自然结束时连接可能还在排空尾帧（§7.5 EOF 排空语义），
+      硬关 socket 会把「脚本正常跑完」误走成硬撤销。收口目标是「脚本没了，投屏不该继续挂着」，
+      与连接何时结束是两件事。
+    - **接在全部六条 run 终结路径上**：`stop` / `killRun` / `settleDone`（自然退出）/
+      `settleKilled` / `killAll` / `forceStopAll`。少接一条 = 那条路上脚本崩了投屏还挂着。
+      （`forceStopAll` 是实现时漏了、写测试时才发现的 —— 那是「应用被杀/测试收口」那条路。）
+
 2026-10-08 拍板（批 77：§8.5 意图日志落 SQLite 的架构选型；协调者裁定）：
 
 46. **意图日志落 SQLite：搬接口，不给模块加 Android 依赖**。契约 §8.5 从第一天写的就是

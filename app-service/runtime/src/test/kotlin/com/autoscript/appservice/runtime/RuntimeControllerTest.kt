@@ -4,6 +4,7 @@ import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.domain.engine.KillCause
 import com.autoscript.domain.engine.StopResult
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
@@ -25,6 +26,87 @@ class RuntimeControllerTest {
         val list = engines ?: MutableList(capacity) { FakeEngine(EngineId(it)) }
         val pool = FixedEnginePool({ id -> list[id.poolIndex] }, capacity)
         return RuntimeController(pool, watchdog) to list
+    }
+
+    /**
+     * A11：**每一条 run 终结的路都要收口**，且**只**收一次。
+     *
+     * 钉的是"接缝接到了哪几条路上"—— 少接一条 = 那条路上脚本崩了投屏还挂着。
+     * 四条路一次跑完：stop（被停）/ killRun（被掐）/ 自然退出（settleDone）/
+     * killAll（宿主急停，广播式）。
+     */
+    @Test
+    fun `四条 run 终结路径都收口且各只一次`() = runBlocking {
+        val revoked = java.util.concurrent.ConcurrentHashMap<Long, AtomicInteger>()
+        fun count(runId: Long) = revoked[runId]?.get() ?: 0
+
+        val list = MutableList(4) { FakeEngine(EngineId(it)) }
+        val pool = FixedEnginePool({ id -> list[id.poolIndex] }, 4)
+        val c = RuntimeController(pool, WatchdogPolicy(), revokeRunResources = { runId ->
+            revoked.computeIfAbsent(runId) { AtomicInteger() }.incrementAndGet()
+        })
+
+        val r1 = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p", "a.js", runNonce = "n1")),
+        ).runId
+        val r2 = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p", "a.js", runNonce = "n2")),
+        ).runId
+        val r3 = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p", "a.js", runNonce = "n3")),
+        ).runId
+        val r4 = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p", "a.js", runNonce = "n4")),
+        ).runId
+
+        c.stop(r1)                                     // 被停
+        c.killRun(r2, KillCause.REQUESTED)             // 被掐
+        c.awaitCompletion(r3)                          // 自然退出
+        c.killAll(KillCause.WATCHDOG_CPU)          // 宿主急停（广播）
+
+        listOf(r1, r2, r3, r4).forEach {
+            assertEquals(1, count(it), "run $it 终结时收口恰好一次")
+        }
+        Unit
+    }
+
+    /** A11：进程级急停（应用被杀/测试收口）那条路同样要收口。 */
+    @Test
+    fun `forceStopAll 也收口`() = runBlocking {
+        val revoked = java.util.concurrent.ConcurrentHashMap<Long, AtomicInteger>()
+        val list = MutableList(2) { FakeEngine(EngineId(it)) }
+        val pool = FixedEnginePool({ id -> list[id.poolIndex] }, 2)
+        val c = RuntimeController(pool, WatchdogPolicy(), revokeRunResources = { runId ->
+            revoked.computeIfAbsent(runId) { AtomicInteger() }.incrementAndGet()
+        })
+        val a = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p", "a.js", runNonce = "n1")),
+        ).runId
+        val b = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p", "a.js", runNonce = "n2")),
+        ).runId
+        c.forceStopAll(KillCause.ENGINE_REQUEST)
+        assertEquals(1, revoked[a]?.get() ?: 0, "急停也收口")
+        assertEquals(1, revoked[b]?.get() ?: 0, "急停也收口")
+        Unit
+    }
+
+    /** A11：缝不接（缺省）时 run 终结照常走完 —— 这条是"没接线"不等于"功能坏掉"。 */
+    @Test
+    fun `未接收口缝时 run 终结不受影响`() = runBlocking {
+        val (c, _) = controller()
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js", runNonce = "n1")),
+        )
+        assertEquals(RuntimeController.StopOutcome.StoppedClean, c.stop(started.runId))
+        Unit
     }
 
     @Test

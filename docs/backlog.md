@@ -1,5 +1,24 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-08 追记（批 78：jsonl 写入侧删除 + 保守档放回 `SCHEDULER_WRITE` + A11 结项）
+
+- **A11 已结项（2026-10-08，批 78）**：批 75 登记的「`abortConnection` 对『子进程继承桥 socket
+  fd』形态未覆盖」已补上 —— 会话资源收口点**新增一条按 `runId` 的路**（`runConnections` 映射 +
+  `revokeRunResources(runId)`，装填在认证成功后、任何业务请求之前，`dispose` 条件摘除），
+  执行终结**不再依赖 socket 断**。接在**全部六条** run 终结路径上（`stop` / `killRun` /
+  `settleDone` / `settleKilled` / `killAll` / `forceStopAll`）。**只收资源、不关 IO**（run 自然
+  结束时连接可能还在排空尾帧，硬关会把「正常跑完」误走成硬撤销）。**下方 A11 原始记录逐字保留
+  作历史，当前状态以本条为准。**口径见 [`design-decisions.md`](design-decisions.md) 第 48 项。
+- **jsonl 意图日志写入侧已删除（fail closed）**：生产只有 `SqliteIntentStore`，SQLite 打不开
+  即装配失败。**下方 A13 证据里的 `JournalFileStore.kt` 原文逐字保留**（该文件已删）。
+  契约套件改由 `:domain` 内的 `InMemoryIntentStore` 承载且**无环境门禁**（放 `:platform` 会退回
+  「没 `sqlite3` 就不跑」）。口径见 [`design-decisions.md`](design-decisions.md) 第 47 项①。
+- **`SCHEDULER_WRITE` 已放回保守档（批 78）**：脚本可自建定时任务，与批 74 现行行为一致。
+  `workManager.create` 的闸已拆为自建/跨脚本二分（项目号由认证点从 lease 装填，非 wire 字段）。
+  **A5 相关行不因此复活** —— 跨脚本那两位仍未放回。
+- **A13 仍开放**：保留期/清理策略仍未拍板（动它会碰幂等锚点）。**A11/A13 之外无新登记。**
+
+
 ## 2026-10-08 追记（批 77：录屏腿与 §8.5 SQLite 落地，A12 结项）
 
 - **A12 已结项（2026-10-08，批 77）**：**MediaProjection 录屏腿已落地** ——
@@ -18,7 +37,7 @@
   体积随 run 数线性增长（每次 run 恒定两条行，已无冗余可压）。老终态行、老 nonce 能否丢
   会直接动到 §8.5 的幂等锚点 —— **丢了老 nonce，重投就会重放副作用**（幂等键失效）。
   批 77 **显式排除**，未拍板。证据：`platform/system/.../persist/SqliteIntentStore.kt`（无删除路径）、
-  `app-service/scheduler/.../persist/JournalFileStore.kt`（同上）、
+  ~~`app-service/scheduler/.../persist/JournalFileStore.kt`（同上；**该文件已于 2026-10-08 批 78 删除**，生产不再有 jsonl 写入侧）~~、
   [`design/08-execution.md`](design/08-execution.md) §8.5。
 - **A11 仍开放**（`abortConnection` 对「子进程继承桥 socket fd」形态未覆盖）：批 77 **未触碰**，
   见下方 2026-10-08 追记块。

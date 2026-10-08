@@ -5,6 +5,7 @@ import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import com.autoscript.domain.scripts.ScriptPaths
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -56,6 +57,7 @@ class AppShellNpmCliTest {
     ): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
+        intentStore = InMemoryIntentStore(),
         schedulerProvider = NoopProvider(),
         screenGate = ScreenGate.AllowAll,
         npmCliSource = source,

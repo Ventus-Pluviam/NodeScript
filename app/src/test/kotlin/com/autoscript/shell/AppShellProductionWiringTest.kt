@@ -7,7 +7,7 @@ import com.autoscript.appservice.scheduler.core.RecoveryRecord
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.appservice.scheduler.core.TriggerSource
-import com.autoscript.appservice.scheduler.persist.JournalFileStore
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
@@ -24,8 +24,8 @@ import java.nio.file.Path
  * 生产接线验证（§8.5 持久意图日志 + §10.2/§12.2 npm 真装配）。
  *
  * 两件事，都是"装配产物可用"而非挂载缝本身的形状测试：
- * 1. `JournalFileStore` + `PersistentIntentLog` 喂 `assemble` —— 崩溃遗留
- *    （journal 里未 COMMIT 的行）经 `bootRecover` 真重投（不是只在 scheduler 单测里）；
+ * 1. 持久意图日志喂 `assemble` —— 崩溃遗留（未 COMMIT 的行）经 `bootRecover` 真重投
+ *    （不是只在 scheduler 单测里）；
  * 2. `NpmShellKit.assembleHandler` 喂 `assemble(npmHandler = …)` —— `npm.*`
  *    走到真 `NpmBridgeHandler`（轻操作可用、重操作诚实 `ERR_NOT_IMPLEMENTED`）。
  */
@@ -67,14 +67,15 @@ class AppShellProductionWiringTest {
 
     @Test
     fun `持久日志遗留经 bootRecover 真重投，归档落盘可追溯`() = runBlocking {
-        val journalDir = dir.resolve("journal")
-        val first = PersistentIntentLog(JournalFileStore(journalDir))
+        // 「重启」= 同一份 State 上的两个实例（`open()` 给新实例是契约里的崩溃模拟口径）。
+        val storeState = InMemoryIntentStore.State()
+        val first = PersistentIntentLog(InMemoryIntentStore(storeState))
         // 模拟崩溃遗留：START 已落盘、未 COMMIT（进程被杀时的样子）
         first.appendStart("p1", "a.js", "nonce-crash", TriggerSource.TIMED, System.currentTimeMillis())
         first.close()
 
-        // 重启：新实例 replay 出同一条遗留
-        val second = PersistentIntentLog(JournalFileStore(journalDir))
+        // 重启：新实例读出同一条遗留
+        val second = PersistentIntentLog(InMemoryIntentStore(storeState))
         assertEquals(1, second.uncommitted().size, "replay 必须找回崩溃遗留")
 
         val archiveDir = dir.resolve("archive1")
@@ -112,7 +113,7 @@ class AppShellProductionWiringTest {
     fun `真 npm 装配挂上后 npm 轻操作可用重操作诚实`() = runBlocking {
         val archive2 = FileRunArchive(dir.resolve("archive2"))
         val s = shellWith(
-            PersistentIntentLog(JournalFileStore(dir.resolve("journal2"))),
+            PersistentIntentLog(InMemoryIntentStore()),
             dir.resolve("files2"),
             dir.resolve("cache2"),
             dir.resolve("archive2"),
