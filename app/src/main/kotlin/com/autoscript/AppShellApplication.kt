@@ -16,6 +16,7 @@ import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.automation.MediaProjectionSessionState
 import com.autoscript.domain.permission.Capability
 import com.autoscript.domain.host.ScriptFilesSnapshot
+import com.autoscript.domain.scripts.ScriptEnvEntry
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
@@ -46,6 +47,7 @@ import com.autoscript.shell.ForegroundKeeper
 import com.autoscript.shell.PlatformWiring
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
+import com.autoscript.appservice.scriptrepo.core.FileScriptEnvStore
 import com.autoscript.shell.ScriptFileOps
 import com.autoscript.shell.ScriptFilesRead
 import com.autoscript.shell.ScreenGateAndroid
@@ -161,6 +163,38 @@ class AppShellApplication : Application(), HostSummary {
     @Volatile
     private var keepAlive: ForegroundKeeper? = null
 
+    /**
+     * 脚本环境变量（§8.1）：管理面板 → 环境变量那一行底下的表。
+     *
+     * **进程级懒建一次**（`filesDir` 在 Application 里稳定，建一次就够），
+     * 与 [keepAlive] 同一形态的"单例式"理由，但更弱一档：这份表没有"第二份实例
+     * 会互相看不见"的记账问题（[FileScriptEnvStore] 每次写都现开现关、replay 只读盘），
+     * 之所以仍只建一份，是为了让**注入侧与读写侧是同一个对象** ——
+     * 引擎闭包读的和界面写的是同一份内存视图，否则写完要等重启才被读到。
+     *
+     * 构造要读盘（replay jsonl），故走 [scriptEnvStoreOrNull] 懒建；
+     * **建不出来（磁盘不可读）如实 null**：读口据此抛、写口据此抛，
+     * 不伪造一张空表（空表 = "你一条都没设过"，那是另一句话）。
+     */
+    @Volatile
+    private var scriptEnvStore: FileScriptEnvStore? = null
+
+    /**
+     * 取（或首次建）脚本环境变量表；建不出来回 null（**不吞**：调用方据此如实报错）。
+     *
+     * 不做 `by lazy`：`lazy` 抛出的异常会被缓存住（首次磁盘故障之后**永远**拿不到表，
+     * 哪怕盘后来好了），而这里的失败是瞬时的 —— 每次现试一次才对。
+     */
+    private fun scriptEnvStoreOrNull(): FileScriptEnvStore? {
+        scriptEnvStore?.let { return it }
+        return synchronized(this) {
+            scriptEnvStore ?: runCatching { FileScriptEnvStore(filesDir.toPath().resolve(".autojs")) }
+                .onFailure { HostLog.w(TAG, "脚本环境变量表打不开（本次读写如实失败，不伪造空表）：${it.message}") }
+                .getOrNull()
+                ?.also { scriptEnvStore = it }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -266,6 +300,16 @@ class AppShellApplication : Application(), HostSummary {
                             // 决定注入与否，这里只给"应该在哪"，落位归 assemble（assets→
                             // BridgeAddonDeploy）。文件从没落过 = 不注入，脚本照跑。
                             addonPath = ScriptPaths.bridgeAddonFile(filesDir),
+                            // 脚本环境变量（§8.1）：**闭包捕获 store，每次 spawn 现读** ——
+                            // 用户在管理面板改完，下一次执行就拿到新值，不需要重启宿主。
+                            // 表建不出来时回空表（脚本照跑，只是没有用户变量）：这一路是
+                            // 可选增强，不该把整次执行判死 —— 与「addon 缺位降级为不注入」
+                            // 同一条纪律。读口/写口那边仍如实报错（见 scriptEnvStoreOrNull）。
+                            scriptEnv = {
+                                scriptEnvStoreOrNull()?.all()
+                                    ?.associate { it.key to it.value }
+                                    .orEmpty()
+                            },
                         ),
                         identityIssuer = identities,
                     )
@@ -701,6 +745,36 @@ class AppShellApplication : Application(), HostSummary {
 
     override fun createSyntaxHighlighter(relPath: String): SyntaxHighlighter =
         PlatformWiring.syntaxHighlighter(relPath)
+
+    /**
+     * 脚本环境变量读数（§8.1，[HostSummary] 的生产实现）。
+     *
+     * 表打不开**抛**（不返回空表）：空表是「读成功且一条都没设过」的样子，
+     * 会把"盘读不出来"画成"你设的变量都没了" —— 与 [npmSnapshot] 同一条纪律。
+     */
+    override suspend fun scriptEnv(): List<ScriptEnvEntry> =
+        checkNotNull(scriptEnvStoreOrNull()) {
+            "脚本环境变量表打不开（files/.autojs/${FileScriptEnvStore.FILE_NAME}）：读不到就是读不到"
+        }.all()
+
+    /**
+     * 写入一条脚本环境变量（[HostSummary] 的生产实现）。
+     *
+     * 键名不合法**抛** [IllegalArgumentException]，原文点名哪个键（判据的唯一出处是
+     * `:domain` 的 `ScriptEnvKeys.reject`，本类与 `:ui` 都不另判一遍）。
+     */
+    override suspend fun putScriptEnv(key: String, value: String) {
+        checkNotNull(scriptEnvStoreOrNull()) {
+            "脚本环境变量表打不开（files/.autojs/${FileScriptEnvStore.FILE_NAME}）：写入无处落账"
+        }.put(key, value)
+    }
+
+    /** 删除一条脚本环境变量（[HostSummary] 的生产实现；幂等，见契约）。 */
+    override suspend fun removeScriptEnv(key: String) {
+        checkNotNull(scriptEnvStoreOrNull()) {
+            "脚本环境变量表打不开（files/.autojs/${FileScriptEnvStore.FILE_NAME}）：删除无处落账"
+        }.remove(key)
+    }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
     fun missedAlarms(): Map<String, Long> = alarmDispatch.missed()

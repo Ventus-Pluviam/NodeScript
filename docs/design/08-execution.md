@@ -43,6 +43,34 @@ interface EnginePool {                                // 实现在 :app-service:
 自停请求可能被自身撤销取消，controller 必须在不可取消收尾区域完成已有的有界停止/强杀及回池，
 不承诺被关闭的连接还能收到 stop 成功 ACK。
 
+**脚本执行环境变量（全局一份，批 82 落地）**：管理面板「环境变量」编一组 KV，
+**所有脚本执行时注入脚本进程的 `process.env`**。契约住 `:domain`
+（`com.autoscript.domain.scripts.ScriptEnvStore` / `ScriptEnvEntry` / `ScriptEnvKeys`），
+落盘实现在 `:app-service:script-repo`（`core/FileScriptEnvStore`，jsonl 追加 + replay 收敛，
+`files/.autojs/script-env.jsonl`，与 `tasks.jsonl` 同族纪律）。
+
+注入面只有一处：`NodeEngineConfig.scriptEnv: () -> Map<String, String>`，
+在 `NodeProcessEngine.execute` 构造子进程 env 时调用。三条口径：
+
+- **每次 spawn 现读**（`() -> Map` 而不是装配期定死的 `Map`）：改完下次执行即生效，
+  不做装配期缓存 —— 缓存 = 用户在界面改完却不生效。与本仓「读口现取不缓存」同一条纪律。
+- **顺序即契约**：用户键**先**写，宿主键（`AUTOSCRIPT_LIBNODE` / `AUTOSCRIPT_HOST_SOCKET` /
+  `AUTOSCRIPT_BRIDGE_TOKEN` / `AUTOSCRIPT_RUN_ID` 等）**后**写，故宿主键一律胜出。
+  这是第二道兜底，第一道在写入侧（下一条）。
+- **`AUTOSCRIPT_` 是保留前缀**：`ScriptEnvKeys.reject` 在保存时当场拒收并点名那个键，
+  `:ui` 与落盘实现共用这一份判据（不抄两份）。理由是实证而非洁癖：
+  `AUTOSCRIPT_BRIDGE_TOKEN` 是宿主签发的一次性桥凭据（`main.cpp` 用它做 hello/ACK 认证，
+  认证后 `unsetenv`；JS 侧 `bootstrap.ts` 认证成功后也 `delete process.env.AUTOSCRIPT_BRIDGE_TOKEN`），
+  用户覆盖它 = 伪造桥身份或自断桥。前缀判据是**字面大小写敏感**的（宿主键全大写，
+  `autoscript_foo` 不撞任何宿主键，拦它属过度收窄）。
+
+写入侧其余拒收面：空串 / 含 `=`（`KEY=VALUE` 的分隔符）/ 含 NUL 或换行（行格式靠 JSON 转义，
+裸换行会撕坏 jsonl 的行边界）。值**不过**这些限制 —— 空串是合法值（与「没设」不同），
+值经 JSON 编码往返逐字相等。
+
+**不注入 npm 安装会话进程**：`HostNodeExecutor` spawn 的 npm CLI 是宿主工具进程、不是用户脚本，
+零 spawn 门禁（§11）的注入面越窄越好 —— 这份表只进用户脚本的 `NodeProcessEngine` 路径。
+
 ### 8.2 引擎实例模型决议（批判决议）
 - **不做**「单 Node 实例多 engine/多 Job」——共享 context 的 `process.exit()`、全局变量、模块副作用全部泄漏（批判 2 反面教材）；「模块作用域隔离」被明确定为**假隔离**。
 - **不做**「v1 用 worker_threads 做并发引擎」——手机端行为未验证（nodejs-mobile #130），且一个 worker 群共享进程=共享隔离边界。列为 P3 **实验性**特性，入口显式标「实验」。

@@ -146,6 +146,7 @@ class NodeProcessEngineTest {
         addon: Path? = null,
         socket: String? = null,
         bridgeDist: Path? = null,
+        scriptEnv: () -> Map<String, String> = { emptyMap() },
         grace: Long = 3_000,
     ): NodeProcessEngine {
         // 只有走默认才铺哑文件：预检缺位案显式传"不存在的路径"、PATH 名案传相对名 —— 都原样不动。
@@ -162,6 +163,7 @@ class NodeProcessEngineTest {
                 addonPath = addon,
                 hostSocketName = socket,
                 bridgeDistPath = bridgeDist,
+                scriptEnv = scriptEnv,
                 stopGraceMillis = grace,
             ),
             launcher,
@@ -260,6 +262,62 @@ class NodeProcessEngineTest {
         assertFalse(NodeProcessEngine.ENV_BRIDGE_ADDON in env)
         assertFalse(NodeProcessEngine.ENV_BRIDGE_DIST in env, "dist 缺省不注入（同 addon 选填纪律）")
         assertTrue(NodeProcessEngine.ENV_RUN_ID in env, "RUN_ID 恒注入")
+    }
+
+    @Test
+    fun `脚本环境变量注入——用户键进 env，宿主键仍胜出（顺序即契约）`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        // 用户键 + 一个**故意与宿主键同名**的键：后者必须被宿主值盖掉。
+        // 这条是 [NodeEngineConfig.scriptEnv] KDoc 里"注入顺序即契约"的唯一钉子 ——
+        // 顺序写反（宿主键先写）时本用例红，而那时用户就能把脚本的桥 socket 改掉。
+        val e = engine(
+            launcher,
+            socket = "as-sock-real",
+            scriptEnv = { mapOf("MY_TOKEN" to "t-1", "MY_EMPTY" to "", NodeProcessEngine.ENV_HOST_SOCKET to "as-sock-forged") },
+        )
+        runBlocking { e.execute(request()) }
+        val env = launcher.lastEnv!!
+        assertEquals("t-1", env["MY_TOKEN"], "用户设的键原样进 env")
+        assertEquals("", env["MY_EMPTY"], "空串是合法值，不得被当成\"没设\"丢掉")
+        assertEquals(
+            "as-sock-real",
+            env[NodeProcessEngine.ENV_HOST_SOCKET],
+            "宿主键胜出：用户覆盖不了桥 socket（ScriptEnvKeys 拒收保留前缀之外的第二道兜底）",
+        )
+    }
+
+    @Test
+    fun `脚本环境变量缺省不注入任何键`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        runBlocking { engine(launcher).execute(request()) }
+        // 缺省 `{ emptyMap() }`：env 里只该有宿主那几键（RUN_ID 恒有），
+        // 多出任何键都说明注入缝在缺省路径上也动了 env。
+        assertEquals(
+            setOf(NodeProcessEngine.ENV_RUN_ID),
+            launcher.lastEnv!!.keys,
+            "离线缺省下 env 只该有 RUN_ID",
+        )
+    }
+
+    @Test
+    fun `脚本环境变量每次 spawn 现读——两次 execute 之间改了表，第二次拿到新值`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        var table = mapOf("K" to "v1")
+        val e = engine(launcher, scriptEnv = { table })
+        runBlocking { e.execute(request()) }
+        assertEquals("v1", launcher.lastEnv!!["K"])
+        table = mapOf("K" to "v2")
+        // 上一次的进程必须**真的退净**：引擎对"同引擎一次一脚本被破坏"是硬拒
+        // （execute 里那条 IllegalStateException），换个新 FakeProcess 引用不够 ——
+        // 旧引用的 alive 还是 true。
+        launcher.nextProcess.alive = false
+        launcher.nextProcess.exitCode = 0
+        launcher.nextProcess = FakeProcess(pid = 4343)
+        runBlocking { e.execute(request()) }
+        assertEquals("v2", launcher.lastEnv!!["K"], "装配期定死会让这条红 —— 用户改完必须下次执行就生效")
     }
 
     @Test

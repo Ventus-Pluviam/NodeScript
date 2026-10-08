@@ -23,9 +23,9 @@
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun MainShell( pagerState: PagerState, onSelectTab: (Int) -&gt; Unit, toast: ToastAction, modifier: Modifier = Modifier, content: @Composable (Modifier) -&gt; Unit, )</ID>
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun ManagementBackHandler(pagerState: PagerState, subPageOpen: Boolean, onBack: () -&gt; Unit)</ID>
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun TabReloadEffect( resumeTick: Int, pagerState: PagerState, subPage: MainActivity.ManagementPage?, onSettled: suspend (MainActivity.Tab) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ManagementSubPageHost( page: ManagementPage, onCloseConsole: () -&gt; Unit, onCloseNpm: () -&gt; Unit, onCloseLogManagement: () -&gt; Unit, scope: CoroutineScope, )</ID>
+    <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ManagementSubPageHost( page: ManagementPage, onCloseConsole: () -&gt; Unit, onCloseNpm: () -&gt; Unit, onCloseEnv: () -&gt; Unit, onCloseLogManagement: () -&gt; Unit, scope: CoroutineScope, )</ID>
     <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ProjectTab(scope: CoroutineScope, themeSwitch: ThemeSwitchWiring, dark: Boolean, active: Boolean)</ID>
-    <ID>FunctionNaming:ManagementScreen.kt$@Composable fun ManagementScreen( onOpenConsole: () -&gt; Unit, onOpenLogManagement: () -&gt; Unit, onOpenNpm: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:ManagementScreen.kt$@Composable fun ManagementScreen( onOpenConsole: () -&gt; Unit, onOpenLogManagement: () -&gt; Unit, onOpenNpm: () -&gt; Unit, onOpenEnv: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:MenuPopup.kt$@Composable internal fun MenuPopup( expanded: Boolean, visibleCount: Int, onDismissRequest: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
     <ID>FunctionNaming:Menus.kt$@Composable fun ActionBottomSheetItem( label: String, tone: StatusTone = StatusTone.NEUTRAL, enabled: Boolean = true, onClick: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:Menus.kt$@Composable fun ContextMenu( expanded: Boolean, onDismiss: () -&gt; Unit, actions: List&lt;MenuEntry&gt;, )</ID>
@@ -74,6 +74,10 @@
     <ID>FunctionNaming:ScriptEditorScreen.kt$@Composable private fun RollingDigit(digit: Char, index: Int)</ID>
     <ID>FunctionNaming:ScriptEditorScreen.kt$@Composable private fun RowScope.EditorTextArea( value: TextFieldValue, onValueChange: (TextFieldValue) -&gt; Unit, highlightedText: AnnotatedString?, hScroll: ScrollState, focusRequester: FocusRequester, minWidth: Dp, textStyle: TextStyle, onHeight: (Float) -&gt; Unit, )</ID>
     <ID>FunctionNaming:ScriptEditorScreen.kt$@Composable private fun ScrollDirectionEffect(scroll: ScrollState, onDirection: (Boolean) -&gt; Unit)</ID>
+    <ID>FunctionNaming:ScriptEnvScreen.kt$@Composable fun ScriptEnvScreen( state: ScriptEnvState, onRefresh: suspend () -&gt; Unit, onDraftKey: (String) -&gt; Unit, onDraftValue: (String) -&gt; Unit, onAdd: () -&gt; Unit, onRemove: (String) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:ScriptEnvScreen.kt$@Composable private fun AddRow( state: ScriptEnvState, onDraftKey: (String) -&gt; Unit, onDraftValue: (String) -&gt; Unit, onAdd: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:ScriptEnvScreen.kt$@Composable private fun EnvField(value: String, hint: String, modifier: Modifier, onChange: (String) -&gt; Unit)</ID>
+    <ID>FunctionNaming:ScriptEnvScreen.kt$@Composable private fun EnvRow(row: ScriptEnvEntry, onRemove: (String) -&gt; Unit)</ID>
     <ID>FunctionNaming:SettingsCells.kt$@Composable internal fun SettingIconBlock(colors: SettingIconColors, glyph: GlyphKind)</ID>
     <ID>FunctionNaming:SettingsCells.kt$@Composable internal fun SettingsCard(content: @Composable () -&gt; Unit)</ID>
     <ID>FunctionNaming:SettingsCells.kt$@Composable internal fun SettingsCellRow( title: String, colors: SettingIconColors? = null, glyph: GlyphKind? = null, modifier: Modifier = Modifier, onClick: (() -&gt; Unit)? = null, trailing: (@Composable () -&gt; Unit)? = null, )</ID>
@@ -98,6 +102,7 @@
     <ID>FunctionNaming:Theme.kt$@Composable fun Theme( mode: ThemeMode, content: @Composable () -&gt; Unit, )</ID>
     <ID>ImplicitDefaultLocale:CapabilityState.kt$InstallSizeState.Companion$String.format("%.1f", bytes / (1024.0 * 1024.0))</ID>
     <ID>LongMethod:Glyphs.kt$@Composable fun Glyph( kind: GlyphKind, tint: Color, modifier: Modifier = Modifier, size: Dp = 24.dp, weight: Float = 1f, )</ID>
+    <ID>LongMethod:MainActivity.kt$MainActivity$@OptIn(ExperimentalFoundationApi::class) // LocalBringIntoViewSpec 在 foundation 1.7 仍是实验 API override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>LongMethod:ProjectScreen.kt$@Composable fun ProjectScreen( state: ProjectState, /** * 主题两态切换（⋮ 第一格，TG 日/夜同款 —— 目标模式写菜单项上）。 * * 参数是**这颗 ⋮ 在根坐标里的中心**：外壳的圆形揭示从它长出来（见 `centerInRoot`）。 */ onSwitchTheme: (Offset) -&gt; Unit, /** * 那一格的**文案** = 点它切到的那一档（TG `DialogsActivity` 的日夜项： * 当前深色写 "Day Mode"、当前浅色写 "Night Mode"）。 * * 由外壳下发而不是本屏自己算：本屏拿不到 `ThemeMode`（那是 `:ui` 外壳的状态）， * 而"当下是明是暗"这个事实在 `MainActivity` 里已经有了（`themeMode.isDark()`）。 */ themeSwitchLabel: String, /** 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。 */ onCreate: (projectId: String, name: String, isFolder: Boolean) -&gt; Unit, /** 读一个脚本文件的文本（**点文件**进编辑面时调；失败原文抛，本屏如实显示）。 */ onReadFile: suspend (projectId: String, relPath: String) -&gt; String, /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */ onSaveFile: suspend (projectId: String, relPath: String, content: String) -&gt; Unit, /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */ onSortChange: (FileSort, Boolean) -&gt; Unit, /** * 本页是否是 pager 当前停稳的那一页。pager 预组合邻页（`beyondViewportPageCount = 1`）， * 本屏的返回键拦截若不看它，用户在任务页按返回会被邻页的项目屏吞掉（去退一层目录）。 */ active: Boolean = true, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:TaskCenterScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun TaskCenterScreen( state: TaskCenterState, /** 控制台状态：本屏只取在途执行那几样（activeRuns/停止三态/读账），不碰日志行。 */ console: ConsoleState, onRunNow: (TaskRowState) -&gt; Unit, onCancel: (TaskRowState) -&gt; Unit, onRegister: (RegistrationForm) -&gt; Unit, onStopRun: (ActiveRunState) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LoopWithTooManyJumpStatements:DeletionParticles.kt$DeletionParticles$for</ID>
@@ -105,6 +110,8 @@
     <ID>MatchingDeclarationName:Refresh.kt$RefreshAction</ID>
     <ID>TooGenericExceptionCaught:MainActivity.kt$MainActivity$t: Exception</ID>
     <ID>TooGenericExceptionCaught:ScriptEditorScreen.kt$t: Exception</ID>
+    <ID>TooGenericExceptionCaught:ScriptEnvOps.kt$t: Exception</ID>
+    <ID>TooManyFunctions:MainActivity.kt$MainActivity : ComponentActivity</ID>
     <ID>TopLevelPropertyNaming:Glyphs.kt$/** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */ private const val StrokeRatio = 0.085f</ID>
     <ID>TopLevelPropertyNaming:MenuPopup.kt$/** 关闭动画时长（TG `dismissAnimationDuration = 150`）。 */ private const val MenuDismissMillis = 150</ID>
     <ID>TopLevelPropertyNaming:MenuPopup.kt$/** 子项 cascade 的波长（TG `cascade(t, pos, count, 4)` 的 4）。 */ private const val MenuCascadeWave = 4f</ID>

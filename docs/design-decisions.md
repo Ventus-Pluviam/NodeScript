@@ -12,6 +12,55 @@
 
 ---
 
+## 52. 脚本全局环境变量的归属、生效时机与保留前缀（2026-10-09，批 82）
+
+**背景**：管理面板批 46 画了四项入口，其中「环境变量」与「镜像源管理」两行一直是
+`toast?.show("…尚未开放")` 占位。查 12 卷设计：**「环境变量」这一条在契约里没有对应条目**
+（`grep -rn "环境变量" docs/design/*.md` 只命中 §11 的 token 段与 §13 的 apksigner 口令段），
+所以本项不是接线既有契约，而是**新增契约** —— 先写进 §8.1 再动代码。
+
+**归属裁定**：管理面板的「环境变量」= **给脚本用的全局环境变量**（用户口径原话
+「是给脚本的全局环境变量」）：用户编一组 KV，**所有脚本执行时注入脚本进程的 `process.env`**。
+不是宿主的、不是 npm 的、不是构建期的。
+
+**拍板四条**：
+
+1. **全局一份，不做按项目覆盖**。项目维度留给将来真有需求时再加；现在加等于先造一个
+   「每个项目各自一套、界面要能切」的复杂度，而用户口径就是全局。
+2. **每次 spawn 现读，不装配期定死**。`NodeEngineConfig.scriptEnv` 的形态是
+   `() -> Map<String, String>` 而不是 `Map` —— 改完**下次执行即生效**，不必重启 App。
+   装配期快照 = 用户在界面改完却不生效（本仓反复点名的坑）；与本仓「读口现取不缓存」
+   同一条纪律。代价是每次 spawn 多一次内存表读取（`FileScriptEnvStore` 内存视图，无 IO）。
+3. **不注入 npm 安装会话进程**。`HostNodeExecutor` spawn 的 npm CLI 是**宿主工具进程**，
+   不是用户脚本；零 spawn 门禁（§11）的注入面越窄越好。这份表只进用户脚本的
+   `NodeProcessEngine` 路径。
+4. **拒绝保存 `AUTOSCRIPT_` 前缀的键**，保存时当场报错并**点名那个键**
+   （`ScriptEnvKeys.reject`，`:ui` 与落盘实现共用这一份判据）。理由是实证：
+   `AUTOSCRIPT_BRIDGE_TOKEN` 是宿主签发的一次性桥凭据（`main.cpp` 用它做 hello/ACK，
+   认证后 `unsetenv`；JS 侧 `bootstrap.ts` 认证成功后 `delete process.env.AUTOSCRIPT_BRIDGE_TOKEN`），
+   用户覆盖它 = 伪造桥身份或自断桥。spawn 时宿主键**后写**再兜一次底（顺序即契约，见 §8.1）——
+   两道防线，写入侧拦住是"告诉用户"，spawn 侧兜住是"用户绕过界面改盘上文件也伤不到桥"。
+   前缀判据**大小写敏感**：宿主键全大写，`autoscript_foo` 不撞任何宿主键，拦它属过度收窄。
+
+**存储与分层**：契约（`ScriptEnvStore`/`ScriptEnvEntry`/`ScriptEnvKeys`）住 `:domain`
+（`:domain` 零文件 IO，实测无 `java.nio.file.Files`）；落盘实现在 `:app-service:script-repo`
+的 `core` 包（`FileScriptEnvStore`，jsonl 追加 + replay 收敛 + 最后半行容忍 + 值经 JSON 编码，
+与 `tasks.jsonl`/`approve-ledger.jsonl` 同族纪律）。**不持有常开 channel**：这份表由用户点击
+驱动（写入频率以「次」计），为它常开一个 `FileChannel` 换来的是「谁负责关」这个新问题
+（`AssembledShell.close` 关的是意图日志/档案/任务注册表，本表不归壳）—— 改成每次追加现开现关
++ `force(true)`，语义一样（返回前已落盘），少一个生命周期。
+
+**接线路径不碰装配链**：`scriptEnv` 在 `AppShellApplication` 的 `engineFactory` 闭包里捕获
+store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** —— 那三处 `assemble` 有
+12/20 个测试调用点，且 `LongParameterList` 已在 baseline 里，加参数是纯噪声。
+
+**呈现面不冒充**：读失败**保留已读到的那份**并带原文（一次瞬时 IO 失败不该把用户编好的表
+显示成空表）；键名不合法只进 `opError` 且**草稿留着**（清掉等于把用户打的字吞了）；
+空串值是**合法值**且与「没设」在列表上是两条不同的事实（渲染成 `KEY=` 而不是留个洞）；
+写失败**不清表**（宿主拒绝时先改表会出现「列表上没了但盘上还在」）。
+
+---
+
 ## 51. 依赖面板的读口形态与审批决定的生产落点（2026-10-09，批 81）
 
 **背景**：§10.9 第 1/2 条（依赖面板、审批卡）在契约里一直是 P0，而 §11.3 第 6 条把它记成

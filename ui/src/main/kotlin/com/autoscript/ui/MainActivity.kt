@@ -79,6 +79,7 @@ import com.autoscript.ui.screens.ManagementScreen
 import com.autoscript.ui.screens.LogManagementScreen
 import com.autoscript.ui.screens.NpmScreen
 import com.autoscript.ui.screens.ProjectScreen
+import com.autoscript.ui.screens.ScriptEnvScreen
 import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
 import com.autoscript.ui.screens.TaskCenterScreen
@@ -91,6 +92,10 @@ import com.autoscript.ui.state.NpmState
 import com.autoscript.ui.state.TaskLogState
 import com.autoscript.ui.state.ProjectState
 import com.autoscript.ui.state.RegistrationForm
+import com.autoscript.ui.state.ScriptEnvState
+import com.autoscript.ui.state.addScriptEnv
+import com.autoscript.ui.state.loadScriptEnv
+import com.autoscript.ui.state.removeScriptEnv
 import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
 import com.autoscript.ui.state.ThemeReveal
@@ -160,6 +165,12 @@ class MainActivity : ComponentActivity() {
      * 拆两个读口就会各自现取一次、两次结果可以互相矛盾）。
      */
     private var npmState: NpmState by mutableStateOf(NpmState.NOT_LOADED)
+
+    /**
+     * 环境变量页状态（批 82，§8.1）。读口**不依赖壳装配**（表住 `filesDir/.autojs`，
+     * 与 `scriptFiles()` 同一条口径），故首帧就现读一次 —— 不等壳就绪那一档。
+     */
+    private var envState: ScriptEnvState by mutableStateOf(ScriptEnvState.NOT_LOADED)
 
     // 「当前页签」不再是一个字段：它由 pager 的滚动位置派生（见 setContent 里的 pagerState）。
     // 存两份必然漂移 —— 手指划过去时字段说 A、pager 说 B。
@@ -326,9 +337,13 @@ class MainActivity : ComponentActivity() {
             // 三个子页开关的**唯一**读法：谁在前台是一个值，不是三个布尔的组合。
             // 顺序（控制台 → 依赖 → 日志）只写在这一处 —— 本页的路由、返回键让位、
             // 切页现取读的都是它，三处同序。
+            // 环境变量子页（批 82）：同一层级、同一读法。
+            var envOpen by rememberSaveable { mutableStateOf(false) }
+            val closeEnv = { envOpen = false }
             val subPage = when {
                 consoleOpen -> ManagementPage.CONSOLE
                 npmOpen -> ManagementPage.NPM
+                envOpen -> ManagementPage.ENV
                 logManagementOpen -> ManagementPage.LOGS
                 else -> null
             }
@@ -406,6 +421,7 @@ class MainActivity : ComponentActivity() {
                                         onOpenConsole = { consoleOpen = true },
                                         onOpenLogManagement = { logManagementOpen = true },
                                         onOpenNpm = { npmOpen = true },
+                                        onOpenEnv = { envOpen = true },
                                         modifier = Modifier,
                                     )
                                 } else {
@@ -413,6 +429,7 @@ class MainActivity : ComponentActivity() {
                                         page = subPage,
                                         onCloseConsole = closeConsole,
                                         onCloseNpm = closeNpm,
+                                        onCloseEnv = closeEnv,
                                         onCloseLogManagement = closeLogManagement,
                                         scope = scope,
                                     )
@@ -434,6 +451,7 @@ class MainActivity : ComponentActivity() {
                 when (subPage) {
                     ManagementPage.CONSOLE -> closeConsole()
                     ManagementPage.NPM -> closeNpm()
+                    ManagementPage.ENV -> closeEnv()
                     else -> closeLogManagement()
                 }
             }
@@ -457,6 +475,7 @@ class MainActivity : ComponentActivity() {
                     Tab.MANAGEMENT -> when (subPage) {
                         ManagementPage.CONSOLE -> reloadConsole()
                         ManagementPage.NPM -> reloadNpm()
+                        ManagementPage.ENV -> reloadEnv()
                         ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog() }
                         null -> Unit
                     }
@@ -519,6 +538,7 @@ class MainActivity : ComponentActivity() {
         page: ManagementPage,
         onCloseConsole: () -> Unit,
         onCloseNpm: () -> Unit,
+        onCloseEnv: () -> Unit,
         onCloseLogManagement: () -> Unit,
         scope: CoroutineScope,
     ) {
@@ -536,6 +556,16 @@ class MainActivity : ComponentActivity() {
                 onDecide = { id, approve -> scope.launch { decideApprovalOp(id, approve) } },
                 onSelectProject = { npmState = npmState.copy(selectedProjectId = it) },
                 onBack = onCloseNpm,
+                modifier = Modifier,
+            )
+            ManagementPage.ENV -> ScriptEnvScreen(
+                state = envState,
+                onRefresh = { reloadEnv() },
+                onDraftKey = { envState = envState.copy(draftKey = it, opError = null, opNotice = null) },
+                onDraftValue = { envState = envState.copy(draftValue = it) },
+                onAdd = { scope.launch { envState = addScriptEnv(hostSummary(), envState) } },
+                onRemove = { key -> scope.launch { envState = removeScriptEnv(hostSummary(), envState, key) } },
+                onBack = onCloseEnv,
                 modifier = Modifier,
             )
             ManagementPage.LOGS -> LogManagementScreen(
@@ -650,6 +680,16 @@ class MainActivity : ComponentActivity() {
         val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
         host.saveScriptFile(projectId, relPath, content)
         reloadProjectFiles()
+    }
+
+    /**
+     * 现取脚本环境变量表（挂起；只写 [envState]）。
+     *
+     * 逻辑在 [loadScriptEnv]（`:ui` 的顶层函数）：那三段"拿读口算下一份状态"是纯的，
+     * 放这里能用 `FakeHost` 直接测，而 `MainActivity` 在 JVM 单测里构造不出来。
+     */
+    private suspend fun reloadEnv() {
+        envState = loadScriptEnv(hostSummary(), envState)
     }
 
     /**
@@ -930,7 +970,7 @@ class MainActivity : ComponentActivity() {
      * `glyph` 是页签条上那个画出来的图标（见 `Glyphs.kt`）。
      */
     /** 管理页在前台的那个子页（面板本身不是子页，用 null 表示）。 */
-    enum class ManagementPage { CONSOLE, NPM, LOGS }
+    enum class ManagementPage { CONSOLE, NPM, ENV, LOGS }
 
     enum class Tab(val short: String, val glyph: GlyphKind) {
         HOME("项目", GlyphKind.HOME),
