@@ -802,6 +802,11 @@ class InstallCoordinator(
      * 扫描面：各顶层依赖 package.json 的 install-scripts 字段（pre/post install，
      * preuninstall/uninstall，prepare/preparePack）。只读顶层（深度 1 的 node_modules/＊）
      * —— 传递依赖同属这些包自己的声明，按顶层包汇总即可覆盖。
+     *
+     * **与 `child_process` 门禁（[NpmSpawnGate]，2026-10-09）是两件事，别合并**：本警告管
+     * 「本该跑却没跑的 lifecycle 脚本」（信息面，不阻塞安装）；门禁管「**任何** spawn 入口
+     * 一律拒绝」（不变量面，硬失败）。前者对 `--ignore-scripts` 的后果负责，后者对
+     * 「npm 或某个包在背地里起进程而没人知道」负责 —— 两者覆盖的失败模式不重叠。
      */
     private suspend fun warnScriptsSkipped(projectId: String, handleId: String, stageDir: java.nio.file.Path) {
         val marked = ArrayList<String>()

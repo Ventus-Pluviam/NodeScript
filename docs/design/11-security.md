@@ -43,7 +43,7 @@
 | # | 威胁（攻击者能力） | 攻击面 | 现行防线（落点） |
 |---|---|---|---|
 | T1 | **恶意/被污染的包在安装时执行任意代码**（lifecycle 脚本） | npm 安装 | 零 spawn 主路径：T0 全程 `--ignore-scripts`，安装脚本一个都没跑过，回执 `scripts-skipped`（`InstallCoordinator`，§10.5-3）。**残余**：让脚本真跑的那条路（spawn 桥）尚未落地，见 §11.3 |
-| T2 | **lockfile 投毒**（把包名指到别处，integrity 仍成立） | `npm ci` 重建 | `LockSigner` 对 lock 做 HMAC-SHA256 带外签名（`files/.autojs/lock.sig`，键绑 `projectId` 防跨项目搬锁），`ci` 前验签；缺签名/错签名一律 `ERR_PERMISSION_DENIED`（TOFU 自签不算通过）。**接线现状（2026-10-01 核实）**：防线代码与单测都在，但**生产装配没接** —— `NpmShellKit.assembleHandler` 的 `lockKey` 缺省 `null` → 既不签也不验，全仓无 `KeyProvider` 实现。见 §11.3 第 8 条 |
+| T2 | **lockfile 投毒**（把包名指到别处，integrity 仍成立） | `npm ci` 重建 | `LockSigner` 对 lock 做 HMAC-SHA256 带外签名（`files/.autojs/lock.sig`，键绑 `projectId` 防跨项目搬锁），`ci` 前验签；缺签名/错签名一律 `ERR_PERMISSION_DENIED`（TOFU 自签不算通过）。~~**接线现状（2026-10-01 核实）**：防线代码与单测都在，但**生产装配没接** —— `NpmShellKit.assembleHandler` 的 `lockKey` 缺省 `null` → 既不签也不验，全仓无 `KeyProvider` 实现。~~ **已接线（2026-10-08，批 79）**：`AppShellApplication` 递 `LockKeyStore.AndroidKeystore`（`AppShellKit` 经 `LockKeyStore.resolve` 做 get-or-create），`ci` 先验签、`install` 收尾重签、快照导出带 `snapshot.sig`。取钥失败**不外抛**：本次不装该防线、原因原文进 `AssembledShell.npmLockKeyFailure`（不吞）。见 §11.3 第 3/8 条 |
 | T3 | **单一镜像/注册表投毒** | registry 响应 | `NpmRegistryVerifier` 双运营主体交叉校验（第二意见必须与首选**不同运营主体**，同站即自比、自比一律拒）；取不到/非 https/无 integrity 锚点一律 `Verdict.Unverifiable` 由调用方显式告知，不折成「通过」 |
 | T4 | **冒名客户端抢绑桥 socket** | abstract unix socket | 桥监听与客户端 `main.cpp` 对称验 peer uid（`SO_PEERCRED`），凭据读不到即 fail-closed 拒收（`BridgeSocketListener`）；abstract 名带 uid 后缀，多实例互不抢绑。UID 通过后还须一次性 256-bit token 的 hello/ACK，绑定 engineRunId；双方 PID 可得时额外匹配。无票、重放、过期、已退出或撤销拒收；**同 UID 窃取其他执行凭据仍不在保证内** |
 | T5 | **未授权能力被调用**（脚本绕过能力授予） | 桥面 | **执行级 `CapabilityMask` 已在桥路由做 deny-by-default 过滤**（2026-10-08，A5 第一阶段；缺省保守档 A）；设备能力门禁仍独立：`PermissionCenter` 是唯一权限入口，读取异常诚实降级 `DEGRADED`（可用性未知即受限），绝不伪造 `GRANTED`。**残余**：来源分级经裁定不做（第 45 项），且掩码不拦 Node 内建 `fs`/`http` |
@@ -61,21 +61,40 @@
    但它**不改变这一条**：掩码只约束**桥面命名空间**，不拦 Node 内建 `fs`/`http`，同 UID 代码仍可
    绕开桥直连进程与文件。**来源分级经裁定不做**（第 45 项）：它不改变这一条，也不产生防护 —— 见 §11.1 事实 3。
 2. **安装脚本「一个都没真跑过」**：T0 全程 `--ignore-scripts`，回执 `scripts-skipped`。等 spawn 桥（P1）落地后，「用户选择跑」这条才有落点；**在那之前，安装脚本永不执行**（§18 第 7 项 + §10.5-3）。
-3. **`lock.sig` 是本地信任锚，不是第三方可验证**：签名用应用私钥，只能证明「这份 lock 是本机签过的」，不构成跨设备/跨用户的可验证来源证明。应用私钥丢失 = 显式「安全降级」失败（`LockSigner` KDoc 口径），不静默放行。**密钥从哪来：目前没有实现** —— 接缝是 `LockSigner.KeyProvider`（2026-10-01 起形状为 `secretKey(): SecretKey`：给句柄而非字节，Keystore 密钥材料不出库也接得上；实现落点已拍板住 `:app` 装配层），设计口径是 Android Keystore 包装的应用密钥，但全仓没有任何 `KeyProvider` 实现、生产装配传 `null`（见第 8 条），所以「生产走 Keystore」这句现在是**目标形态**，不是现状。
+3. **`lock.sig` 是本地信任锚，不是第三方可验证**：签名用应用私钥，只能证明「这份 lock 是本机签过的」，不构成跨设备/跨用户的可验证来源证明。应用私钥丢失 = 显式「安全降级」失败（`LockSigner` KDoc 口径），不静默放行。**密钥从哪来：已落地（2026-10-08，批 79）** —— 接缝是 `LockSigner.KeyProvider`（2026-10-01 起形状为 `secretKey(): SecretKey`：给句柄而非字节，Keystore 密钥材料不出库也接得上；实现落点已拍板住 `:app` 装配层），实现是 `LockKeyStore.AndroidKeystore`（`AndroidKeyStore` 提供者，`HmacSHA256` / 256 位 / `PURPOSE_SIGN or PURPOSE_VERIFY` / `setUserAuthenticationRequired(false)`，别名 `autoscript.lock.hmac.v1`）。**取钥判定 = get-or-create 且「取不动」绝不静默重建**：只有「别名下没有这把钥匙」才新建，锁被换过/库失效/Keystore 整体不可用一律显式失败（重建会把「这份 lock 曾被换过」洗掉，或让所有项目已有签名一起验不过）。**仍不改变本条的性质**：它是本地锚，不是第三方可验证的来源证明。
 4. ~~**MediaProjection 高清会话未落**：授权 UI + FGS 那一档还没接，P0 由同一 a11y 帧源连续截图承接（§9.2）。这不是安全缺口，是能力边界，列此只为避免被当成「高清会话已有门禁」。~~ **已落地（2026-10-08，批 75）**：授权 UI（`AndroidScreenConsentBroker` + `ScreenConsentRequests`）与 `foregroundServiceType="mediaProjection"` 的前台服务（`ProjectionForegroundService`）都已接，`MediaProjectionSource` 经 `PlatformWiring.screenHandler` 进 `screen` 命名空间。~~**仍缺的是录屏**（`MediaRecorder` 全仓零引用）~~ **录屏亦已落地（2026-10-08，批 77）**：`MediaProjectionRecorder` 与截屏腿并列、共用同一条会话账（同意 + FGS 同一条），输出汇是 `MediaRecorder` → 视频文件。
 5. **16KB 页机不测（2026-10-06 拍板），SELinux enforcing 上下文与 targetSdk 提取策略仍待真机**：16KB 的装载风险由构建期机械门禁承接（§16：`LOAD align >= 0x4000` **且** `p_offset ≡ p_vaddr (mod align)`，三个产物 + `libc++_shared.so` 逐件在 CI 里断言，且该门禁被负向证伪过）—— **已知不测的残余面是「内核真按 16KB 基页映射时的装载行为」**，口径与理由见 `design-decisions.md` 第 34 项。后两项（SELinux enforcing、targetSdk 提取策略）同样只在特定设备上测得到，仍待真机（design-status「仍未验」块）。
 6. **审批卡呈现层未排期**：审批账本与桥面拉取口已通（`drainApprovals` → `NpmBridgeHandler` → JS `pumpApprovals`），但能力中心的审批卡不在当前排期内，期间审批只能靠脚本侧拉取。
 7. **无上报时限承诺**：私密上报渠道已于 2026-10-01 开通（GitHub Security → Report a vulnerability，见根 [`SECURITY.md`](../../SECURITY.md)）—— 缺的从此不是渠道，而是**响应 / 修复时限**：单人维护的开发期项目不作承诺。（原条目「上报流程缺失」同日改写。）
-8. **npm 生产装配：执行体已接线，签名与脚本门禁仍未落（2026-10-01 起分档）** —— `AppShellKit` 不再走全缺省：
+8. **npm 生产装配：执行体 / 签名 / 脚本门禁均已接线，只剩 T1 执行面（2026-10-01 起分档；标题于 2026-10-09 批 80 订正 —— 原写「签名与脚本门禁仍未落」，批 79 接了签名、批 80 接了门禁）** —— `AppShellKit` 不再走全缺省：
    - **`executor` 已接线**：素材（`assets/npm/**`，vendored npm CLI）启动期幂等落位 `files/npm/`，
-     注入 `HostNodeExecutor`（宿主 = `nativeLibraryDir/libnoden.so`）；**两条同时成立才注入**
-     （落位就位 + 有宿主），否则保持 `HeavyOpExecutor.Unavailable` 并对 npm.* 如实回
+     注入 `HostNodeExecutor`（宿主 = `nativeLibraryDir/libnoden.so`）；~~**两条同时成立才注入**
+     （落位就位 + 有宿主）~~ **三条同时成立才注入（落位就位 + 有宿主 + `child_process` 拦截 shim
+     落位，2026-10-09 批 80 —— shim 是 §10.11 P0 承诺面，落不上就不注入）**，否则保持
+     `HeavyOpExecutor.Unavailable` 并对 npm.* 如实回
      `ERR_NOT_IMPLEMENTED`，原因原文进 `AssembledShell.npmCliFailure`（不吞）。即 T1/T7 的
      安装路径**有执行体了**，但仍**依赖素材随包**：本机自建、没跑过 Node 构建线的 APK
      就是「无素材」那一档（警告 + 空产出，装配照过）。
-   - **`lockKey` 仍 `null`**（T2 的签/验与快照导出都不发生；全仓无 `KeyProvider` 实现，
-     接缝形状 2026-10-01 已就位 —— 见第 3 条）。
+   - ~~**`lockKey` 仍 `null`**（T2 的签/验与快照导出都不发生；全仓无 `KeyProvider` 实现，
+     接缝形状 2026-10-01 已就位 —— 见第 3 条）。~~ **已接线（2026-10-08，批 79）**：
+     `AppShellApplication` → `AppShellKit(npmLockKeys = LockKeyStore.AndroidKeystore)` →
+     `NpmShellKit.assembleHandler(lockKey = LockKeyStore.resolve(...))`。装配期**就取一次钥匙**
+     （不把「Keystore 坏没坏」推到用户第一次 `npm ci` 才炸 —— 那时看到的是验签失败，
+     分不清是 lock 被换了还是钥匙取不动）；取不到则本次不装该防线，原因原文进
+     `AssembledShell.npmLockKeyFailure`，**不掀翻装配**（npm 只是能力之一）。
+     接线后行为：`ci` 先验签（无签名/格式不识/不符/跨项目搬运一律 `ERR_PERMISSION_DENIED`）、
+     `install` 收尾重签（失败即中止本次安装并如实报错）、`exportSnapshot` 带 `snapshot.sig`。
    - **`scriptExecutor` 仍 `Unavailable`**（T1 门禁过了也跑不起来，spawn 桥属 P1）。
+   - **`child_process` 拦截 shim 已接线（2026-10-09）**：`NpmSpawnGate` 把
+     `npm-spawn-gate.cjs`（classpath 资源）落到 `files/.autojs/`，`HostNodeExecutor` 经
+     `NODE_OPTIONS=--require=<它>` 注入安装会话进程，`child_process` 七个入口一律抛错；
+     被拦时按 shim 播报折成 `ERR_NPM_SPAWN_BLOCKED` / `ERR_PERMISSION_DENIED`（`detached:true`）/
+     `ERR_NOT_IMPLEMENTED`（`fork`）。**落位失败 → 不注入安装执行体**（P0 承诺面，
+     不许静默降级成「装是能装、守卫没了」）。零 spawn 金标准（§10.12 末行）落成
+     `NpmSpawnGateMatrixTest`：门禁注入下跑 install/ls/dedupe/prune/uninstall/ci 全绿、
+     不注入也全绿（反向变异）、`npm run` 在门禁下确实被拦（真产物判据），并已登记进
+     `check-e2e-ran.sh` 的 nightly 验尸清单。**边界**：它是不变量守卫不是安全边界
+     （已获批脚本可 `delete require.cache` 绕过）——对抗面仍是审批与最小掩码。
    - **素材版本落差已于 2026-10-02 消解**（换 registry 发布态 tarball `npm@12.2.0`，
      `VERSIONS.env` 钉版本 + sha1，`fetch-and-build.sh` §9 双闸），§10.1 脊梁满足。
      **实测的官方默认语义**（解包产物直跑）：**依赖** lifecycle 默认拒（`allow-scripts`
@@ -83,10 +102,12 @@
      `npm install-scripts approve <pkg>` 放行）、`allow-git=none` / `allow-remote=none`；
      **项目自身** lifecycle 仍执行（历代如此）→ 所以硬编码 `--ignore-scripts` 仍是主控的
      **一半**，不撤；**非脚本** spawn 路径的第二层兜底（§10.12 末行 child_process 拦截
-     shim）**仍未落**。口径见 [`design-decisions.md`](../design-decisions.md) 第 26 项，
+     shim）**已于 2026-10-09 落地**（见 §11.3 第 8 条末段：`NpmSpawnGate` + 零 spawn 金标准）。
+     口径见 [`design-decisions.md`](../design-decisions.md) 第 26 项，
      实测注见 [`10-npm.md`](10-npm.md) §10.1 与 §10.12 风险表。
 
-   即：**设计上写着「已接线」的那几道 npm 防线，当前在生产路径上只接上了一道（执行体）**；这是接线缺口，不是设计缺口。
+   即：**设计上写着「已接线」的那几道 npm 防线，截至 2026-10-09 只剩 `scriptExecutor`（T1
+   执行面）未接**；这是接线缺口，不是设计缺口。
 
 ### 11.4 非目标
 

@@ -12,7 +12,65 @@
 
 ---
 
+## 50. `child_process` 拦截 shim 的落位、注入与「落不上就不注入执行体」（2026-10-09）
+
+**背景**：§10.11 P0 与 §10.12 末行把「安装会话强制注入 child_process 拦截 shim」写成 P0 承诺，
+并给了 CI 金标准（child_process 替换为 throw 的 harness 里跑全命令矩阵必须全绿）。此前它一直
+「未落」—— `--ignore-scripts` 只挡 lifecycle 脚本，挡不住**非脚本** spawn，而那条漂移在本平台上
+表现为**静默失败**（装完了但东西不对，无人报错）。
+
+**拍板四条**：
+
+1. **shim 本体住 classpath 资源（`app-service/npm/src/main/resources/.../npm-spawn-gate.cjs`），
+   落位到 `filesDir/.autojs/`**。不随 npm 素材树：素材树受 `npm-manifest.json` 逐件摘要对账，
+   往里塞宿主自己的文件会让「清单与 APK 文件集合不一致」每次启动必红 —— 那是给别人的账本记自己的账。
+   不写成 Kotlin 字符串常量：它是要被 Node 真加载的代码，落成真文件才有人读得懂、也才能被单测**真跑**。
+2. **注入走 `NODE_OPTIONS=--require=<落点>`，追加不覆盖**。父环境里那份是别人的设置，
+   为装自己的守卫把别人抹掉是越权；`--require` 对 `-e`/脚本/npm 自己 fork 的 node 子进程都生效，
+   覆盖面比单点 argv 注入宽（argv 那条路在这里本来也走不通 —— npm 的 argv 是它自己的）。
+3. **落位失败 = 不注入安装执行体（fail closed）**。它是 P0 承诺面，静默降级成「装是能装、守卫没了」
+   正是那条风险本身。原因原文进 `AssembledShell.npmCliFailure`，不吞。缺省资源永远在 classpath 上，
+   故这条分支由 `npmGateDeploy` 注入缝（装配参数）在测试里够到。
+4. **被拦时的错误码按 shim 播报折成领域码**（`ERR_NPM_SPAWN_BLOCKED` / `detached:true` →
+   `ERR_PERMISSION_DENIED` / `fork` → `ERR_NOT_IMPLEMENTED`），原文进 detail —— 而不是折成一句
+   「npm 退出码 1」，否则脚本与 UI 无从判定「是守卫拦的」还是「是 npm 自己失败的」。
+
+**边界（写死，不许当它是沙箱）**：本 shim 是**不变量守卫**，不是安全边界 —— 已获批的脚本可以
+`delete require.cache[require.resolve('child_process')]` 后重新 require 拿到未打补丁的模块。
+真正的对抗面是审批（§10.5-2 人机分离）与 T1 会话的最小 CapabilityMask（§10.5-4）。
+
+**金标准落成 `NpmSpawnGateMatrixTest`**（三条：门禁注入下 install/ls/dedupe/prune/uninstall/ci 全绿；
+不注入也全绿的反向变异；`npm run` 在门禁下确实被拦且**无产物**），已登记进
+`check-e2e-ran.sh` 的 nightly 验尸清单（本机没 npm 时跳过是对的，CI 上恒真跑）。
+
+**仍未落（本项不涉及）**：T1 spawn 桥本体 —— stdio 假管道、pgrp 杀树、node-shim PIE 与 PATH 注入。
+
+
 ## 已拍板（原 §18 全部九项：第 1–7 项 2026-09-26、第 8/9 项 2026-09-25；外加后续新增编号项）
+
+2026-10-08 拍板（批 79：`lockKey` 生产接线；协调者按 §11.3 第 3 条已拍板的落点实施）：
+
+49. **应用密钥落 Android Keystore，取钥判定是 get-or-create 且「取不动」绝不静默重建**（批 79）：
+   - **接上的是什么**：`LockSigner` 的签/验与单测从 2026-10-01 就在，但生产装配
+     `lockKey = null` → `npm ci` 不验签直接走（§11.3 第 8 条自记）。本项把钥匙面接上，
+     **不改契约语义**（仍是 HMAC-SHA256、`v1 <hex>` 落盘格式、原子写）。
+   - **落点**：`:app` 装配层 `LockKeyStore`（2026-10-01 backlog A1c 已拍板的落点）。
+     `HmacKeys` 接口是**唯一碰 `android.` 的面**，`resolve` 与单测纯 JVM —— `:app` 无
+     Robolectric，故判定必须与 Keystore 调用分开才测得到（同 `AndroidScreenGate` 的分法）。
+   - **判定：只有「别名下真没有这把钥匙」才新建**。三种「取不到」各有各的失败方向，混成
+     「建一把新的」会把它们全变成同一种灾难：锁被换过 / 库失效
+     （`KeyPermanentlyInvalidatedException`）→ 新签名盖住旧签名，用户看不出「这份 lock
+     曾被换过」；Keystore 整体不可用（锁屏态、厂商 ROM、`loadStore` 抛）→ 重建会把**所有**
+     项目已有签名变成一律验不过。两条都是**显式失败**比「换把钥匙继续」诚实。
+   - **别名带版本号**（`autoscript.lock.hmac.v1`）：落盘格式的 `v1` 前缀是将来换 ECDSA 的
+     兼容开关；换算法时**换一把新密钥**，否则「v1 签名验不过」与「算法换代」诊断上分不开。
+   - **装配期就取一次钥匙**，且**取不到不掀翻装配**：npm 只是能力之一，为一把钥匙让整个壳
+     装不起来不成比例。该次传 `null` = 不装 lock 防线（`ci` 不验签直接走），原因原文进
+     `AssembledShell.npmLockKeyFailure` —— **不吞**，与 `npmCliFailure` 同一条纪律。
+   - **为什么必须装配期取**：推到用户第一次 `npm ci` 才炸的话，用户看到的是一条验签失败，
+     **分不清是 lock 被换了还是钥匙取不动** —— 这两件事的处置完全不同。
+   - **仍不改变 §11.3 第 3 条的性质**：它是**本地信任锚**，只证明「这份 lock 是本机签过的」，
+     不是跨设备/跨用户可验证的来源证明。密钥丢失 = 显式安全降级失败，不静默放行。
 
 2026-10-08 拍板（批 78：jsonl 写入侧删除 + 保守档放回 `SCHEDULER_WRITE`；用户裁定）：
 
@@ -451,8 +509,10 @@
       剪裁/点条目清零/三锚在场/版本断言/基表全绿；**node-slice 全链回归在 CI 跑**
       （本机禁编 Node，CLAUDE.md 口径），出库数字与旧值对比记进当天流水。
     - **代价（明写）**：素材与 Node 源码树**版本解耦** —— 以后升 Node 不再自动带
-      npm 升级（各自钉、各自回归）；换来的是脊梁可兑现。§10.12 残余不变：
-      child_process 拦截 shim 仍未落（P0 未排），硬编码 `--ignore-scripts` 主控不撤。
+      npm 升级（各自钉、各自回归）；换来的是脊梁可兑现。~~§10.12 残余不变：
+      child_process 拦截 shim 仍未落（P0 未排）~~ **该残余已于 2026-10-09 批 80 消解**
+      （见本文件第 50 项）；硬编码 `--ignore-scripts` 主控不撤（它挡 lifecycle、
+      shim 挡非脚本 spawn，两层各管一段）。
 
 2026-10-02 拍板并落地（backlog C7 + B4 合批；facade 文档面 + 依赖供应链，非 §18 编号项）：
 

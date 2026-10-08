@@ -100,8 +100,21 @@
    订阅方无从裁决那次到底成没成。执行侧收尾复查 `cancelled`，已取消则**不采纳**结果；
    catch 分支只在还没发过终态时补发。
 
-**仍未落**：spawn 桥本体（`--require` 注入的 child_process shim、stdio 假管道、pgrp 杀树、
-`detached` 拒绝、node-shim PIE 与 PATH 注入）—— 上面第 3 段是它的**接缝**，不是它的实现。
+**仍未落**：spawn 桥本体（stdio 假管道、pgrp 杀树、node-shim PIE 与 PATH 注入）——
+上面第 3 段是它的**接缝**，不是它的实现。
+
+**已落（2026-10-09，T0 面）**：**强制注入的 child_process 拦截 shim**（上表 T0 末行 /
+§10.12 末行那条「零 spawn 不变量漂移」）—— `NpmSpawnGate` 把 `npm-spawn-gate.cjs`
+（`:app-service:npm` 的 classpath 资源）落到 `files/.autojs/`，`HostNodeExecutor` 经
+`NODE_OPTIONS=--require=<它>` 注入安装会话进程（**追加不覆盖**父环境里那份），
+七个入口（`spawn`/`spawnSync`/`exec`/`execSync`/`execFile`/`execFileSync`/`fork`）一律抛错：
+非批准 spawn → `ERR_NPM_SPAWN_BLOCKED`、`detached:true` → `ERR_PERMISSION_DENIED`
+（上表 T1 那条「shim 直接拒绝 detached」）、`fork` → `ERR_NOT_IMPLEMENTED`。
+**落位失败 → 装配层不注入安装执行体**（fail closed：它是 P0 承诺面，静默降级成
+「装是能装、守卫没了」正是这条风险本身）。§10.12 末行的**桌面 CI 金标准**落成
+`NpmSpawnGateMatrixTest`（门禁注入下 install/ls/dedupe/prune/uninstall/ci 全绿 +
+不注入也全绿的反向变异 + `npm run` 确实被拦），并登记进 `check-e2e-ran.sh`。
+**边界**：它是不变量守卫，不是安全边界（已获批脚本可 `delete require.cache` 绕过）。
 
 
 ### 10.4 事务化安装与崩溃自愈（整改自批判 android-runtime F1）
@@ -258,10 +271,10 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 |---|---|
 | `--ignore-scripts` 的「假装成功」（postinstall 下载二进制/自检、真原生包装上才炸） | packument `hasInstallScript` 前置扫描 + 显式 warning + 人工审批升级通道，**禁止静默** |
 | 第三方 `.node` V8 ABI 稀缺且难匹配（Node24 `NODE_MODULE_VERSION`=137 与 libnode 快照不一致则 dlopen 崩）；`process.platform` 非 android 会让平台探测失真 | 当前策略**不引入第三方 `.node`**（wasm 优先、纯 JS 兜底；prebuild 工具已移出排期，需要时再立）；自建 libnode 必须 `--dest-os=android` + CI `process.platform/arch` 断言 + 16KB 双门禁（本仓构建线照旧） |
-| vendored npm 12 要求 Node≥24.15，降级 npm11 会恢复「脚本默认执行」使护栏静默消失 | `:node-runtime-build` 钉版本下限。**该落差已发生（2026-10-01）**：素材取自 Node 24.21.0 的 `deps/npm` = **npm 11.19.0**，npm 12 的 `allowScripts=none` 默认语义**不在位**。三条补偿：① **主控与版本无关** —— `HostNodeExecutor` 对每条命令硬编码 `--ignore-scripts`（§11.1 T1 的零 spawn 主路径），"脚本默认执行"这条恢复不了它；② 版本钉死 + 断言 —— `NPM_CLI_VERSION` 与素材树 `package.json` 逐字比对，漂移即 `fetch-and-build.sh` §9 当场红（`npm install` 的 lifecycle 面不会静默换版）；③ 落差登记在 backlog（升级 = 换素材来源；「等 Node 线携带」已实测否掉 —— `nodejs.org/dist/index.json` 的 868 条发布里没有一条带 npm 12.x；改 `NPM_CLI_VERSION` 即触发全链回归）。**残余**：①只是"不跑脚本"，npm 11 与 12 在**非脚本** spawn 路径上的差异没有第二条兜底 —— §10.12 末行的 child_process 拦截 shim 仍未落（P0 未排）。~~**该落差已发生（2026-10-01）**~~ **已消解（2026-10-02 A6 落地）**：素材换 registry `npm@12.2.0`，npm 12 官方默认（依赖 lifecycle 拒 + allow-git/remote=none，§10.1 实测注）回到在位；①的主控角色不变、②③照旧，残余（child_process shim 未落）不变 |
+| vendored npm 12 要求 Node≥24.15，降级 npm11 会恢复「脚本默认执行」使护栏静默消失 | `:node-runtime-build` 钉版本下限。**该落差已发生（2026-10-01）**：素材取自 Node 24.21.0 的 `deps/npm` = **npm 11.19.0**，npm 12 的 `allowScripts=none` 默认语义**不在位**。三条补偿：① **主控与版本无关** —— `HostNodeExecutor` 对每条命令硬编码 `--ignore-scripts`（§11.1 T1 的零 spawn 主路径），"脚本默认执行"这条恢复不了它；② 版本钉死 + 断言 —— `NPM_CLI_VERSION` 与素材树 `package.json` 逐字比对，漂移即 `fetch-and-build.sh` §9 当场红（`npm install` 的 lifecycle 面不会静默换版）；③ 落差登记在 backlog（升级 = 换素材来源；「等 Node 线携带」已实测否掉 —— `nodejs.org/dist/index.json` 的 868 条发布里没有一条带 npm 12.x；改 `NPM_CLI_VERSION` 即触发全链回归）。**残余**：①只是"不跑脚本"，npm 11 与 12 在**非脚本** spawn 路径上的差异没有第二条兜底 —— §10.12 末行的 child_process 拦截 shim 仍未落（P0 未排）。~~**该落差已发生（2026-10-01）**~~ **已消解（2026-10-02 A6 落地）**：素材换 registry `npm@12.2.0`，npm 12 官方默认（依赖 lifecycle 拒 + allow-git/remote=none，§10.1 实测注）回到在位；①的主控角色不变、②③照旧。~~残余（child_process shim 未落）不变~~ **残余已收口（2026-10-09）**：该 shim 已落地，见 §10.3「已落」段 |
 | 设备端 100 依赖安装 15–60s（eMMC/f2fs 更差），非「秒级」 | 独立会话 + 分级超时 + FGS + 熄屏仅物化；进度如实展示 |
 | 锁 TOFU；缓存条目与 lock 版本绑定（更新依赖后旧 tarball EINTEGRITY） | 带外信任锚 + 多镜像交叉校验 + 设备端锁降信任标记；提示联网/升级包 |
-| **零 spawn 不变量漂移**（npm 升级引入新 spawn 路径，allowScripts 拦不住非脚本 spawn） | 安装会话**强制注入 child_process 拦截 shim**（非批准 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）；桌面 CI 金标准：child_process 替换为 throw 的 harness 里跑全命令矩阵必须全绿；vendored npm 升级只准通过此闸 |
+| **零 spawn 不变量漂移**（npm 升级引入新 spawn 路径，allowScripts 拦不住非脚本 spawn） | 安装会话**强制注入 child_process 拦截 shim**（非批准 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）；桌面 CI 金标准：child_process 替换为 throw 的 harness 里跑全命令矩阵必须全绿；vendored npm 升级只准通过此闸。**已落地（2026-10-09）**：见 §10.3「已落」段（`NpmSpawnGate` + `NpmSpawnGateMatrixTest`，后者已进 `check-e2e-ran.sh`） |
 | 离线 bundle 与 lock 闭包不匹配（盯顶层包，锁含的传递依赖不在种子内 → ENOTCACHED） | `offlineGap` 返回缺失清单（名+尺寸）；导入先按当前 lock 校验；「仅凭种子 npm ci --offline」金标准 |
 | 审批/ledger 被已批准脚本改写（自批+改 registry） | ledger 迁 App 私有只读目录 + 条目绑定版本+脚本哈希 + post-check 防篡改比对 + .npmrc 变更经 :main 卡控审计 |
 | 数据被清（clear data/卸载重装）导致依赖与审批记录蒸发 | npm-cache/seed → cacheDir（可重建）；node_modules/ledger/lock → filesDir；导出/导入 SAF 快照；清后强制重审批并明示 |

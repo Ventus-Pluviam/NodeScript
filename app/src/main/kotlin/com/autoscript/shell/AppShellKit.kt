@@ -3,8 +3,10 @@ package com.autoscript.shell
 import com.autoscript.appservice.npm.HeavyOpExecutor
 import com.autoscript.appservice.npm.HostNodeExecutor
 import com.autoscript.appservice.npm.InstallCoordinator
+import com.autoscript.appservice.npm.LockSigner
 import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.appservice.npm.NpmShellKit
+import com.autoscript.appservice.npm.NpmSpawnGate
 import com.autoscript.appservice.runtime.EngineWatchdog
 import com.autoscript.appservice.runtime.ProcessMonitor
 import com.autoscript.appservice.runtime.UnavailableEngine
@@ -95,6 +97,8 @@ object AppShellKit {
      *   `nativeLibraryDir/libnoden.so`，与 [engineFactory] 的 hostBinary 同一个文件）。
      *   null = 没有能跑 CLI 的宿主 → **不注入执行体**（素材照样部署，便于诊断：
      *   "装了 CLI 却没有 node"比"什么都没接线"更接近病因）。
+     *   **有宿主时同时落 `child_process` 拦截 shim**（§10.11 P0 / §10.12 末行）：它是零 spawn
+     *   不变量的第二层兜底，落位失败 = 不注入执行体（fail closed，见 [NpmSpawnGate] KDoc）。
      * @param datastoreHandler `datastore` 命名空间实现（§9.6，经 `CapabilityNamespaces.datastore` 转接）；
      *   独立缝（不入 [SystemHandlers] 束 —— 存储面无共担门禁）；null = 未接线，桥如实 `ERR_NOT_IMPLEMENTED`。
      * @param zipHandler `zip` 命名空间实现（§9.6，经 `CapabilityNamespaces.zip` 转接）；
@@ -138,6 +142,23 @@ object AppShellKit {
          * Node 宿主绝对路径（见 KDoc）。null = 不注入执行体（素材照样部署）。
          */
         npmNodeBin: String? = null,
+        /**
+         * 应用密钥缝（§10.5-1 T2 / §11.3 第 8 条）。给的是 Keystore 面
+         * （[LockKeyStore.HmacKeys]），**本配方自己经 [LockKeyStore.resolve] 决定
+         * 「取已有 / 首次建」** —— 取钥判定住在能记账的地方（失败原因进
+         * [AssembledShell.npmLockKeyFailure]），调用方只负责「钥匙在哪」。
+         *
+         * **缺省 null = 不装 lock 签名**：`ci` 不验签直接走、快照导出如实
+         * `ERR_NOT_IMPLEMENTED`（不假装验过）。生产传 [LockKeyStore.AndroidKeystore]。
+         */
+        npmLockKeys: LockKeyStore.HmacKeys? = null,
+        /**
+         * `child_process` 拦截 shim 的落位缝（§10.11 P0）。缺省 = 真从 classpath 资源落盘
+         * （[NpmSpawnGate.deploy]）；测试注入 [NpmSpawnGate.Deploy.Failed] 验「落位失败 →
+         * 不注入执行体」那条 fail-closed 判据 —— 真资源永远在 classpath 上，不注入就够不到
+         * 那个分支，而它正是「不许静默降级」这条承诺的落点。
+         */
+        npmGateDeploy: (Path) -> NpmSpawnGate.Deploy = { NpmSpawnGate.deploy(it) },
         datastoreHandler: NamespaceHandler? = null,
         zipHandler: NamespaceHandler? = null,
         settingsHandler: NamespaceHandler? = null,
@@ -279,48 +300,35 @@ object AppShellKit {
         // 调用方自带 handler（测试/替换实现）时**本配方不碰素材**：不部署、不注入，
         // 两个报告字段保持 null（它们的语义是"本配方自建 npm 时的落位结果"，不是
         // "npm 一切正常"）。
-        var npmCli: NpmCliDeployer.Outcome? = null
-        var npmCliFailure: String? = null
-        val npm: NamespaceHandler = npmHandler ?: run {
-            val source = npmCliSource
-            val executor: HeavyOpExecutor = if (source == null) {
-                npmCliFailure = "无素材来源（assets/npm 未随包）"
-                HeavyOpExecutor.Unavailable
-            } else {
-                // 落位与执行体分两步记账：npmCli 非 null 就一定是"CLI 真在盘上"，
-                // 不吃"部署成了、执行体没接上"的中间态（那种情况两者都非 null，
-                // 由 npmCliFailure 的原文说清差在哪一步）。
-                val deployed = try {
-                    NpmCliDeployer.deploy(filesDir, source) as NpmCliDeployer.Outcome.Ready
-                } catch (e: Exception) {
-                    null.also { npmCliFailure = "素材部署失败：${e.message}" }
-                }
-                if (deployed == null) {
-                    HeavyOpExecutor.Unavailable
-                } else {
-                    npmCli = deployed
-                    val host = npmNodeBin
-                    if (host == null) {
-                        npmCliFailure = "CLI 已落位（${deployed.cliJs}），但没有 Node 宿主" +
-                            "（nativeLibraryDir/libnoden.so 缺）→ 不注入执行体"
-                        HeavyOpExecutor.Unavailable
-                    } else {
-                        try {
-                            HostNodeExecutor(deployed.cliJs, cacheDir, nodeBin = host)
-                        } catch (e: Exception) {
-                            npmCliFailure = "CLI 已落位（${deployed.cliJs}），但执行体构造失败：" +
-                                "${e.message} → 不注入"
-                            HeavyOpExecutor.Unavailable
-                        }
-                    }
-                }
+        // 应用密钥（§10.5-1 T2）：**装配期就取一次**，不把「Keystore 坏没坏」推到用户
+        // 第一次 npm ci 才炸 —— 那时看到的是一条验签失败，分不清是 lock 被换了还是
+        // 钥匙取不动。取不到不外抛（npm 只是能力之一，为一把钥匙掀翻装配不成比例）：
+        // 传 null = 本次不装 lock 防线，原因原文进 npmLockKeyFailure，不吞成"一切正常"。
+        var npmLockKeyFailure: String? = null
+        val lockKey: LockSigner.KeyProvider? = npmLockKeys?.let { keys ->
+            try {
+                LockKeyStore.resolve(keys).also { it.secretKey() }
+            } catch (e: Exception) {
+                npmLockKeyFailure = "应用密钥取不到，lock 签名与快照签名本次不生效（ci 不验签直接走）：${e.message}"
+                null
             }
-            NpmShellKit.assembleHandler(
-                filesDir = filesDir,
-                cacheDir = cacheDir,
-                executor = executor,
-            )
         }
+        // 自建 npm 的两步（素材落位 + 执行体注入）外迁成 [wireNpmExecutor]：本方法已经
+        // 是三十几个参数的装配根，把这段判断留在里面只会让"怎么装"淹没在嵌套里。
+        val npmWiring: NpmWiring? = if (npmHandler == null) {
+            wireNpmExecutor(filesDir, cacheDir, npmCliSource, npmNodeBin, npmGateDeploy)
+        } else {
+            null   // 调用方自带 handler：本配方不碰素材（见上方 KDoc），四个报告字段保持 null
+        }
+        val npm: NamespaceHandler = npmHandler ?: NpmShellKit.assembleHandler(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            executor = npmWiring!!.executor,
+            // T2 装配缺口收口（2026-10-08 批 79）：此前这里从不传 `lockKey`，
+            // 于是生产路径上 lock 既不签也不验 —— §11.3 第 8 条记的就是这件事。
+            // 接上后 `ci` 先验签、`install` 收尾重签、快照导出带 snapshot.sig。
+            lockKey = lockKey,
+        )
 
         val shell = AppShell.assemble(
             engineFactory = engineFactory,
@@ -361,7 +369,86 @@ object AppShellKit {
         }
         return AssembledShell(
             shell, log, archive, tasks, npm, ownedScope,
-            deployReport, bridgeDistReport, bridgeAddonReport, npmCli, npmCliFailure,
+            deployReport, bridgeDistReport, bridgeAddonReport,
+            npmWiring?.cli, npmWiring?.cliFailure,
+            npmLockKeyFailure, npmWiring?.gate,
         )
+    }
+
+    /**
+     * 自建 npm 装配的两步结果：**执行体**（喂 [NpmShellKit.assembleHandler]）+ 三个如实记账位。
+     *
+     * [cli] 非 null 就一定是"CLI 真在盘上"；[cliFailure] 是"哪一步没接上"的原文；
+     * [gate] 非 null = child_process 拦截 shim 在盘上（§10.11 P0 承诺面）。
+     */
+    private class NpmWiring(
+        val executor: HeavyOpExecutor,
+        val cli: NpmCliDeployer.Outcome?,
+        val cliFailure: String?,
+        val gate: Path?,
+    )
+
+    /**
+     * 素材落位 → 执行体注入（§10.2 调用链首段/末段）。
+     *
+     * **只有"部署就位 + 有 Node 宿主 + 拦截 shim 落位"三条同时成立才注入
+     * [HostNodeExecutor]**；任一不成立就保持 [HeavyOpExecutor.Unavailable]，桥对 npm.*
+     * 如实 `ERR_NOT_IMPLEMENTED` —— 装了 CLI 却没有能跑它的 node（或没有守卫）时，
+     * "注入"就等于把必失败（或**无门禁**）伪装成已接线。
+     *
+     * 异常不外抛：npm 只是能力之一，素材缺失（绝大多数本机构建的 APK 就是这样）不该让
+     * 整个壳装不起来 —— 而 `NpmCliDeployer.deploy` 对"素材缺失/半瘫"是 loud 的
+     * （锚校验一票否决），所以这里必须接住并如实记账，而不是放它掀翻装配。
+     */
+    private fun wireNpmExecutor(
+        filesDir: Path,
+        cacheDir: Path,
+        source: NpmCliDeployer.CliSource?,
+        host: String?,
+        gateDeploy: (Path) -> NpmSpawnGate.Deploy,
+    ): NpmWiring {
+        if (source == null) {
+            return NpmWiring(HeavyOpExecutor.Unavailable, null, "无素材来源（assets/npm 未随包）", null)
+        }
+        // 落位与执行体分两步记账：cli 非 null 就一定是"CLI 真在盘上"，
+        // 不吃"部署成了、执行体没接上"的中间态（那种情况两者都非 null，
+        // 由 cliFailure 的原文说清差在哪一步）。
+        val deployed = try {
+            NpmCliDeployer.deploy(filesDir, source) as NpmCliDeployer.Outcome.Ready
+        } catch (e: Exception) {
+            return NpmWiring(HeavyOpExecutor.Unavailable, null, "素材部署失败：${e.message}", null)
+        }
+        if (host == null) {
+            return NpmWiring(
+                HeavyOpExecutor.Unavailable, deployed,
+                "CLI 已落位（${deployed.cliJs}），但没有 Node 宿主" +
+                    "（nativeLibraryDir/libnoden.so 缺）→ 不注入执行体",
+                null,
+            )
+        }
+        // child_process 拦截 shim（§10.11 P0 承诺面 / §10.12 末行「零 spawn 不变量漂移」）：
+        // **只有真要去起 CLI 时才落**（没宿主 = 本来就没有安装会话可守，落一个没人 require
+        // 的 .cjs 是噪声）。落位失败 → **不注入执行体**：静默降级成「装是能装、守卫没了」
+        // 正是那条风险本身。
+        val gate = when (val g = gateDeploy(filesDir)) {
+            is NpmSpawnGate.Deploy.Ready -> g.file
+            is NpmSpawnGate.Deploy.Failed -> {
+                val why = "CLI 已落位（${deployed.cliJs}）且宿主就位，但 child_process 拦截 shim 未落位" +
+                    " → 不注入执行体（零 spawn 不变量是 P0 承诺面，缺它不许静默降级）：${g.reason}"
+                return NpmWiring(HeavyOpExecutor.Unavailable, deployed, why, null)
+            }
+        }
+        return try {
+            NpmWiring(
+                HostNodeExecutor(deployed.cliJs, cacheDir, nodeBin = host, spawnGateFile = gate),
+                deployed, null, gate,
+            )
+        } catch (e: Exception) {
+            NpmWiring(
+                HeavyOpExecutor.Unavailable, deployed,
+                "CLI 已落位（${deployed.cliJs}），但执行体构造失败：${e.message} → 不注入",
+                null,
+            )
+        }
     }
 }

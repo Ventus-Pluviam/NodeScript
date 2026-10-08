@@ -40,6 +40,8 @@
     <ID>ThrowsCount:NpmScriptResolver.kt$NpmScriptResolver$fun binTarget(projectRoot: Path, bin: String): BinTarget?</ID>
     <ID>ThrowsCount:NpmSnapshot.kt$NpmSnapshot$fun verify(projectId: String, zipFile: Path): Manifest</ID>
     <ID>TooGenericExceptionCaught:InstallCoordinator.kt$InstallCoordinator$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:NpmSpawnGate.kt$NpmSpawnGate$t: Throwable</ID>
+    <ID>TooGenericExceptionCaught:NpmSpawnGate.kt$NpmSpawnGate$t: Throwable#2</ID>
     <ID>TooGenericExceptionCaught:NpmCliDeployer.kt$NpmCliDeployer$e: Exception</ID>
     <ID>TooGenericExceptionCaught:NpmScriptResolver.kt$NpmScriptResolver$e: Exception</ID>
     <ID>TooGenericExceptionThrown:HostNodeExecutor.kt$HostNodeExecutor$throw RuntimeException("npm ${op.args.first()} 超时（${op.timeoutMillis}ms）")</ID>

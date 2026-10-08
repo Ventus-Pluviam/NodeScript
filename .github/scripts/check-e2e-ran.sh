@@ -15,6 +15,7 @@ cd "$(dirname "$0")/../.."
 E2E_CLASSES=(
   com.autoscript.appservice.npm.HostNodeNpmE2ETest        # 真 npm install（registry 网络）
   com.autoscript.appservice.npm.NpmCacheSeedDeployerTest  # 仅凭种子 cache 的离线 npm ci
+  com.autoscript.appservice.npm.NpmSpawnGateMatrixTest    # 零 spawn 金标准：门禁下跑 P0 命令矩阵
   com.autoscript.shell.P0LoopbackTest                     # :app 全链路：桥 → 真 npm → 树 → 点击
 )
 
@@ -51,4 +52,4 @@ if [ "$fail" -ne 0 ]; then
   echo "多半是宿主 npm 发现（HostNpm：npm root -g → node prefix → 静态位）或 ~/.npm/_cacache 没预热。"
   exit 1
 fi
-echo "E2E 真跑了：三条真 npm 路径均有结果且零跳过。"
+echo "E2E 真跑了：四条真 npm 路径均有结果且零跳过。"

@@ -86,6 +86,24 @@ class AssembledShell internal constructor(
      * 执行体构造失败）—— 这一档最该被看见，它离"能用"只差一个宿主。
      */
     val npmCliFailure: String? = null,
+    /**
+     * 应用密钥没接上的原因原文（null = 已接上，lock 签名与快照签名都在生效）。
+     * 与 [npmCliFailure] 同一纪律：**不吞** —— 能力中心据此显示「lock 防线未生效」，
+     * 而不是把字段缺失读成一切正常。
+     *
+     * 与 [npmCliFailure] 的区别：那一条是「CLI 落了但跑不起来」（离能用只差一个宿主），
+     * 这一条是「装得上、能装，只是 `npm ci` 不验签」—— 用户看得见的效果是
+     * `ci` 不再因 lock 被换而拒，故能力中心两处措辞不能混。
+     */
+    val npmLockKeyFailure: String? = null,
+    /**
+     * `child_process` 拦截 shim 的落点（null = 本次没落 / 没素材没宿主，见
+     * [AppShellKit.assemble]）。**非 null 才是"零 spawn 不变量有守卫"**：
+     * 它是 P0 承诺面（§10.11），所以装配层在它落位失败时**不注入安装执行体**
+     * （原因原文进 [npmCliFailure]）—— 能读到这里 = 守卫在盘上，会话进程起时经
+     * `NODE_OPTIONS=--require=<它>` 注入。
+     */
+    val npmSpawnGate: java.nio.file.Path? = null,
 ) : AutoCloseable {
     /** 没补上的脚本（路径 + 原因；能力中心呈现"有脚本没补上"，不吞成一切正常）。 */
     fun deployFailures(): List<ScriptDeployRecovery.Failure> = deployReport.failures

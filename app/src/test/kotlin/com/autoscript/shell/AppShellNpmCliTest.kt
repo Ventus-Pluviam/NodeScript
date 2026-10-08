@@ -15,8 +15,11 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import com.autoscript.appservice.npm.LockSigner
 import java.nio.file.Files
 import java.nio.file.Path
+import javax.crypto.SecretKey
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * vendored npm CLI 落位 + 执行体注入在 [AppShellKit.assemble] 上的接线（§10.2 调用链首段）。
@@ -54,6 +57,9 @@ class AppShellNpmCliTest {
     private fun assembleWith(
         source: NpmCliDeployer.CliSource?,
         nodeBin: String?,
+        lockKeys: LockKeyStore.HmacKeys? = null,
+        gateDeploy: (Path) -> com.autoscript.appservice.npm.NpmSpawnGate.Deploy =
+            { com.autoscript.appservice.npm.NpmSpawnGate.deploy(it) },
     ): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
@@ -62,6 +68,8 @@ class AppShellNpmCliTest {
         screenGate = ScreenGate.AllowAll,
         npmCliSource = source,
         npmNodeBin = nodeBin,
+        npmLockKeys = lockKeys,
+        npmGateDeploy = gateDeploy,
     )
 
     /**
@@ -112,6 +120,16 @@ class AppShellNpmCliTest {
                 Files.isRegularFile(ScriptPaths.projectsRoot(files).parent.resolve("npm/.cli-manifest.sha256")),
                 "幂等锚（.cli-manifest.sha256）必须落盘",
             )
+            // 门禁必须同时落位：它是 P0 承诺面，落不上就不注入执行体（见下一条用例）。
+            assertEquals(
+                com.autoscript.appservice.npm.NpmSpawnGate.gateFile(files),
+                assembled.npmSpawnGate,
+                "有宿主 = 真会起安装会话 → child_process 拦截 shim 必须落位",
+            )
+            assertTrue(
+                Files.isRegularFile(com.autoscript.appservice.npm.NpmSpawnGate.gateFile(files)),
+                "shim 必须真在盘上（会话进程 --require 得到它）",
+            )
             val (code, detail) = installResult(assembled)
             assertNotEquals("ERR_NOT_IMPLEMENTED", code, "执行体已注入：不该再是 NOT_IMPLEMENTED")
             assertTrue(detail.contains("libnoden"), "失败原因该指向假宿主（= 真走到 exec 了）：$detail")
@@ -135,6 +153,30 @@ class AppShellNpmCliTest {
     }
 
     @Test
+    fun `门禁落位失败：不注入执行体（P0 承诺面，不许静默降级）`() {
+        // 零 spawn 不变量是 §10.11 的 P0 承诺：shim 落不上时"照常装"等于把守卫悄悄摘掉，
+        // 而用户看到的一切正常 —— 正是 §10.12 末行那条风险本身。故 fail closed。
+        val src = MemSource(listOf("bin/npm-cli.js", "bin/npx-cli.js"))
+        assembleWith(
+            source = src,
+            nodeBin = dir.resolve("libnoden.so").toString(),
+            gateDeploy = { com.autoscript.appservice.npm.NpmSpawnGate.Deploy.Failed("磁盘只读（注入用）") },
+        ).use { assembled ->
+            assertNull(assembled.npmSpawnGate, "落位失败就不该报出落点")
+            val why = assembled.npmCliFailure
+            assertTrue(
+                why != null && why.contains("拦截 shim 未落位") && why.contains("磁盘只读（注入用）"),
+                "原因原文要点名 shim 落位失败：$why",
+            )
+            assertEquals(
+                "ERR_NOT_IMPLEMENTED",
+                installResult(assembled).first,
+                "没守卫就不起安装会话：宁可不装，不可无门禁地装",
+            )
+        }
+    }
+
+    @Test
     fun `半瘫素材（缺锚）：装配不塌，原因原文点名锚文件`() {
         val src = MemSource(listOf("bin/npm-cli.js"))   // 少 npx-cli.js
         assembleWith(source = src, nodeBin = dir.resolve("libnoden.so").toString()).use { assembled ->
@@ -143,6 +185,106 @@ class AppShellNpmCliTest {
             assertTrue(why != null && why.contains("npx-cli.js"), "原因必须点名缺的锚：$why")
             assertTrue(!Files.exists(NpmCliDeployer.cliJsPath(files)), "缺锚绝不能让 cliJs 就位")
             assertEquals("ERR_NOT_IMPLEMENTED", installResult(assembled).first)
+        }
+    }
+
+    // —— T2 装配接线（§10.5-1 / §11.3 第 8 条）——
+
+    /**
+     * 假 Keystore：`present` 控库里有没有，`onCreate` 控新建会不会炸。
+     * 别名与字节固定 ⇒ 同一棵装配里 sign/verify 用的是同一把（下面那条负向要靠这个）。
+     */
+    private class MemKeys(
+        private val present: SecretKey?,
+        private val onCreate: (String) -> SecretKey = { error("本用例不该新建") },
+    ) : LockKeyStore.HmacKeys {
+        override fun load(alias: String): SecretKey? = present
+        override fun create(alias: String): SecretKey = onCreate(alias)
+    }
+
+    private fun memKey(tag: String): SecretKey =
+        SecretKeySpec("test-app-key-$tag-aaaaaaaaaaaaaaaa".toByteArray(), "HmacSHA256")
+
+    /** 装项目 lockfile（ci 验签的判据文件）。 */
+    private fun writeLock(projectId: String, body: String): Path {
+        val root = ScriptPaths.projectsRoot(files).resolve(projectId)
+        Files.createDirectories(root)
+        return root.resolve("package-lock.json").also { Files.write(it, body.toByteArray()) }
+    }
+
+    private fun ciResult(assembled: AssembledShell, projectId: String): Pair<String, String> = runBlocking {
+        val r = assembled.shell.router.dispatch(
+            BridgeRequest(2, "npm", "ci", """{"projectId":"$projectId"}""", 30_000L),
+        )
+        when (r) {
+            is BridgeResponse.Err -> r.errorCode to (r.detail ?: "")
+            is BridgeResponse.Ok -> "OK" to (r.payload ?: "")
+        }
+    }
+
+    @Test
+    fun `装配给了密钥面：ci 真的走验签（无签名 lock 诚实被拒）`() {
+        // 这条是本批的核心判据：装配层把 lockKey 接上之前，ci 对没有签名的 lock
+        // 是直接放行的（lockSigner == null ⇒ verifyOrThrow 根本没被调）。
+        // 所以「没签名 ⇒ ERR_PERMISSION_DENIED」只能是接上了才成立。
+        val keys = MemKeys(present = memKey("wired"))
+        assembleWith(source = null, nodeBin = null, lockKeys = keys).use { assembled ->
+            assertNull(assembled.npmLockKeyFailure, "密钥面给了就不该有失败原因：${assembled.npmLockKeyFailure}")
+            writeLock("main", """{"lockfileVersion":3,"packages":{}}""")
+            val (code, detail) = ciResult(assembled, "main")
+            assertEquals("ERR_PERMISSION_DENIED", code, "没签名的 lock 必须被 ci 拒：$detail")
+            assertTrue(detail.contains("lock.sig"), "原因要点名缺的是签名文件：$detail")
+        }
+    }
+
+    @Test
+    fun `装配给了密钥面：签过且未改的 lock 过验签（不是一律拒）`() {
+        val keys = MemKeys(present = memKey("good"))
+        assembleWith(source = null, nodeBin = null, lockKeys = keys).use { assembled ->
+            val lock = writeLock("main", """{"lockfileVersion":3,"packages":{}}""")
+            // 用同一把钥匙替执行体收尾时那次 sign（生产是 install 收尾写的）。
+            LockSigner(files.resolve(".autojs"), LockKeyStore.resolve(keys)).sign("main", lock)
+            val (code, detail) = ciResult(assembled, "main")
+            // 验签过了 → 进到重操作入队；没有执行体 → 如实 ERR_NOT_IMPLEMENTED。
+            assertEquals("ERR_NOT_IMPLEMENTED", code, "验签已过，卡在没执行体上才是对的：$detail")
+            assertTrue(!detail.contains("lock.sig"), "验签已过就不该再提签名：$detail")
+        }
+    }
+
+    @Test
+    fun `装配没给密钥面：ci 仍直接放行（缺省诚实 = 不假装验过，且不谎称已接线）`() {
+        assembleWith(source = null, nodeBin = null).use { assembled ->
+            assertNull(assembled.npmLockKeyFailure, "没给密钥面 = 本来就没接，不算失败")
+            writeLock("main", """{"lockfileVersion":3,"packages":{}}""")
+            val (code, _) = ciResult(assembled, "main")
+            assertEquals("ERR_NOT_IMPLEMENTED", code, "没装 lock 防线时验签不发生，直接走到没执行体")
+        }
+    }
+
+    @Test
+    fun `取钥失败：装配照过，防线原因原文进 npmLockKeyFailure（不掀翻整个壳）`() {
+        val keys = MemKeys(present = null, onCreate = { throw IllegalStateException("Keystore 锁屏不可用") })
+        assembleWith(source = null, nodeBin = null, lockKeys = keys).use { assembled ->
+            val why = assembled.npmLockKeyFailure
+            assertTrue(why != null && why.contains("锁屏"), "原因原文要点名取不动的原因：$why")
+            writeLock("main", """{"lockfileVersion":3,"packages":{}}""")
+            val (code, _) = ciResult(assembled, "main")
+            assertEquals("ERR_NOT_IMPLEMENTED", code, "取钥失败那一档 = 本次不装 lock 防线（不是把 ci 全拒）")
+        }
+    }
+
+    @Test
+    fun `锁被换过：跨项目搬来的签名验不过（键绑 projectId 这条在装配面上活着）`() {
+        val keys = MemKeys(present = memKey("bound"))
+        assembleWith(source = null, nodeBin = null, lockKeys = keys).use { assembled ->
+            val signer = LockSigner(files.resolve(".autojs"), LockKeyStore.resolve(keys))
+            val lock = writeLock("main", """{"lockfileVersion":3,"packages":{}}""")
+            signer.sign("main", lock)
+            // 换个项目号重建同样的 lock：签名是给 "main" 的。
+            writeLock("other", """{"lockfileVersion":3,"packages":{}}""")
+            val (code, detail) = ciResult(assembled, "other")
+            assertEquals("ERR_PERMISSION_DENIED", code, "跨项目搬锁必须被拒：$detail")
+            assertTrue(detail.contains("跨项目"), "原因要点名跨项目：$detail")
         }
     }
 }

@@ -18,7 +18,7 @@
 | **Repository** | `ScriptRepo`、`Datastore`、`Scheduler` 的 RunRecord | 三处存取各自仅通过仓库 |
 | **EventBus** | `:main` 内事件（能力状态变化、引擎状态） | 模块解耦、不直连 |
 | **Idempotency 键（runNonce）** | checkpoint 意图日志 | 崩溃恢复不重复副作用 |
-| **Interceptor/Decorator（child_process shim）** | npm 安装会话进程 | 零 spawn 强制不变量：拦截非批准 spawn 并硬失败（ERR_NPM_SPAWN_BLOCKED），把静默漂移变成响亮错误 |
+| **Interceptor/Decorator（child_process shim）** | npm 安装会话进程（`NpmSpawnGate` → `files/.autojs/npm-spawn-gate.cjs`，`NODE_OPTIONS=--require` 注入，2026-10-09 落地） | 零 spawn 强制不变量：拦截非批准 spawn 并硬失败（ERR_NPM_SPAWN_BLOCKED），把静默漂移变成响亮错误 |
 | **Transaction Journal + 暂存目录/rename** | InstallCoordinator · reify | 安装原子化（node_modules.part-<ts> + install.journal begin/commit/fail），崩溃自愈坏树 |
 | **Trust Anchor（带外）** | 供应链安全 | pin 注册表签名公钥 + 多镜像 integrity 交叉校验，破除 TOFU 自签 |
 | **Generation/tombstone（Handle）** | HandleRegistry | 跨进程资源竞态安全 |

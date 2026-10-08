@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.core.AutojsException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.charset.StandardCharsets
@@ -27,6 +28,14 @@ import java.util.concurrent.TimeUnit
  * 零 spawn 主路径（§10.1/§10.3 T0）在这里落地为参数面：
  * `--ignore-scripts`（拒绝全部 lifecycle）+ `--no-audit --no-fund` +
  * `--cache <cacheDir>`。
+ *
+ * **2026-10-09 补上第二层（§10.12 末行「零 spawn 不变量漂移」）**：`--ignore-scripts`
+ * 只挡 lifecycle 脚本，挡不住**非脚本** spawn（npm 自己新增一条 `execFile` 路径、或某包
+ * 直接 `require('child_process')`），那类漂移在本平台上的表现是**静默失败**。
+ * [spawnGateFile] 非 null 时经 `NODE_OPTIONS=--require=<shim>` 把
+ * [NpmSpawnGate] 注入会话进程，`child_process` 七个入口一律抛错；被拦时本类把
+ * shim 的播报**提成领域错误码**（`ERR_NPM_SPAWN_BLOCKED` / `ERR_PERMISSION_DENIED` /
+ * `ERR_NOT_IMPLEMENTED`）而不是折成一句「退出码 1」—— 病因要能被脚本与 UI 机器判定。
  */
 class HostNodeExecutor(
     private val npmCliJs: Path,
@@ -36,6 +45,15 @@ class HostNodeExecutor(
     // 与 NpmRegistryVerifier 的首选同源（交叉校验要比的就是实际安装用的那一家）：
     // 出厂官方，§18 第 7 项拍板。
     private val registry: String = NpmRegistryVerifier.OFFICIAL,
+    /**
+     * `child_process` 拦截 shim 的落盘路径（[NpmSpawnGate.gateFile]）；null = 不注入门禁。
+     *
+     * **装配层不许传 null**：它是 §10.11 P0 承诺面，缺了就不是「少一层保险」而是
+     * 「零 spawn 这条不变量没人守」。null 只留给两处 —— 单测（验参数面本身）与
+     * 桌面 P0 切片（[com.autoscript.appservice.npm.NpmSpawnGate.deploy] 在那边由调用方
+     * 自行决定装不装）。
+     */
+    private val spawnGateFile: Path? = null,
 ) : HeavyOpExecutor {
 
     init {
@@ -103,6 +121,13 @@ class HostNodeExecutor(
         val pb = ProcessBuilder(cmd)
         pb.directory(workDir.toFile())
         pb.environment().putAll(env)
+        // 门禁注入走 NODE_OPTIONS（**追加不覆盖**父环境里那份别人的设置，见 mergeNodeOptions）：
+        // `--require` 对 `-e`、脚本、以及 npm 自己 fork 的 node 子进程都生效，覆盖面比
+        // 单点 argv 注入宽 —— 而 argv 那条路在这里本来也走不通（npm 的 argv 是它自己的）。
+        spawnGateFile?.let { gate ->
+            val key = NpmSpawnGate.ENV_NODE_OPTIONS
+            pb.environment()[key] = NpmSpawnGate.mergeNodeOptions(pb.environment()[key], gate)
+        }
         pb.redirectErrorStream(true)
         val proc = pb.start()
         val output = proc.inputStream.readBytes().toString(StandardCharsets.UTF_8)
@@ -111,10 +136,26 @@ class HostNodeExecutor(
             proc.destroyForcibly()
             throw RuntimeException("npm ${op.args.first()} 超时（${op.timeoutMillis}ms）")
         }
-        if (proc.exitValue() != 0) {
-            throw RuntimeException("npm 退出码 ${proc.exitValue()}: ${output.takeLast(500)}")
-        }
+        if (proc.exitValue() != 0) throw failureOf(op, output, proc.exitValue())
         return output
+    }
+
+    /**
+     * 非零退出的病因（**不折成一句「退出码 1」**）：门禁播报优先于退出码 —— 被拦时 npm
+     * 只会笼统报一句失败，真病因是 shim 那条播报。码按 shim 给的折成领域码
+     * （[NpmSpawnGate.errorCodeOf]，三个已知码一一对应），原文进 detail，
+     * 于是脚本与 UI 能按码判定「是守卫拦的」还是「是 npm 自己失败的」。
+     */
+    private fun failureOf(op: HeavyOp, output: String, exitCode: Int): RuntimeException {
+        val blocked = NpmSpawnGate.blockedIn(output)
+        return if (blocked != null) {
+            AutojsException(
+                NpmSpawnGate.errorCodeOf(blocked.code),
+                "npm ${op.args.first()} 被 child_process 门禁拦截（${blocked.code}）：${blocked.detail}",
+            )
+        } else {
+            RuntimeException("npm 退出码 $exitCode: ${output.takeLast(500)}")
+        }
     }
 
     /**

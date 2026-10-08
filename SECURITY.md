@@ -71,13 +71,16 @@
    （`LOAD align >= 0x4000` 且 `p_offset ≡ p_vaddr (mod align)`，三个产物逐件断言），
    **残余面是「内核真按 16KB 基页映射时的装载行为」未被实测**，属**已知不测**而非待做。
 5. **MediaProjection 高清会话未落**：P0 由同一无障碍帧源连续截图承接（§9.2）。
-6. **npm 生产装配只接上了一道**：执行体已接线（2026-10-01，且**依赖素材随包** —— 没跑过
+6. **npm 生产装配仅剩 T1 执行面未接**：执行体已接线（2026-10-01，且**依赖素材随包** —— 没跑过
    `node-runtime-build` 的 APK 就是「无素材」那档，npm.* 如实 `ERR_NOT_IMPLEMENTED`），
-   签名/快照（`lockKey` 缺省 `null`）与脚本门禁（`scriptExecutor`，P1）仍未接 —— lock 验签当前
-   **不可用**。另：vendored 的是 registry `npm@12.2.0`（2026-10-02 换源，§10 脊梁 12.x 满足），
+   签名/快照（`lockKey`）与 `child_process` 拦截 shim 已于 2026-10-08 / 2026-10-09 接线
+   （`LockKeyStore.AndroidKeystore` / `NpmSpawnGate`），**脚本门禁（`scriptExecutor`，T1 执行面）
+   仍未接** —— T1 lifecycle 脚本当前跑不起来（门禁过了也如实 `ERR_NOT_IMPLEMENTED`）。
+   另：vendored 的是 registry `npm@12.2.0`（2026-10-02 换源，§10 脊梁 12.x 满足），
    实测官方默认 = **依赖** lifecycle 拒（白名单空 + 播报）+ `allow-git/remote=none` 在位，
    **项目自身**仍执行 → 硬编码 `--ignore-scripts` 仍是主控的一半；非脚本 spawn 的第二兜底
-   child_process 拦截 shim **仍未落**（见 §11.3 第 8 条、
+   child_process 拦截 shim 已落（§10.12 末行的零 spawn 金标准落成
+   `NpmSpawnGateMatrixTest`，已进 nightly 验尸清单；见 §11.3 第 8 条、
    [`docs/design/10-npm.md`](docs/design/10-npm.md) §10.1 实测注与 §10.12 风险表）。
 
 以上每一条在 `docs/design/11-security.md` §11.3 都有对应登记。两处若有出入，以设计文档为准。
