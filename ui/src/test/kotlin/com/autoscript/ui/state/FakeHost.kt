@@ -11,6 +11,7 @@ import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.permission.Capability
+import com.autoscript.domain.scripts.ScriptEnvEntry
 
 /**
  * [HostSummary] 的测试替身：只关心首屏那几条事实的用例，不该被迫实现整张读口。
@@ -70,4 +71,13 @@ open class FakeHost(
 
     override suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket =
         throw UnsupportedOperationException("本替身未提供 resolveNpmApproval（用例按需覆盖）")
+
+    override suspend fun scriptEnv(): List<ScriptEnvEntry> =
+        throw UnsupportedOperationException("本替身未提供 scriptEnv（用例按需覆盖）")
+
+    override suspend fun putScriptEnv(key: String, value: String): Unit =
+        throw UnsupportedOperationException("本替身未提供 putScriptEnv（用例按需覆盖）")
+
+    override suspend fun removeScriptEnv(key: String): Unit =
+        throw UnsupportedOperationException("本替身未提供 removeScriptEnv（用例按需覆盖）")
 }
