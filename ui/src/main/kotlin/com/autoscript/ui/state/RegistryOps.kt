@@ -45,9 +45,12 @@ internal suspend fun saveRegistry(host: HostSummary?, state: RegistryState): Reg
         return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
     }
     return try {
-        host.setNpmRegistry(state.draft.trim())
         val saved = state.draft.trim()
-        loadRegistry(host, state).copy(
+        host.setNpmRegistry(saved)
+        // 清草稿**再**现取：`RegistryState.of` 的灌草稿是 `ifEmpty` 语义（用户正在打字时
+        // 刷新不许冲掉半截输入）。存着不清的话，现取读回的规范值会被那条保护挡在门外 ——
+        // 用户刚存的 `  https://x/ ` 会一直显示成带空白的原样，看起来像"没存进去"。
+        loadRegistry(host, state.copy(draft = "")).copy(
             opNotice = if (saved.isEmpty()) "已恢复出厂缺省" else "已保存：下次安装起生效",
         )
     } catch (e: CancellationException) {

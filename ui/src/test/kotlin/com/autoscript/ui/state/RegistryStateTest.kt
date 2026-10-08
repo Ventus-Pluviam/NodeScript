@@ -117,6 +117,7 @@ class RegistryStateTest {
         assertNull(next.opError)
         assertTrue("下次安装起生效" in (next.opNotice ?: ""), "回执要写清生效时机：${next.opNotice}")
         assertEquals("https://harbor.example.com/registry", next.effective, "键与值都 trim 后落下去")
+        assertEquals("https://harbor.example.com/registry", next.draft, "存完输入框要显示存进去的那个值，不是用户打的带空白原样")
     }
 
     @Test
