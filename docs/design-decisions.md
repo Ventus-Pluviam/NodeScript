@@ -12,6 +12,84 @@
 
 ---
 
+## 53. 镜像源管理的归属、粒度与解析链，以及 registry 的两处断链（2026-10-09，批 83）
+
+**背景**：管理面板四项入口只剩「镜像源管理」还是 `toast?.show("镜像源管理尚未开放")`。
+backlog 批 82 那条追记要求**先裁归属，别照抄「环境变量」的形状**（那是脚本面，这是 npm 面）。
+探查时发现两条**比 UI 占位更严重**的断链，一并收口。
+
+**五裁定**：
+
+1. **归属 `:app-service:npm`**。它本来就在管这件事：`NpmConfigKey.REGISTRY`、项目 `.npmrc`
+   的写入口 `config()`、`InstallHistory.Op.REGISTRY` 审计键、交叉校验的首选读取 —— 全在这个模块。
+   搬去 `:app` 或新开模块就是第二份 registry 判据，而批 82 的教训正是「判据抄两份必然漂」。
+
+2. **粒度：全局一份**（用户 2026-10-09 裁定）。对应 §10.2 三层链的 `files/.npmrc`(userconfig) 那一层 ——
+   **该层此前零实现**（全仓只有 `NpmProjectLayout.npmrc(projectId)` 一个路径函数）。
+   否掉的另两案：只做项目级（用户要的是「一次改完所有项目」）、全局缺省 + 项目覆盖的编辑面
+   （项目那层仍可手编 `.npmrc`，界面代管它就要处理"项目覆盖了全局"的显示歧义，收益不抵成本）。
+
+3. **解析链两层：项目 `.npmrc` → 全局 `files/.npmrc` → 出厂官方**，落在
+   `InstallCoordinator.resolveRegistry` 一处。**校验的首选与安装的那家取同一个值** ——
+   这是本批真正的交付物，UI 只是它的呈现面。
+
+4. **判据唯一一份住 `:domain`**（`NpmRegistryKeys`，与批 82 `ScriptEnvKeys` 同形）：
+   `canonicalize` 与 `reject` 同时被 `NpmRegistryVerifier` 的缝边界与 `:ui` 的输入校验调用。
+   `NpmRegistryVerifier.OFFICIAL`/`MIRROR` 改成指向它的**别名**，URL 字面量从此只有一份。
+   `:domain` 此前零 `java.net` 用法，本批是**第一处**（`java.net.URI` 只做形态判定，不涉 IO，
+   `ArchitectureTest` 的禁令面是 `android..`/compose/awt/swing 与 `com.autoscript.bridge|platform|engine`，
+   不受影响）。
+
+5. **`HostNodeExecutor` 不再无条件注入 `--registry`**：构造参数 `registry: String` 改成
+   `registryOverride: String? = null`，null 即不注入，让 npm 自己按 `prefix/.npmrc` → userconfig → 出厂解析。
+
+**两条断链（实测证据留档，这是本批比 UI 占位更值得留的东西）**：
+
+- **断链 1 —— 生产环境的 `--registry` 永远指向官方**：`HostNodeExecutor.registry` 缺省
+  `NpmRegistryVerifier.OFFICIAL` 并写进 argv，而**全仓唯一的构造点** `AppShellKit.wireNpmExecutor`
+  从不传这个参数 → 用户经 `setRegistry` 设的镜像对真实安装**毫无影响**。
+- **断链 2 —— 项目 `.npmrc` 根本没被 npm 读到**：`prepareWorkDir` 只拷 `package.json`/`package-lock.json`，
+  不拷 `.npmrc`；而 `runNpm` 用 `--prefix workDir`。
+
+  本机用 **npm 12.2.0**（与仓里 vendored 同版本，`node-runtime-build/VERSIONS.env`）实测：
+
+  | 场景 | 生效 registry |
+  |---|---|
+  | cwd 有 `.npmrc`、`--prefix` 指向别处 | **`--prefix` 那个目录的 `.npmrc`**（cwd 的被忽略） |
+  | cwd 有 `.npmrc`、不给 `--prefix` | cwd 的 `.npmrc` |
+  | 都不给 | 出厂官方 |
+  | `--registry` 显式给出 | 赢 `.npmrc` 的 `registry=` 键（但文件仍被读，`@scope:registry` 等键照常生效） |
+
+  即 **`--prefix` 一旦给出，npm 的项目级配置就只看 `prefix/.npmrc`**，cwd 不再参与。
+  生产两处都不满足 → 项目 `.npmrc` 是死配置。
+
+- **两条的净效果**：`setRegistry`/`config()` 的写入侧**生产上是空转**；唯一真读项目 `.npmrc` 的是
+  交叉校验的 `readRegistryFromNpmrc` —— 于是**校验的首选**与**实际安装的那家**可以不是一家。
+
+**顺带收口的写法裁定**：
+
+- **全局 `.npmrc` 整文件重写，不做行级 append**（与 `InstallCoordinator.config` 写项目 `.npmrc` 同款，
+  两处共用 `NpmrcFile`）：这是用户手编的文件、npm 自己也会改它，行级追加会让同一个键出现两行。
+- **写入侧存原样（只 trim）不规整化**：规整化会丢 query，自建网关用 `?token=…` 的凭据会被静默剥掉 ——
+  表现为「保存成功」之后永久 401。规整化只在**判据侧**（`canonicalize`，给交叉校验比对用）。
+- **空输入 = 删键（恢复出厂）**，不是写一个空值行 —— 后者让 npm 拿到空 registry 而每次安装都失败。
+- **`--registry` 与 `--userconfig` 两者都给、不二选一**：实测 `--registry` 赢 `registry=` 键，
+  但 `--userconfig` 指的文件仍被读（`@scope:registry`、proxy、cache 等键都靠它）。
+- **审计行 `projectId` 传空串**：全局变更没有项目；改 `InstallHistory` 的行格式会动审计契约，
+  空串在审计页上正好读作「全局」。**不是笔误。**
+- **`npmArgv` 与 `prepareWorkDir` 提为 public 而非 internal**：Kotlin `internal` 跨模块不可见，
+  而 `:app` 的装配测试正是「`--registry` 不该再出现」这条不变量的最重要消费方。纯函数，无状态风险。
+- **`ManagementBackHandler` 的 `else ->` 改成显式枚举分支**：留 `else` 会在加新子页时静默吞掉返回键
+  （新页按返回 = 把日志管理关了，而不是关自己）。
+
+**未做（明确划界）**：首启引导的 registry ping 探测与镜像候选表（§10.9 第 6 条）、审计页
+（`InstallHistory` 仍无 UI 消费方，本批只保证写进去）、`proxy`/`cache-retention` 两个 `NpmConfigKey`
+（桥面本来就没有入口）、`NpmServices.registryOf`（该成员全仓零引用，本批不模仿也不顺手删）。
+**真机面**：镜像源在真机网络下能否连通（企业内网/自建 registry 的证书与代理）、`--userconfig`
+在 Android 上的路径可达性 —— 要装包才验得到，归入真机验证积压。
+
+---
+
 ## 52. 脚本全局环境变量的归属、生效时机与保留前缀（2026-10-09，批 82）
 
 **背景**：管理面板批 46 画了四项入口，其中「环境变量」与「镜像源管理」两行一直是
