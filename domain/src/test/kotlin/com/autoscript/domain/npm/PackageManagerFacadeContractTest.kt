@@ -19,7 +19,7 @@ class PackageManagerFacadeContractTest {
             "install", "ci", "update", "uninstall", "dedupe", "prune",
             "audit", "importOfflineBundle", "importTarball", "cancel",
             // 轻操作
-            "list", "offlineGap", "config", "storage",
+            "list", "offlineGap", "config", "storage", "projectSnapshot",
             // 审批（人机分离：requestApprove 仅入队 / resolveApproval 仅 UI 回调）
             "requestApprove", "resolveApproval", "pendingApprovals",
             // P1

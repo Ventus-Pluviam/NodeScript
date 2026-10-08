@@ -22,7 +22,9 @@ import java.nio.file.Path
  * npm 生产装配（docs §10.2 存储布局 + §12.2 接线现状）。
  *
  * 把散在各处的目录约定收到一处（调用方只给 `filesDir`/`cacheDir`，不再逐个拼路径），
- * 产出直接喂 `AppShell.assemble(npmHandler = …)` 的挂载缝。纯 JVM、无 Android，
+ * 产出直接喂 `AppShell.assemble(npmHandler = …)` 的挂载缝；返回具体类型（而非
+ * [NamespaceHandler]）是为了让装配层还能拿到 [NpmBridgeHandler.facade] —— 呈现面的
+ * 依赖面板/审批卡读口走它，不经桥（§10.9.1）。纯 JVM、无 Android，
  * archUnit 允许（本包只见 `:domain` + 自家 `npm` 子包）。
  *
  * 目录映射（§10 存储布局）：
@@ -62,7 +64,7 @@ object NpmShellKit {
         lockKey: LockSigner.KeyProvider? = null,
         snapshots: Boolean = true,
         freeSpaceProbe: (Path) -> Long = defaultFreeSpaceProbe(filesDir),
-    ): NamespaceHandler {
+    ): NpmBridgeHandler {
         // 项目根来自契约层（§9.6 单一事实来源）：与 script-repo/调度恢复/装配层同一个函数，
         // 拼错目录名不再可能（曾经这里与 AppShellKit 各写一份字面量）。
         val layout = NpmProjectLayout(ScriptPaths.projectsRoot(filesDir))

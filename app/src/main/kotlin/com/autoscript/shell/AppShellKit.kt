@@ -5,6 +5,7 @@ import com.autoscript.appservice.npm.HostNodeExecutor
 import com.autoscript.appservice.npm.InstallCoordinator
 import com.autoscript.appservice.npm.LockSigner
 import com.autoscript.appservice.npm.NpmCliDeployer
+import com.autoscript.appservice.npm.NpmBridgeHandler
 import com.autoscript.appservice.npm.NpmShellKit
 import com.autoscript.appservice.npm.NpmSpawnGate
 import com.autoscript.appservice.runtime.EngineWatchdog
@@ -320,15 +321,20 @@ object AppShellKit {
         } else {
             null   // 调用方自带 handler：本配方不碰素材（见上方 KDoc），四个报告字段保持 null
         }
-        val npm: NamespaceHandler = npmHandler ?: NpmShellKit.assembleHandler(
-            filesDir = filesDir,
-            cacheDir = cacheDir,
-            executor = npmWiring!!.executor,
-            // T2 装配缺口收口（2026-10-08 批 79）：此前这里从不传 `lockKey`，
-            // 于是生产路径上 lock 既不签也不验 —— §11.3 第 8 条记的就是这件事。
-            // 接上后 `ci` 先验签、`install` 收尾重签、快照导出带 snapshot.sig。
-            lockKey = lockKey,
-        )
+        val built: NpmBridgeHandler? = if (npmHandler == null) {
+            NpmShellKit.assembleHandler(
+                filesDir = filesDir,
+                cacheDir = cacheDir,
+                executor = npmWiring!!.executor,
+                // T2 装配缺口收口（2026-10-08 批 79）：此前这里从不传 `lockKey`，
+                // 于是生产路径上 lock 既不签也不验 —— §11.3 第 8 条记的就是这件事。
+                // 接上后 `ci` 先验签、`install` 收尾重签、快照导出带 snapshot.sig。
+                lockKey = lockKey,
+            )
+        } else {
+            null   // 调用方自带 handler：本配方不参与，呈现面读口随之缺席（如实 null）
+        }
+        val npm: NamespaceHandler = npmHandler ?: built!!
 
         val shell = AppShell.assemble(
             engineFactory = engineFactory,
@@ -372,6 +378,7 @@ object AppShellKit {
             deployReport, bridgeDistReport, bridgeAddonReport,
             npmWiring?.cli, npmWiring?.cliFailure,
             npmLockKeyFailure, npmWiring?.gate,
+            built?.facade,
         )
     }
 
