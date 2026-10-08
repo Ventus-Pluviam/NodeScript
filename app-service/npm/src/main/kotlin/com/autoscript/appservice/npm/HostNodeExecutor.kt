@@ -42,9 +42,28 @@ class HostNodeExecutor(
     private val cacheDir: Path,
     private val nodeBin: String = "node",
     private val env: Map<String, String> = emptyMap(),
-    // 与 NpmRegistryVerifier 的首选同源（交叉校验要比的就是实际安装用的那一家）：
-    // 出厂官方，§18 第 7 项拍板。
-    private val registry: String = NpmRegistryVerifier.OFFICIAL,
+    /**
+     * 显式钉死的注册表（argv 里的 `--registry`）。**缺省 null = 不注入**（2026-10-09 批 83）。
+     *
+     * 此前这里缺省 `NpmRegistryVerifier.OFFICIAL` 且**唯一的生产构造点从不传它**，
+     * 于是每次安装都被强制钉在官方源上：用户经 `setRegistry` 写的项目 `.npmrc`
+     * 对真实安装毫无影响（写了个寂寞），而交叉校验的首选却是从那份 `.npmrc` 读的
+     * —— 校验的那家与实际装的那家可以不是同一家。
+     *
+     * 现在缺省不注入，让 npm 自己按 `--prefix`（= workDir，见 [prepareWorkDir] 会把
+     * 项目 `.npmrc` 拷进去）→ `--userconfig`（[userConfig]）→ 出厂解析，
+     * 与 [InstallCoordinator.resolveRegistry] 的两层链**同源**。
+     * 非 null 只留给「必须钉死某一家」的场合（测试、诊断）。
+     */
+    private val registryOverride: String? = null,
+    /**
+     * 传给 npm 的 `--userconfig`（§10.2 的 `files/.npmrc` 那一层）。
+     *
+     * **不能省**：`--registry` 与 userconfig 不是二选一 —— 实测 `--registry` 只赢
+     * `registry=` 这一个键，文件里的 `@scope:registry`、proxy、cache 等键仍靠这条通路。
+     * null = 不给这个参数（npm 用自己的缺省 userconfig，即宿主 HOME 下那份）。
+     */
+    private val userConfig: Path? = null,
     /**
      * `child_process` 拦截 shim 的落盘路径（[NpmSpawnGate.gateFile]）；null = 不注入门禁。
      *
@@ -92,8 +111,15 @@ class HostNodeExecutor(
             }
         }
 
-    /** 播种工作目录：项目 package.json（必须存在）+ 现有 lockfile（有则带上，保住已装依赖闭包）。 */
-    private fun prepareWorkDir(op: HeavyOp, workDir: Path) {
+    /**
+     * 播种工作目录：项目 `package.json`（必须存在）+ 现有 lockfile（有则带上，保住已装依赖闭包）
+     * + 项目 `.npmrc`（有则带上，见下方注释）。
+     *
+     * `public` 与 [npmArgv] 同一条理由：Kotlin 的 `internal` 跨模块不可见，而
+     * 「项目 `.npmrc` 到底有没有进 workDir」这条不变量最该被 `:app` 的装配测试钉住
+     * （它一旦失守，`setRegistry` 就重新变成空转，而症状只在真机上表现为「装的还是官方源」）。
+     */
+    fun prepareWorkDir(op: HeavyOp, workDir: Path) {
         val pkgJson = op.projectRoot.resolve("package.json")
         require(Files.isRegularFile(pkgJson)) {
             "项目 ${op.projectId} 缺 package.json（$pkgJson），无法执行 npm ${op.args.first()}"
@@ -105,20 +131,43 @@ class HostNodeExecutor(
         if (Files.isRegularFile(lock)) {
             Files.copy(lock, workDir.resolve("package-lock.json"))
         }
+        // 项目 `.npmrc` 必须跟着走（2026-10-09 批 83）：`--prefix` 一旦给出，npm 的
+        // 项目级配置就**只看 prefix/.npmrc**（cwd 不再参与，本机 npm 12.2.0 实测），
+        // 而 workDir 就是 prefix。不拷的话项目 `.npmrc` 是死配置 ——
+        // `setRegistry` 写得再对，npm 也一个字都读不到。
+        val npmrc = op.projectRoot.resolve(NpmGlobalConfig.FILE_NAME)
+        if (Files.isRegularFile(npmrc)) {
+            Files.copy(npmrc, workDir.resolve(NpmGlobalConfig.FILE_NAME))
+        }
+    }
+
+    /**
+     * npm 会话进程的完整 argv（**纯函数**，2026-10-09 批 83 从 [runNpm] 提出来）。
+     *
+     * 为什么提出来：本类一构造就 `require(Files.isRegularFile(npmCliJs))`，
+     * 于是「argv 里到底有没有 `--registry`」这条不变量此前**只能靠真起 node 才验得到**
+     * —— 而它正是「用户设的镜像源不生效」那个 bug 的所在地。提成纯函数后，
+     * 零 node、零文件系统即可断言（`:app` 的装配测试也走它）。
+     *
+     * `public` 而非 `internal`：Kotlin 的 `internal` **跨模块不可见**，而最重要的
+     * 消费方正是 `:app` 的装配测试。纯函数扩大可见性不带任何状态风险。
+     */
+    fun npmArgv(op: HeavyOp, workDir: Path): List<String> = buildList {
+        add(nodeBin)
+        add(npmCliJs.toAbsolutePath().toString())
+        addAll(op.args)
+        add("--ignore-scripts"); add("--no-audit"); add("--no-fund")
+        add("--cache"); add(cacheDir.toAbsolutePath().toString())
+        add("--prefix"); add(workDir.toAbsolutePath().toString())
+        // 只有显式给了才注入：缺省让 npm 按 prefix/.npmrc → userconfig → 出厂自己解析
+        // （见 [registryOverride] 的 KDoc —— 无条件注入正是那个「写了不生效」的病因）。
+        registryOverride?.let { add("--registry"); add(it) }
+        userConfig?.let { add("--userconfig"); add(it.toAbsolutePath().toString()) }
+        add("--loglevel"); add("error")
     }
 
     private fun runNpm(op: HeavyOp, workDir: Path): String {
-        val cmd = buildList {
-            add(nodeBin)
-            add(npmCliJs.toAbsolutePath().toString())
-            addAll(op.args)
-            add("--ignore-scripts"); add("--no-audit"); add("--no-fund")
-            add("--cache"); add(cacheDir.toAbsolutePath().toString())
-            add("--prefix"); add(workDir.toAbsolutePath().toString())
-            add("--registry"); add(registry)
-            add("--loglevel"); add("error")
-        }
-        val pb = ProcessBuilder(cmd)
+        val pb = ProcessBuilder(npmArgv(op, workDir))
         pb.directory(workDir.toFile())
         pb.environment().putAll(env)
         // 门禁注入走 NODE_OPTIONS（**追加不覆盖**父环境里那份别人的设置，见 mergeNodeOptions）：
