@@ -1,5 +1,23 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-09 追记（批 81：依赖面板 + 审批卡 —— 审批链的生产落点补齐）
+
+- **§10.9 第 1/2 条的「UI 未排期」记账已订正（2026-10-09，批 81）**：真问题是**结构性的** ——
+  `PackageManagerFacade.resolveApproval`/`pendingApprovals` 全仓零生产调用方、
+  `NpmShellKit` 建 `ApprovalLedger()` 时没传 store（重启即蒸发 + `requestId` 从 `apr-1` 重来
+  与历史票碰撞）。已修：审批账本缺省落盘 + `:domain` `NpmPanelSnapshot` 读口 +
+  `HostSummary.npmSnapshot()/resolveNpmApproval()` + `:ui` `NpmScreen`/`NpmState`。
+  口径见 [`design-decisions.md`](design-decisions.md) 第 51 项。**未落**（登记为后续）：
+  安装输入行/旗标/阶段进度条、依赖树、`hasInstallScript` 前置告警、白名单放行通道。
+- **npm 面的「有实现、零生产调用方」三条（记下来，别当成已做）**：`update`、
+  `exportSnapshot`（§10.9.4 高信任快照）、`storage()`。前两条**也不在桥面** —— 它们要等
+  「依赖面板的变更半边」与「打包向导」（§10.9.7）。**不加进桥面**：§10.7 的 facade 是内部面，
+  桥面是脚本面，两件事。`storage()` 已是宿主内部读口（喂依赖面板的尺寸条）。
+- **契约面数字订正**：`docs/design/12-js-api.md` 的 npm 行原写「方法表 13 项」，
+  实测生成物（`WireMethods.kt` / `wire.schema.json`）自 2026-09-26 起一直是 **14 条** ——
+  是数错，不是漂移，已就地订正（桥面本次一条不加）。
+- **npm P1 剩余件不变**：`scriptExecutor`（T1 spawn 桥本体）。**A13 仍开放**。
+
 ## 2026-10-09 追记（批 80：`child_process` 拦截 shim 接线 + 零 spawn 金标准）
 
 - **§10.11 P0 / §10.12 末行那条「零 spawn 不变量漂移」的兜底已落（2026-10-09，批 80）**：
