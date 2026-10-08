@@ -83,6 +83,16 @@
      接线后行为：`ci` 先验签（无签名/格式不识/不符/跨项目搬运一律 `ERR_PERMISSION_DENIED`）、
      `install` 收尾重签（失败即中止本次安装并如实报错）、`exportSnapshot` 带 `snapshot.sig`。
    - **`scriptExecutor` 仍 `Unavailable`**（T1 门禁过了也跑不起来，spawn 桥属 P1）。
+   - **`child_process` 拦截 shim 已接线（2026-10-09）**：`NpmSpawnGate` 把
+     `npm-spawn-gate.cjs`（classpath 资源）落到 `files/.autojs/`，`HostNodeExecutor` 经
+     `NODE_OPTIONS=--require=<它>` 注入安装会话进程，`child_process` 七个入口一律抛错；
+     被拦时按 shim 播报折成 `ERR_NPM_SPAWN_BLOCKED` / `ERR_PERMISSION_DENIED`（`detached:true`）/
+     `ERR_NOT_IMPLEMENTED`（`fork`）。**落位失败 → 不注入安装执行体**（P0 承诺面，
+     不许静默降级成「装是能装、守卫没了」）。零 spawn 金标准（§10.12 末行）落成
+     `NpmSpawnGateMatrixTest`：门禁注入下跑 install/ls/dedupe/prune/uninstall/ci 全绿、
+     不注入也全绿（反向变异）、`npm run` 在门禁下确实被拦（真产物判据），并已登记进
+     `check-e2e-ran.sh` 的 nightly 验尸清单。**边界**：它是不变量守卫不是安全边界
+     （已获批脚本可 `delete require.cache` 绕过）——对抗面仍是审批与最小掩码。
    - **素材版本落差已于 2026-10-02 消解**（换 registry 发布态 tarball `npm@12.2.0`，
      `VERSIONS.env` 钉版本 + sha1，`fetch-and-build.sh` §9 双闸），§10.1 脊梁满足。
      **实测的官方默认语义**（解包产物直跑）：**依赖** lifecycle 默认拒（`allow-scripts`
@@ -90,10 +100,12 @@
      `npm install-scripts approve <pkg>` 放行）、`allow-git=none` / `allow-remote=none`；
      **项目自身** lifecycle 仍执行（历代如此）→ 所以硬编码 `--ignore-scripts` 仍是主控的
      **一半**，不撤；**非脚本** spawn 路径的第二层兜底（§10.12 末行 child_process 拦截
-     shim）**仍未落**。口径见 [`design-decisions.md`](../design-decisions.md) 第 26 项，
+     shim）**已于 2026-10-09 落地**（见 §11.3 第 8 条末段：`NpmSpawnGate` + 零 spawn 金标准）。
+     口径见 [`design-decisions.md`](../design-decisions.md) 第 26 项，
      实测注见 [`10-npm.md`](10-npm.md) §10.1 与 §10.12 风险表。
 
-   即：**设计上写着「已接线」的那几道 npm 防线，当前在生产路径上只接上了一道（执行体）**；这是接线缺口，不是设计缺口。
+   即：**设计上写着「已接线」的那几道 npm 防线，截至 2026-10-09 只剩 `scriptExecutor`（T1
+   执行面）未接**；这是接线缺口，不是设计缺口。
 
 ### 11.4 非目标
 

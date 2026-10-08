@@ -58,6 +58,8 @@ class AppShellNpmCliTest {
         source: NpmCliDeployer.CliSource?,
         nodeBin: String?,
         lockKeys: LockKeyStore.HmacKeys? = null,
+        gateDeploy: (Path) -> com.autoscript.appservice.npm.NpmSpawnGate.Deploy =
+            { com.autoscript.appservice.npm.NpmSpawnGate.deploy(it) },
     ): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
@@ -67,6 +69,7 @@ class AppShellNpmCliTest {
         npmCliSource = source,
         npmNodeBin = nodeBin,
         npmLockKeys = lockKeys,
+        npmGateDeploy = gateDeploy,
     )
 
     /**
@@ -117,6 +120,16 @@ class AppShellNpmCliTest {
                 Files.isRegularFile(ScriptPaths.projectsRoot(files).parent.resolve("npm/.cli-manifest.sha256")),
                 "幂等锚（.cli-manifest.sha256）必须落盘",
             )
+            // 门禁必须同时落位：它是 P0 承诺面，落不上就不注入执行体（见下一条用例）。
+            assertEquals(
+                com.autoscript.appservice.npm.NpmSpawnGate.gateFile(files),
+                assembled.npmSpawnGate,
+                "有宿主 = 真会起安装会话 → child_process 拦截 shim 必须落位",
+            )
+            assertTrue(
+                Files.isRegularFile(com.autoscript.appservice.npm.NpmSpawnGate.gateFile(files)),
+                "shim 必须真在盘上（会话进程 --require 得到它）",
+            )
             val (code, detail) = installResult(assembled)
             assertNotEquals("ERR_NOT_IMPLEMENTED", code, "执行体已注入：不该再是 NOT_IMPLEMENTED")
             assertTrue(detail.contains("libnoden"), "失败原因该指向假宿主（= 真走到 exec 了）：$detail")
@@ -136,6 +149,30 @@ class AppShellNpmCliTest {
             val why = assembled.npmCliFailure
             assertTrue(why != null && why.contains("没有 Node 宿主"), "原因要点名缺宿主：$why")
             assertEquals("ERR_NOT_IMPLEMENTED", installResult(assembled).first)
+        }
+    }
+
+    @Test
+    fun `门禁落位失败：不注入执行体（P0 承诺面，不许静默降级）`() {
+        // 零 spawn 不变量是 §10.11 的 P0 承诺：shim 落不上时"照常装"等于把守卫悄悄摘掉，
+        // 而用户看到的一切正常 —— 正是 §10.12 末行那条风险本身。故 fail closed。
+        val src = MemSource(listOf("bin/npm-cli.js", "bin/npx-cli.js"))
+        assembleWith(
+            source = src,
+            nodeBin = dir.resolve("libnoden.so").toString(),
+            gateDeploy = { com.autoscript.appservice.npm.NpmSpawnGate.Deploy.Failed("磁盘只读（注入用）") },
+        ).use { assembled ->
+            assertNull(assembled.npmSpawnGate, "落位失败就不该报出落点")
+            val why = assembled.npmCliFailure
+            assertTrue(
+                why != null && why.contains("拦截 shim 未落位") && why.contains("磁盘只读（注入用）"),
+                "原因原文要点名 shim 落位失败：$why",
+            )
+            assertEquals(
+                "ERR_NOT_IMPLEMENTED",
+                installResult(assembled).first,
+                "没守卫就不起安装会话：宁可不装，不可无门禁地装",
+            )
         }
     }
 

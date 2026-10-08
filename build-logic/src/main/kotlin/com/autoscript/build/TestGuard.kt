@@ -25,6 +25,10 @@ object TestGuard {
         "NpmCliDeployerTest",        // app-service/npm：素材源取本机 npm 安装
         "HostNodeNpmE2ETest",        // app-service/npm：拉真宿主 node+npm 进程
         "NpmCacheSeedDeployerTest",  // app-service/npm：离线首装金标准要宿主 npm + 真 tarball
+        // app-service/npm：零 spawn 金标准（child_process 门禁下跑 P0 命令矩阵）——
+        // 要宿主 node+npm 真起进程；**本机没装 npm 时跳过是对的**，而 CI 上两者恒在，
+        // 所以这道门在那边一定真跑（§10.12 末行「vendored npm 升级只准通过此闸」）。
+        "NpmSpawnGateMatrixTest",
         "P0LoopbackTest",            // app：P0 回环要宿主 node+npm（-PskipNpmE2E 下整类不跑）
     )
 

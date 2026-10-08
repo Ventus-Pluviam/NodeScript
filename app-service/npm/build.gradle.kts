@@ -27,9 +27,16 @@ dependencies {
 tasks.test {
     // 真实 npm e2e 默认跳过：CI 走 -PskipNpmE2E（本机不带 flag 即跑，宿主机 node+npm 存在才启用）。
     // 清单：HostNodeNpmE2ETest（install/ci 真跑）+ NpmCacheSeedDeployerTest 的金标准
-    // （仅凭种子 npm ci --offline）——两者都要拉真 npm 进程。
+    // （仅凭种子 npm ci --offline）+ NpmSpawnGateMatrixTest 的零 spawn 金标准
+    // （child_process 门禁下跑 P0 命令矩阵，§10.12 末行）——三者都要拉真 npm 进程。
+    //
+    // 后两条**不碰网络**（矩阵只用本地 `file:` 依赖），但仍随本 flag 一起排除：它们的
+    // 环境前置与那两条相同（宿主 node+npm），而 CI 的 jvm-tests 恒带本 flag —— 留在这里
+    // 是为了让"要不要跑真 npm"仍然只有一个开关（nightly 去掉 flag 即全跑，
+    // check-e2e-ran.sh 逐类验尸）。
     if (project.hasProperty("skipNpmE2E")) {
         exclude("**/HostNodeNpmE2ETest*")
         exclude("**/NpmCacheSeedDeployerTest*")
+        exclude("**/NpmSpawnGateMatrixTest*")
     }
 }
