@@ -8,7 +8,7 @@ import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalTicket
-import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
@@ -672,15 +672,15 @@ class AppShellApplication : Application(), HostSummary {
      * 读壳自己持有的那两件同一条理）。
      *
      * 没接上（壳未装配 / 本次装配没挂 npm）**抛**，不返回空快照 —— 空快照是「读成功且
-     * 一条都没有」的样子，会把「npm 压根没接线」画成「这个项目没有依赖」。装配期的
+     * 一条都没有」的样子，会把「npm 压根没接线」画成「一个项目都没有」。装配期的
      * 失败原文在 `AssembledShell.npmCliFailure`，呈现层该显示它。
      */
-    override suspend fun npmSnapshot(projectId: String): NpmProjectSnapshot {
+    override suspend fun npmSnapshot(): NpmPanelSnapshot {
         val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：依赖面板暂不可读" }
-        val facade = built.npmFacade ?: throw IllegalStateException(
-            "npm 未接线：本次装配没挂 npm handler（原因见装配日志的 npmCliFailure）——依赖面板无可读之处",
-        )
-        return facade.projectSnapshot(projectId)
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：本次装配没挂 npm handler（原因见装配日志的 npmCliFailure）——依赖面板无可读之处"
+        }
+        return facade.snapshot()
     }
 
     /**
@@ -692,7 +692,7 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket {
         val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：审批决定无处落账" }
-        val facade = built.npmFacade ?: throw IllegalStateException("npm 未接线：审批决定无处落账")
+        val facade = checkNotNull(built.npmFacade) { "npm 未接线：审批决定无处落账" }
         return facade.resolveApproval(
             requestId,
             if (approve) ApprovalDecision.APPROVE else ApprovalDecision.REJECT,

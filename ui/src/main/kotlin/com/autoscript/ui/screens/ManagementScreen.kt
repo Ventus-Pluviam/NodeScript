@@ -28,13 +28,15 @@ import com.autoscript.ui.theme.ThemeColors
  * **组内不画横线**（批 47）：TG `SettingCell` 的 `Factory.bindView` 不传分隔线，
  * 用户口径「分组那不需要横线分隔」同向。
  *
- * 入口现状：**日志管理**与**控制台**进入已有页面；依赖管理/环境变量/镜像源管理尚未实现，
- * 点击直接弹未开放提示。面板不持有宿主读口，也不把未实现的功能画成空数据或保存成功。
+ * 入口现状：**依赖管理**（2026-10-09 批 81 落地）、**日志管理**与**控制台**进入已有页面；
+ * 环境变量/镜像源管理仍未实现，点击直接弹未开放提示。面板不持有宿主读口，
+ * 也不把未实现的功能画成空数据或保存成功。
  */
 @Composable
 fun ManagementScreen(
     onOpenConsole: () -> Unit,
     onOpenLogManagement: () -> Unit,
+    onOpenNpm: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val toast = LocalToast.current
@@ -51,7 +53,7 @@ fun ManagementScreen(
                         title = "依赖管理",
                         colors = DependencyColors,
                         glyph = GlyphKind.FILE_GENERIC,
-                        onClick = { toast?.show("依赖管理尚未开放") },
+                        onClick = onOpenNpm,
                     )
                     SettingsCellRow(
                         title = "环境变量",

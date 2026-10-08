@@ -16,6 +16,7 @@ import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConfigKey
+import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.PackageManagerFacade
 import com.autoscript.domain.npm.PackageSpec
@@ -419,28 +420,33 @@ class InstallCoordinator(
     }
 
     /**
-     * 依赖面板读数（§10.9.1）：本项目已装清单 + 离线缺口 + 目录尺寸 + **全局**待审队列。
+     * 依赖面板读数（§10.9.1）：全部项目的已装清单 + 离线缺口 + 目录尺寸 + **全局**待审队列。
      *
      * 待审取 `ledger.all()` 里仍是 PENDING 的那些（**跨项目**）：审批卡是全局队列，
      * 按项目筛会让用户漏掉别的项目上等着的那张。`pending(projectId)` 那条口子服务的是
      * 脚本侧 `drainApprovals`（脚本只看自己项目），两者语义不同，不要互相替换。
      *
-     * 为什么这个读口在 facade 上而不是让呈现层自己拼：`list/offlineGap/storage` 三条
-     * 各自会读盘/遍历目录，呈现层拼四次就是四次 IO 与四次「读失败该怎么办」的分叉；
-     * 收成一处，失败语义只有一套（抛）。
+     * 项目列表 = `storage()` 的键（= 项目根下的目录），**不是** lockfile 的键：
+     * 「装了依赖但还没落 lock」的项目也要出现在面板上（它有一棵 node_modules 要管），
+     * 而只有 lock 的项目反倒没有可管的东西。两者取并集是过度设计 —— 目录是超集。
      */
-    override suspend fun projectSnapshot(projectId: String): NpmProjectSnapshot =
-        NpmProjectSnapshot(
-            projectId = projectId,
-            installed = list(projectId, depth = 0),
-            offlineGap = offlineGap(projectId),
-            storage = storage()[projectId],
-            quotaBytes = config.projectQuotaBytes,
-            quotaWarnRatio = config.quotaWarnRatio,
-            pendingApprovals = ledger.all()
-                .filter { it.second.status == ApprovalStatus.PENDING }
-                .map { it.first },
-        )
+    override suspend fun snapshot(): NpmPanelSnapshot {
+        val stats = storage()
+        val pending = ledger.all()
+            .filter { it.second.status == ApprovalStatus.PENDING }
+            .map { it.first }
+        val projects = stats.keys.sorted().map { id ->
+            NpmProjectSnapshot(
+                projectId = id,
+                installed = list(id, depth = 0),
+                offlineGap = offlineGap(id),
+                storage = stats[id],
+                quotaBytes = config.projectQuotaBytes,
+                quotaWarnRatio = config.quotaWarnRatio,
+            )
+        }
+        return NpmPanelSnapshot(projects = projects, pendingApprovals = pending)
+    }
 
     override suspend fun storage(): Map<String, NodeModulesStats> {
         if (!Files.isDirectory(layout.projectsRoot)) return emptyMap()

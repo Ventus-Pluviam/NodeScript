@@ -2,7 +2,7 @@ package com.autoscript.domain.host
 
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.npm.ApprovalTicket
-import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.permission.Capability
 import com.autoscript.domain.permission.CapabilityLifecycle
 import com.autoscript.domain.permission.CapabilityState
@@ -188,16 +188,18 @@ interface HostSummary {
     fun createSyntaxHighlighter(relPath: String): SyntaxHighlighter = SyntaxHighlighter.NONE
 
     /**
-     * 依赖面板读数（§10.9.1；管理面板 → 依赖管理）。挂起：要读 lockfile 与目录尺寸（IO）。
+     * 依赖面板读数（§10.9.1；管理面板 → 依赖管理）。挂起：要读 lockfile 与遍历目录（IO）。
+     *
+     * **全量**（全部项目 + 全局待审队列），不按项目问 —— 理由见 [NpmPanelSnapshot] 的 KDoc。
      *
      * 读失败**抛**（与 [taskCenter]/[console] 同一条纪律）：`:ui` 据此如实显示「读依赖失败」，
-     * 而不是画成「这个项目没有依赖」—— 后者会让用户以为自己的包丢了。
+     * 而不是画成「一个项目都没有」—— 后者会让用户以为自己的项目丢了。
      *
-     * 读口**未接线**（宿主没装配 npm，或本次装配没接上执行体）同样**抛**，不返回空快照：
-     * 空快照是「读成功且真的一条都没有」的样子。装配期的失败原文在
-     * `AssembledShell.npmCliFailure`，呈现层应显示它而不是显示一个空面板。
+     * 读口**未接线**（宿主没装配 npm）同样**抛**，不返回空快照：空快照是「读成功且真的
+     * 一条都没有」的样子。装配期的失败原文在 `AssembledShell.npmCliFailure`，
+     * 呈现层应显示它而不是显示一个空面板。
      */
-    suspend fun npmSnapshot(projectId: String): NpmProjectSnapshot
+    suspend fun npmSnapshot(): NpmPanelSnapshot
 
     /**
      * 人工审批决定（§10.5-2 **人机分离**的唯一落点）。

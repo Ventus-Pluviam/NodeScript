@@ -210,12 +210,14 @@ interface PackageManagerFacade {
     suspend fun storage(): Map<String, NodeModulesStats>
 
     /**
-     * 依赖面板读数（§10.9.1）：一次现取本项目已装清单 + 离线缺口 + 尺寸配额 + 全局待审队列。
+     * 依赖面板读数（§10.9.1）：一次现取**全部项目**的已装清单 + 离线缺口 + 尺寸配额，
+     * 外加**全局**待审队列。
      *
      * 与上面几条轻操作的关系是「合成」不是「替代」：它内部就是 `list + offlineGap +
-     * storage + ledger`，存在只为让呈现层少一次拼装与少一套失败语义分叉。
+     * storage + ledger`，存在只为让呈现层少一次拼装、少一套失败语义分叉，
+     * 也避免"按项目问四次 = 四次 IO + 四份可以互相矛盾的结论"。
      */
-    suspend fun projectSnapshot(projectId: String): NpmProjectSnapshot
+    suspend fun snapshot(): NpmPanelSnapshot
 
     // —— 审批（人机分离 §10.5）——
     /** 脚本/内部唯一入口：只入队，返回票；永不在此执行。 */
@@ -264,18 +266,32 @@ interface PackageManagerFacade {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * 一个项目的依赖面板读数（一次现取，不缓存 —— 与 `capabilityCenter()` 同纪律：
+ * 依赖面板的**全量**读数（一次现取，不缓存 —— 与 `capabilityCenter()` 同纪律：
  * 缓存 = 撒谎的开始）。
  *
- * @property installed 已装清单（`list()` 直读 lockfile 的权威结果；**空 = 真的没装**，
- *   与「没读到」是两句不同的话，后者由调用方抛异常表达）。
+ * 为什么是"全量"而不是"按项目问一次"：依赖面板要能回答"我到底有哪些项目、
+ * 各自装了什么"，只列一个项目会让人以为其余项目不存在（与 §9.5 能力中心
+ * "列全量能力"同一条理由）。审批队列同理是**全局**的 —— 按项目筛会让用户
+ * 漏掉别的项目上等着的那张卡。
+ *
+ * @property projects 按项目号排序（顺序稳定，界面不用再排）；**空 = 一个项目都没有**
+ *   （还没部署过任何项目），与「没读到」是两句不同的话，后者由调用方抛异常表达。
+ * @property pendingApprovals 待人工决定的审批票（跨项目；`ApprovalStatus.PENDING`）。
+ */
+data class NpmPanelSnapshot(
+    val projects: List<NpmProjectSnapshot>,
+    val pendingApprovals: List<ApprovalRequest>,
+)
+
+/**
+ * 单个项目的依赖面板读数。
+ *
+ * @property installed 已装清单（`list()` 直读 lockfile 的权威结果；**空 = 真的没装**）。
  * @property offlineGap 离线闭包缺口（lock 闭包 − 缓存），带尺寸；空 = 离线可重建。
- * @property storage null = 本项目还没量到（`storage()` 只列**存在**的项目目录）——
- *   与 [NodeModulesStats] 里 `totalBytes=0` 的「量到了、就是 0 字节」是两回事。
+ * @property storage null = 本项目没量到尺寸（不该发生 —— 项目在列表里就说明目录存在；
+ *   非 null 但 `totalBytes=0` 才是「量到了、就是 0 字节」）。
  * @property quotaBytes / [quotaWarnRatio] 配额口径（来自 `InstallConfig`，**呈现层不自己写死
  *   512MB** —— 判据只有一处，写第二份就会与真拦人的那份漂移）。
- * @property pendingApprovals 待人工决定的审批票（**全项目**，不只是本项目：
- *   §10.5 的审批卡是全局队列，按项目筛会让用户漏掉别的项目上等着的那张）。
  */
 data class NpmProjectSnapshot(
     val projectId: String,
@@ -284,7 +300,6 @@ data class NpmProjectSnapshot(
     val storage: NodeModulesStats?,
     val quotaBytes: Long,
     val quotaWarnRatio: Double,
-    val pendingApprovals: List<ApprovalRequest>,
 ) {
     /** 已用 ≥ 配额（与 `InstallCoordinator` 那道 100% 拦的判据同源）。 */
     val overQuota: Boolean get() = (storage?.totalBytes ?: 0L) >= quotaBytes

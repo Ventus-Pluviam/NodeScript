@@ -9,7 +9,7 @@ import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.npm.ApprovalTicket
-import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.permission.Capability
 
 /**
@@ -65,7 +65,7 @@ open class FakeHost(
     override suspend fun saveScriptFile(projectId: String, relPath: String, content: String): Unit =
         throw UnsupportedOperationException("本替身未提供 saveScriptFile（用例按需覆盖）")
 
-    override suspend fun npmSnapshot(projectId: String): NpmProjectSnapshot =
+    override suspend fun npmSnapshot(): NpmPanelSnapshot =
         throw UnsupportedOperationException("本替身未提供 npmSnapshot（用例按需覆盖）")
 
     override suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket =
