@@ -1,5 +1,21 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-09 追记（批 80：`child_process` 拦截 shim 接线 + 零 spawn 金标准）
+
+- **§10.11 P0 / §10.12 末行那条「零 spawn 不变量漂移」的兜底已落（2026-10-09，批 80）**：
+  `NpmSpawnGate` + `npm-spawn-gate.cjs` + `HostNodeExecutor(spawnGateFile=…)`，装配层
+  **三条齐才注入执行体**（素材 + 宿主 + shim 落位），shim 落不上就不注入（fail closed）。
+  金标准落成 `NpmSpawnGateMatrixTest`，已进 `check-e2e-ran.sh` 的 nightly 验尸清单。
+  口径见 [`design-decisions.md`](design-decisions.md) 第 50 项。
+- **npm P1 剩余件收窄为一件**：只剩 `scriptExecutor`（T1 spawn 桥本体 —— stdio 假管道、
+  pgrp 杀树、node-shim PIE + PATH 注入）。`lockKey`（批 79）与零 spawn 第二层（批 80）均已收口。
+  **A13 仍开放**。
+- **T1 桥本体为何本批没做（如实记）**：它在当前环境下**验不到** —— `:app` 的 JVM 单测里没有
+  脚本引擎（`scriptExecutor` 是 `Unavailable`），且 `engine/node-process/main.cpp` 把 node argv
+  写死（`node [-e BOOTSTRAP --] <script> <args>`），Kotlin 侧注入不了 `--require`。要真做，
+  先得让 T1 会话进程有可注入的 argv 面 + 一个能在 JVM 测试里跑的假引擎。本批因此只做 T0 面
+  （已声明为 P0、可全 JVM 验证、且让早已声明的 `ERR_NPM_SPAWN_BLOCKED` 第一次真有人发）。
+
 ## 2026-10-08 追记（批 79：`lockKey` 生产接线）
 
 - **T2 的 `lockKey` 装配缺口已收口（2026-10-08，批 79）**：`LockKeyStore.AndroidKeystore` +
