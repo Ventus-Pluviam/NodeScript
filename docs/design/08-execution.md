@@ -94,6 +94,13 @@ interface EnginePool {                                // 实现在 :app-service:
 
 ### 8.5 崩溃恢复与幂等（checkpoint 意图日志）
 - `:main` 的 scheduler 持久化 **意图日志（intent log）**：`RUN_START(projectId, entry, runNonce, scheduledAt) → …execute… → COMMIT(result)` append-only（SQLite，启动即回放）。
+
+> **2026-10-08 批 78 修订**：本条的「生产实现 = jsonl + SQLite 双轨、打不开回落 jsonl」已作废 ——
+> **生产只有 `SqliteIntentStore` 一条路**，SQLite 打不开即装配失败（fail closed），不回落。
+> 理由与口径见 [`../design-decisions.md`](../design-decisions.md) 第 47 项①：jsonl 那份的 `runId`
+> 分配（`max+1`）与「锁内先查后写」锚点**以单写者为前提**，回落会连带失去幂等锚点 ——
+> 把「调度坏了」伪装成「调度还在」。**老设备 `intent-log.jsonl` 的一次性导入仍可用**（读的是
+> 格式，纯 `:domain` parser，不依赖写入方）。**契约（append-only / 启动即回放 / nonce 幂等）不变。**
 - **恢复只跟随 COMMIT**：进程/手机重启后，未 COMMIT 的 run 视为「未完成意向」→ 重新入队，但生成**新的 runId + 保留 runNonce**；执行体用 `runNonce` 做**幂等键**（外部副作用目标幂等，如「只发一次」的通知 id、datastore 原子键），杜绝重复业务副作用。
 - **rerun 新 RunRecord**（每次重跑都是新 runId）——满足批判「resume=新 runId」语义；「断点续跑」只对纯内存任务可选，涉及副作用任务默认不允许自动续。
 
