@@ -329,6 +329,9 @@ class AppShell(
                 val controller = RuntimeController(
                     FixedEnginePool({ id -> engineFactory(id, identities) }, poolCapacity),
                     authorization = policy,
+                    // A11：run 终结时收掉那条连接的进程级资源（投屏会话），不再依赖 socket 断
+                    // —— 脚本把桥 fd 继承给子进程时主进程死掉不产生 EOF（见缝的 KDoc）。
+                    revokeRunResources = frameServer::revokeRunResources,
                 )
                 val enginesHandler = EnginesNamespaceHandler(controller)
                 router.register("engines", enginesHandler)

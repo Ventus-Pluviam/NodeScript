@@ -64,6 +64,23 @@ class RuntimeController(
      * 现场表现为「exec 放行的组合，子进程起来却被自己的掩码拒」。
      */
     private val authorization: ScriptAuthorizationPolicy = ScriptAuthorizationPolicy(),
+    /**
+     * **run 终结时的连接资源收口口**（A11，§9.2）：按 runId 撤销那条 run 的桥连接上挂着的
+     * 进程级资源（投屏会话）。缺省 = **不做**（`{ _ -> }`），此时本类**只**清自己的账
+     * （在途表/心跳），run 终结不影响任何连接资源 —— 那是接入端那条连接自己的生命周期。
+     *
+     * **为什么需要它（A11 的原始病灶）**：接入端的收口挂在**连接**上（abort / dispose / EOF），
+     * 而脚本若把桥 socket fd 继承给子进程，脚本主进程死了**不产生 EOF**，连接不结束，
+     * 于是投屏会话没有撤销点 —— 通知栏一条"正在投屏"却没有任何脚本在跑。补上 runId 侧的
+     * 撤销入口后，run 终结**不再依赖 socket 断**。
+     *
+     * **为什么判据住在接入端**：连接号在那里发出，本类自始至终只认 runId。缝是无类型的
+     * `(Long) -> Unit`，实现是 `NewlineFrameServer::revokeRunResources`。
+     *
+     * **幂等、不抛**是契约要求：收口回调由设备层写（`VirtualDisplay.release` 之类），
+     * 漏掉或抛异常都只影响那一条资源。这里是**执行终结路径**，绝不让它打断引擎收尾。
+     */
+    private val revokeRunResources: (Long) -> Unit = {},
 ) {
     private val guard = Mutex()
     private val active = HashMap<Long, PoolHandle>()
@@ -159,6 +176,8 @@ class RuntimeController(
             active.remove(runId)
         } ?: return StopOutcome.AlreadyGone
         heartbeats.forget(runId)
+        // A11：stop 也是 run 终结 —— 同一条收口（与 kill/自然退出同口径）。
+        revokeRunResources(runId)
         // 自停会撤销当前桥连接并取消调用协程；已摘走的 handle 必须完成回池。
         return withContext(NonCancellable) {
             when (val result = pool.release(handle)) {
@@ -189,6 +208,7 @@ class RuntimeController(
             active.remove(runId)
         } ?: return null
         heartbeats.forget(runId)
+        revokeRunResources(runId)
         return withContext(NonCancellable) {
             val killed = handle.slot.engine.kill()
             // 强杀即终结：槽位 + 许可证必须成对归还（§8.2 记账）；
@@ -204,6 +224,7 @@ class RuntimeController(
         active.clear()
         startedAt.clear()
         gone.forEach { heartbeats.forget(it) }
+        gone.forEach { revokeRunResources(it) }
         withContext(NonCancellable) { pool.killAll(reason) }
     }
 
@@ -221,6 +242,9 @@ class RuntimeController(
         active.clear()
         startedAt.clear()
         gone.forEach { heartbeats.forget(it) }
+        // A11：急停也是 run 终结 —— 与 killAll 同一收口口径（进程被杀/测试收口那条路上，
+        // 宿主随后多半还会 close 整个壳，但那时连接已被强拆，收口已经晚了）。
+        gone.forEach { revokeRunResources(it) }
         withContext(NonCancellable) { pool.killAll(cause) }
     }
 
@@ -461,6 +485,7 @@ class RuntimeController(
             active.remove(runId)
         } ?: return Completed.UnknownRun(null)
         heartbeats.forget(runId)
+        revokeRunResources(runId)
         return withContext(NonCancellable) {
             val summary = handle.slot.engine.lastRunSummary()
             when (pool.release(handle)) {
@@ -480,6 +505,7 @@ class RuntimeController(
             active.remove(runId)
         } ?: return Completed.UnknownRun(null)
         heartbeats.forget(runId)
+        revokeRunResources(runId)
         return withContext(NonCancellable) {
             val summary = handle.slot.engine.lastRunSummary()
             pool.release(handle)
