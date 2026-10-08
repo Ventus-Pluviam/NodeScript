@@ -5,6 +5,7 @@ import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.npm.ApprovalAction
+import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalStatus
 import com.autoscript.domain.npm.InstallEvent
@@ -132,6 +133,8 @@ class InstallCoordinatorTest {
         script: ScriptOpExecutor? = null,
         /** 时钟（尺寸缓存的 TTL 判定读它；不注入则走真实时间）。 */
         now: () -> Long = { System.currentTimeMillis() },
+        /** 全局镜像源（§10.2 userconfig 层）；null = 未接线，解析链退到项目 .npmrc → null。 */
+        globalConfig: NpmGlobalConfig? = null,
     ) = InstallCoordinator(
         services = NpmServices(
             layout = layout,
@@ -149,6 +152,7 @@ class InstallCoordinatorTest {
         now = now,
         freeSpaceProbe = { free },
         registryOf = registryOf,
+        globalConfig = globalConfig,
         scriptExecutor = script ?: ScriptOpExecutor.Unavailable,
     )
 
@@ -554,6 +558,102 @@ class InstallCoordinatorTest {
         val e = h.all().single()
         assertEquals(InstallHistory.Op.REGISTRY, e.op)
         assertTrue(e.detail?.contains("registry=https://registry.npmjs.org") == true, "明细须含键值：${e.detail}")
+    }
+
+    // ═══ 全局镜像源（§10.9 第 8 条；2026-10-09 批 83） ═══
+
+    @Test
+    fun `全局镜像源未接线时如实回出厂缺省`() = runBlocking {
+        val snap = coordinator().globalRegistry()
+        assertNull(snap.configured, "没接线就是「没设过」，不许假装读到了空配置")
+        assertEquals(NpmRegistryKeys.OFFICIAL, snap.effective)
+        assertEquals(NpmRegistryKeys.MIRROR, snap.secondaryRegistry)
+    }
+
+    @Test
+    fun `设全局镜像源后读回且入史`() = runBlocking {
+        val h = newHistory()
+        val c = coordinator(history = h, globalConfig = NpmGlobalConfig(dir))
+        c.setGlobalRegistry("  https://registry.npmmirror.com/  ")
+        assertEquals(
+            "https://registry.npmmirror.com/",
+            c.globalRegistry().configured,
+            "去首尾空白后**原样**落盘：不做规整化，否则带 ?token= 的自建网关会被静默削掉凭据",
+        )
+        assertTrue(c.globalRegistry().customized)
+        val e = h.all().single()
+        assertEquals(InstallHistory.Op.REGISTRY, e.op)
+        assertEquals("", e.projectId, "全局变更没有项目维度——空串是刻意的，不是漏填")
+    }
+
+    @Test
+    fun `校验不过抛原文且不落盘`() = runBlocking {
+        val c = coordinator(globalConfig = NpmGlobalConfig(dir))
+        val bad = "http://registry.npmjs.org"
+        val e = assertThrows(IllegalArgumentException::class.java) { runBlocking { c.setGlobalRegistry(bad) } }
+        assertTrue(bad in (e.message ?: ""), "拒收原文必须点名用户输入的那个串：${e.message}")
+        assertNull(c.globalRegistry().configured, "被拒的值不得落盘")
+        assertFalse(Files.exists(NpmGlobalConfig(dir).file()), "连文件都不该被建出来")
+    }
+
+    @Test
+    fun `空白输入是恢复出厂——删键而不是写空值`() = runBlocking {
+        val c = coordinator(globalConfig = NpmGlobalConfig(dir))
+        c.setGlobalRegistry("https://registry.npmmirror.com")
+        assertTrue(c.globalRegistry().customized)
+        c.setGlobalRegistry("   ")
+        assertNull(c.globalRegistry().configured)
+        assertFalse(
+            Files.readAllLines(NpmGlobalConfig(dir).file()).any { it.startsWith("registry=") },
+            "「恢复出厂」必须把行删掉",
+        )
+    }
+
+    @Test
+    fun `未接线时写全局镜像源抛而不是静默丢弃`() = runBlocking {
+        val e = assertThrows(AutojsException::class.java) {
+            runBlocking { coordinator().setGlobalRegistry("https://x.example.com") }
+        }
+        assertTrue("未接线" in (e.message ?: ""), "要说清为什么写不进去：${e.message}")
+    }
+
+    /** 永远回 Agreed 的假校验器（只关心它被问到的 primary）。 */
+    private fun agreeingVerifier(): FakeVerifier = FakeVerifier(
+        mapOf("dayjs" to NpmRegistryVerifier.Verdict.Agreed("dayjs", "1.11.23", I, "https://x.tgz", false)),
+    )
+
+    @Test
+    fun `解析链两层——项目 npmrc 有则用项目，没有才落到全局`() = runBlocking {
+        coordinator(globalConfig = NpmGlobalConfig(dir)).setGlobalRegistry("https://global.example.com")
+
+        // 第一层缺席 → 落到全局那层
+        val v1 = agreeingVerifier()
+        coordinator(globalConfig = NpmGlobalConfig(dir), registryVerifier = v1)
+            .install("p1", listOf(PackageSpec("dayjs", "1.11.23")))
+        assertEquals("https://global.example.com", v1.asked.single().third, "项目 .npmrc 没有时用全局那层")
+
+        // 第一层在场 → 项目赢（全局只做缺省，不顶掉项目级）
+        Files.createDirectories(layout.projectRoot("p1"))
+        Files.write(layout.npmrc("p1"), listOf("registry=https://project.example.com"))
+        val v2 = agreeingVerifier()
+        coordinator(globalConfig = NpmGlobalConfig(dir), registryVerifier = v2)
+            .install("p1", listOf(PackageSpec("dayjs", "1.11.23")))
+        assertEquals("https://project.example.com", v2.asked.single().third, "项目 .npmrc 覆盖全局")
+    }
+
+    @Test
+    fun `两层都没设时交给校验器 null——由它用自己的出厂缺省`() = runBlocking {
+        val v = agreeingVerifier()
+        coordinator(globalConfig = NpmGlobalConfig(dir), registryVerifier = v)
+            .install("p1", listOf(PackageSpec("dayjs", "1.11.23")))
+        assertNull(v.asked.single().third, "两层都没设 = null（不是「猜一个镜像」）")
+    }
+
+    @Test
+    fun `快照带上全局镜像源读数`() = runBlocking {
+        val c = coordinator(globalConfig = NpmGlobalConfig(dir))
+        c.setGlobalRegistry("https://registry.npmmirror.com")
+        assertEquals("https://registry.npmmirror.com", c.snapshot().registry?.configured)
     }
 
     // ═══ 审批（人机分离） ═══

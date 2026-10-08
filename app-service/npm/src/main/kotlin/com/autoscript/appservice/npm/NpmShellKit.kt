@@ -45,6 +45,10 @@ import java.nio.file.Path
  * - [lockKey] 缺省 null → 不带 lockSigner：ci 不验签直接走（不假装验过）；
  * - [registryVerifier] 缺省接真 [NpmRegistryVerifier]（纯 JVM + Http 源；只在 install 被调时
  *   发请求，装配本身零网络）。测试要静默跳过校验时显式传 null。
+ *
+ * 全局镜像源**不经参数**：它恒为 `files/.npmrc`（[NpmGlobalConfig]），与传给 npm 的
+ * `--userconfig` 同一路径。做成可注入只会制造「协调器读 A、npm 读 B」这种分家
+ * —— 而本批修的正是这类分家。
  */
 object NpmShellKit {
 
@@ -91,6 +95,10 @@ object NpmShellKit {
                 services = services,
                 executor = executor,
                 scriptExecutor = scriptExecutor,
+                // 全局镜像源（§10.2 userconfig 层，2026-10-09 批 83）：与喂给 npm 的
+                // `--userconfig` 是**同一个文件** —— 解析链读到的与 npm 读到的必须是同一份，
+                // 否则「界面显示生效了」与「npm 真去哪家」又会分家。
+                globalConfig = NpmGlobalConfig(filesDir),
                 freeSpaceProbe = freeSpaceProbe,
             ),
         )
