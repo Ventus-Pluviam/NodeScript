@@ -59,6 +59,22 @@ data class NodeEngineConfig(
      * 缺省 null = 不注入（单测/桌面不经资产部署的路径）。
      */
     val bridgeDistPath: Path? = null,
+    /**
+     * **脚本环境变量**（§8.1，宿主侧全局配置）：用户在管理面板 → 环境变量里编的那组 KV，
+     * 每次 spawn 注入脚本进程的 `process.env`。
+     *
+     * **是 `() -> Map` 而不是 `Map`，且每次 execute 现读** —— 这是契约不是风格：
+     * 装配期读一次塞进来，用户在界面改完就得重启 App 才生效，而"保存了却没生效"
+     * 正是本仓反复点名的坑（与 `HostSummary` 各读口"现取不缓存"同一条纪律）。
+     * 生产实现是 `FileScriptEnvStore.all()` 的投影（`AppShellApplication` 的 engineFactory
+     * 闭包里捕获 store）；缺省 `{ emptyMap() }` = 不注入任何用户变量。
+     *
+     * **注入顺序即契约**：本表先写、宿主键（`AUTOSCRIPT_*`）后写，故宿主键**永远胜出**。
+     * 用户在界面上设不了这些键（`ScriptEnvKeys.reject` 拒收保留前缀），这里的顺序是
+     * **第二道兜底** —— 盘上若已有历史脏行，或将来有人绕过写入闸直写 store，
+     * 引擎侧仍不会被覆盖成"脚本去连别的 socket"。
+     */
+    val scriptEnv: () -> Map<String, String> = { emptyMap() },
     /** 四步 quiesce 的排空窗口（§8.3）：`stop()` SIGTERM 后等这么久，未退则 TimedOut 交池 kill 兜底。 */
     val stopGraceMillis: Long = 3_000,
 )
@@ -164,6 +180,9 @@ class NodeProcessEngine(
 
                 val runId = nodeEngineRunIds.getAndIncrement()
                 val env = linkedMapOf<String, String>()
+                // 用户环境变量**先**写（§8.1）：下面的宿主键后写，故宿主键胜出。
+                // 顺序是契约，不是巧合 —— 见 NodeEngineConfig.scriptEnv 的 KDoc。
+                config.scriptEnv().forEach { (k, v) -> env[k] = v }
                 config.libnodePath?.let { env[ENV_LIBNODE] = it.toString() }
                 addonEffective?.let { env[ENV_BRIDGE_ADDON] = it.toString() }
                 config.hostSocketName?.let { env[ENV_HOST_SOCKET] = it }
