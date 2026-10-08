@@ -187,6 +187,35 @@ data class SnapshotRef(
 enum class NpmConfigKey { REGISTRY, PROXY, CACHE_RETENTION }
 
 /**
+ * 全局镜像源读数（§10.9 第 8 条；管理面板「镜像源管理」）。
+ *
+ * 三个字段都是**出厂缺省不写死在呈现层**的载体：界面上那句「出厂缺省：官方源」和
+ * 「第二意见：npmmirror」都从 [defaultRegistry]/[secondaryRegistry] 读，而不是在
+ * Compose 里再抄一遍 URL —— 抄了就会与 [NpmRegistryKeys] 漂。
+ *
+ * @property configured 用户设过的值（**去首尾空白后原样**）；null = 没设过，实际走 [defaultRegistry]。
+ *   注意「没设过」与「读不到」是两句不同的话：后者由调用方抛异常表达。
+ *
+ *   **写入侧刻意不做规整化**（不去尾斜杠、不丢 query）：少数自建网关的地址带
+ *   `?token=…`，规整化会**静默**把凭据削掉 —— 用户看到「保存成功」而此后每次安装都 401，
+ *   这是比尾斜杠难看糟糕得多的失败形态。规整化只发生在**读的边界**
+ *   （[NpmRegistryKeys.canonicalize]，拼 packument URL 前），那里丢 query 是安全的。
+ * @property defaultRegistry 出厂缺省（[NpmRegistryKeys.OFFICIAL]，§18 第 7 项）。
+ * @property secondaryRegistry 交叉校验的第二意见（官方 ↔ 镜像互补；与首选**不同运营主体**）。
+ */
+data class NpmRegistrySnapshot(
+    val configured: String?,
+    val defaultRegistry: String,
+    val secondaryRegistry: String,
+) {
+    /** 实际生效的那一家（界面显示的「当前生效」就是它）。 */
+    val effective: String get() = configured ?: defaultRegistry
+
+    /** 是否被用户改过（界面据此决定「恢复出厂」按钮是否可用）。 */
+    val customized: Boolean get() = configured != null
+}
+
+/**
  * npm 包管理门面（§10.7）。实现侧：全局唯一安装调度器 + 每项目互斥锁；
  * 所有重操作可取消（[cancel]），进度经 [progress] 流式回传。
  */
@@ -208,6 +237,26 @@ interface PackageManagerFacade {
     suspend fun offlineGap(projectId: String): List<MissingPkg>
     suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String? = null)
     suspend fun storage(): Map<String, NodeModulesStats>
+
+    /**
+     * 全局镜像源读数（§10.9 第 8 条；管理面板「镜像源管理」的读口）。
+     *
+     * 缺省实现如实回「没设过 + 出厂缺省」：老替身（测试里那些只关心别的面的假门面）
+     * 零改动即可编译，而**不假装**读过盘 —— 这一条与 `HostSummary` 其余读口同纪律。
+     */
+    suspend fun globalRegistry(): NpmRegistrySnapshot =
+        NpmRegistrySnapshot(null, NpmRegistryKeys.OFFICIAL, NpmRegistryKeys.MIRROR)
+
+    /**
+     * 设 / 清全局镜像源（§10.9 第 8 条）。
+     *
+     * `null` 或全空白 = **恢复出厂缺省**（删键，不是写一个空值）—— 与界面「清空输入框
+     * 即恢复出厂」同一条语义。校验不过**抛** [IllegalArgumentException]，原文点名
+     * （判据的唯一一份在 [NpmRegistryKeys.reject]）。
+     *
+     * 缺省实现是空操作：未接线的替身不落任何账，也不假装成功（调用方按返回值/异常判定）。
+     */
+    suspend fun setGlobalRegistry(raw: String?) {}
 
     /**
      * 依赖面板读数（§10.9.1）：一次现取**全部项目**的已装清单 + 离线缺口 + 尺寸配额，
@@ -281,6 +330,14 @@ interface PackageManagerFacade {
 data class NpmPanelSnapshot(
     val projects: List<NpmProjectSnapshot>,
     val pendingApprovals: List<ApprovalRequest>,
+    /**
+     * 全局镜像源读数（§10.9 第 8 条）。
+     *
+     * **带缺省值**是刻意的：它是本 DTO 的后加字段，缺省让既有构造点零改动；
+     * null = 该读口未接线（呈现层据此显示「读不到」，**不显示成「没设过」** ——
+     * 那会把「宿主没接这个口」画成「你用的就是出厂源」）。
+     */
+    val registry: NpmRegistrySnapshot? = null,
 )
 
 /**

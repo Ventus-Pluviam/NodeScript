@@ -3,6 +3,8 @@ package com.autoscript.domain.host
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmPanelSnapshot
+import com.autoscript.domain.npm.NpmRegistryKeys
+import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.permission.Capability
 import com.autoscript.domain.permission.CapabilityLifecycle
 import com.autoscript.domain.permission.CapabilityState
@@ -240,6 +242,26 @@ interface HostSummary {
      * 删除一条脚本环境变量。**幂等**（与 [cancelTask] 同口径）：从未设过的 key 照样返回。
      */
     suspend fun removeScriptEnv(key: String)
+
+    /**
+     * 全局镜像源读数（§10.9 第 8 条；管理面板 → 镜像源管理）。
+     *
+     * 与依赖面板同一条分工：**宿主自己的界面读口，不经桥**（桥面是脚本侧的面）。
+     * 缺省实现回「没设过 + 出厂缺省」—— 未接线的替身零改动即可编译，
+     * 且不假装读过盘。
+     */
+    suspend fun npmRegistry(): NpmRegistrySnapshot =
+        NpmRegistrySnapshot(null, NpmRegistryKeys.OFFICIAL, NpmRegistryKeys.MIRROR)
+
+    /**
+     * 设 / 清全局镜像源（§10.9 第 8 条）。`null` 或全空白 = **恢复出厂缺省**。
+     *
+     * 校验不过**抛** [IllegalArgumentException]（原文点名用户输入的那个串）；
+     * 判据的唯一一份在 `:domain` 的 [NpmRegistryKeys.reject]，本口与 `:ui` 共用。
+     *
+     * 缺省实现是空操作（未接线时不落账也不假装成功）。
+     */
+    suspend fun setNpmRegistry(raw: String?) {}
 }
 
 /**
