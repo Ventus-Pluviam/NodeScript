@@ -497,11 +497,7 @@ class InstallCoordinator(
                 quotaWarnRatio = config.quotaWarnRatio,
             )
         }
-        return NpmPanelSnapshot(
-            projects = projects,
-            pendingApprovals = pending,
-            registry = globalRegistry(),
-        )
+        return NpmPanelSnapshot(projects = projects, pendingApprovals = pending)
     }
 
     override suspend fun storage(): Map<String, NodeModulesStats> {

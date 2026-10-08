@@ -650,10 +650,13 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `快照带上全局镜像源读数`() = runBlocking {
+    fun `依赖面板快照不带镜像源——两者各走各的读口`() = runBlocking {
+        // 依赖面板的 snapshot() 要遍历每个项目的 node_modules 算尺寸；镜像源管理页读一个
+        // 键就够。把 registry 塞进那个 DTO 会让「打开镜像源页」付一次全项目遍历的代价，
+        // 而它当前也没有消费方 —— 故镜像源只走 globalRegistry() 这一条口。
         val c = coordinator(globalConfig = NpmGlobalConfig(dir))
         c.setGlobalRegistry("https://registry.npmmirror.com")
-        assertEquals("https://registry.npmmirror.com", c.snapshot().registry?.configured)
+        assertEquals("https://registry.npmmirror.com", c.globalRegistry().configured)
     }
 
     // ═══ 审批（人机分离） ═══

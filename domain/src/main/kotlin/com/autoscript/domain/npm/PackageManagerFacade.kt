@@ -330,14 +330,6 @@ interface PackageManagerFacade {
 data class NpmPanelSnapshot(
     val projects: List<NpmProjectSnapshot>,
     val pendingApprovals: List<ApprovalRequest>,
-    /**
-     * 全局镜像源读数（§10.9 第 8 条）。
-     *
-     * **带缺省值**是刻意的：它是本 DTO 的后加字段，缺省让既有构造点零改动；
-     * null = 该读口未接线（呈现层据此显示「读不到」，**不显示成「没设过」** ——
-     * 那会把「宿主没接这个口」画成「你用的就是出厂源」）。
-     */
-    val registry: NpmRegistrySnapshot? = null,
 )
 
 /**
