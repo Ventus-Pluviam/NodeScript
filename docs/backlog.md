@@ -1,5 +1,15 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-08 追记（批 79：`lockKey` 生产接线）
+
+- **T2 的 `lockKey` 装配缺口已收口（2026-10-08，批 79）**：`LockKeyStore.AndroidKeystore` +
+  `AppShellKit(npmLockKeys=…)` → `NpmShellKit.assembleHandler(lockKey=…)`。接线后 `ci` 先验签、
+  `install` 收尾重签、`exportSnapshot` 带 `snapshot.sig`；取钥失败本次不装该防线、原因原文进
+  `AssembledShell.npmLockKeyFailure`。口径见 [`design-decisions.md`](design-decisions.md) 第 49 项。
+  **仍未验**：`AndroidKeyStore` 那层（`KeyGenParameterSpec` 在真 ROM 上收不收、`getEntry`
+  返回类型）要装包才验得到 —— 归入「真机验证积压」那一类，不单列条目。
+- **npm P1 剩余件不变**：`scriptExecutor`（T1 spawn 桥本体）、`lockKey` 之外无新增。**A13 仍开放**。
+
 ## 2026-10-08 追记（批 78：jsonl 写入侧删除 + 保守档放回 `SCHEDULER_WRITE` + A11 结项）
 
 - **A11 已结项（2026-10-08，批 78）**：批 75 登记的「`abortConnection` 对『子进程继承桥 socket

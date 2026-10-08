@@ -3,6 +3,7 @@ package com.autoscript.shell
 import com.autoscript.appservice.npm.HeavyOpExecutor
 import com.autoscript.appservice.npm.HostNodeExecutor
 import com.autoscript.appservice.npm.InstallCoordinator
+import com.autoscript.appservice.npm.LockSigner
 import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.appservice.npm.NpmShellKit
 import com.autoscript.appservice.runtime.EngineWatchdog
@@ -138,6 +139,16 @@ object AppShellKit {
          * Node 宿主绝对路径（见 KDoc）。null = 不注入执行体（素材照样部署）。
          */
         npmNodeBin: String? = null,
+        /**
+         * 应用密钥缝（§10.5-1 T2 / §11.3 第 8 条）。给的是 Keystore 面
+         * （[LockKeyStore.HmacKeys]），**本配方自己经 [LockKeyStore.resolve] 决定
+         * 「取已有 / 首次建」** —— 取钥判定住在能记账的地方（失败原因进
+         * [AssembledShell.npmLockKeyFailure]），调用方只负责「钥匙在哪」。
+         *
+         * **缺省 null = 不装 lock 签名**：`ci` 不验签直接走、快照导出如实
+         * `ERR_NOT_IMPLEMENTED`（不假装验过）。生产传 [LockKeyStore.AndroidKeystore]。
+         */
+        npmLockKeys: LockKeyStore.HmacKeys? = null,
         datastoreHandler: NamespaceHandler? = null,
         zipHandler: NamespaceHandler? = null,
         settingsHandler: NamespaceHandler? = null,
@@ -281,6 +292,19 @@ object AppShellKit {
         // "npm 一切正常"）。
         var npmCli: NpmCliDeployer.Outcome? = null
         var npmCliFailure: String? = null
+        // 应用密钥（§10.5-1 T2）：**装配期就取一次**，不把「Keystore 坏没坏」推到用户
+        // 第一次 npm ci 才炸 —— 那时看到的是一条验签失败，分不清是 lock 被换了还是
+        // 钥匙取不动。取不到不外抛（npm 只是能力之一，为一把钥匙掀翻装配不成比例）：
+        // 传 null = 本次不装 lock 防线，原因原文进 npmLockKeyFailure，不吞成"一切正常"。
+        var npmLockKeyFailure: String? = null
+        val lockKey: LockSigner.KeyProvider? = npmLockKeys?.let { keys ->
+            try {
+                LockKeyStore.resolve(keys).also { it.secretKey() }
+            } catch (e: Exception) {
+                npmLockKeyFailure = "应用密钥取不到，lock 签名与快照签名本次不生效（ci 不验签直接走）：${e.message}"
+                null
+            }
+        }
         val npm: NamespaceHandler = npmHandler ?: run {
             val source = npmCliSource
             val executor: HeavyOpExecutor = if (source == null) {
@@ -319,6 +343,10 @@ object AppShellKit {
                 filesDir = filesDir,
                 cacheDir = cacheDir,
                 executor = executor,
+                // T2 装配缺口收口（2026-10-08 批 79）：此前这里从不传 `lockKey`，
+                // 于是生产路径上 lock 既不签也不验 —— §11.3 第 8 条记的就是这件事。
+                // 接上后 `ci` 先验签、`install` 收尾重签、快照导出带 snapshot.sig。
+                lockKey = lockKey,
             )
         }
 
@@ -362,6 +390,7 @@ object AppShellKit {
         return AssembledShell(
             shell, log, archive, tasks, npm, ownedScope,
             deployReport, bridgeDistReport, bridgeAddonReport, npmCli, npmCliFailure,
+            npmLockKeyFailure,
         )
     }
 }

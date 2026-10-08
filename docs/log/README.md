@@ -1,5 +1,14 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-08，批 79）
+
+- [2026-10-08 · 批 79：`lockKey` 生产接线（T2 防线生效）](2026-10-08.md)：
+  `LockKeyStore.AndroidKeystore`（Keystore HMAC 密钥，get-or-create，「取不动」绝不静默重建；
+  别名带 `v1` 版本号）+ `AppShellKit(npmLockKeys=…)` → `NpmShellKit.assembleHandler(lockKey=…)`；
+  装配期就取一次钥匙，取不到则本次不装该防线、原因原文进 `AssembledShell.npmLockKeyFailure`（不掀翻装配）。
+  接线后 `ci` 先验签、`install` 收尾重签、`exportSnapshot` 带 `snapshot.sig`。本机 14 任务 JVM 线 +
+  `:app` detekt 绿，两处反向变异各自命中。**边界**：`AndroidKeyStore` 那层要真机才验得到。
+
 ## 最新追记（2026-10-08，批 77）
 
 - [2026-10-08 · 批 77：录屏腿（`MediaRecorder`）+ §8.5 意图日志落 SQLite](2026-10-08.md)：

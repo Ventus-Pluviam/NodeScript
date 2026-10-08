@@ -23,6 +23,7 @@ import com.autoscript.shell.AlarmPort
 import com.autoscript.shell.AlarmReceiver
 import com.autoscript.shell.AlarmSchedulerProvider
 import com.autoscript.shell.HostLog
+import com.autoscript.shell.LockKeyStore
 import com.autoscript.shell.AndroidAlarmPort
 import com.autoscript.shell.AndroidBridgeBinder
 import com.autoscript.shell.AndroidForegroundOps
@@ -287,6 +288,11 @@ class AppShellApplication : Application(), HostSummary {
                 // npm 执行体的 Node 宿主 = 与脚本引擎同一个 noden（§19 交付位）：
                 // 设备上它就是 nativeLibraryDir/libnoden.so，ProcessBuilder 直接 exec。
                 npmNodeBin = nativeDir.resolve("libnoden.so").toString(),
+                // 应用密钥（§10.5-1 T2 / §11.3 第 8 条）：lock 带外签名与快照签名的
+                // 密钥面 = Android Keystore（首次运行建一把，之后一直取那把）。
+                // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
+                // 本类只递 Keystore 那条缝 —— 与 npmCliSource/npmNodeBin 同一分工。
+                npmLockKeys = LockKeyStore.AndroidKeystore,
                 // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
                 // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，
                 // 不 import 任何 com.autoscript.platform..（ArchitectureTest 看住）。
