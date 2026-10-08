@@ -6,6 +6,7 @@ import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.permission.Capability
 import com.autoscript.domain.permission.CapabilityLifecycle
 import com.autoscript.domain.permission.CapabilityState
+import com.autoscript.domain.scripts.ScriptEnvEntry
 
 /**
  * 宿主摘要读口（首屏/能力中心「壳就绪没、漏投几条」的状态源）。
@@ -212,6 +213,33 @@ interface HostSummary {
      * 幂等：已决票再调返回原票（不翻案）。票不存在**抛**（原文给 UI）。
      */
     suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket
+
+    /**
+     * 脚本环境变量（§8.1；管理面板 → 环境变量）。**全局一份**，不是按项目的配置。
+     *
+     * 挂起：读盘（jsonl replay 已在构造时做过，这里是内存投影 —— 但仍声明挂起，
+     * 与其余读口同一形状，免得将来换成现读实现时改签名）。
+     *
+     * 空列表 = **真的没设过任何变量**，不是"读不到"。读不到由实现**抛**（与
+     * [taskCenter]/[npmSnapshot] 同一条纪律）：`:ui` 据此如实说"读取失败"，
+     * 而不是画成"你设的变量都没了"。
+     */
+    suspend fun scriptEnv(): List<ScriptEnvEntry>
+
+    /**
+     * 写入/覆盖一条脚本环境变量（后写胜）。改动**下次脚本执行起**生效 ——
+     * 引擎每次 spawn 现读，不需要重启宿主。
+     *
+     * 键名不合法**抛** [IllegalArgumentException]，原文点名哪个键、为什么
+     * （判据的唯一出处是 `:domain` 的 `ScriptEnvKeys.reject`，本口不另判一遍）。
+     * **不静默丢弃**：用户敲了一个被保留前缀占用的名字，必须当场知道。
+     */
+    suspend fun putScriptEnv(key: String, value: String)
+
+    /**
+     * 删除一条脚本环境变量。**幂等**（与 [cancelTask] 同口径）：从未设过的 key 照样返回。
+     */
+    suspend fun removeScriptEnv(key: String)
 }
 
 /**
