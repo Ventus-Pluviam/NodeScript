@@ -9,8 +9,8 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /**
- * §8.5 契约套件打在 [SqliteIntentStore] 上 —— **与 `JournalFileStore` 跑的是同一组用例**
- * （`IntentStoreContract` 住 `:domain` 的 testFixtures，两个实现各继承一次）。
+ * §8.5 契约套件打在 [SqliteIntentStore] 上 —— **与 `InMemoryIntentStore` 跑的是同一组用例**
+ * （`IntentStoreContract` 住 `:domain` 的 testFixtures，各实现各继承一次）。
  *
  * 执行体是 [CliSqlRunner]（宿主 `sqlite3` CLI），因此本机跑的是**真 SQLite 引擎**，
  * 不是仿制品。**没被这份测试覆盖的是 `AndroidSqliteRunner` 本身**（`SQLiteOpenHelper`

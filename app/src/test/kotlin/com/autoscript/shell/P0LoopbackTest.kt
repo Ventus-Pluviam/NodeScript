@@ -2,6 +2,7 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.npm.NpmShellKit
 import com.autoscript.appservice.npm.HostNodeExecutor
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import com.autoscript.testkit.HostNpm
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
@@ -64,6 +65,7 @@ class P0LoopbackTest {
     private fun kit(tree: InMemoryUiTree): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
+        intentStore = InMemoryIntentStore(),
         schedulerProvider = provider,
         screenGate = ScreenGate.AllowAll,
         a11yHandler = CapabilityNamespaces.a11y(tree, tree),

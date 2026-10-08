@@ -23,7 +23,7 @@ import com.autoscript.domain.scripts.IntentStore
  *   `ON intent_log(run_nonce) WHERE outcome IS NULL OR outcome <> 'INTERRUPTED'` ——
  *   「一个 nonce 至多一条**算数的**行」，其中 `INTERRUPTED` 是「这次不算数」的封口。
  *
- *   这一条同时表达了两件事，与 `JournalFileStore` 的两张内存表逐条等价：
+ *   这一条同时表达了两件事，与已退役的 jsonl 存储的两张内存表逐条等价：
  *   - **存活行唯一**：同 nonce 第二条 START 行被拒（`insertStart` 的原子兜底）；
  *   - **已提交 nonce 唯一且不可再投**：已 COMMIT 的行仍在索引里，所以同 nonce 再插一行
  *     存活行、或另一行再封成真终态，都被拒（真副作用幂等锚点）。
@@ -151,7 +151,7 @@ internal object IntentStoreSql {
 
     /**
      * 全量行读取（`liveRows`/`allRows` 共用）：按 `run_id` 升序 —— 与
-     * `JournalFileStore` 的 `sortedMapOf` 迭代序一致（契约是「按 runId 升序」）。
+     * 已退役的 jsonl 存储的 `sortedMapOf` 迭代序一致（契约是「按 runId 升序」）。
      *
      * @param liveOnly true = 只取未封口行（启动回放入口）
      */

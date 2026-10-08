@@ -13,7 +13,7 @@ import java.nio.file.Path
 
 /**
  * 审批账本持久化单测（§10.2 approve-ledger）：submit/resolve 双写 + replay 恢复 +
- * id 不碰撞 + 半行容忍。与 JournalFileStoreTest 同款崩溃纪律断言。
+ * id 不碰撞 + 半行容忍。与已删除的 `JournalFileStoreTest` 同款崩溃纪律断言。
  */
 class ApprovalLedgerStoreTest {
 

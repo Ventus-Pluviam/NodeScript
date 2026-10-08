@@ -2,7 +2,7 @@ plugins {
     id("autoscript.jvm")
     // 契约测试夹具（§8.5）：`IntentStoreContract` 是**同一组用例打在多个实现上**的那一份
     // —— 存储引擎从 jsonl 换成 SQLite 时，两个实现必须逐条等价，所以规格只能有一份。
-    // 消费方：`:app-service:scheduler`（JournalFileStore）、`:platform:system`（SqliteIntentStore）。
+    // 消费方：`:domain` 自己的 test（InMemoryIntentStore，无门禁）、`:platform:system`（SqliteIntentStore）。
     id("java-test-fixtures")
 }
 

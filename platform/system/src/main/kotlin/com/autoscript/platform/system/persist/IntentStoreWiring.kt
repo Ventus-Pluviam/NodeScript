@@ -9,15 +9,17 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * 意图日志存储的**选型与一次性迁移**（§8.5「append-only（SQLite，启动即回放）」）。
+ * 意图日志存储的**打开与一次性迁移**（§8.5「append-only（SQLite，启动即回放）」）。
  *
  * 两件事，都只在装配期跑一次：
  *
  * 1. **迁移**（[migrate]）：老设备上已有 `intent-log.jsonl`。SQLite 库为空且 jsonl 非空时
  *    把历史**带着原 runId** 导进去，然后把 jsonl 改名归档（`intent-log.jsonl.migrated`）。
- * 2. **选型**（[open]）：Android 生产开 SQLite；`sqlite3` 不可用（异常）时**如实回落到
- *    jsonl** —— 与 `PlatformWiring` 里 `images`/`dialogs` 同一条「缺件不伪造」纪律：
- *    回落是明说的降级，不是静默换引擎。
+ * 2. **打开**（[open]）：Android 生产开 SQLite。**没有回落**（2026-10-08 裁定）——
+ *    打开失败就是失败，异常原样抛给装配层（`AppShellApplication.installWithFiles` 的
+ *    失败分支：记日志、壳保持未就绪、闹钟走漏投记账）。原先那条「打不开就回落 jsonl」
+ *    已删：回落目标的 runId 分配与幂等锚点都靠单写者假设撑着，那不是降级，是
+ *    把「调度坏了」伪装成「调度还能用」。
  *
  * **为什么要迁移而不是不迁**（本轨的显式裁定）：
  * - **runId 与 `run-archive.jsonl` 的 `EngineRunLink.intentRunId` 是同一批号**。不迁 =
@@ -31,7 +33,7 @@ import java.nio.file.Path
  * - **老库不再增长**：迁移后 jsonl 归档不再被读（改名前先验后写），老设备不会"两份日志各写各的"。
  *
  * **可重入**：库非空即跳过（本类是这份库的唯一写者，读-判-写之间没有并发写者）；
- * 库空而 jsonl 也已归档 → 无事可做。失败（jsonl 损坏）**响亮失败**：装配层据此回落 jsonl，
+ * 库空而 jsonl 也已归档 → 无事可做。失败（jsonl 损坏）**响亮失败**：异常抛给装配层，
  * 老日志原样留着（改名在验完之后），不会出现"导了一半、老的又没了"。
  */
 object IntentStoreWiring {
@@ -43,7 +45,7 @@ object IntentStoreWiring {
      * 打开 Android 生产用的意图日志存储，并在需要时先做一次性迁移。
      *
      * @param context Android 上下文（`SQLiteOpenHelper` 用）
-     * @param autojsDir `.autojs` 目录（jsonl 就在它下面 —— 与 `JournalFileStore` 同一处）
+     * @param autojsDir `.autojs` 目录（老 jsonl 就在它下面 —— 与已退役的 jsonl 存储同一处）
      * @return 存储实例（调用方负责 close，随壳收口）
      */
     fun open(context: Context, autojsDir: Path): IntentStore =
@@ -88,7 +90,7 @@ object IntentStoreWiring {
         return String(bytes, 0, end, StandardCharsets.UTF_8)
     }
 
-    /** jsonl 侧的文件名（与 `JournalFileStore` 同一份约定，这里只读不写）。 */
+    /** jsonl 侧的文件名（与已退役的 jsonl 存储同一份约定，这里只读不写）。 */
     private object JournalName {
         const val FILE = "intent-log.jsonl"
     }

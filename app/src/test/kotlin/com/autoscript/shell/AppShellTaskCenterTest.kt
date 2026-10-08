@@ -7,6 +7,7 @@ import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TimedSchedule
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.domain.host.ScheduleSpec
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -44,6 +45,7 @@ class AppShellTaskCenterTest {
     private fun kit(): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
+        intentStore = InMemoryIntentStore(),
         schedulerProvider = RecordingProvider(),
         screenGate = ScreenGate.AllowAll,
     )

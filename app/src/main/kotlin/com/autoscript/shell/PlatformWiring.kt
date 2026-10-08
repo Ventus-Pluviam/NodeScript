@@ -34,7 +34,6 @@ import com.autoscript.platform.system.power.WakeLockLedger
 import com.autoscript.platform.capabilities.a11y.A11yEventRing
 import com.autoscript.platform.capabilities.a11y.InMemoryUiTree
 import com.autoscript.platform.capabilities.a11y.SystemA11yBridge
-import com.autoscript.appservice.scheduler.persist.JournalFileStore
 import com.autoscript.platform.editor.EditorHighlighters
 import java.nio.file.Path
 
@@ -215,33 +214,22 @@ object PlatformWiring {
         )
 
     /**
-     * §8.5 意图日志存储的**生产选型**：Android 走 SQLite（`SqliteIntentStore`，住
-     * `:platform:system`），并在此之前做一次性迁移（老设备的 `intent-log.jsonl` →
-     * SQLite，带原 runId、幂等可重入 —— 理由见 [IntentStoreWiring] 的 KDoc）。
+     * §8.5 意图日志存储的**生产打开**：SQLite（`SqliteIntentStore`，住 `:platform:system`），
+     * 并在此之前做一次性迁移（老设备的 `intent-log.jsonl` → SQLite，带原 runId、
+     * 幂等可重入 —— 理由见 [IntentStoreWiring] 的 KDoc）。
      *
-     * **打开失败如实回落 jsonl**（返回的 [AppShellKit.IntentStoreChoice.fallbackReason]
-     * 是原因原文）：与 `images`/`dialogs` 同一条「缺件不伪造」纪律 —— 回落是**明说的**
-     * 降级（诊断读口能看见），不是静默换引擎。回落时不动 jsonl（迁移失败也一样），
-     * 老日志原样留着继续被 `JournalFileStore` 读写。
+     * **打不开就是失败，不回落**（2026-10-08 裁定）：异常原样抛给调用方
+     * （`AppShellApplication.installWithFiles` 的失败分支 —— 记日志、壳保持未就绪、
+     * 闹钟走漏投记账）。原先那条「打不开就回落 jsonl」已删：回落目标的 runId 分配
+     * （`max+1`）与幂等锚点（锁内先查后写）都靠单写者假设撑着，那不是降级，
+     * 是把「调度坏了」伪装成「调度还能用」。
      *
      * 为什么这个函数住本类而不是 `AppShellKit`：它碰 Android（`Context`），而
      * `AppShellKit` 的纪律是**纯 JVM 可测**（只收 :domain 缝类型，不 import `android.`）。
      * 本类已经是「唯一碰 Android 的那一步」（`of(context)` 同址）。
      */
-    @Suppress("TooGenericExceptionCaught") // 打不开/迁不动的失败面很宽（SQLite 打开、磁盘、迁移解析），但都必须回落成明说的降级
-    fun intentStore(context: Context, autojsDir: Path): AppShellKit.IntentStoreChoice = try {
-        AppShellKit.IntentStoreChoice(
-            store = IntentStoreWiring.open(context.applicationContext, autojsDir),
-            backend = "sqlite",
-        )
-    } catch (e: Exception) {
-        // 只有"打不开/迁不动"才回落。异常原文进诊断字段 —— 不吞成"一切正常"。
-        AppShellKit.IntentStoreChoice(
-            store = JournalFileStore(autojsDir),
-            backend = "journal",
-            fallbackReason = "${e::class.simpleName}: ${e.message}",
-        )
-    }
+    fun intentStore(context: Context, autojsDir: Path): IntentStore =
+        IntentStoreWiring.open(context.applicationContext, autojsDir)
 
     /**
      * 生产入口：`Context` → [SystemSpis.of] 十件 + DialogHost 构造（本类是唯一同时

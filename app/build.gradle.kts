@@ -165,4 +165,7 @@ dependencies {
     // P0LoopbackTest 的宿主 npm 发现器取自 :app-service:npm 的测试夹具（backlog D9）：
     // 此前 `:app` 测试源集自己抄了一份、与那边**已分叉**，现在物理上只有一份。
     testImplementation(testFixtures(project(":app-service:npm")))
+    // `AppShellKit.assemble` 的 intentStore 是必填参数（无缺省，2026-10-08 删回落）：
+    // 测试喂 :domain 夹具的 `InMemoryIntentStore`（零 IO）。
+    testImplementation(testFixtures(project(":domain")))
 }

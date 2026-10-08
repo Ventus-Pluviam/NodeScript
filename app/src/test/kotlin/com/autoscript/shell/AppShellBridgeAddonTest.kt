@@ -2,6 +2,7 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.file.Files
 import java.nio.file.Path
@@ -34,6 +35,7 @@ class AppShellBridgeAddonTest {
         AppShellKit.assemble(
             filesDir = files,
             cacheDir = cache,
+            intentStore = InMemoryIntentStore(),
             schedulerProvider = NoopProvider(),
             screenGate = ScreenGate.AllowAll,
             bridgeAddon = bridgeAddon,

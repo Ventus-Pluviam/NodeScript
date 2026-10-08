@@ -14,6 +14,7 @@ import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.engine.StopResult
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.domain.scripts.EngineRunLink
+import com.autoscript.domain.scripts.InMemoryIntentStore
 import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
 import kotlinx.coroutines.runBlocking
@@ -32,6 +33,7 @@ class AppShellTaskLogTest {
     private fun kit(): AssembledShell = AppShellKit.assemble(
         filesDir = dir.resolve("files"),
         cacheDir = dir.resolve("cache"),
+        intentStore = InMemoryIntentStore(),
         screenGate = ScreenGate.AllowAll,
         schedulerProvider = object : SchedulerProvider {
             override suspend fun registerTrigger(targetFireAtMillis: Long, taskId: String) = TriggerHandle { }
@@ -68,6 +70,7 @@ class AppShellTaskLogTest {
         AppShellKit.assemble(
             filesDir = dir.resolve("files"),
             cacheDir = dir.resolve("cache"),
+            intentStore = InMemoryIntentStore(),
             screenGate = ScreenGate.AllowAll,
             schedulerProvider = object : SchedulerProvider {
                 override suspend fun registerTrigger(targetFireAtMillis: Long, taskId: String) = TriggerHandle { }

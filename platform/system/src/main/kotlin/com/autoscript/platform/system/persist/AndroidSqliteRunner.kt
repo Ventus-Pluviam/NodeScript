@@ -22,9 +22,10 @@ import android.database.sqlite.SQLiteOpenHelper
  * FULL 就得同时钉 `journal_mode` 与连接池配置。非 WAL 模式下池里只有一条连接，一句
  * pragma 就是全库口径。选简单且可证明的那条。
  *
- * **单写者**：意图日志的写者只有 `:main` 的单例调度器（§8.5），与 `JournalFileStore`
- * 的单写者锁同一条前提 —— 本类不额外加锁，靠 `SQLiteDatabase` 自身的串行化与
- * `ux_nonce` 的原子拒绝兜底。
+ * **单写者**：意图日志的写者只有 `:main` 的单例调度器（§8.5）—— 本类不额外加锁，
+ * 靠 `SQLiteDatabase` 自身的串行化与 `ux_nonce` 的原子拒绝兜底。**锚点由引擎强制**：
+ * 即便真有第二个写者进来，唯一索引照样拒绝（已退役的 jsonl 存储则不同 —— 它的
+ * 「锁内先查后写」只在单写者前提下成立）。
  *
  * 连接生命周期：`SQLiteOpenHelper` 持应用级单例库；[close] 随壳收口时由装配层调
  * （同 `SqliteKvOps` 的收口入口形状）。
