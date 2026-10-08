@@ -79,6 +79,7 @@ import com.autoscript.ui.screens.ManagementScreen
 import com.autoscript.ui.screens.LogManagementScreen
 import com.autoscript.ui.screens.NpmScreen
 import com.autoscript.ui.screens.ProjectScreen
+import com.autoscript.ui.screens.RegistryScreen
 import com.autoscript.ui.screens.ScriptEnvScreen
 import com.autoscript.ui.screens.SettingsScreen
 import com.autoscript.ui.screens.ConsoleScreen
@@ -91,10 +92,14 @@ import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.ui.state.TaskLogState
 import com.autoscript.ui.state.ProjectState
+import com.autoscript.ui.state.RegistryState
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.ScriptEnvState
 import com.autoscript.ui.state.addScriptEnv
+import com.autoscript.ui.state.loadRegistry
 import com.autoscript.ui.state.loadScriptEnv
+import com.autoscript.ui.state.resetRegistry
+import com.autoscript.ui.state.saveRegistry
 import com.autoscript.ui.state.removeScriptEnv
 import com.autoscript.ui.state.TaskCenterState
 import com.autoscript.ui.state.TaskRowState
@@ -171,6 +176,12 @@ class MainActivity : ComponentActivity() {
      * 与 `scriptFiles()` 同一条口径），故首帧就现读一次 —— 不等壳就绪那一档。
      */
     private var envState: ScriptEnvState by mutableStateOf(ScriptEnvState.NOT_LOADED)
+
+    /**
+     * 镜像源管理页状态（批 83，§10.9 第 8 条）。与 [envState] 同一条口径：读口不依赖
+     * 壳装配（全局 `.npmrc` 住 `filesDir`），首帧就现读一次。
+     */
+    private var registryState: RegistryState by mutableStateOf(RegistryState.NOT_LOADED)
 
     // 「当前页签」不再是一个字段：它由 pager 的滚动位置派生（见 setContent 里的 pagerState）。
     // 存两份必然漂移 —— 手指划过去时字段说 A、pager 说 B。
@@ -340,10 +351,14 @@ class MainActivity : ComponentActivity() {
             // 环境变量子页（批 82）：同一层级、同一读法。
             var envOpen by rememberSaveable { mutableStateOf(false) }
             val closeEnv = { envOpen = false }
+            // 镜像源管理子页（批 83）：同一层级、同一读法。
+            var registryOpen by rememberSaveable { mutableStateOf(false) }
+            val closeRegistry = { registryOpen = false }
             val subPage = when {
                 consoleOpen -> ManagementPage.CONSOLE
                 npmOpen -> ManagementPage.NPM
                 envOpen -> ManagementPage.ENV
+                registryOpen -> ManagementPage.REGISTRY
                 logManagementOpen -> ManagementPage.LOGS
                 else -> null
             }
@@ -422,6 +437,7 @@ class MainActivity : ComponentActivity() {
                                         onOpenLogManagement = { logManagementOpen = true },
                                         onOpenNpm = { npmOpen = true },
                                         onOpenEnv = { envOpen = true },
+                                        onOpenRegistry = { registryOpen = true },
                                         modifier = Modifier,
                                     )
                                 } else {
@@ -430,6 +446,7 @@ class MainActivity : ComponentActivity() {
                                         onCloseConsole = closeConsole,
                                         onCloseNpm = closeNpm,
                                         onCloseEnv = closeEnv,
+                                        onCloseRegistry = closeRegistry,
                                         onCloseLogManagement = closeLogManagement,
                                         scope = scope,
                                     )
@@ -448,11 +465,16 @@ class MainActivity : ComponentActivity() {
                         }
                 }
             ManagementBackHandler(pagerState, subPage != null) {
+                // 每个枚举都显式列出：留 `else` 会在加新子页时静默吞掉返回键
+                // （新页按返回 = 把日志管理关了，而不是关自己）。
                 when (subPage) {
                     ManagementPage.CONSOLE -> closeConsole()
                     ManagementPage.NPM -> closeNpm()
                     ManagementPage.ENV -> closeEnv()
-                    else -> closeLogManagement()
+                    ManagementPage.LOGS -> closeLogManagement()
+                    ManagementPage.REGISTRY -> closeRegistry()
+                    // 面板本身不是子页：返回键让位给页签滑动（本 handler 只在子页开着时拦截）。
+                    null -> Unit
                 }
             }
             // 键里带页签和管理子页：进入控制台即现取，而不是显示上次离开时的快照。
@@ -476,6 +498,7 @@ class MainActivity : ComponentActivity() {
                         ManagementPage.CONSOLE -> reloadConsole()
                         ManagementPage.NPM -> reloadNpm()
                         ManagementPage.ENV -> reloadEnv()
+                        ManagementPage.REGISTRY -> reloadRegistry()
                         ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog() }
                         null -> Unit
                     }
@@ -539,6 +562,7 @@ class MainActivity : ComponentActivity() {
         onCloseConsole: () -> Unit,
         onCloseNpm: () -> Unit,
         onCloseEnv: () -> Unit,
+        onCloseRegistry: () -> Unit,
         onCloseLogManagement: () -> Unit,
         scope: CoroutineScope,
     ) {
@@ -566,6 +590,15 @@ class MainActivity : ComponentActivity() {
                 onAdd = { scope.launch { envState = addScriptEnv(hostSummary(), envState) } },
                 onRemove = { key -> scope.launch { envState = removeScriptEnv(hostSummary(), envState, key) } },
                 onBack = onCloseEnv,
+                modifier = Modifier,
+            )
+            ManagementPage.REGISTRY -> RegistryScreen(
+                state = registryState,
+                onRefresh = { reloadRegistry() },
+                onDraft = { registryState = registryState.copy(draft = it, opError = null, opNotice = null) },
+                onSave = { scope.launch { registryState = saveRegistry(hostSummary(), registryState) } },
+                onReset = { scope.launch { registryState = resetRegistry(hostSummary(), registryState) } },
+                onBack = onCloseRegistry,
                 modifier = Modifier,
             )
             ManagementPage.LOGS -> LogManagementScreen(
@@ -690,6 +723,15 @@ class MainActivity : ComponentActivity() {
      */
     private suspend fun reloadEnv() {
         envState = loadScriptEnv(hostSummary(), envState)
+    }
+
+    /**
+     * 现取全局镜像源读数（挂起；只写 [registryState]）。
+     *
+     * 逻辑在 [loadRegistry]（`:ui` 顶层函数），理由与 [reloadEnv] 逐字相同。
+     */
+    private suspend fun reloadRegistry() {
+        registryState = loadRegistry(hostSummary(), registryState)
     }
 
     /**
@@ -970,7 +1012,7 @@ class MainActivity : ComponentActivity() {
      * `glyph` 是页签条上那个画出来的图标（见 `Glyphs.kt`）。
      */
     /** 管理页在前台的那个子页（面板本身不是子页，用 null 表示）。 */
-    enum class ManagementPage { CONSOLE, NPM, ENV, LOGS }
+    enum class ManagementPage { CONSOLE, NPM, ENV, LOGS, REGISTRY }
 
     enum class Tab(val short: String, val glyph: GlyphKind) {
         HOME("项目", GlyphKind.HOME),

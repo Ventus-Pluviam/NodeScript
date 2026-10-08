@@ -23,9 +23,9 @@
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun MainShell( pagerState: PagerState, onSelectTab: (Int) -&gt; Unit, toast: ToastAction, modifier: Modifier = Modifier, content: @Composable (Modifier) -&gt; Unit, )</ID>
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun ManagementBackHandler(pagerState: PagerState, subPageOpen: Boolean, onBack: () -&gt; Unit)</ID>
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun TabReloadEffect( resumeTick: Int, pagerState: PagerState, subPage: MainActivity.ManagementPage?, onSettled: suspend (MainActivity.Tab) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ManagementSubPageHost( page: ManagementPage, onCloseConsole: () -&gt; Unit, onCloseNpm: () -&gt; Unit, onCloseEnv: () -&gt; Unit, onCloseLogManagement: () -&gt; Unit, scope: CoroutineScope, )</ID>
+    <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ManagementSubPageHost( page: ManagementPage, onCloseConsole: () -&gt; Unit, onCloseNpm: () -&gt; Unit, onCloseEnv: () -&gt; Unit, onCloseRegistry: () -&gt; Unit, onCloseLogManagement: () -&gt; Unit, scope: CoroutineScope, )</ID>
     <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ProjectTab(scope: CoroutineScope, themeSwitch: ThemeSwitchWiring, dark: Boolean, active: Boolean)</ID>
-    <ID>FunctionNaming:ManagementScreen.kt$@Composable fun ManagementScreen( onOpenConsole: () -&gt; Unit, onOpenLogManagement: () -&gt; Unit, onOpenNpm: () -&gt; Unit, onOpenEnv: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:ManagementScreen.kt$@Composable fun ManagementScreen( onOpenConsole: () -&gt; Unit, onOpenLogManagement: () -&gt; Unit, onOpenNpm: () -&gt; Unit, onOpenEnv: () -&gt; Unit, onOpenRegistry: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:MenuPopup.kt$@Composable internal fun MenuPopup( expanded: Boolean, visibleCount: Int, onDismissRequest: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
     <ID>FunctionNaming:Menus.kt$@Composable fun ActionBottomSheetItem( label: String, tone: StatusTone = StatusTone.NEUTRAL, enabled: Boolean = true, onClick: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:Menus.kt$@Composable fun ContextMenu( expanded: Boolean, onDismiss: () -&gt; Unit, actions: List&lt;MenuEntry&gt;, )</ID>
@@ -53,6 +53,11 @@
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun SearchField( query: String, onChange: (String) -&gt; Unit, )</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun SelectionTick()</ID>
     <ID>FunctionNaming:Refresh.kt$@Composable fun RefreshableBox( modifier: Modifier = Modifier, content: @Composable BoxScope.() -&gt; Unit, )</ID>
+    <ID>FunctionNaming:RegistryScreen.kt$@Composable fun RegistryScreen( state: RegistryState, onRefresh: suspend () -&gt; Unit, onDraft: (String) -&gt; Unit, onSave: () -&gt; Unit, onReset: () -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:RegistryScreen.kt$@Composable private fun CurrentCard(state: RegistryState)</ID>
+    <ID>FunctionNaming:RegistryScreen.kt$@Composable private fun EditRow( state: RegistryState, onDraft: (String) -&gt; Unit, onSave: () -&gt; Unit, onReset: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:RegistryScreen.kt$@Composable private fun RegistryField(value: String, onChange: (String) -&gt; Unit, modifier: Modifier)</ID>
+    <ID>FunctionNaming:RegistryScreen.kt$@Composable private fun SecondaryNote(state: RegistryState)</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun Cell( modifier: Modifier = Modifier, leading: (@Composable () -&gt; Unit)? = null, contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 10.dp), trailing: (@Composable () -&gt; Unit)? = null, onClick: (() -&gt; Unit)? = null, content: @Composable () -&gt; Unit, )</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun CountBadge(text: String?, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun Dot(tone: StatusTone, modifier: Modifier = Modifier, size: Int = 8)</ID>
@@ -109,6 +114,7 @@
     <ID>MatchingDeclarationName:Glyphs.kt$GlyphKind</ID>
     <ID>MatchingDeclarationName:Refresh.kt$RefreshAction</ID>
     <ID>TooGenericExceptionCaught:MainActivity.kt$MainActivity$t: Exception</ID>
+    <ID>TooGenericExceptionCaught:RegistryOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:ScriptEditorScreen.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:ScriptEnvOps.kt$t: Exception</ID>
     <ID>TooManyFunctions:MainActivity.kt$MainActivity : ComponentActivity</ID>
