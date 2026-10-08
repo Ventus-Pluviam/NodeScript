@@ -365,16 +365,35 @@ class AppShell(
                 // 将来每次触发都拉起新执行 —— 那是一次绕过掩码的派生。判据放这里（装配层），
                 // 因为它要算子掩码、比调用方掩码，而这两件事只有 `:app` 同时看得见
                 // （scheduler 模块的 arch 门禁禁 `domain.permission`）。
-                // 语义 = `engines.exec` 的同一套：调用方要有 `CROSS_SCRIPT_CONTROL`，
-                // 且掩码要覆盖**被建任务将来会拿到的**掩码（跨脚本不得提权）。
+                //
+                // **判据 = 「自建」与「替别人建」分开**（2026-10-08 批 78，对齐批 75 给
+                // `engines.stop/status` 定下的形状）：那一次把「是不是别的执行」的判据从
+                // 目录级下沉到 handler，好让窄掩码脚本停得掉**自己**。本闸原先照抄
+                // `engines.exec` 的一刀切 —— 无条件要求 `CROSS_SCRIPT_CONTROL`，
+                // 于是脚本连**自己的**任务都建不了，而 `workManager` 是 §14 P0 用户故事
+                // 明写的闭环之一。实测（探针）：掩码已含 `SCHEDULER_WRITE` 仍被本闸拒，
+                // 放开掩码那一半零收益。
+                //
+                // 现在的判据两条：
+                // - **自建**（`caller.projectId` 与目标项目号相同）→ 只要求调用方掩码含
+                //   `SCHEDULER_WRITE`（路由闸已经按目录查过，本闸不重复判）。比对用的
+                //   [AuthenticatedRunContext.projectId] **由认证点从 lease 装填、不是 wire
+                //   字段**（与 capabilityMask 同一条「不可自报」纪律），所以这个相等判断
+                //   用的是可信身份，不是脚本自报的值。**空串 = 不知道 → 走跨脚本那条**
+                //   （fail closed，不套默认项目名）。
+                // - **替别人建** → 回到 `authorizeStart` 的全套（跨脚本位 + 不得提权）。
                 // 宿主直投（无认证上下文）= 链的根，放行。
                 val authorizeCreate: suspend (String) -> String? = { projectId ->
                     val caller = kotlin.coroutines.coroutineContext[AuthenticatedRunContext]
-                    try {
-                        controller.authorizeStart(caller, projectId)
+                    if (caller != null && caller.projectId.isNotBlank() && caller.projectId == projectId) {
                         null
-                    } catch (e: AutojsException) {
-                        e.message
+                    } else {
+                        try {
+                            controller.authorizeStart(caller, projectId)
+                            null
+                        } catch (e: AutojsException) {
+                            e.message
+                        }
                     }
                 }
                 router.register("workManager", WorkManagerNamespaceHandler(scheduler, authorizeCreate))
