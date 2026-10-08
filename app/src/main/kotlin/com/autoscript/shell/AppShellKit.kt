@@ -2,6 +2,7 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.npm.HeavyOpExecutor
 import com.autoscript.appservice.npm.HostNodeExecutor
+import com.autoscript.appservice.npm.NpmGlobalConfig
 import com.autoscript.appservice.npm.InstallCoordinator
 import com.autoscript.appservice.npm.LockSigner
 import com.autoscript.appservice.npm.NpmCliDeployer
@@ -388,7 +389,7 @@ object AppShellKit {
      * [cli] 非 null 就一定是"CLI 真在盘上"；[cliFailure] 是"哪一步没接上"的原文；
      * [gate] 非 null = child_process 拦截 shim 在盘上（§10.11 P0 承诺面）。
      */
-    private class NpmWiring(
+    internal class NpmWiring(
         val executor: HeavyOpExecutor,
         val cli: NpmCliDeployer.Outcome?,
         val cliFailure: String?,
@@ -407,7 +408,7 @@ object AppShellKit {
      * 整个壳装不起来 —— 而 `NpmCliDeployer.deploy` 对"素材缺失/半瘫"是 loud 的
      * （锚校验一票否决），所以这里必须接住并如实记账，而不是放它掀翻装配。
      */
-    private fun wireNpmExecutor(
+    internal fun wireNpmExecutor(
         filesDir: Path,
         cacheDir: Path,
         source: NpmCliDeployer.CliSource?,
@@ -447,7 +448,15 @@ object AppShellKit {
         }
         return try {
             NpmWiring(
-                HostNodeExecutor(deployed.cliJs, cacheDir, nodeBin = host, spawnGateFile = gate),
+                HostNodeExecutor(
+                    deployed.cliJs, cacheDir, nodeBin = host, spawnGateFile = gate,
+                    // 全局镜像源走 userconfig（§10.2 三层链；2026-10-09 批 83）。
+                    // **不再传 registryOverride**：此前无条件注入 `--registry 官方`，
+                    // 于是用户设的镜像源对真实安装毫无影响。现在让 npm 自己按
+                    // `--prefix`（workDir，里面已拷了项目 .npmrc）→ userconfig → 出厂解析，
+                    // 与 InstallCoordinator.resolveRegistry 的两层链同源。
+                    userConfig = filesDir.resolve(NpmGlobalConfig.FILE_NAME),
+                ),
                 deployed, null, gate,
             )
         } catch (e: Exception) {
