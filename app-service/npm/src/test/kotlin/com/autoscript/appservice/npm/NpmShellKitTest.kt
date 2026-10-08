@@ -53,6 +53,47 @@ class NpmShellKitTest {
     }
 
     @Test
+    fun `审批账本缺省落盘：requestApprove 之后 approve-ledger 真在盘上`() = runBlocking {
+        val files = dir.resolve("files")
+        val h = NpmShellKit.assembleHandler(filesDir = files, cacheDir = dir.resolve("cache"))
+        val r = h.handle(
+            BridgeRequest(
+                3, "npm", "requestApprove",
+                """{"pkg":"esbuild","versionHash":"sha512-v1","action":"install_script"}""",
+                10_000,
+            ),
+        )
+        assertInstanceOf(BridgeResponse.Ok::class.java, r)
+        val ledger = files.resolve(".autojs/approve-ledger.jsonl")
+        assertTrue(Files.isRegularFile(ledger), "审批是信任决策，装配缺省必须落盘：$ledger")
+        assertTrue(
+            Files.readAllLines(ledger).any { it.contains("\"op\":\"submit\"") && it.contains("esbuild") },
+            "落盘内容要带得回这份请求（否则 replay 恢复不出任何东西）",
+        )
+    }
+
+    @Test
+    fun `审批账本显式不落盘：approvalStore = null 时盘上零文件（逃生口是显式的）`() = runBlocking {
+        val files = dir.resolve("files")
+        val h = NpmShellKit.assembleHandler(
+            filesDir = files,
+            cacheDir = dir.resolve("cache"),
+            approvalStore = null,
+        )
+        h.handle(
+            BridgeRequest(
+                4, "npm", "requestApprove",
+                """{"pkg":"esbuild","versionHash":"sha512-v1","action":"install_script"}""",
+                10_000,
+            ),
+        )
+        assertTrue(
+            !Files.exists(files.resolve(".autojs/approve-ledger.jsonl")),
+            "显式传 null 就不该落盘（这条口子只给不关心重启的用例）",
+        )
+    }
+
+    @Test
     fun `T1 执行面不经桥面：run 与 exec 从脚本不可达，注入的执行体零触发`() = runBlocking {
         val seen = mutableListOf<String>()
         val h = NpmShellKit.assembleHandler(

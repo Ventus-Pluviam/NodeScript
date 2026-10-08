@@ -23,6 +23,10 @@ import java.nio.file.StandardOpenOption
  * - `{"op":"resolve","requestId":R,"status":"APPROVED"|"REJECTED","at":M}`
  *
  * 崩溃自愈：replay 时最后状态即终态（resolve 单向写，无回滚事件）。
+ *
+ * **文件名口径**：实现落 `approve-ledger.jsonl`（与 `install-history.jsonl` / `install.journal`
+ * 同一族）。§10.2 存储布局正文写的是 `approve-ledger.json`（无 l）—— 那是过期写法，
+ * 实现与 [NpmSnapshot] 的归档清单都按 `.jsonl` 走；契约侧已在台账里如实登记。
  */
 interface ApprovalStore {
     fun insertSubmit(r: ApprovalRequest)

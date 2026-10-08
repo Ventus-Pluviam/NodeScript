@@ -17,8 +17,13 @@ import java.util.concurrent.ConcurrentHashMap
  * - 审批记录绑定 `pkg+versionHash`：[isApproved] 按此键查询，版本升级（hash 变化）自动失配必须重批；
  * - EXPIRED 由调用方按 requestedAtMillis+ttl 判（账本只存事实，不内置时钟策略——测试注入 now）。
  *
- * 持久化由实现层决定（P0 内存账本 + JVM 单测；Android 生产落 `files/.autojs/approve-ledger.json`，
- * HMAC keyed 于 :main，§10.2 存储布局）。
+ * 持久化由实现层决定（`store` 缺省 null = 内存账本，只给不关心重启的用例用；生产落
+ * `files/.autojs/approve-ledger.jsonl`，§10.2 存储布局 —— 文件名以 [FileApprovalStore]
+ * 为准，契约正文里那处 `approve-ledger.json` 是过期写法）。
+ *
+ * **不落盘的代价不只是"重启蒸发"**：[seq] 从 `store?.lastSeq()` 起算，缺 store 时恒从 0
+ * 起 —— 重启后新票会与历史票同 id（`apr-1` 复用），而 [resolve] 按 requestId 查表，
+ * 旧账与新账就此串在一起。故生产装配（[NpmShellKit]）缺省即落盘。
  */
 class ApprovalLedger(
     private val store: ApprovalStore? = null,
