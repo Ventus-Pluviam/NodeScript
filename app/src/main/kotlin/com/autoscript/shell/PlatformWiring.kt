@@ -305,8 +305,15 @@ object PlatformWiring {
                 ShellMode.ADB -> {
                     val r = ShizukuInput.exec(command, timeoutMillis)
                     // 逐字段转接（`:platform:capabilities` 看不到 `:platform:system` 的
-                    // `ShellResult`，两边各有一个同形 DTO）。
-                    ShellResult(code = r.code, stdout = r.stdout, stderr = r.stderr)
+                    // `ShellResult`，两边各有一个同形 DTO）。**`truncated` 必须一起搬**：
+                    // 漏掉它，adb 档的输出被截到上限时控制台不会打那句「已截断」——
+                    // 那是「悄悄丢字节」，正是 §9.6 截断口径要防的事（2026-10-09 补）。
+                    ShellResult(
+                        code = r.code,
+                        stdout = r.stdout,
+                        stderr = r.stderr,
+                        truncated = r.truncated,
+                    )
                 }
             }
     }
