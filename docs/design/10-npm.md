@@ -183,7 +183,8 @@ interface PackageManager {
   fun approvals(projectId): Flow<ApprovalRequest>
   suspend fun drainEvents(projectId, sinceSeq, batch=32): InstallEventBatch   // 脚本侧拉取口（§7.5 桥无宿主→脚本推送面）
   suspend fun drainApprovals(projectId, sinceSeq, batch=32): ApprovalBatch    // 同上；游标由调用方持有
-  suspend fun storage(): Map<ProjectId, NodeModulesStats>
+  suspend fun storage(): Map<ProjectId, NodeModulesStats>   // 每项目 node_modules 体积
+  suspend fun cacheStorage(): NodeModulesStats             // npm 缓存体积（**全机一份**；2026-10-09 批 87，§10.9 第 5 条的 npm-cache 尺寸栏）
   suspend fun exportSnapshot(uri): SnapshotRef                 // node_modules.zip+lock+ledger→SAF；高信任通道
   suspend fun cancel(handle: InstallHandle)               // TTL/取消 → quiesce 安装会话
   suspend fun history(): List<InstallHistoryEntry>         // 审计史（2026-10-09 批 85）：append-only 历史，与 snapshot() 的「当前事实」是两件事
@@ -222,6 +223,15 @@ JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
 的账 —— 一行 `npm run build` 走 T1 通道（无事务），一行 `npm ls` 甚至不起进程，塞进同一个句柄类型
 会让 `cancel()`/journal 的语义含糊。输出环是 `InstallCoordinator` 里**另一个** `SeqRing`（有界 512），
 与 `InstallEvent` 那条环互不干扰（前者给界面看，后者给脚本拉）。
+
+**缓存体积读口（2026-10-09 批 87，§10.9 第 5 条「per-project `node_modules` + `npm-cache` 尺寸」的后半截）**：
+`cacheStorage()` 与 `storage()` **分开而不是并进去** —— 两者的键空间不同：`storage()` 是「每个项目各占
+多大」（`Map<projectId, …>`），而缓存按内容寻址、**全机只有一份**（§10.2），按项目铺开就是同一个数字
+抄 N 份，而那 N 份会让人以为「删掉这个项目的缓存」说得通。`projectId` 传空串（全局读数没有项目，与
+`InstallHistoryEntry` 里 `registry` 那条同手法）。只报 `content-v2` 的体积：这个数字的用途是回答
+「回收缓存能腾出多少」，而回收动的正是 content-v2 —— 把 `index-v5`（几 KB 级索引）算进来，
+配额条上的数字就会与回收回执里的删/留对不上，而那两个数字摆在同一个屏幕上。量不到（缓存目录还不
+存在）报 0 而**不是** null：目录不存在就是「这个缓存是空的」。
 
 **缓存回收读口（2026-10-09 批 86，§10.9 第 5 条那颗 cache clean）**：`reclaimCache()` 返回
 `NpmCacheReclaimReport`（六字段：`removedEntries`/`removedBytes`/`keptEntries`/`keptBytes`/
@@ -305,9 +315,28 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
    「未知操作」—— 那是把「还不认识」说成「记录有问题」）、**筛选只影响显示**（宿主读口无参全量，
    筛掉失败行时状态栏说明「全部记录里共 N 条失败」）。**未落**：**导出**（§10.5-2 原话是
    「落 App 且**可导出**」，可导出那条通道 = SAF 选目录 + 写文件，本批没接 —— 故不画按钮）。
-   **未落**：安装输入行 / 旗标 / 阶段进度条（要 `install` 会话的完整形态）、依赖**树**（`list(depth)` 宿主侧
-   只用 0，画树就是把平铺清单伪装成树）、`hasInstallScript` 前置告警（要 packument 解析面）、
-   「全局禁止脚本」开关（出厂默认已是禁止，反向的**白名单放行**通道属 T1 之后）。
+   **变更半边已落（2026-10-09 批 87）**：安装输入行 + 两颗旗标（`-D` / 「离线优先」）+ 六档**阶段条**
+   + 清单行上的「卸载」。四条口径写死在这里，免得被"统一"掉：
+   - **走的是与控制台同一条宿主口**（`HostSummary.runNpmPanelCommand` → 同一个
+     `InstallCoordinator.runConsoleCommand`）：同一份判据（`NpmConsoleKeys.parse`）、同一套装前
+     多镜像交叉校验、同一道磁盘/配额预检、同一把项目锁与全局安装会话。**门禁强度不取决于用户从
+     哪个界面按下去** —— 新开一条「按 spec 装」的宿主口就是第二份安装入口，而两份入口的差别
+     只在「谁先忘了加某道门」上体现出来。「卸载」同理走 `npm uninstall <name>` 命令通道。
+   - **进度是阶段不是百分比**：`InstallEvent.Progress.percent` 全仓**从无赋值**，
+     `HostNodeExecutor` 起的是 vendored npm CLI 进程、reify 在它进程内是黑盒，宿主只在前后发得出
+     三枚粗标记。故画的是 `InstallEvent.Phase` 六档的**阶段条**；原文那句「job 数」同样拿不到。
+     画一条会动的百分比条就是编一个拿不到的数 —— 用户看着它停在 90%，比看着它诚实地停在
+     「写入 node_modules」更糟。**这条口径是对 §10.9 第 1 条原文的收窄，不是实现偷懒**。
+   - **「离线优先」不是「仅离线」**：这颗旗标拼的是 `--prefer-offline`（先查缓存、缺了仍联网）。
+     真正断网也要装上，靠的是缓存里恰好有全部闭包（`offlineGap` 答的就是这个）。
+     界面文案与旗标名都不许把一个词当两件事用。
+   - **草稿失败不清**：宿主是先落 ECHO 行**再抛**的（预检/验签拒绝都发生在发出去之后），
+     清早了用户看到的是「一句失败 + 一个空输入框」，还得把包名重打一遍。
+   **未落**：依赖**树**（`list(depth)` 宿主侧只用 0，画树就是把平铺清单伪装成树）、
+   `hasInstallScript` **前置**告警（要 packument 解析面；装完之后的 `SCRIPTS_SKIPPED` 警告
+   已经在事件流里，那是**事后**的，界面不假装自己知道装之前该警告什么）、
+   「全局禁止脚本」开关（出厂默认已是禁止，反向的**白名单放行**通道属 T1 之后）、
+   真流式 stdout（同第 3 条的边界）。
    ~~**另**：第 5 条（包大小管理页）的「一键 prune/dedupe/ci 重装/cache clean」按钮**仍未落** ——
    配额满时那句提示今天把用户指去**控制台**敲 `npm prune`（可操作，但不是一键）。~~
    **该行已落（2026-10-09 批 86）**：四颗按钮进依赖管理页（见第 5 条），配额满那句提示改为
@@ -380,8 +409,11 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
    - **回执不替用户宣布结果**：三颗按钮是**入队**（几十秒量级），回执说"已入队…完成后清单会更新"；
      回收是**一次算出来的读数**，回执带删/留两侧数字（用户按下去就是为了看那个数字变没变）。
    **失败原文原样透传**（`ci` 的验签拒绝那句里已经写清了为什么拒，界面再译一遍就是第二份判据）。
-   **仍未落**：`npm-cache` 那一栏的尺寸读数（`CacacheIndex.contentBytes()` 有实现，但 `QuotaCard`
-   今天只画 `node_modules`）—— 故回收回执里的删/留数字取自报告本身，不取自配额条。
+   **`npm-cache` 那一栏已落（2026-10-09 批 87）**：~~`QuotaCard` 今天只画 `node_modules`~~
+   —— 现由 `QuotaCard` 一并画出（`cacheStorage()` 读口，只算 `content-v2`；与 node_modules
+   那行**各自独立判空** —— 量不到项目尺寸不该把缓存那行也吞掉，反之亦然）。
+   回收回执里的删/留数字**仍**取自 `NpmCacheReclaimReport` 本身，不取自配额条：两者量的是同一棵树，
+   但一个是「这一刻有多大」、一个是「这次删了多少」，拿后者去对前者只会让人以为对不上。
 6. **首启引导**：原子部署 assets/npm CLI + 播种精选缓存 → registry ping 探测 → 选镜像（**默认官方 npmjs**，§18 第 7 项；镜像是加速选项不是开箱前提）与配置代理（能力中心网络项）。
 7. **打包向导联动**：node_modules 默认入 APK + `.autojs.build.ignore` 排除规则 + 「完全离线变体」（宿主预装 node_modules.zip）+ 项目 lock 签名生成。
 8. **镜像源管理**（2026-10-09 批 83）：管理面板 → 镜像源管理（`RegistryScreen`），编的是 **npm registry 全局缺省**，**粒度全局一份**（用户 2026-10-09 裁定；不做「全局缺省 + 项目覆盖」的编辑面 —— 项目那层仍可手编 `.npmrc`，界面不代管）。

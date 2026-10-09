@@ -1,5 +1,22 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-09 追记（批 87：依赖面板变更半边 + `npm-cache` 尺寸栏）
+
+- **§10.9 第 1 条的变更半边已落（2026-10-09，批 87）**：安装输入行 + 两颗旗标（`-D` /
+  「离线优先」）+ 六档阶段条 + 清单行「卸载」。**上一条追记里那句「未落：安装输入行/旗标/
+  阶段进度条」已就地划掉。** 口径见 [`design/10-npm.md`](design/10-npm.md) §10.9 第 1 条。
+- **`npm-cache` 尺寸栏已落（2026-10-09，批 87）**：`cacheStorage()` 读口 + `QuotaCard` 里的
+  一行（只量 `content-v2`）。**上一条追记里那句「`npm-cache` 尺寸没进配额条」已就地划掉** ——
+  但**回执口径不变**：回收的删/留数字仍取自 `NpmCacheReclaimReport` 本身，不取自那一行
+  （一个是「这一刻有多大」、一个是「这次删了多少」，拿后者对前者只会让人以为对不上）。
+- **阶段条只走到 `QUEUED` 是现状不是缺陷（批 87 登记）**：`runNpmPanelCommand` 是**入队即返回**，
+  而 `:ui` 每个读口都是"进页面/手动刷新时现取一次"（无常驻轮询循环），故一次现取多半只拿到
+  `QUEUED`，续拉要用户再点「刷新」。**要真做成会自己走的进度条**，缺的是宿主侧一条常驻推送
+  （`drainEvents` 那条环已经在，缺的是"谁来按节奏拉"）—— 那是一件独立的事，别顺手在 `:ui`
+  里塞一个 `while(true)` 轮询（那会把「读一次」变成"后台一直在问"）。
+- **真机验证积压（批 87 新增一条）**：输入行在软键盘下的观感（弹出是否遮住阶段条、回车是否
+  收键盘）、阶段条在真安装里走不走得动 —— 无设备。随下次真机冒烟一并看。
+
 ## 2026-10-09 追记（批 86：依赖维护按钮 + 缓存按 lock 闭包回收）
 
 - **§10.9 第 5 条的动作半边已落（2026-10-09，批 86）**：依赖管理页配额条下面一行四颗按钮
@@ -14,9 +31,11 @@
   要做需要三件：素材生成（构建期从 `~/.npm` 物化 + 侧车 `.sha512`）、随包（`assets/npm-seed/**`
   + 一个 `prepareNpmSeedAssets` 任务）、启动期部署（`AppShellKit` 里与 npm CLI 落位同批）。
   **别把它当成「已经做了只是没接线」** —— 素材本身也不存在。
-- **`npm-cache` 尺寸没进配额条（批 86 发现，登记）**：`CacacheIndex.contentBytes()` 有实现，
+- ~~**`npm-cache` 尺寸没进配额条（批 86 发现，登记）**：`CacacheIndex.contentBytes()` 有实现，
   但 `QuotaCard` 只画 `node_modules`，§10.9 第 5 条要的「per-project `node_modules` + `npm-cache`
-  尺寸」今天只有前半截。回收回执里的删/留数字因此取自 `NpmCacheReclaimReport` 本身，不取自配额条。
+  尺寸」今天只有前半截。~~ **已落（2026-10-09，批 87）**：`cacheStorage()` 读口 + `InstallCard`
+  里那一行。**回收回执里的删/留数字仍取自 `NpmCacheReclaimReport` 本身**（口径不变，理由见本文件
+  顶部批 87 那条）。
 - **缓存回收的 index 修复只在 npm 10.9.8 上实测过（批 86 边界，登记）**：悬空 index 让在线
   `npm install` 报 `ENOENT … Invalid response body while trying to fetch` 这条结论来自本机 npm 10.9.8；
   随包 npm 是 12.2.0，cacache 桶格式同源（`index-v5` 的追加式行 + `sha1(json)` 前缀）但**未在该版本上复跑**。
@@ -142,10 +161,12 @@
   与历史票碰撞）。已修：审批账本缺省落盘 + `:domain` `NpmPanelSnapshot` 读口 +
   `HostSummary.npmSnapshot()/resolveNpmApproval()` + `:ui` `NpmScreen`/`NpmState`。
   口径见 [`design-decisions.md`](design-decisions.md) 第 51 项。**未落**（登记为后续）：
-  安装输入行/旗标/阶段进度条、依赖树、`hasInstallScript` 前置告警、白名单放行通道。
+  ~~安装输入行/旗标/阶段进度条~~（**已落 2026-10-09 批 87**）、依赖树、`hasInstallScript`
+  前置告警、白名单放行通道。
 - **npm 面的「有实现、零生产调用方」三条（记下来，别当成已做）**：`update`、
   `exportSnapshot`（§10.9.4 高信任快照）、`storage()`。前两条**也不在桥面** —— 它们要等
-  「依赖面板的变更半边」与「打包向导」（§10.9.7）。**不加进桥面**：§10.7 的 facade 是内部面，
+  「依赖面板的变更半边」（~~**已落 2026-10-09 批 87**~~ —— 但 `update` **仍未接**：批 87 接的是
+  `runConsoleCommand` 那条命令通道，`update()` 那个方法面至今零生产调用方）与「打包向导」（§10.9.7）。**不加进桥面**：§10.7 的 facade 是内部面，
   桥面是脚本面，两件事。`storage()` 已是宿主内部读口（喂依赖面板的尺寸条）。
 - **契约面数字订正**：`docs/design/12-js-api.md` 的 npm 行原写「方法表 13 项」，
   实测生成物（`WireMethods.kt` / `wire.schema.json`）自 2026-09-26 起一直是 **14 条** ——
