@@ -322,9 +322,17 @@ object PlatformWiring {
                     // `rememberCoroutineScope()`），不切就是拿 UI 线程陪跑到超时
                     // —— 整个窗口在这段时间里画不出帧、也处理不了输入。
                     //
-                    // 这**不是**「首次 `input tap` 挂 30s」那个 bug 的成因（那条实测
-                    // 只有冷置后的第 1 条挂，而本缺陷会让每一条都钉住 UI 线程），
-                    // 两者各自独立。2026-10-10 外审第 1 条。
+                    // 这条链**就是**「`input tap` 挂 30s」的成因 —— 2026-10-10 真机 ANR
+                    // 实证：`ANR in com.autoscript … Input dispatching timed out
+                    // （Waited 5005ms for KeyEvent … ENTER(66)）`，主线程栈为
+                    // `MainActivity$ManagementSubPageHost$4$1$1.invokeSuspend(MainActivity.kt:618)`
+                    // → `ConsoleShellRunner.execute` → 本行 → `ShizukuInput.waitOrKill`
+                    // → `IRemoteProcess$Stub$Proxy.waitForTimeout`（BinderProxy.transact）。
+                    // 注入的事件落进**应用自己的窗口**时，主线程正卡在这儿收不了，
+                    // `input`（WAIT_FOR_FINISH）只好陪等到 30s 超时 —— 所以**每一条**
+                    // 都挂（实测修复前连续 6 条全 32s），不是「只有冷置后的第 1 条」。
+                    // 目标窗口不属于本进程时不受影响：`input tap 5 5`（状态栏）实测 2.6s。
+                    // 2026-10-10 外审第 1 条。
                     val r = withContext(Dispatchers.IO) { ShizukuInput.exec(command, timeoutMillis) }
                     // 逐字段转接（`:platform:capabilities` 看不到 `:platform:system` 的
                     // `ShellResult`，两边各有一个同形 DTO）。**`truncated` 必须一起搬**：
