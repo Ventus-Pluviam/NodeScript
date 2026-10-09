@@ -1,5 +1,19 @@
 # AutoScript 待办池（backlog）
 
+- **外审建议（2026-10-09，未做，登记）**：`IShizukuService`/`IRemoteProcess` 其实**就在
+  编译类路径上**（`dev.rikka.shizuku:aidl` 是 `api` 的传递依赖，`implementation` 收得到，
+  实测 `:platform:capabilities:dependencies --configuration debugCompileClasspath` 可见）。
+  既然编译期看得见，那条链可以**直接转型**而不必反射：
+  `IShizukuService.Stub.asInterface(binder)` → `IRemoteProcess`，一处反射都不用。
+  收益是把这一整类 bug（签名漂移、声明类不可见、R8 改名）从**运行时**挪到**编译期**，
+  连 `proguard-rules.pro` 那五条 keep 也可以删（静态引用自带保名）。
+  本批没做，理由：现修法已由测试 + R8 mapping 双重验证，且它与 `newProcess` 那条
+  已被真机验证过的写法同形，改动面最小；转型那条要重写守卫并重验 R8。
+  **要做就得一次做完**（`Shizuku` 主类那条仍须反射 —— 它的静态初始化在 JVM 上会炸，
+  见 `ShizukuInput` 的类 KDoc；只有 AIDL 接口那半可以转型）。
+  注：这也解释了 `ShizukuInput` 类 KDoc 里「不 import `rikka.shizuku.*`」那句的**边界** ——
+  它针对的是 `rikka.shizuku.Shizuku`（静态初始化重），不是 AIDL 接口。
+
 ## 2026-10-09 追记（批 88 真机 bug：Shizuku adb 档 100% 不可用 —— 已修）
 
 - **真机实测（2026-10-09，用户设备 Android 13 + KernelSU，Shizuku 13.6.0.r1086）**：
