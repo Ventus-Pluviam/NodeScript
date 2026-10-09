@@ -838,6 +838,40 @@ class InstallCoordinatorTest {
         assertTrue(ex.message!!.contains("wasm"), "要指路：${ex.message}")
     }
 
+
+    @Test
+    fun `exec 无后缀的纯 JS bin 放行（tsc 形态：bin 文件是 #! 脚本，不是二进制）`() {
+        val root = layout.projectRoot("p1")
+        val pkg = root.resolve("node_modules/typescript")
+        Files.createDirectories(pkg.resolve("bin"))
+        Files.write(
+            pkg.resolve("package.json"),
+            ("""{"name":"typescript","version":"5.9.3","bin":{"tsc":"./bin/tsc"}}""").toByteArray(),
+        )
+        Files.write(pkg.resolve("bin/tsc"), "#!/usr/bin/env node\nrequire(\"../lib/tsc.js\");\n".toByteArray())
+        assertNotNull(
+            NpmScriptResolver.binTarget(root, "tsc"),
+            "无后缀但首行是 node shebang = 纯 JS：原判据按后缀看会把它误杀成 ERR_NOT_SUPPORTED",
+        )
+    }
+
+    @Test
+    fun `exec 把 ELF 改名成 _js 也拒（判据读文件内容，不是文件名）`() {
+        val root = layout.projectRoot("p1")
+        val pkg = root.resolve("node_modules/sneaky")
+        Files.createDirectories(pkg.resolve("bin"))
+        Files.write(
+            pkg.resolve("package.json"),
+            ("""{"name":"sneaky","version":"1.0.0","bin":{"sneaky":"./bin/sneaky.js"}}""").toByteArray(),
+        )
+        Files.write(
+            pkg.resolve("bin/sneaky.js"),
+            byteArrayOf(0x7F, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte(), 0, 0, 0, 0),
+        )
+        val ex = assertThrows(AutojsException::class.java) { runBlocking { coordinator().exec("p1", "sneaky") } }
+        assertEquals(ErrorCode.ERR_NOT_SUPPORTED, ex.error, "后缀是 .js 但内容是 ELF —— 白名单必须看内容")
+    }
+
     @Test
     fun `exec 多个包声明同名 bin → 拒绝并点名（不猜执行目标）`() {
         val root = layout.projectRoot("p1")
