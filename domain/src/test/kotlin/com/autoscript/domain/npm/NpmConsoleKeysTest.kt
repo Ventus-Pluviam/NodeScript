@@ -70,12 +70,67 @@ class NpmConsoleKeysTest {
     }
 
     @Test
-    fun `非 npm 与 npx 开头的行被拒，理由说清本平台没有 shell`() {
-        for (line in listOf("ls -la", "sh -c 'echo hi'", "rm -rf node_modules", "node index.js")) {
-            val r = NpmConsoleKeys.parse(line) as NpmConsoleCommand.Rejected
-            assertTrue("只认 npm 与 npx" in r.reason, "「$line」的理由要说清入口限制：${r.reason}")
-            assertTrue(line in r.reason, "「$line」的理由必须点名原文：${r.reason}")
-        }
+    fun `默认模式下裸首词按 npm bin 解析（装好的依赖提供的命令）`() {
+        // 2026-10-09 二次裁定：控制台要能直接敲 tsc / eslint 这类命令。
+        assertEquals(NpmConsoleCommand.Exec("tsc", emptyList()), NpmConsoleKeys.parse("tsc"))
+        assertEquals(
+            NpmConsoleCommand.Exec("tsc", listOf("--noEmit")),
+            NpmConsoleKeys.parse("tsc --noEmit"),
+        )
+        // 存在性判不了（要看文件系统）—— 那是宿主的事，判据只负责把首词定形。
+        assertEquals(NpmConsoleCommand.Exec("ls", listOf("-la")), NpmConsoleKeys.parse("ls -la"))
+    }
+
+    @Test
+    fun `su 与 shizuku 单独一行 = 进模式，带参数 = 就地跑一条 shell 命令`() {
+        assertEquals(NpmConsoleCommand.EnterMode(ShellConsoleMode.ROOT), NpmConsoleKeys.parse("su"))
+        assertEquals(NpmConsoleCommand.EnterMode(ShellConsoleMode.ADB), NpmConsoleKeys.parse("shizuku"))
+        assertEquals(
+            NpmConsoleCommand.Shell("id", ShellConsoleMode.ROOT),
+            NpmConsoleKeys.parse("su id"),
+        )
+        assertEquals(
+            NpmConsoleCommand.Shell("ls -la /sdcard", ShellConsoleMode.ADB),
+            NpmConsoleKeys.parse("shizuku ls -la /sdcard"),
+        )
+    }
+
+    @Test
+    fun `exit 退出特权模式，且不带参数`() {
+        assertEquals(NpmConsoleCommand.ExitMode, NpmConsoleKeys.parse("exit"))
+        val r = NpmConsoleKeys.parse("exit 1") as NpmConsoleCommand.Rejected
+        assertTrue("exit" in r.reason, r.reason)
+    }
+
+    @Test
+    fun `特权模式下裸首词是 shell 命令，且正文原样透传（不重新分词）`() {
+        // 进了 root 之后敲 ls 要的是 shell 的 ls，不是某个恰好叫 ls 的包。
+        assertEquals(
+            NpmConsoleCommand.Shell("ls -la", ShellConsoleMode.ROOT),
+            NpmConsoleKeys.parse("ls -la", ShellConsoleMode.ROOT),
+        )
+        // 双空格/引号原样带下去 —— 在这里切一遍再拼回去就是**改用户的命令**。
+        assertEquals(
+            NpmConsoleCommand.Shell("""echo "a  b"""", ShellConsoleMode.ROOT),
+            NpmConsoleKeys.parse("""echo "a  b"""", ShellConsoleMode.ROOT),
+        )
+    }
+
+    @Test
+    fun `五个入口词在任何模式下都优先（否则进了 root 就退不出来）`() {
+        assertEquals(
+            NpmConsoleCommand.Npm("ls", emptyList()),
+            NpmConsoleKeys.parse("npm ls", ShellConsoleMode.ROOT),
+        )
+        assertEquals(
+            NpmConsoleCommand.Exec("esbuild", emptyList()),
+            NpmConsoleKeys.parse("npx esbuild", ShellConsoleMode.ROOT),
+        )
+        assertEquals(NpmConsoleCommand.ExitMode, NpmConsoleKeys.parse("exit", ShellConsoleMode.ADB))
+        assertEquals(
+            NpmConsoleCommand.EnterMode(ShellConsoleMode.ADB),
+            NpmConsoleKeys.parse("shizuku", ShellConsoleMode.ROOT),
+        )
     }
 
     @Test

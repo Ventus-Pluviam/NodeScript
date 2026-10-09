@@ -62,6 +62,20 @@ class ConsoleCmdOpsTest {
             failRun?.let { throw it }
             return NpmConsoleHandle("con-1", projectId, line, 0L)
         }
+
+        /** shell 面的调用账（与控制台那条 npm 面分开记：混在一起就分不清走了哪个口）。 */
+        val shellRan = mutableListOf<Triple<String, String, com.autoscript.domain.npm.ShellConsoleMode>>()
+
+        override suspend fun runShellCommand(
+            projectId: String,
+            command: String,
+            mode: com.autoscript.domain.npm.ShellConsoleMode,
+            timeoutMillis: Long,
+        ): com.autoscript.domain.host.ShellConsoleResult {
+            shellRan += Triple(projectId, command, mode)
+            failRun?.let { throw it }
+            return com.autoscript.domain.host.ShellConsoleResult(0, "ok", null)
+        }
     }
 
     private fun echo(seq: Long, text: String) =
@@ -120,11 +134,11 @@ class ConsoleCmdOpsTest {
     @Test
     fun `敲错的行当场拒且不发`() = runBlocking {
         val host = CmdHost()
-        var s = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED).copy(draft = "rm -rf /")
+        var s = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED).copy(draft = "npm publish")
         s = runConsoleCmd(host, s)
         assertTrue(host.ran.isEmpty(), "解析不过的行一个字节都不该发给宿主")
-        assertTrue("只认 npm 与 npx" in (s.opError ?: ""), "拒收原文要点名为什么：${s.opError}")
-        assertEquals("rm -rf /", s.draft, "被拒时草稿要留着 —— 清掉等于把用户敲的字吞了")
+        assertTrue("publish" in (s.opError ?: ""), "拒收原文要点名为什么：${s.opError}")
+        assertEquals("npm publish", s.draft, "被拒时草稿要留着 —— 清掉等于把用户敲的字吞了")
         assertNull(s.opNotice)
     }
 
@@ -160,6 +174,63 @@ class ConsoleCmdOpsTest {
         val s = runConsoleCmd(host, s0)
         assertTrue(host.ran.isEmpty())
         assertTrue("先建一个项目" in (s.opError ?: ""), "要说清下一步：${s.opError}")
+    }
+
+    @Test
+    fun `su 进 root 模式：不派发到宿主，只改界面状态并给回执`() = runBlocking {
+        val host = CmdHost()
+        var s = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED).copy(draft = "su")
+        s = runConsoleCmd(host, s)
+        assertEquals(com.autoscript.domain.npm.ShellConsoleMode.ROOT, s.mode)
+        assertTrue(host.ran.isEmpty() && host.shellRan.isEmpty(), "进模式是界面侧的事，一个字节都不该发给宿主")
+        assertEquals("", s.draft)
+        assertTrue("root" in (s.opNotice ?: ""), "回执要说清进了哪个模式：${s.opNotice}")
+    }
+
+    @Test
+    fun `特权模式下裸首词走 shell 面，不落到 npm 面`() = runBlocking {
+        val host = CmdHost()
+        var s = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED).copy(draft = "shizuku")
+        s = runConsoleCmd(host, s)
+        assertEquals(com.autoscript.domain.npm.ShellConsoleMode.ADB, s.mode)
+
+        s = s.copy(draft = "ls -la /sdcard")
+        s = runConsoleCmd(host, s)
+        assertTrue(host.ran.isEmpty(), "特权模式下的裸行不许落回 npm 面：${host.ran}")
+        assertEquals(
+            listOf(Triple("p1", "ls -la /sdcard", com.autoscript.domain.npm.ShellConsoleMode.ADB)),
+            host.shellRan,
+            "整行原样交给 shell（含空格），入口词已剥",
+        )
+    }
+
+    @Test
+    fun `exit 退出特权模式，之后裸首词回到 npm 面`() = runBlocking {
+        val host = CmdHost()
+        var s = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+            .copy(draft = "su", mode = com.autoscript.domain.npm.ShellConsoleMode.ROOT)
+        s = runConsoleCmd(host, s.copy(draft = "exit"))
+        assertEquals(com.autoscript.domain.npm.ShellConsoleMode.DEFAULT, s.mode)
+
+        s = runConsoleCmd(host, s.copy(draft = "tsc --version"))
+        assertEquals(listOf("p1" to "tsc --version"), host.ran, "原文交给宿主，不从解析结果拼回去")
+        assertTrue(host.shellRan.isEmpty())
+    }
+
+    @Test
+    fun `su 带参数就地跑一条：不切模式`() = runBlocking {
+        val host = CmdHost()
+        val loaded = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+        val s = runConsoleCmd(host, loaded.copy(draft = "su id"))
+        assertEquals(
+            listOf(Triple("p1", "id", com.autoscript.domain.npm.ShellConsoleMode.ROOT)),
+            host.shellRan,
+        )
+        assertEquals(
+            com.autoscript.domain.npm.ShellConsoleMode.DEFAULT,
+            s.mode,
+            "带参数的 su 是「用 root 跑这一条」，不是「接下来都在 root 里」",
+        )
     }
 
     @Test

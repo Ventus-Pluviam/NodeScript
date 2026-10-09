@@ -12,6 +12,70 @@
 
 ---
 
+## 58. 控制台 shell 面：必须显式进模式，且 `adb` 档 = Shizuku（2026-10-09，批 88）
+
+**背景（用户口径，逐字）**：「也需要让控制台能执行 shell」+「root 执行二进制需要输入 `su` 进入
+root 模式执行，不然就是 adb」+「输入 `exit` 是退出 adb 或者 root 权限模式」+「这部分说的是控制台的」。
+本项是对 **第 54 项第 2 条**（「命令范围 = 只有 npm，不加 shell」，用户 2026-10-09 早先裁定
+「不用加 sh 啊」）的**修订**：shell 进控制台，但**不是**「裸命令一律当 shell」——
+**要显式进模式**。原裁定不删，见「已推翻 / 已改口径」。
+
+**七裁定**：
+
+1. **必须有模式，不许静默挑一条**。root 与 Shizuku 是两条**不同身份**的通道（root uid vs
+   shell uid），能做的事不同、留下的痕迹不同、失败话术也不同。静默替用户挑一条 = 让
+   「我以为我在用 root」与「实际用的是 shell」不可分辨 —— 与 §9.3「三通道必须显式指定」
+   是同一条纪律。进模式后**徽标常驻可见**：用户不该在以为敲的是 npm 时把命令送进 root shell。
+   **模式是界面侧状态**（`ConsoleCmdState.mode`），不是宿主状态：宿主每次只收一条**已定形**的
+   命令（`Shell(command, mode)`），它不需要知道用户是不是还在特权模式里。换个项目不必重置模式
+   —— 模式是人的姿势，不是项目的属性。
+2. **入口词在任何模式下都优先**（`npm`/`npx`/`su`/`shizuku`/`exit`）。否则进了 root 模式就
+   **再也退不出来**（那五个词会被当成 shell 命令发给 `/system/bin/sh`，而设备上多半没有
+   叫 `exit` 的程序）。`exit` 带参数即拒（它只用来退模式）。
+3. **`su <cmd>` 与 `su` 是两件事**：单独一行 = 进模式；带参数 = **就地跑那一条**（不切模式）。
+   两种用法都自然 —— 前者不需要用户先切模式再切回来。`shizuku` 同理。
+4. **`DEFAULT` 一律拒，且拒要落一行**。拒绝路径**先落 RESULT 行再抛**：抛是因为「没跑」与
+   「跑了但非零退出」是两件事（折成同一个 DTO 会让调用方无从分辨）；落行是因为用户敲完 `ls`
+   之后总得看见「为什么没跑」，而不是一行 ECHO 后面什么都没有。**拒绝不碰执行体**
+   （否则就是「先跑了再说」）。话术要**点名怎么进特权模式**（`su` / `shizuku`）。
+   同理，默认模式下裸首词查不到 bin 时，`ERR_NOT_FOUND` 那句话也要带这半句指路 ——
+   「node_modules 里没有声明 bin「ls」的包」是对的但**没用**，用户想要的从来不是某个叫 ls 的包。
+5. **非零退出是结果不是异常**：命令跑了、退出了、退成非零 —— 照原样进 RESULT 行（`ok = false`）。
+   把非零退出折成抛异常会让「命令的输出」与「宿主自己出错了」在界面上长得一样。
+   执行体**抛错**才走异常（原文进 RESULT 行，原异常继续上抛给调用方）。
+   `CancellationException` **原样上抛**：吞成一行「失败」会让协程取消变成"命令跑失败了"。
+6. **超时不渲染半截输出**：`withTimeoutOrNull` 套在 `ConsoleShellRunner`（TTL 契约），超时即
+   `ERR_TIMEOUT` 且**一行都不落** —— 命令没跑完，画一行「退出码 N」就是编一个没发生过的退出。
+   真实现（Shizuku 的 `waitForTimeout`）自己也超时，两层并存不冲突（先到的那个说了算）。
+7. **`adb` 档 = Shizuku，且只在装配层换**。`AndroidShellExecutor` 的 `ShellMode.ADB` 与 `DEFAULT`
+   是同一行（`sh -c`，**应用 uid**）—— 那是它自己的口径（「设备侧已在 adb shell 内」），
+   不是控制台要的。**不改那个类**：改它会动到 a11y 的输入注入那条路（`ShellInputProvider.adb`
+   传的是 Shizuku 缝，不走 `ShellMode.ADB`）。两条面各要各的语义，故在 `PlatformWiring` 分流
+   （`ConsoleShellExecutor`：ROOT/DEFAULT 转平台 shell，ADB 转 `ShizukuInput.exec`），两边都不动。
+
+**另外两条落点选择**（不是裁定，是分工）：
+
+- **`ConsoleShellRunner` 独立一件**（不从 `InstallCoordinator` 里再长出来）：shell 链与依赖树
+  **无关** —— 不建事务、不占安装会话、不碰项目锁（敲一条 `ls` 不该占住全局安装会话）。
+  `projectId` 只用于把输出落进那个项目的控制台环。
+- **判据仍住 `:domain`**（`NpmConsoleKeys.parse` 收 mode 参数）：界面侧当场拒与宿主侧执行
+  读的是同一句话，与第 54 项第 6 条同一条理由。
+
+**顺手修的两处真问题**：
+
+- **`ShizukuInput.shizukuClass` 只接 `ClassNotFoundException`**：JVM 单测跑 ADB 档时实测抛的是
+  `NoClassDefFoundError: Could not initialize class rikka.shizuku.Shizuku`（类在、静态初始化炸），
+  它**不是** `Exception` —— 那条路径会越过 `AutojsException` 直穿到调用方，用户拿到的是一个栈
+  而不是一句「去装/去更新 Shizuku」。补接 `LinkageError`。**刻意不写 `catch (Throwable)`**：
+  那会把 `OutOfMemoryError` 这类也折成「Shizuku 没装」，是把真故障说成用户可修的问题。
+- **`NpmScriptResolver` 的纯 JS 探测拆出 `PureJsProbe`**：解析器已有 11 个函数、越过 detekt
+  `TooManyFunctions` 线。拆的判据不是「凑数」—— 解析器管**怎么找到** bin（manifest 声明、
+  路径逃逸、包目录扫描），`PureJsProbe` 管**找到之后它是不是 JS**（读那个文件的头几百字节）。
+
+**未验**：真机行为（无设备，按既定纪律由用户自测）—— Shizuku 装好后 `newProcess` 那条反射链、
+`su -c` 在真 ROM 上的话术、特权模式下软键盘的观感。**已知缺口**：`ShizukuExecResult` 无
+`truncated` 字段 → adb 档输出被截到 4 KiB 时控制台**不会**打「已截断」（root 档有真判据）。
+
 ## 57. 面板的变更半边复用控制台那条宿主口；进度报阶段不报百分比（2026-10-09，批 87）
 
 **背景**：§10.9 第 1 条要「安装输入行 / 旗标 / 阶段进度条」。批 81 落了清单那半截并把这三样
@@ -1586,6 +1650,7 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
 | backlog **A9**「`NOTICE` 表里『逐字 / 逐句』的说法未与上游核实」（2026-10-06 登记） | `docs/backlog.md` A9（已移除）；本文件第 36 项 | **不做了，整行移除**（2026-10-07，用户裁定，口径全文见本文件**第 37 项**）：那是**署名措辞的精度**问题，不是许可义务 —— 第 1 节要的版权声明与担保免责、第 2(a) 节的修改说明与日期已于第 36 项补齐并随 APK 出。核实做了一半就停：抽查的几处（`cascade()` / `onMeasure` / 缓动常量 / `SIZE = 48` / 缩放时长）**都站得住**，但抽查出两处**上游不存在的类名**（`TopicsLayoutSwitcher`、`ReverseOrder`）也一并「不追」（同属注释举例，非署名义务），如实记在第 37 项 | 2026-10-07 |
 | `ADB_INPUT` 三态**恒 `DEGRADED`**（「未就绪时输入走无障碍手势」这条降级路径真实存在） | `AndroidSystemStateReader` 的映射表；`PermissionCenter.guideText(ADB_INPUT)` 的文案 | **改口径**（2026-10-07，本文件**第 38 项**）：批 61（§9.3 三通道三选一）**已经废掉那条降级路径** —— 指定 `adb` 而不可用就是 `ERR_PERMISSION_DENIED`，绝不改用别的通道。故改成真探测：`ShizukuInput.isAvailable()` 就绪 → `GRANTED`，不就绪 → `DENIED`（与无障碍/root/使用情况访问同档）；文案里那句降级承诺同批删掉 | 2026-10-07 |
 | backlog **D7**「大文件余量：`AppShellApplication` 与 `Scheduler` 还有没有值得付的刀口」（2026-10-02 登记） | `docs/backlog.md` D7；`app-service/scheduler/.../core/Scheduler.kt`；`app/src/main/kotlin/com/autoscript/AppShellApplication.kt` | **结项**（2026-10-07，口径全文见本文件**第 39 项**）：`Scheduler` 类体是单一内聚状态机，**无值得付的接缝**（拆大方法要把八九个构造参数摊成 `internal`，是拿封装换行数）；只外迁三个顶层声明（`ScheduledTask`/`RecoveryRecord`/`DefaultDeadlines`）。`AppShellApplication` 的读侧零重复不变式（不搬），写侧取一个刀口 —— 四类 APK 资产的读法抽成 `shell/AssetsRead.kt`（**该文件不可单测**，已如实登记） | 2026-10-07 |
+| 第 54 项第 2 条「命令范围 = 只有 npm，**不加 shell**」（用户 2026-10-09 早先裁定「不用加 sh 啊」） | `docs/design-decisions.md` 第 54 项第 2 条；`docs/design/10-npm.md` §10.9 第 3 条 | **改口径（2026-10-09，批 88）**：用户同日后续裁定「也需要让控制台能执行 shell」+「`su` 进 root、`shizuku` 进 adb、`exit` 退出」—— shell **进控制台**，但不是「裸命令一律当 shell」：**必须显式进模式**（`su`/`shizuku`），默认模式下裸首词仍是 npm bin。原裁定那半句「任意命令走脚本侧的 `auto.shell` 桥面」**仍成立**（那是脚本面，与控制台是两条面）；作废的只有「控制台不加 shell」这一句。口径见本文件**第 58 项** | 2026-10-09 |
 ### 附：§12.2 被反转口径原文照抄（2026-09-30 步骤 6 摘录前的原文）
 
 > - **语义层**（handler）住 `:platform:capabilities` 的 `SystemNamespaces.kt`，纯 JVM 可测（假 SPI 注入即可跑）：参数校验（spec 守卫、必填字段、`timeout > 0`）、枚举字面量解析（`ShellMode`/`DialogMode`，拼错即报错不静默套默认）、默认值（shell 超时 30s）、错误分类**透传**（`AutojsException.error` 原码回桥）、响应形状编码（与 `extras.ts` 逐字对齐）；

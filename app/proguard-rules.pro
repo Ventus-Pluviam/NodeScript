@@ -35,20 +35,29 @@
 # 不是 compileOnly**（`ShizukuProvider` 是本应用 manifest 里声明的 ContentProvider，
 # 类不在 = 授权握手不成立），所以两个坐标都真在 APK 里。
 #
-# 这四条覆盖反射调到的**每一个类名 + 方法名**：
+# 这五条覆盖反射调到的**每一个类名 + 方法名**：
 #   · `rikka.shizuku.Shizuku`：`getBinder()` / `pingBinder()`；
 #   · `moe.shizuku.server.IShizukuService$Stub`：`asInterface(IBinder)`；
 #   · `moe.shizuku.server.IShizukuService`：`newProcess(String[], String[], String)`
-#     （**从公开接口取**，见 ShizukuInput.run 里那段注释）；
-#   · `rikka.shizuku.ShizukuRemoteProcess`（`newProcess` 返回的实现类）：
-#     `getErrorStream()` / `waitForTimeout(long, TimeUnit)` / `destroy()` / `exitValue()`。
+#     （**从公开接口取**，见 ShizukuInput.newProcess 里那段注释）；
+#   · `moe.shizuku.server.IRemoteProcess`：`newProcess` **返回值**上的全部方法
+#     （`getInputStream` / `getErrorStream` / `waitForTimeout(long, String)` /
+#     `exitValue` / `destroy`）—— 同样**从公开接口取**，理由与上一条相同，
+#     只是坑在返回值那一侧（2026-10-09 真机定位，见 ShizukuInput.RemoteProcessApi）。
+#     `waitForTimeout` 的第二参是 `java.lang.String`（AIDL 原样），**不是** `TimeUnit`
+#     —— 照包装类的形状写会保错方法名。
 #
 # 前三条里的方法**有静态调用者**（`ShizukuProvider` 真调 `Shizuku.getBinder()`/
 # `pingBinder()`；`Shizuku` 内部真调 `IShizukuService$Stub.asInterface`），`-keep` 在这里
 # 主要是**保名**（实测 `mapping.txt`：`rikka.shizuku.Shizuku -> O2.c`、`getBinder() -> call`）。
-# 第四条不一样：`ShizukuRemoteProcess` 在本应用侧**没有静态调用者**（`Shizuku.newProcess`
-# 是私有的、只有 `Shizuku` 内部调，而那个入口本应用没用），当前 release 包里它的四个方法
-# **全被 R8 删光**（`usage.txt`）—— 这条 `-keep` 才是真在保代码。
+# 后两条不一样：那两个接口在本应用侧**没有静态调用者**（本应用全程反射），
+# 只有 `-keep` 能把名字留住。
+#
+# **2026-10-09 删掉的一条**：`-keep class rikka.shizuku.ShizukuRemoteProcess { … }`。
+# 那个类是 `Shizuku.newProcess`（`private static`）的返回类型，而本应用直接调 AIDL 接口
+# （`Shizuku.newProcess` 私有、够不着），**永远拿不到那个包装类** —— 保它是保一份死代码，
+# 而且它保的方法签名（`waitForTimeout(long, TimeUnit)`）与真跑的那条路径（`(long, String)`）
+# 不是一回事，正好掩盖了上面那个 bug。
 -keep class rikka.shizuku.Shizuku {
     public static android.os.IBinder getBinder();
     public static boolean pingBinder();
@@ -59,11 +68,12 @@
 -keep class moe.shizuku.server.IShizukuService {
     public abstract moe.shizuku.server.IRemoteProcess newProcess(java.lang.String[], java.lang.String[], java.lang.String);
 }
--keep class rikka.shizuku.ShizukuRemoteProcess {
-    public java.io.InputStream getErrorStream();
-    public boolean waitForTimeout(long, java.util.concurrent.TimeUnit);
-    public void destroy();
+-keep interface moe.shizuku.server.IRemoteProcess {
+    public android.os.ParcelFileDescriptor getInputStream();
+    public android.os.ParcelFileDescriptor getErrorStream();
+    public boolean waitForTimeout(long, java.lang.String);
     public int exitValue();
+    public void destroy();
 }
 
 # ── 2. 原生方法按名字解析（libopencv.so 的 JNI 入口）────────────────────────

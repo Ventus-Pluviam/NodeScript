@@ -9,6 +9,7 @@ import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.appservice.npm.NpmCacheSeedDeployer
 import com.autoscript.appservice.npm.NpmBridgeHandler
 import com.autoscript.appservice.npm.NpmShellKit
+import com.autoscript.appservice.npm.ShellOpExecutor
 import com.autoscript.appservice.npm.NpmSpawnGate
 import com.autoscript.appservice.runtime.EngineWatchdog
 import com.autoscript.appservice.runtime.ProcessMonitor
@@ -162,6 +163,18 @@ object AppShellKit {
          * 那个分支，而它正是「不许静默降级」这条承诺的落点。
          */
         npmGateDeploy: (Path) -> NpmSpawnGate.Deploy = { NpmSpawnGate.deploy(it) },
+        /**
+         * 控制台 shell 面的执行缝（2026-10-09）。**只有 `:app` 能造它** ——
+         * `:app-service:npm` 的 ArchitectureTest 禁 `com.autoscript.platform..`，
+         * 故真实现（`PlatformWiring.ConsoleShellExecutor`）在这里被转成 `:domain` 的缝。
+         */
+        shellExecutor: ShellOpExecutor = ShellOpExecutor.Unavailable,
+        /**
+         * 控制台 shell 命令的 TTL（毫秒，2026-10-09）。缺省 30 秒（与
+         * [InstallCoordinator.DEFAULT_CONSOLE_SHELL_TIMEOUT_MILLIS] 同值，装配层按需覆盖）——
+         * 本配方只透传，不判。
+         */
+        consoleShellTimeoutMillis: Long = InstallCoordinator.DEFAULT_CONSOLE_SHELL_TIMEOUT_MILLIS,
         datastoreHandler: NamespaceHandler? = null,
         zipHandler: NamespaceHandler? = null,
         settingsHandler: NamespaceHandler? = null,
@@ -332,6 +345,8 @@ object AppShellKit {
                 // 于是生产路径上 lock 既不签也不验 —— §11.3 第 8 条记的就是这件事。
                 // 接上后 `ci` 先验签、`install` 收尾重签、快照导出带 snapshot.sig。
                 lockKey = lockKey,
+                shellExecutor = shellExecutor,
+                consoleShellTimeoutMillis = consoleShellTimeoutMillis,
             )
         } else {
             null   // 调用方自带 handler：本配方不参与，呈现面读口随之缺席（如实 null）

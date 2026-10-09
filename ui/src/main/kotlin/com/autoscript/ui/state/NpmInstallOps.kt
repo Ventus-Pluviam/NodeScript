@@ -210,5 +210,10 @@ private fun noticeForPanel(cmd: NpmConsoleCommand): String = when (cmd) {
         "已提交 npm run ${cmd.script}：未获批会入队，请到下面的审批卡确认后**重敲这一行**"
     is NpmConsoleCommand.Exec ->
         "已提交 npx ${cmd.bin}：未获批会入队，请到下面的审批卡确认后**重敲这一行**"
+    // 下面三类**到不了这里**（依赖面板的输入行不解析 shell/模式命令，上面已拦），
+    // 穷尽 when 而已 —— 但话术不糊弄：真走到这里说明界面的拦截漏了。
+    is NpmConsoleCommand.Shell -> "依赖面板不执行 shell 命令：请到控制台用 su/shizuku 模式"
+    is NpmConsoleCommand.EnterMode -> "依赖面板不切特权模式：请到控制台"
+    NpmConsoleCommand.ExitMode -> "依赖面板不切特权模式：请到控制台"
     is NpmConsoleCommand.Rejected -> cmd.reason   // 到不了这里（上面已拦），穷尽 when 而已
 }

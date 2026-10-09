@@ -2,7 +2,9 @@ package com.autoscript.appservice.npm
 
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
+import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.ApprovalAction
+import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.InstallEvent
 import java.nio.file.Path
 
@@ -139,4 +141,33 @@ data class ScriptOp(
 ) {
     /** 审批键的主体段（`"<pkg>|<what>"`）—— 账本键与审计条目同款，不再各拼各的。 */
     val subject: String get() = "$pkg|$what"
+}
+
+/**
+ * 控制台 shell 面的执行缝（2026-10-09）。
+ *
+ * **为什么是缝而不是直接调 `:platform:system`**：`:app-service:npm` 的 `ArchitectureTest`
+ * 禁 `com.autoscript.platform..`（依赖方向铁律），控制台命令面住在本模块，编译期看不到
+ * `AndroidShellExecutor` / `ShizukuInput`。缝住 `:domain`，真实现由 `:app` 的装配层
+ * （`PlatformWiring`，唯一同时看得见两个平台模块的地方）注入 —— 与
+ * [HeavyOpExecutor]/[ScriptOpExecutor] 同一条分工。
+ *
+ * **TTL 契约**同 [HeavyOpExecutor]：调用方已套 withTimeoutOrNull，实现方必须合作式
+ * 响应取消（阻塞 IO 拆成可中断段、子进程随取消销毁）。
+ */
+fun interface ShellOpExecutor {
+    /** 跑一条 shell 命令；[ShellConsoleMode.DEFAULT] 一律拒（需要 root 或 Shizuku）。 */
+    suspend fun execute(command: String, mode: ShellConsoleMode, timeoutMillis: Long): ShellConsoleResult
+
+    /** 缺省：未接线 → 如实 ERR_NOT_IMPLEMENTED（不假装跑过）。 */
+    object Unavailable : ShellOpExecutor {
+        override suspend fun execute(
+            command: String,
+            mode: ShellConsoleMode,
+            timeoutMillis: Long,
+        ): ShellConsoleResult = throw AutojsException(
+            ErrorCode.ERR_NOT_IMPLEMENTED,
+            "控制台 shell 面未接线：本宿主没有接上 shell 执行入口（命令未执行：$command）",
+        )
+    }
 }

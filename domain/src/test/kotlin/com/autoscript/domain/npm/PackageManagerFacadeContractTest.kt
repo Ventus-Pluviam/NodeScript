@@ -24,6 +24,8 @@ class PackageManagerFacadeContractTest {
             "globalRegistry", "setGlobalRegistry",
             // 控制台命令面（§10.9 第 3 条「npm 终端视图」；同样不经桥）
             "runConsoleCommand", "consoleOutput",
+            // 控制台 shell 面（2026-10-09 用户口径：控制台要能执行 shell）
+            "runShellCommand",
             // 审批（人机分离：requestApprove 仅入队 / resolveApproval 仅 UI 回调）
             "requestApprove", "resolveApproval", "pendingApprovals",
             // P1

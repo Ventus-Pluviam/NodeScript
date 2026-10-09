@@ -41,6 +41,8 @@ import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
+import com.autoscript.domain.npm.ShellConsoleMode
+import com.autoscript.ui.state.modeLabel
 import com.autoscript.ui.theme.ThemeColors
 import kotlinx.coroutines.launch
 
@@ -52,8 +54,10 @@ import kotlinx.coroutines.launch
  * **日志管理**（系统日志 / 脚本输出 / 任务日志三段），控制台只做一件事：**跑命令**。
  *
  * 三条边界写在这一屏上，因为用户在这里最容易误解：
- * - **没有 shell**：只认 `npm` 与 `npx` 两个入口，任意命令走脚本侧的 `auto.shell`
- *   （本仓没有 shell，假装支持 `sh -c` 只会让"看起来能跑、实际没人守"的输入进来）；
+ * - **shell 要显式进模式**（2026-10-09 用户口径：控制台要能执行 shell）：敲 `su` 进
+ *   root（`su -c`）或 `shizuku` 进 adb（Shizuku，shell uid），`exit` 退出。默认模式下
+ *   裸命令按**依赖提供的命令**解析（`tsc` / `eslint`…），与 shell 面不混；
+ *   模式徽标常驻可见 —— 用户不该在以为敲的是 npm 时把命令送进 root shell；
  * - **命令跑在某个项目上**：`npm install` 要落进那个项目的 `node_modules`，
  *   所以顶部先选项目（只有一个项目时不画那一排 —— 一个格子的分段控件是在暗示还有别的）；
  * - **装好的依赖提供的命令**（`npx <bin>` / `npm run <script>`）走**人工审批**（§10.5）：
@@ -108,8 +112,9 @@ fun ConsoleScreen(
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         ToneText(
-            text = "在这里跑 npm 命令（npm install / ci / ls / audit…），以及依赖装好后提供的命令" +
-                "（npx <命令> / npm run <脚本>）。本平台没有 shell，只认这两个入口。",
+            text = "在这里跑 npm 命令（npm install / ci / ls / audit…）、依赖装好后提供的命令" +
+                "（npx <命令> / npm run <脚本>），以及 shell 命令 —— shell 要先敲 su（root）" +
+                "或 shizuku（adb）进特权模式，exit 退出。",
             tone = StatusTone.MUTED,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
@@ -225,8 +230,22 @@ private fun InputRow(state: ConsoleCmdState, onDraft: (String) -> Unit, onRun: (
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CommandField(state.draft, onDraft, enabled = state.canRun, onSubmit = onRun, modifier = Modifier.weight(1f))
+            CommandField(
+                state.draft, onDraft,
+                enabled = state.canRun, onSubmit = onRun, modifier = Modifier.weight(1f),
+                mode = state.mode,
+            )
             PillButton("执行", selected = false, enabled = state.canRun, onClick = onRun)
+        }
+        // 特权模式徽标（2026-10-09）：**进了模式必须一眼看得见** —— 否则用户以为自己在
+        // 默认模式里敲 npm，实际每条都在往 root shell 送（§9.3「三通道必须显式指定」）。
+        if (state.mode != ShellConsoleMode.DEFAULT) {
+            ToneText(
+                text = "▲ " + modeLabel(state.mode) + " —— exit 退出",
+                tone = StatusTone.ATTENTION,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
         ToneText(
             text = when {
@@ -234,7 +253,9 @@ private fun InputRow(state: ConsoleCmdState, onDraft: (String) -> Unit, onRun: (
                 state.project == null -> "没有可跑命令的项目"
                 state.running -> "有命令在跑：跑完才能敲下一行"
                 state.opInFlight -> "正在提交…"
-                else -> "按空白切分，不支持引号与管道（本平台没有 shell）"
+                state.mode == ShellConsoleMode.DEFAULT ->
+                    "默认：裸命令按依赖提供的命令解析（tsc / eslint…）；su 或 shizuku 进特权模式"
+                else -> "特权模式：整行原样交给 shell（引号与管道归 shell 自己解析）；exit 退出"
             },
             tone = StatusTone.MUTED,
             style = MaterialTheme.typography.bodySmall,
@@ -250,6 +271,7 @@ private fun CommandField(
     enabled: Boolean,
     onSubmit: () -> Unit,
     modifier: Modifier,
+    mode: ShellConsoleMode,
 ) {
     val palette = ThemeColors
     Row(
@@ -262,7 +284,7 @@ private fun CommandField(
         Box(Modifier.weight(1f)) {
             if (value.isEmpty()) {
                 Text(
-                    text = "npm install axios",
+                    text = if (mode == ShellConsoleMode.DEFAULT) "npm install axios" else "ls -la /sdcard",
                     color = palette.text.copy(alpha = 0.5f),
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,

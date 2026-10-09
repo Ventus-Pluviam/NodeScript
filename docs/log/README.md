@@ -1,5 +1,46 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 88 真机验证）
+
+- [2026-10-09 · 批 88 真机验证：Shizuku adb 档 100% 不可用（已修）](2026-10-09.md)：
+  用户在真机上（Android 13 + KernelSU，Shizuku 13.6.0.r1086）冒烟 —— `su`（root 档）正常，
+  `shizuku`（adb 档）一条都跑不起来（`NoSuchMethodException: …IRemoteProcess$Stub$Proxy.
+  waitForTimeout [long, class java.util.concurrent.TimeUnit]`）。**根因**：`5a03dc3` 把
+  `newProcess` 改成「从公开接口取方法」时，**没有把同一条推理推广到它的返回值上** ——
+  那个运行时类是**包内可见**的 AIDL proxy（且自己 override 了接口的每个方法），
+  于是签名找不到（AIDL 上是 `(long, String)`）、流方法 `as? InputStream` 静默得 null、
+  `destroy`/`exitValue` 抛 `IllegalAccessException`。**修法**：新增同文件
+  `RemoteProcessApi`（每个方法从公开接口取）+ `ShizukuProcessReader`（读进程那一半搬出
+  `ShizukuInput`）+ `waitForTimeout(long, "MILLISECONDS")`（设备 dex 反汇编核实）+
+  流改 `PFD → AutoCloseInputStream` 且形状不符即抛 + `step()` 剥开
+  `InvocationTargetException` + `ShizukuExecResult` 补 `truncated`（批 88 那条已知缺口销账）
+  + proguard 删死代码规则、补 `IRemoteProcess`。**守卫**：`ShizukuRemoteProcessTest` 8 例
+  （喂包内可见的 AIDL 仿真替身）+ `ArchitectureTest` 常量池字节门（已反证会红）。
+  **边界**：真机复测待用户跑；13.6.0 服务端 AIDL 未逐字核对；两档流上限仍不统一。
+
+## 最新追记（2026-10-09，批 88）
+
+- [2026-10-09 · 批 88：控制台 shell 面（`su` / `shizuku` 特权模式，用户口径）](2026-10-09.md)：
+  用户口径「也需要让控制台能执行 shell」+ 三条指定（`su` 进 root、`shizuku` 进 adb、`exit` 退出，
+  「这部分说的是控制台的」）。批 84 第 2 项裁定当时写的是「只有 npm，不加 shell」—— 本条是
+  **用户对该裁定的修订**：shell 进控制台，但**必须显式进模式**（不是「裸命令一律当 shell」）。
+  `:domain` `NpmConsoleKeys.parse(line, mode)` + 枚举 `ShellConsoleMode` + 三个新命令变体；
+  `HostSummary.runShellCommand` + `ShellConsoleResult`；`:app-service:npm` 新增
+  `ConsoleShellRunner`（执行 + 渲染，独立一件）+ `ShellOpExecutor` 缝；`:platform:capabilities`
+  `ShizukuInput.exec`（**并发**排空两条流）；`:app` `PlatformWiring.ConsoleShellExecutor`
+  （**ADB 档换成 Shizuku**）；`:ui` `ConsoleCmdState.mode` + 模式徽标。
+  **七条口径**：必须有模式、不许静默挑一条（root uid 与 shell uid 是两条不同身份的通道，
+  静默挑 = 让「我以为我在用 root」不可分辨）/ `su <cmd>` 与 `su` 是两件事（带参数 = 就地跑那一条）/
+  `DEFAULT` 一律拒且拒要落一行（先落 RESULT 再抛，拒绝不碰执行体）/ 非零退出是结果不是异常 /
+  超时不渲染半截输出 / shell 面与依赖树无关（不建事务、不占安装会话、不碰项目锁）/
+  `adb` 档 = Shizuku 且只在装配层换（`AndroidShellExecutor` 的 ADB 是**应用 uid**，
+  改它会动到 a11y 输入注入那条路）。
+  **顺手修两处**：`ShizukuInput.shizukuClass` 补接 `LinkageError`（JVM 实测
+  `NoClassDefFoundError` 不是 `Exception`，会越过 `AutojsException` 直穿到调用方）；
+  `NpmScriptResolver` 纯 JS 探测拆出 `PureJsProbe`（越 `TooManyFunctions` 线）。
+  **边界**：真机未验（无设备，由用户自测）；**已知缺口**：adb 档输出被截到 4 KiB 时
+  控制台不打「已截断」（root 档有真判据）。
+
 ## 最新追记（2026-10-09，批 87）
 
 - [2026-10-09 · 批 87：依赖面板变更半边（§10.9 第 1 条）+ `npm-cache` 尺寸栏（第 5 条）](2026-10-09.md)：

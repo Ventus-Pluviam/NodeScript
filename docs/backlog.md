@@ -1,5 +1,87 @@
 # AutoScript 待办池（backlog）
 
+- **外审建议（2026-10-09，未做，登记）**：`IShizukuService`/`IRemoteProcess` 其实**就在
+  编译类路径上**（`dev.rikka.shizuku:aidl` 是 `api` 的传递依赖，`implementation` 收得到，
+  实测 `:platform:capabilities:dependencies --configuration debugCompileClasspath` 可见）。
+  既然编译期看得见，那条链可以**直接转型**而不必反射：
+  `IShizukuService.Stub.asInterface(binder)` → `IRemoteProcess`，一处反射都不用。
+  收益是把这一整类 bug（签名漂移、声明类不可见、R8 改名）从**运行时**挪到**编译期**，
+  连 `proguard-rules.pro` 那五条 keep 也可以删（静态引用自带保名）。
+  本批没做，理由：现修法已由测试 + R8 mapping 双重验证，且它与 `newProcess` 那条
+  已被真机验证过的写法同形，改动面最小；转型那条要重写守卫并重验 R8。
+  **要做就得一次做完**（`Shizuku` 主类那条仍须反射 —— 它的静态初始化在 JVM 上会炸，
+  见 `ShizukuInput` 的类 KDoc；只有 AIDL 接口那半可以转型）。
+  注：这也解释了 `ShizukuInput` 类 KDoc 里「不 import `rikka.shizuku.*`」那句的**边界** ——
+  它针对的是 `rikka.shizuku.Shizuku`（静态初始化重），不是 AIDL 接口。
+
+## 2026-10-09 追记（批 88 真机 bug：Shizuku adb 档 100% 不可用 —— 已修）
+
+- **真机实测（2026-10-09，用户设备 Android 13 + KernelSU，Shizuku 13.6.0.r1086）**：
+  批 88 的 `shizuku` 档在真机上**一条命令都跑不起来**，报
+  `NoSuchMethodException: moe.shizuku.server.IRemoteProcess$Stub$Proxy.waitForTimeout
+  [long, class java.util.concurrent.TimeUnit]`；同机同一条命令走 `su`（root 档）正常，
+  故问题被限定在 Shizuku 这条通道。**上一条追记里「真机验证积压①」已就地划掉**
+  （答案有了：不通，且不是环境问题）。修法见 `fix(capabilities,app)` 那次提交
+  （2026-10-09），机理与判据写在 `ShizukuInput` 的 `RemoteProcessApi` KDoc 里。
+- **根因一句话**：`5a03dc3` 已把 `newProcess` 本身改成「从公开接口取方法」，
+  **但同一条推理没有推广到它的返回值上** —— `drain`/`drainBoth`/`pump` 一律走
+  `process.javaClass.getMethod(...)`，而那个运行时类是**包内可见**的 AIDL proxy
+  （`IRemoteProcess$Stub$Proxy`），且它自己 override 了接口的每一个方法。三处后果：
+  ① `waitForTimeout` 的 AIDL 签名是 `(long, String)` 不是 `(long, TimeUnit)`
+  （后者只存在于本应用**永远拿不到**的 `rikka.shizuku.ShizukuRemoteProcess` ——
+  `Shizuku.newProcess` 是 `private static`）；② 两条流方法返回 `ParcelFileDescriptor`
+  而非 `InputStream`，`as? InputStream` **静默**得 null（比 ① 更隐蔽：症状是"输出栏什么
+  都没有"，不是任何一条报错）；③ `destroy`/`exitValue` 在包内可见类上 invoke 抛
+  `IllegalAccessException`。
+- **adb 档的输出截断不报（上一条追记那条）已就地划掉**：`ShizukuExecResult` 补了
+  `truncated`，`PlatformWiring` 逐字段转接时一起搬。**口径**：两条流**各自**判、`or` 起来
+  算一个数（任一条被截即置位）—— 与 `AndroidShellExecutor` 的
+  `truncated = out.truncated || err.truncated` 同形，不另立一套。
+- **两条流的上限仍不统一（登记，未做）**：adb 档是 `ShizukuProcessReader.CAPTURE_LIMIT_CHARS`
+  = 4 KiB（字符），root 档是 `ShellCaptureLimit.MAX_CAPTURE_BYTES` = 1 MiB（字节）——
+  两个数分居两个模块（`platform/capabilities` 看不到 `:platform:system` 的契约），
+  统一它们要 `:domain` 出一份共享常量，属跨模块契约变更。在那之前 adb 档的截断**如实上报**
+  （置 `truncated` + 控制台打「已截断」），不静默丢字节。
+- **回归守卫已立（JVM，无需真机）**：`ShizukuRemoteProcessTest` 8 例（喂一个**包内可见**、
+  逐个 override 接口方法的 AIDL 仿真替身，把"从运行时类取方法必失败 / 从公开接口取才通"
+  的语义钉死）+ `ArchitectureTest` 新增「Shizuku 反射只许 `ShizukuInput` 一处」
+  （本模块生产代码引用不到那两个包，故门落在**常量池字节**上；**点分与斜杠两种形态都要找**
+  —— 只找斜杠时新抄一份 `Class.forName` 照样绿，实测过）。
+- **真机验证积压（本批新增，等用户跑）**：修完这一版要验的五件 ——
+  ① `shizuku` 档 `id` 出 uid + 退出码；② 失败命令（`ls /nonexistent`）非零退出且 stderr 有内容；
+  ③ 大输出命令（`logcat -d`）不死锁；④ 长命令走超时路径；⑤ a11y 的 `ADB` 输入通道
+  （`ShizukuInput.run`）真能注入（**这条从来没成功过**，与 bug 是同一处）。
+- **13.6.0 的服务端 AIDL 未逐字核对（登记）**：`waitForTimeout(long, String)` 与
+  「第二参是 `TimeUnit.valueOf` 要的枚举常量名」两条，是从设备上 Shizuku 13.6.0 的
+  `classes.dex` **反汇编**核实（`invoke-static {v0}, Ljava/util/concurrent/TimeUnit;.valueOf`），
+  随仓库 vendored 的是 13.1.5。若真机复测仍报签名不符，就从设备上把服务端接口 dump 出来对齐。
+
+## 2026-10-09 追记（批 88：控制台 shell 面）
+
+- **控制台 shell 面已落（2026-10-09，批 88）**：`su` 进 root、`shizuku` 进 adb、`exit` 退出；
+  默认模式下裸首词仍是 npm bin。**批 84 那条「只认 npm 与 npx，不加 sh」的裁定已被用户同日后续
+  口径修订**（口径见 [`design-decisions.md`](design-decisions.md) 第 58 项 + 「已推翻」表）。
+- **真机验证积压（批 88 新增，登记）**：无设备，按既定纪律由用户自测。具体没验的三件 ——
+  ~~① Shizuku 装好之后 `newProcess` 那条反射链在真机上通不通（本机只能验「缺席时如实拒绝」）~~
+  **作废（2026-10-09 真机实测：不通，见上方追记）**；
+  ② `su -c` 在真 ROM 上的话术与行为（有些 ROM 的 `su` 是 Magisk 的、有些根本没有）
+  —— **部分已验（2026-10-09 真机：KernelSU 上 `su` 进 root 档、`id` 出 `uid=0(root)`、
+  退出码 0、`ls /data/data/com.autoscript/files` 退出码 0；换 ROM 的差异仍未验）**；
+  ③ 特权模式下软键盘的观感 + 模式徽标是否足够显眼（这条只有人眼能判）**（仍未验）**。
+- ~~**adb 档的输出截断不报（批 88 发现，登记）**~~ **已修（2026-10-09，见上方追记：
+  `ShizukuExecResult` 补 `truncated`，两条流各自判、`or` 成一个数）**。原文照抄如下 ——
+  `ShizukuExecResult` **没有** `truncated` 字段，
+  经 `PlatformWiring` 转成 `ShellConsoleResult` 时取缺省 `false` —— 于是 adb 档的输出被截到
+  4 KiB 时，控制台**不会**打那句「输出超过上限，已截断」（root 档走 `AndroidShellExecutor`，
+  有真判据，那一档会打）。修法是给 `ShizukuExecResult` 加一个 `truncated` 并让 `pump` 在越限时置位；
+  本批没做，因为要先定「截断」在两条流上怎么算一个数（两条流各自截断？还是合起来算一个？）。
+  **别把它当成"已经做了只是没显示"** —— 那个字段本身不存在。
+- **`su` / `shizuku` 的「就地跑一条」不做引号解析（批 88 现状，登记）**：`su echo "a  b"` 里那对
+  双引号会被原样交给 shell（`sh -c` 自己解析），而**宿主这一层**按空白切分只为剥掉入口词
+  （`substringAfter(' ')`）—— 故多空格与引号由 shell 决定，不是宿主吃掉的。这与 §10.9 第 3 条
+  「分词按空白切、不做 shell 引号解析」**不冲突**：那条管的是 npm 面（npm 自己不解析引号），
+  特权模式那条路整行原样交给 `sh -c`，引号归 shell 解析。**别顺手把两面的分词"统一"掉**。
+
 ## 2026-10-09 追记（批 87：依赖面板变更半边 + `npm-cache` 尺寸栏）
 
 - **§10.9 第 1 条的变更半边已落（2026-10-09，批 87）**：安装输入行 + 两颗旗标（`-D` /

@@ -24,16 +24,16 @@ import java.nio.file.Path
  *   与「版本升级必须重批」是同一条纪律的同一种粒度。
  * - [binTarget]：bin 声明（归属包 pkg@version + bin 名 + 目标相对路径）的摘要。
  *
- * 纯 JS bin 白名单（§10.3 T1「纯 JS bin 白名单」）：bin 目标必须是 `.js`/`.cjs`/`.mjs`。
- * 非 JS 后缀即 `ERR_NOT_SUPPORTED` 并指向「wasm 优先、纯 JS 兜底」（§10.3 明确不可行那节）
- * —— 从 app 数据区 exec 任意二进制本就不允许（W^X），设备端也没有编译器可用。
+ * 纯 JS bin 白名单（§10.3 T1「纯 JS bin 白名单」）：判据是**目标文件本身**，不是文件名后缀
+ * （2026-10-09 修，见 [isPureJsEntry]）。非 JS 即 `ERR_NOT_SUPPORTED` 并指向
+ * 「wasm 优先、纯 JS 兜底」（§10.3 明确不可行那节）—— 从 app 数据区 exec 任意二进制
+ * 本就不允许（W^X），设备端也没有编译器可用。
  *
  * 解析只读文件系统（`:main` Kotlin 直读，零 Node 进程，§10.6 轻操作同款纪律）。
  */
 internal object NpmScriptResolver {
 
-    /** 纯 JS bin 目标后缀（白名单的全体；不在表内即拒）。按**文件名的结尾**判，不是整名相等。 */
-    private val JS_SUFFIXES = listOf(".js", ".cjs", ".mjs")
+    private const val NEWLINE = "\n"
 
     /** 项目自身 scripts 的解析结果。 */
     data class ProjectScripts(
@@ -102,14 +102,9 @@ internal object NpmScriptResolver {
             )
         }
         val (pkgDir, rel) = hits.single()
-        val fileName = rel.substringAfterLast('/')
-        if (!JS_SUFFIXES.any { fileName.endsWith(it, ignoreCase = true) }) {
-            throw AutojsException(
-                ErrorCode.ERR_NOT_SUPPORTED,
-                "bin「" + bin + "」不是纯 JS 目标（" + rel + "）：设备端不执行 app 数据区里的原生二进制" +
-                    "（W^X，§10.3）。请改用 wasm 实现或纯 JS 替代（如 esbuild-wasm / node:sqlite / bcryptjs）",
-            )
-        }
+        // 顺序是**刻意**的（2026-10-09 修）：逃逸 → 存在 → 是不是 JS。
+        // 白名单判据现在要**读文件**，故必须排在存在性之后；而逃逸检查本就该最先 ——
+        // 它对恶意 manifest 是第一条防线，没有理由排在一条纯字符串后缀检查后面。
         val entry = pkgDir.resolve(rel).normalize()
         if (!entry.startsWith(pkgDir)) {
             throw AutojsException(
@@ -123,15 +118,18 @@ internal object NpmScriptResolver {
                 "bin「" + bin + "」的目标文件不存在：" + entry + "（声明在 manifest 但未物化，包是否装完整？）",
             )
         }
+        if (!PureJsProbe.isPureJsEntry(entry, rel)) {
+            throw AutojsException(
+                ErrorCode.ERR_NOT_SUPPORTED,
+                "bin「" + bin + "」不是纯 JS 目标（" + rel + "）：设备端不执行 app 数据区里的原生二进制" +
+                    "（W^X，§10.3）。请改用 wasm 实现或纯 JS 替代（如 esbuild-wasm / node:sqlite / bcryptjs）",
+            )
+        }
         val manifest = manifestOf(pkgDir)!!
         val pkg = str(manifest, "name")?.takeIf { it.isNotBlank() } ?: pkgDir.fileName.toString()
         val version = str(manifest, "version")?.takeIf { it.isNotBlank() } ?: "0.0.0"
         return BinTarget(pkg, version, hashOf(pkg + "@" + version, "bin:" + bin + "=" + rel), entry)
     }
-
-    // —— 内部 ——
-
-    private const val NEWLINE = "\n"
 
     /** 读并解析一个 package.json；不存在/不是普通文件 → null；存在但坏了 → 抛（不装作没有）。 */
     private fun manifestOf(dir: Path): Map<String, DomainJson.Value>? {
@@ -194,4 +192,85 @@ internal object NpmScriptResolver {
         val canonical = identity.length.toString() + ":" + identity + " " + body.length.toString() + ":" + body
         return "sha256:" + DirSizer.sha256(canonical.toByteArray(StandardCharsets.UTF_8))
     }
+}
+
+/**
+ * bin 目标「是不是能交给 node 跑的纯 JS」的**唯一判据处**（2026-10-09 修）。
+ *
+ * 为什么从 [NpmScriptResolver] 里拆出来（2026-10-09）：探测从「看文件名后缀」变成
+ * 「读文件内容」（ELF 魔数 / shebang / 后缀三道），解析器因此多出三个函数、越过了
+ * detekt 的 `TooManyFunctions` 线。拆的判据不是「凑数」—— 这两件事本来就不同：
+ * [NpmScriptResolver] 管**怎么找到** bin（manifest 声明、路径逃逸、包目录扫描），
+ * 本对象管**找到之后它是不是 JS**。前者读 manifest 与目录，后者只读那一个文件的头几百字节。
+ *
+ * 探测结果**不缓存**：bin 目标在安装会话里可能被换掉（重装同一版本、npm 重写文件），
+ * 缓存一个「上次是 JS」的结论等于让 W^X 门禁读一份过期的判断。
+ */
+internal object PureJsProbe {
+
+    /**
+     * 纯 JS bin 目标的**辅助**后缀表（`.js`/`.cjs`/`.mjs`）。按文件名的结尾判，不是整名相等。
+     *
+     * **不再是唯一判据**（2026-10-09 修）：它是 [isPureJsEntry] 里 shebang 之后的**第二道**，
+     * 不是第一道。理由见该函数的 KDoc。
+     */
+    private val JS_SUFFIXES = listOf(".js", ".cjs", ".mjs")
+
+    /** shebang 探测读多少字节（只需首行；256 字节够任何正常 shebang 行）。 */
+    private const val SHEBANG_PROBE_BYTES = 256
+
+    /** ELF 魔数：原生二进制。无论文件叫什么名字，命中即拒。 */
+    private val ELF_MAGIC = byteArrayOf(0x7F, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte())
+
+    /**
+     * shebang 行里的 node：`#!/usr/bin/env node`、`#!/usr/bin/node`、`#!/usr/bin/env -S node …`。
+     *
+     * **不能只判 `contains("node")`**：`/usr/bin/nodemon` 也含 "node"，那是另一个程序。
+     * 要求 `node` 前后是行首/空白/`/` 与空白/行尾，即它是**一个独立的路径段或词**。
+     */
+    private val NODE_SHEBANG = Regex("(^|\\s|/)node(\\s|$)")
+
+    /**
+     * bin 目标是不是**能交给 node 跑的纯 JS**（2026-10-09 修）。
+     *
+     * **修的是什么**：原判据是「文件名以 `.js`/`.cjs`/`.mjs` 结尾」。而 npm 生态里大量 bin
+     * 是**无后缀**的 —— `typescript` 的 `{"tsc": "./bin/tsc"}`、`esbuild` 的 `bin/esbuild`
+     * 都是。那些文件是货真价实的 JS（首行 `#!/usr/bin/env node`），却因为「文件名没后缀」
+     * 被这条判据**误杀**成 `ERR_NOT_SUPPORTED`，而报出去的那句话（「不是纯 JS 目标」）
+     * 恰好是错的 —— 用户照着它去换 wasm 替代，换掉的是一个本来就能跑的工具。
+     *
+     * **现在的判据读文件本身，三步**：
+     * 1. ELF 魔数 → **原生二进制，无论叫什么名字都拒**（放最后一道，防的是「把 ELF 命名成
+     *    `.js`」这种绕过）；
+     * 2. 首行 shebang 指向 node → **纯 JS**（`tsc`/`esbuild` 这类无后缀 bin 走这条）；
+     * 3. 都没有 → 退回后缀表（`eslint.js`/`prettier.cjs` 走这条，它们通常**没有** shebang）。
+     *
+     * **读不到文件即判否**（fail closed）：判据说「我确认它是 JS」，读不出来就不该假装确认过。
+     *
+     * **诚实边界**：本判据答的是「这个文件**是不是** JS 源码」，不是「跑起来会不会 spawn」。
+     * `esbuild` 的 `bin/esbuild` 是 JS（第一步就过），但它在最后一行
+     * `require("child_process").execFileSync(原生二进制)` —— 那由 [NpmSpawnGate] 在运行期拦，
+     * 报的是**真病因**（「被 child_process 门禁拦截」）。两条判据各管各的，不互相冒充。
+     */
+    fun isPureJsEntry(entry: Path, rel: String): Boolean {
+        val head = try {
+            Files.newInputStream(entry).use { it.readNBytes(SHEBANG_PROBE_BYTES) }
+        } catch (_: Exception) {
+            return false
+        }
+        if (startsWithElfMagic(head)) return false
+        if (hasNodeShebang(head)) return true
+        val fileName = rel.substringAfterLast('/')
+        return JS_SUFFIXES.any { fileName.endsWith(it, ignoreCase = true) }
+    }
+
+    private fun startsWithElfMagic(head: ByteArray): Boolean =
+        head.size >= ELF_MAGIC.size && ELF_MAGIC.indices.all { head[it] == ELF_MAGIC[it] }
+
+    private fun hasNodeShebang(head: ByteArray): Boolean {
+        if (head.size < 2 || head[0] != '#'.code.toByte() || head[1] != '!'.code.toByte()) return false
+        val line = String(head, StandardCharsets.US_ASCII).lineSequence().firstOrNull() ?: return false
+        return NODE_SHEBANG.containsMatchIn(line)
+    }
+
 }
