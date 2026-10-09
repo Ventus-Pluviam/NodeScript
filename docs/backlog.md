@@ -1,5 +1,36 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-09 追记（批 86：依赖维护按钮 + 缓存按 lock 闭包回收）
+
+- **§10.9 第 5 条的动作半边已落（2026-10-09，批 86）**：依赖管理页配额条下面一行四颗按钮
+  （`清理多余包`/`依赖去重`/`按 lock 重装`/`回收缓存`）。口径见
+  [`design-decisions.md`](design-decisions.md) 第 56 项。**上一条追记里那句「动作半边仍未落」已就地划掉。**
+- **`cacheDir/npm-cache-seed` 没有生产部署路径（批 86 发现，登记）**：§10.2 写的是
+  「`cacheDir/npm-cache-seed`：精选 tarball 种子，首启播种」，但实测 `grep -rn NpmCacheSeedDeployer`
+  的非测试命中只有它自己与注释 —— **`NpmCacheSeedDeployer.deploy` 在生产里零调用方**（非测试引用只剩 `cacheRoot`/`cacacheDir`/`contentPath` 这几个路径函数），
+  种子素材（`assets/` 侧）也没有对应的 gradle 任务。后果具体：§10.11 P0 承诺的
+  「精选缓存种子 + 离线首装」在真机上**一次都没播过种**，于是 `offlineGap` 恒报缺口
+  （这现象本身被批 86 的 `cacheRoot` 合一掩盖了一半 —— 目录统一了，但里面还是空的）。
+  要做需要三件：素材生成（构建期从 `~/.npm` 物化 + 侧车 `.sha512`）、随包（`assets/npm-seed/**`
+  + 一个 `prepareNpmSeedAssets` 任务）、启动期部署（`AppShellKit` 里与 npm CLI 落位同批）。
+  **别把它当成「已经做了只是没接线」** —— 素材本身也不存在。
+- **`npm-cache` 尺寸没进配额条（批 86 发现，登记）**：`CacacheIndex.contentBytes()` 有实现，
+  但 `QuotaCard` 只画 `node_modules`，§10.9 第 5 条要的「per-project `node_modules` + `npm-cache`
+  尺寸」今天只有前半截。回收回执里的删/留数字因此取自 `NpmCacheReclaimReport` 本身，不取自配额条。
+- **缓存回收的 index 修复只在 npm 10.9.8 上实测过（批 86 边界，登记）**：悬空 index 让在线
+  `npm install` 报 `ENOENT … Invalid response body while trying to fetch` 这条结论来自本机 npm 10.9.8；
+  随包 npm 是 12.2.0，cacache 桶格式同源（`index-v5` 的追加式行 + `sha1(json)` 前缀）但**未在该版本上复跑**。
+  真机冒烟时顺手看一眼回收后 `npm install` 是否正常。
+- **`NpmCacheReclaim.repairIndex` 不清理「指向仍存在、只是没人再需要」的 index 条目（刻意留的）**：
+  那些是 packument 索引等几 KB 的小文件，清它们要重建整棵桶树，收益与风险不成比例。
+  故 `Report.keptEntries` 会大于真正被 lock 引用的条目数。**这不是漏删**，别当 bug 修。
+- **`ci` 与 `importOfflineBundle` 是否漏入史 —— 仍未核实（批 85 登记，批 86 复核后仍留）**：
+  批 85 那条「同类待查」写的就是这两条。批 86 顺带确认了它们**确实在 handle 存在之前抛**
+  （`ci` 的 `lockSigner.verifyOrThrow`、`importOfflineBundle` 的 `ERR_FILE_NOT_FOUND`），
+  但**没有修**：要不要把「一次从没开始的会话」记成审计事件是**口径问题**，得先拍板再动手。
+- **真机验证积压（批 86 新增一条）**：四颗按钮在真机上的观感（忙碌态文案、回收后配额条是否
+  真的动了）未验 —— 无设备。随下次真机冒烟一并看。
+
 ## 2026-10-09 追记（批 85：审计页落地 —— `InstallHistory` 从「零消费方」转为有读口）
 
 - **§10.5-2「审计日志落 App 且可导出」的读侧已落（2026-10-09，批 85）**：前半截（落盘）自始成立，
@@ -10,9 +41,10 @@
 - **「可导出」仍未落（登记为后续）**：§10.5-2 的原话含「可导出」，那条通道 = SAF 选目录 + 写文件。
   本批**不画按钮**（按下去什么都不发生的按钮比不画更糟）。要做先想清导出格式：
   jsonl 原文（可再导入）还是人读文本（可贴给别人）—— 两者不是一回事。
-- **包大小管理页的动作半边仍未落（§10.9 第 5 条）**：配额满时那句提示今天把用户指去**控制台**
+- ~~**包大小管理页的动作半边仍未落（§10.9 第 5 条）**：配额满时那句提示今天把用户指去**控制台**
   敲 `npm prune`（批 84 的白名单里真有 `prune`，那条路是通的），但 prune/dedupe/ci 重装/cache clean
-  的**一键按钮**没有。它是本批顺带看清的一条：**有路可走 ≠ 有一键**，记账时别把前者写成后者。
+  的**一键按钮**没有。它是本批顺带看清的一条：**有路可走 ≠ 有一键**，记账时别把前者写成后者。~~
+  **作废（2026-10-09，批 86）**：四颗按钮已落，见本文件顶部那条。
 - **同批补的一条漏账（记下来，别再漏）**：`enqueueHeavy` 的磁盘/配额**预检拒绝**原先不入史 ——
   用户屏幕上是一句「已达配额」，审计页上却是「什么都没发生」。已补记。**同类待查**：
   其余在 handle 存在之前就抛的路径（`importOfflineBundle` 的 `ERR_FILE_NOT_FOUND`、

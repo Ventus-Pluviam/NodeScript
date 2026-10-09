@@ -12,6 +12,78 @@
 
 ---
 
+## 56. 缓存回收按 lock 闭包（不叫 cache clean），且必须同时修 index（2026-10-09，批 86）
+
+**背景**：§10.9 第 5 条那颗「cache clean」按钮。摆着两条路，语义完全不同：
+
+- **A：`npm cache clean --force`** —— 把 `cacheDir/npm-cache` 整个删掉，npm 自己就有这个子命令；
+- **B：按 lock 闭包回收** —— 只删「没有任何项目 lock 需要」的 content 条目。
+
+**用户 2026-10-09 裁定：走 B。** 理由是 §10 整卷的离线能力（`--prefer-offline`、精选种子首装、
+`offlineGap` 体检、离线 bundle 导入）**全建在这个缓存上**：全清等于把紧挨着的那颗「按 lock 重装」
+按钮变成**必须联网**——用户按「清理」是为了腾地方，不是为了把自己踢下线。npm 自己没有 B 这个子命令
+（`cache clean` 只有全清），故**必须新开一个 facade 方法**。
+
+**裁定一：保留集是「所有项目 lock 闭包的并集」，不是当前项目。** 只按当前项目算会删掉别的项目
+离线重装要用的包，而那种「省了空间、坏了别的项目」的后果，用户在点按钮时**完全看不见**
+（他站在 p1 的页面上，毁的是 p2）。lock 读不出来的项目**点名入史**（`unreadable`）：
+那些项目的包没有被保护，用户有权知道 —— 但**没有 lockfile 的项目不算**（那是「还没装过」，
+不是「保护不了」，两种情况混为一谈会让每个新项目都在审计里报一次假警）。
+
+**裁定二：不叫 `cache clean`，审计 op 名是 `cache_reclaim`。** 名字跟着语义走。审计页上
+「全清」与「按闭包回收」长得一样的话，将来真接了全清就分不出来了。
+
+**裁定三：回收必须同时摘掉指向已消失 content 的 index-v5 行 —— 这不是附赠，是半件事的另一半。**
+实测（2026-10-09，npm 10.9.8 本机，五组受控实验）：
+
+- `npm ci --offline` 走 `cacache.get.stream.byDigest`，**不看 index**：content 在就命中，
+  缺就 `ENOTCACHED`（与 `NpmCacheSeedDeployer.CACHE_HIT_NOTE` 同一条实测口径）；
+- 但**在线**路径读 index：index 指向一份已消失的 content 时，`npm install` 报
+  `ENOENT … Invalid response body while trying to fetch`（**不是**回源重下）。
+
+即**悬空 index 会让缓存从「没用」变成「有害」，而且界面上看不出来**（不报错到用户眼前，
+只在下次联网安装时炸）。第二件事对「本来就已经悬空的 index」（系统清缓存、上次崩在半路）
+同样有效 —— 那种状态下连在线安装都是坏的。`Report.indexRebuilt` 报的就是这次有没有修到；
+`integrity` 为 `null` 的行是 cacache 的**删除标记**（`compact` 里的记法），**保留** ——
+它不是悬空引用。
+
+**裁定四：认不出形状的一律保留；删不掉的不计入 removed。** `integrityOf` 只认
+`sha512/<2>/<2>/<124>` 且全小写 hex 这一种形状，其余（sha1 目录、路径段数不对、大写 hex）
+回 null = 保留。理由：本函数的职责是回收缓存，不是打扫看不懂的东西；**删一个读不懂的文件是
+「猜」，猜错的代价是别人的离线能力，收益只是几个字节**。同理，`Files.deleteIfExists` 失败
+（并发占用/权限）的条目计入 `keptEntries` 而不是 `removedEntries` —— 报出来的数字必须是真发生的事。
+`keptEntries` 因此会**大于**真正被 lock 引用的条目数（index 里那些「指向仍存在、只是没人再需要」
+的 packument 条目刻意不清：几 KB 的小文件，清它们要重建整棵桶树，收益与风险不成比例）。
+**`Report` 刻意不提供 `offlineUsable` 这类派生判断**：`keptEntries > 0` 不等于「离线可用」
+（认不出形状而留下的条目一个都命中不了 `byDigest`）——想下这个结论得看 `keepCount` 与具体 lock，
+那是调用方的事。
+
+**裁定五：三颗维护按钮共用 `NpmMaintenanceAction` 枚举，回收缓存不进这个枚举。**
+`prune`/`dedupe`/`ci` 形状相同（都是一次安装会话、都返回 `InstallHandle`、都过 per-project 互斥锁
+与磁盘/配额预检），界面只需要知道「哪一颗在跑」，故一个枚举 + 一条 `HostSummary.runNpmMaintenance`
+够用。回收缓存**返回的是一份读数而不是句柄、也不占安装会话**，塞进去会让「跑一次 npm 会话」
+（几十秒量级）与「删几个缓存文件」（毫秒量级）在界面上共用一套进度语义。
+**`CI` 那颗不绕过任何门禁**：走的是 `facade.ci(offline = true)`，`lockSigner.verifyOrThrow` 照旧先跑。
+
+**裁定六（同批修的一处真错，不是附赠）：`cacheRoot` 成为「npm 的缓存在哪」的唯一一份判据。**
+实测（`grep -rn "npm-cache"`）发现四处读者各拼各的、**互不相同**：喂给 npm 的 `--cache` 拿到的是
+`cacheDir` 本身（少一层）、`CacacheIndex` 读 `cacheDir/npm-cache`、离线 bundle 导入落在第三个目录
+（协调器 `npmCacheDir` 未传时的 `projectsRoot` 同级兜底），而 `NpmCacheSeedDeployer.cacheRoot`
+自己当时是**恒等映射**（`= cacheDir`）却挂着「缓存根（cacheDir/npm-cache）」的注释 ——
+注释与实现相反，正是这次分家的起点。后果不是报错而是**静默失效**：`offlineGap` 恒报缺口、
+导入完 `ci --offline` 照样不命中。已全部改走 `cacheRoot`。**`--cache` 取值变化被判定为安全**：
+生产上那个目录此前**基本从没被填过**（缓存从没播过种），故没有「换目录 = 丢缓存」的实际损失。
+
+**未落（如实划界）**：`npm-cache` 那一栏的尺寸读数没进 `QuotaCard`（`CacacheIndex.contentBytes()`
+有实现，今天只画 `node_modules`），故回收回执里的删/留数字取自报告本身；§10.2 写的
+`cacheDir/npm-cache-seed` **没有生产部署路径**（`NpmCacheSeedDeployer` 只有测试调用方）——
+已登记 backlog。
+
+**边界**：真机行为未验（无设备）；index 修复的实测证据来自本机 npm 10.9.8，随包 npm 是 12.2.0，
+桶格式同源但未在该版本上复跑。
+
+---
+
 ## 55. 审计史另开一条读口，不并进依赖面板快照（2026-10-09，批 85）
 
 **背景**：§10.5-2 原话是「审计日志（approve/registry 变更/lock 重签）落 App **且可导出**」。

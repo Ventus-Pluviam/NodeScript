@@ -49,6 +49,7 @@
 - `files/scripts/<projectId>/`：`package.json`、`package-lock.json`(v3)、`node_modules/`、`.npmrc`（项目级）。⚠ `filesDir` 所在分区文件系统由厂商决定（ext4/f2fs 皆有）——f2fs+eMMC 纳入真机红测矩阵，bin-links/符号链接/20k 小文件写方差按最差形态设计超时。
 - `files/.autojs`（**App 私有、安装会话只读、HMAC keyed 于 :main**）：`approve-ledger.json`（审批记录，条目绑定 `pkg+版本+脚本内容哈希`，新版本必须重新审批）、`lock.sig`、`install.journal`（事务日志）、`install-history`（审计）。
 - `cacheDir/npm-cache`（**系统可自动清，损失可接受**）：npm 内容寻址缓存 `content-v2 + index-v5`（非 SQLite）；`cacheDir/npm-cache-seed`：精选 tarball 种子（axios/dayjs/lodash/cheerio 等 ~5MB），首启播种。
+  **「npm 的缓存在哪」只有一份判据（2026-10-09 批 86）**：`NpmCacheSeedDeployer.cacheRoot(cacheDir)` = `cacheDir/npm-cache`，四处读者（喂给 npm 的 `--cache`、`CacacheIndex` 查询根、缓存回收根、离线 bundle 导入落点）一律经它。此前四处各拼各的，实测**互不相同**：`--cache` 拿到的是 `cacheDir` 本身（少一层）、`CacacheIndex` 读 `cacheDir/npm-cache`、导入落点又是第三个目录（协调器 `npmCacheDir` 未传时的 `projectsRoot` 同级兜底）—— 而 `cacheRoot` 自己当时是**恒等映射**却挂着「缓存根（cacheDir/npm-cache）」的注释，注释与实现相反。后果不是报错而是**静默失效**：`offlineGap` 恒报缺口、导入完 `ci --offline` 照样不命中。
 - `files/npm/`：vendored npm CLI（assets→filesDir 原子部署 tmp+sha256+rename；首启/升级落盘）。**已落地（2026-10-01）**：素材根 = `assets/npm/**`（键形状 `npm/<rel>`，零点条目 —— AssetManager 对点条目的可见性 ROM 间不一致），幂等锚 = `files/npm/.cli-manifest.sha256`（内容 = 全树清单规范化后的 sha256；2026-10-06 B9 起，构建期生成 `assets/npm-manifest.json`，含 count/bytes/files[path,sha256]。部署先核对 APK 文件集合、总字节和每件摘要，再核对落盘树；一致才免写，缺件/不可读/坏摘要拒绝部署并保留旧树。每次启动需要读盘校验，不再承诺零 IO）。**剪裁口径已实测**：按此口径剪出来的树（1668 文件 / 9MiB / 点条目 0）`npm ls`（装进 arborist）与真 `npm install` 都通过 —— 「丢点条目会不会弄瘸 npm」有实测答案，不走推断。
 - `files/offline-bundles/<bundleId>`、`files/npm-import/`：离线 bundle / 本地 tarball 导入区。
 - registry 配置：项目 `.npmrc` → `files/.npmrc`(userconfig) → `NPM_CONFIG_REGISTRY` env；默认 **`registry.npmjs.org` 官方**（§18 第 7 项 2026-09-26 拍板；要快自己 `setRegistry` 切 npmmirror/华为/腾讯），`replace-registry-host=npmjs` 使 lockfile 跨 registry 可用；代理 `Settings.Global.HTTP_PROXY` → 引擎 env `HTTP(S)_PROXY`。
@@ -186,6 +187,7 @@ interface PackageManager {
   suspend fun exportSnapshot(uri): SnapshotRef                 // node_modules.zip+lock+ledger→SAF；高信任通道
   suspend fun cancel(handle: InstallHandle)               // TTL/取消 → quiesce 安装会话
   suspend fun history(): List<InstallHistoryEntry>         // 审计史（2026-10-09 批 85）：append-only 历史，与 snapshot() 的「当前事实」是两件事
+  suspend fun reclaimCache(): NpmCacheReclaimReport        // 缓存按 lock 闭包回收（2026-10-09 批 86）：**不是** npm 的 cache clean，见 §10.9 第 5 条
 }
 ```
 
@@ -220,6 +222,27 @@ JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
 的账 —— 一行 `npm run build` 走 T1 通道（无事务），一行 `npm ls` 甚至不起进程，塞进同一个句柄类型
 会让 `cancel()`/journal 的语义含糊。输出环是 `InstallCoordinator` 里**另一个** `SeqRing`（有界 512），
 与 `InstallEvent` 那条环互不干扰（前者给界面看，后者给脚本拉）。
+
+**缓存回收读口（2026-10-09 批 86，§10.9 第 5 条那颗 cache clean）**：`reclaimCache()` 返回
+`NpmCacheReclaimReport`（六字段：`removedEntries`/`removedBytes`/`keptEntries`/`keptBytes`/
+`keepCount`/`indexRebuilt`）。**刻意不叫 `cache clean`**（审计 op 名是 `InstallHistoryOp.CACHE_RECLAIM`
+= `"cache_reclaim"`）：npm 的 `cache clean` 是整目录全清，而本动作的语义是「删掉没有任何项目 lock
+需要的那些」（用户 2026-10-09 裁定）—— §10 整卷的离线能力（`--prefer-offline`、精选种子首装、
+`offlineGap` 体检）全建在这个缓存上，全清等于把紧挨着的「按 lock 重装」那颗按钮变成**必须联网**。
+名字跟着语义走：审计页上两件事长得一样的话，将来真接了全清就分不出来了。
+**它是一份读数不是一个句柄**（与 `install`/`prune`/`dedupe`/`ci` 那四条返回 `InstallHandle` 的不同）：
+不动依赖树、不占安装会话、跑完即出账，故不塞进 `NpmMaintenanceAction` 那个枚举。
+**`keptEntries` 会大于 lock 闭包条目数**，这不是漏删：认不出形状的条目（非 sha512 目录、路径段数不对、
+大写 hex）一律保留 —— 本方法的职责是回收缓存，不是打扫看不懂的东西，删一个读不懂的文件是「猜」，
+猜错的代价是别人的离线能力，收益只是几个字节。
+
+**同批修的一件事（不是附赠）**：回收**必须同时摘掉指向已消失 content 的 index-v5 行**。实测
+（2026-10-09，npm 10.9.8）：`npm ci --offline` 走 `cacache.get.stream.byDigest`、**不看 index**
+（content 在就命中，缺就 `ENOTCACHED`）；但**在线**路径读 index，index 指向一份已消失的 content 时
+`npm install` 报 `ENOENT … Invalid response body while trying to fetch`（**不是**回源重下）——
+即**悬空 index 会让缓存从「没用」变成「有害」，且界面上看不出来**。所以只删 content 不修 index
+是半件事；`indexRebuilt` 报的就是这次有没有修到。`integrity` 为 null 的行是 cacache 的**删除标记**
+（`compact` 里的记法），保留 —— 它不是悬空引用。
 
 ### 10.8 JS API —— `auto.npm`
 
@@ -285,8 +308,10 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
    **未落**：安装输入行 / 旗标 / 阶段进度条（要 `install` 会话的完整形态）、依赖**树**（`list(depth)` 宿主侧
    只用 0，画树就是把平铺清单伪装成树）、`hasInstallScript` 前置告警（要 packument 解析面）、
    「全局禁止脚本」开关（出厂默认已是禁止，反向的**白名单放行**通道属 T1 之后）。
-   **另**：第 5 条（包大小管理页）的「一键 prune/dedupe/ci 重装/cache clean」按钮**仍未落** ——
-   配额满时那句提示今天把用户指去**控制台**敲 `npm prune`（可操作，但不是一键）。
+   ~~**另**：第 5 条（包大小管理页）的「一键 prune/dedupe/ci 重装/cache clean」按钮**仍未落** ——
+   配额满时那句提示今天把用户指去**控制台**敲 `npm prune`（可操作，但不是一键）。~~
+   **该行已落（2026-10-09 批 86）**：四颗按钮进依赖管理页（见第 5 条），配额满那句提示改为
+   指向本页的「清理多余包」（控制台那条路仍然通，第 3 条的白名单没动）。
 3. **npm 终端视图**（P1）：项目内终端 `npm install axios` / `npm ls`，stdout/stderr 流式输出 + exit code；与依赖面板同一安装会话队列。
    **落地现状（2026-10-09 批 84）**：控制台页从「日志屏」改成**命令面**（用户口径：「控制台不是放系统日志的地方，
    是用来执行命令的，比如 npm」）—— 管理面板 → 控制台，选项目 + 敲一行 + 看输出；原控制台的日志内容
@@ -338,10 +363,25 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 4. **离线包导入**：SAF 选择（tarball / lock+cacache bundle / 快照 node_modules.zip）→ 验签 → 队列安装；另提供「从内置精选缓存离线装 axios/dayjs/…」。`node_modules.zip` 导入**仅限高信任项目**，签名锚定 `HMAC(应用密钥, lock.sig + zip.sha256)`；市场脚本一律拒绝该格式（走 reify 产出 integrity）。
    **体积上限（2026-10-06，backlog B12）**：cacache bundle 解包前先卡**整包** 512 MiB（判据是文件系统上的字节数，不是 zip 声明的数），解包中逐条目卡 64 MiB —— 单条目读到顶即停、不入缓存。上限**整包拒收**（不截断、不返回部分结果）并回 `ERR_INVALID_PARAM`（「选错了文件」是可诊断的参数问题，不是 `ERR_FILE_NOT_FOUND`）。理由：这条路径收的是用户从 SAF 递进来的外部文件，**用户可能只是选错了**（视频、系统镜像、整个 Downloads 打成的一个包），而解包器在读到顶之前没有任何自然的停止点。
 5. **包大小管理页**：per-project `node_modules` + `npm-cache` 尺寸（Kotlin 遍历）+ 配额条（80%黄/100%拦）→ 一键 prune/dedupe/ci 重装/cache clean；明确标注 node_modules 计入系统「App 数据」。
-   **落地现状（2026-10-09 批 81 尺寸条 + 批 85 措辞订正）**：尺寸/配额条与判据已落（`NpmScreen` 的 `QuotaCard`，
-   读 `storage()` + `InstallConfig` 的 512MB/80%，呈现层不写死）；**动作半边未落** ——
-   今天配额满时那句提示把用户指去**控制台**敲 `npm prune`（那条路是真的通的，见第 3 条），
-   而不是假装有一颗「一键清理」的按钮。
+   **落地现状（2026-10-09 批 81 尺寸条 + 批 85 措辞订正 + 批 86 动作半边）**：尺寸/配额条与判据已落
+   （`NpmScreen` 的 `QuotaCard`，读 `storage()` + `InstallConfig` 的 512MB/80%，呈现层不写死）。
+   ~~**动作半边未落** —— 今天配额满时那句提示把用户指去**控制台**敲 `npm prune`（那条路是真的通的，
+   见第 3 条），而不是假装有一颗「一键清理」的按钮。~~
+   **动作半边已落（2026-10-09 批 86）**：依赖管理页配额条下面多一行 `MaintenanceCard`，四颗按钮
+   —— `清理多余包`(prune) / `依赖去重`(dedupe) / `按 lock 重装`(ci) / `回收缓存`(reclaimCache)。
+   三条口径写死在这里，免得被"统一"掉：
+   - **前三颗走 `NpmMaintenanceAction` 枚举**（`PRUNE`/`DEDUPE`/`CI`）→ `HostSummary.runNpmMaintenance`
+     → `facade.prune/dedupe/ci`：它们形状相同（都是一次安装会话、都返回 `InstallHandle`、都要
+     per-project 互斥锁与磁盘/配额预检），界面只需要知道"哪一颗在跑"。`CI` 走的是 `facade.ci(offline = true)`
+     —— **`lockSigner.verifyOrThrow` 照旧先跑**，按钮不绕过任何门禁。
+   - **`回收缓存` 不在那个枚举里**：它返回的是一份读数而不是句柄、也不占安装会话，塞进去会让
+     「跑一次 npm 会话」与「删几个缓存文件」在界面上共用一套进度语义（时长差两个量级）。
+     它走自己的 `HostSummary.reclaimNpmCache()` + 自己的 `reclaimingCache` 忙碌位。
+   - **回执不替用户宣布结果**：三颗按钮是**入队**（几十秒量级），回执说"已入队…完成后清单会更新"；
+     回收是**一次算出来的读数**，回执带删/留两侧数字（用户按下去就是为了看那个数字变没变）。
+   **失败原文原样透传**（`ci` 的验签拒绝那句里已经写清了为什么拒，界面再译一遍就是第二份判据）。
+   **仍未落**：`npm-cache` 那一栏的尺寸读数（`CacacheIndex.contentBytes()` 有实现，但 `QuotaCard`
+   今天只画 `node_modules`）—— 故回收回执里的删/留数字取自报告本身，不取自配额条。
 6. **首启引导**：原子部署 assets/npm CLI + 播种精选缓存 → registry ping 探测 → 选镜像（**默认官方 npmjs**，§18 第 7 项；镜像是加速选项不是开箱前提）与配置代理（能力中心网络项）。
 7. **打包向导联动**：node_modules 默认入 APK + `.autojs.build.ignore` 排除规则 + 「完全离线变体」（宿主预装 node_modules.zip）+ 项目 lock 签名生成。
 8. **镜像源管理**（2026-10-09 批 83）：管理面板 → 镜像源管理（`RegistryScreen`），编的是 **npm registry 全局缺省**，**粒度全局一份**（用户 2026-10-09 裁定；不做「全局缺省 + 项目覆盖」的编辑面 —— 项目那层仍可手编 `.npmrc`，界面不代管）。
