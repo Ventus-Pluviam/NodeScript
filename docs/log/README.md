@@ -1,5 +1,23 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 88 真机验证）
+
+- [2026-10-09 · 批 88 真机验证：Shizuku adb 档 100% 不可用（已修）](2026-10-09.md)：
+  用户在真机上（Android 13 + KernelSU，Shizuku 13.6.0.r1086）冒烟 —— `su`（root 档）正常，
+  `shizuku`（adb 档）一条都跑不起来（`NoSuchMethodException: …IRemoteProcess$Stub$Proxy.
+  waitForTimeout [long, class java.util.concurrent.TimeUnit]`）。**根因**：`5a03dc3` 把
+  `newProcess` 改成「从公开接口取方法」时，**没有把同一条推理推广到它的返回值上** ——
+  那个运行时类是**包内可见**的 AIDL proxy（且自己 override 了接口的每个方法），
+  于是签名找不到（AIDL 上是 `(long, String)`）、流方法 `as? InputStream` 静默得 null、
+  `destroy`/`exitValue` 抛 `IllegalAccessException`。**修法**：新增同文件
+  `RemoteProcessApi`（每个方法从公开接口取）+ `ShizukuProcessReader`（读进程那一半搬出
+  `ShizukuInput`）+ `waitForTimeout(long, "MILLISECONDS")`（设备 dex 反汇编核实）+
+  流改 `PFD → AutoCloseInputStream` 且形状不符即抛 + `step()` 剥开
+  `InvocationTargetException` + `ShizukuExecResult` 补 `truncated`（批 88 那条已知缺口销账）
+  + proguard 删死代码规则、补 `IRemoteProcess`。**守卫**：`ShizukuRemoteProcessTest` 8 例
+  （喂包内可见的 AIDL 仿真替身）+ `ArchitectureTest` 常量池字节门（已反证会红）。
+  **边界**：真机复测待用户跑；13.6.0 服务端 AIDL 未逐字核对；两档流上限仍不统一。
+
 ## 最新追记（2026-10-09，批 88）
 
 - [2026-10-09 · 批 88：控制台 shell 面（`su` / `shizuku` 特权模式，用户口径）](2026-10-09.md)：
