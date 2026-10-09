@@ -8,6 +8,8 @@ import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalTicket
+import com.autoscript.domain.npm.NpmConsoleHandle
+import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.host.ShellSummary
@@ -767,6 +769,36 @@ class AppShellApplication : Application(), HostSummary {
         val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：镜像源无处落账" }
         val facade = checkNotNull(built.npmFacade) { "npm 未接线：镜像源无处落账" }
         facade.setGlobalRegistry(raw)
+    }
+
+    /**
+     * 在控制台执行一行 npm 命令（§10.9 第 3 条，[HostSummary] 的生产实现）。
+     *
+     * 与 [npmSnapshot] 同一条纪律：命令交给**装配产物里那个 facade**（第二个
+     * `InstallCoordinator` 会各自持句柄表/事件环，控制台就会看到一本与安装互不相干
+     * 的账）；未接线**抛**，不假装跑过。
+     *
+     * 解析不过由 facade 侧**抛** [IllegalArgumentException]，原文点名用户敲的那个串
+     * （判据的唯一一份在 `:domain` 的 `NpmConsoleKeys`）—— 本类只转发，不另判一遍。
+     */
+    override suspend fun runNpmCommand(projectId: String, line: String): NpmConsoleHandle {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：控制台无法执行命令" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：控制台无法执行命令（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.runConsoleCommand(projectId, line)
+    }
+
+    /**
+     * 控制台输出读数（§10.9 第 3 条，[HostSummary] 的生产实现）。
+     *
+     * 未接线**抛**（与 [npmSnapshot] 同）：空快照是「读成功且真的一行都没有」的样子，
+     * 会把「宿主没接这个口」画成「命令跑了但什么都没说」。
+     */
+    override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：控制台输出暂不可读" }
+        val facade = checkNotNull(built.npmFacade) { "npm 未接线：控制台输出无可读之处" }
+        return facade.consoleOutput(projectId, sinceSeq, maxLines)
     }
 
     override fun createSyntaxHighlighter(relPath: String): SyntaxHighlighter =

@@ -9,6 +9,8 @@ import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.npm.ApprovalTicket
+import com.autoscript.domain.npm.NpmConsoleHandle
+import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.permission.Capability
@@ -87,4 +89,10 @@ open class FakeHost(
 
     override suspend fun setNpmRegistry(raw: String?): Unit =
         throw UnsupportedOperationException("本替身未提供 setNpmRegistry（用例按需覆盖）")
+
+    override suspend fun runNpmCommand(projectId: String, line: String): NpmConsoleHandle =
+        throw UnsupportedOperationException("本替身未提供 runNpmCommand（用例按需覆盖）")
+
+    override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot =
+        throw UnsupportedOperationException("本替身未提供 consoleOutput（用例按需覆盖）")
 }
