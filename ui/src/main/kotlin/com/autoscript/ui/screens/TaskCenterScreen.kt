@@ -665,9 +665,6 @@ private fun RunRow(
     }
 }
 
-/** 复制用的执行摘要 —— 与行里画的那句**同源**（改一处两边都改；控制台同名函数的镜像）。 */
-private fun ActiveRunState.summaryText(): String =
-    "#$runId 池侧：$poolLabel · ${hostLabel ?: "宿主状态读不到（引擎已死或未接线）"}"
 
 /**
  * 一条定时任务（TG `UserCell` call 样式的逐项几何：行高 56dp 起、头像 44dp 圆、

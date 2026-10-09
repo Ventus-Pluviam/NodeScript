@@ -238,6 +238,29 @@ class ConsoleStateTest {
     }
 
     @Test
+    fun `日志管理三段的数据源过滤互不重叠且合起来是全部`() {
+        val s = ConsoleState.of(
+            ConsoleState.NOT_LOADED,
+            snap(
+                lines = listOf(
+                    row(1L, runId = 0L, text = "宿主装配完成"),
+                    row(2L, runId = 7L, text = "脚本输出"),
+                    row(3L, runId = 0L, text = "闹钟投递"),
+                ),
+                nextSeq = 3L,
+            ),
+            nowMillis = 1L,
+        )
+        val system = s.systemLogLines()
+        val script = s.scriptOutputLines()
+        assertEquals(listOf("宿主装配完成", "闹钟投递"), system.map { it.text })
+        assertEquals(listOf("脚本输出"), script.map { it.text })
+        assertEquals(s.lines.size, system.size + script.size, "两段不重不漏 —— 一行日志不能同时出现在两个页签下，也不能两边都没有")
+        assertTrue(system.all { it.external })
+        assertTrue(script.none { it.external })
+    }
+
+    @Test
     fun `停止三字段缺省空闲 刷新现取归零`() {
         val s = ConsoleState.NOT_LOADED
         assertNull(s.stopError)

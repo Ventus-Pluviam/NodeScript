@@ -86,7 +86,11 @@ import com.autoscript.ui.screens.ConsoleScreen
 import com.autoscript.ui.screens.TaskCenterScreen
 import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.ActiveRunState
+import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.ConsoleState
+import com.autoscript.ui.state.loadConsoleCmd
+import com.autoscript.ui.state.runConsoleCmd
+import com.autoscript.ui.state.selectConsoleProject
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.NpmState
@@ -161,6 +165,15 @@ class MainActivity : ComponentActivity() {
 
     /** 控制台状态（同上；行与游标随失败保留 —— 见 `ConsoleState.failed`）。 */
     private var consoleState: ConsoleState by mutableStateOf(ConsoleState.NOT_LOADED)
+
+    /**
+     * 控制台（命令面）状态（§10.9 第 3 条）。
+     *
+     * 与 [consoleState] 是**两本账**：那本是宿主事件与脚本输出（现在画在日志管理页），
+     * 这本是 npm 命令的输出环（画在控制台）。两者各有自己的游标，互不影响 ——
+     * 合成一本会让"刷新日志"把命令输出也拉一遍、反之亦然。
+     */
+    private var consoleCmdState: ConsoleCmdState by mutableStateOf(ConsoleCmdState.NOT_LOADED)
 
     /** 任务日志（日志管理页第二个列表：全部项目的终态历史；读失败保留已读到的行）。 */
     private var taskLogState: TaskLogState by mutableStateOf(TaskLogState.NOT_LOADED)
@@ -495,7 +508,7 @@ class MainActivity : ComponentActivity() {
                     // 在别的子页上白跑一遍是真金白银的 IO。面板本身（null）不读任何东西。
                     // 日志管理两个列表都要现取：系统日志是控制台游标增量，任务日志读档案。
                     Tab.MANAGEMENT -> when (subPage) {
-                        ManagementPage.CONSOLE -> reloadConsole()
+                        ManagementPage.CONSOLE -> reloadConsoleCmd()
                         ManagementPage.NPM -> reloadNpm()
                         ManagementPage.ENV -> reloadEnv()
                         ManagementPage.REGISTRY -> reloadRegistry()
@@ -568,9 +581,12 @@ class MainActivity : ComponentActivity() {
     ) {
         when (page) {
             ManagementPage.CONSOLE -> ConsoleScreen(
-                state = consoleState,
-                onRefresh = { reloadConsole() },
-                onStopRun = { run -> scope.launch { stopRunOp(run) } },
+                state = consoleCmdState,
+                projects = consoleCmdState.projects,
+                onRefresh = { reloadConsoleCmd() },
+                onSelectProject = { scope.launch { consoleCmdState = selectConsoleProject(hostSummary(), consoleCmdState, it) } },
+                onDraft = { consoleCmdState = consoleCmdState.copy(draft = it, opError = null, opNotice = null) },
+                onRun = { scope.launch { runConsoleCmdOp() } },
                 onBack = onCloseConsole,
                 modifier = Modifier,
             )
@@ -606,6 +622,7 @@ class MainActivity : ComponentActivity() {
                 taskLogState = taskLogState,
                 onRefreshConsole = { reloadConsole() },
                 onRefreshTaskLog = { reloadTaskLog() },
+                onStopRun = { run -> scope.launch { stopRunOp(run) } },
                 onBack = onCloseLogManagement,
                 modifier = Modifier,
             )
@@ -955,6 +972,35 @@ class MainActivity : ComponentActivity() {
             throw e
         } catch (t: Exception) {
             ConsoleState.failed(t, consoleState)
+        }
+    }
+
+    /**
+     * 现取控制台（命令面）一轮（挂起；只写 [consoleCmdState]，不触发重读）。
+     *
+     * 三落点与 [reloadNpm] 同构：读口未接线 → 失败态带原因（**不冒充**「还没有输出」）；
+     * 抛错 → `ConsoleCmdState.failed` **保留已读到的行与游标**（一次瞬时失败不该把用户
+     * 刚看到的 npm 输出抹掉，游标清了下次还会重放）；成功 → 累积入列。
+     *
+     * 项目清单与输出在 [loadConsoleCmd] 里是**同一次现取**（理由见那条的 KDoc）。
+     */
+    private suspend fun reloadConsoleCmd() {
+        consoleCmdState = loadConsoleCmd(hostSummary(), consoleCmdState)
+    }
+
+    /**
+     * 执行控制台输入框里那行（挂起）。
+     *
+     * 先判后发再拉的三段都在 [runConsoleCmd] 里（判据与宿主侧同一份 —— 界面当场拒，
+     * 不往返一趟才拿到同一句话）；本函数只负责挂起中把按钮禁用防连点。
+     */
+    private suspend fun runConsoleCmdOp() {
+        if (consoleCmdState.opInFlight) return
+        consoleCmdState = consoleCmdState.copy(opInFlight = true)
+        try {
+            consoleCmdState = runConsoleCmd(hostSummary(), consoleCmdState)
+        } finally {
+            consoleCmdState = consoleCmdState.copy(opInFlight = false)
         }
     }
 
