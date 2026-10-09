@@ -34,6 +34,8 @@ class PackageManagerFacadeContractTest {
             "exportSnapshot",
             // 审计史（§10.5-2；append-only 历史，与 snapshot() 的"当前事实"是两件事）
             "history",
+            // 缓存回收（§10.9 第 5 条的动作半边；**不是** npm cache clean，见该方法的 KDoc）
+            "reclaimCache",
         )
         assertEquals(expected, names, "门面方法面必须与 §10.7 冻结清单一致")
     }
@@ -141,6 +143,26 @@ class PackageManagerFacadeContractTest {
         assertEquals("run_script", InstallHistoryOp.RUN_SCRIPT)
         assertEquals("exec", InstallHistoryOp.EXEC)
         assertEquals("install_script", InstallHistoryOp.INSTALL_SCRIPT)
+    }
+
+    @Test
+    fun `缓存回收报告六字段（回收后的账，不是"本来有多少"）`() {
+        assertEquals(
+            listOf("removedEntries", "removedBytes", "keptEntries", "keptBytes", "keepCount", "indexRebuilt"),
+            NpmCacheReclaimReport::class.java.declaredFields.map { it.name },
+            "界面要回答的是「点完了还占多大地方」，所以 kept* 是现状、removed* 是本次战果；" +
+                "keepCount 单列是为了让「保留集为空」与「保留集很大」可区分",
+        )
+    }
+
+    @Test
+    fun `维护动作三态（cache 回收刻意不在这个枚举里）`() {
+        assertEquals(
+            listOf("PRUNE", "DEDUPE", "CI"),
+            NpmMaintenanceAction.entries.map { it.name },
+            "cache 回收返回的是一份读数而不是句柄、且不占安装会话 —— 塞进这里会让" +
+                "「跑一次 npm 会话」与「删几个缓存文件」在界面上共用一套进度语义",
+        )
     }
 
     @Test

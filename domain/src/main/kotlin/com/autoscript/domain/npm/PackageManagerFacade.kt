@@ -172,6 +172,56 @@ data class NodeModulesStats(
 )
 
 /**
+ * 依赖维护动作（§10.9 第 5 条「包大小管理页」的三颗按钮）。
+ *
+ * **为什么是一个枚举而不是三条读口**：这三个动作对**呈现层**是同一种东西 ——
+ * 「按下去，等一会儿，回一句结论」。它们的差异（`ci` 要验签、`prune` 删多余、
+ * `dedupe` 拍平）全在 facade 侧已经各写各的，界面不需要、也不该知道。
+ * 收成枚举的另一个好处是**界面侧只有一条失败路径**要写，而三条各自写会漂出
+ * 「prune 的失败被吞了、dedupe 的没吞」这类只在某一个按钮上出现的问题。
+ *
+ * **不含 cache 回收**：那个动作走 [PackageManagerFacade.reclaimCache]，返回的是
+ * 一份读数（回收后还占多大）而不是句柄，且它**不占安装会话**（不动依赖树）。
+ * 把它塞进本枚举会让「跑一次 npm 会话」与「删几个缓存文件」在界面上共用一条
+ * 进度语义，而它们一个要几十秒、一个是瞬间。
+ */
+enum class NpmMaintenanceAction {
+    /** 删掉 lock 里不需要的包（`npm prune`）。 */
+    PRUNE,
+
+    /** 拍平重复依赖（`npm dedupe`）。 */
+    DEDUPE,
+
+    /** 按 lock 严格重建（`npm ci`）——**唯一一个会先验 lock 签名的动作**。 */
+    CI,
+}
+
+/**
+ * 缓存回收的结果（[PackageManagerFacade.reclaimCache]，§10.9 第 5 条）。
+ *
+ * 五个数字都**只说回收后的事实**，不掺「本来有多少」—— 界面要回答的是
+ * 「点完了还占多大地方」，那才是用户下一步的依据（`removed*` 是本次战果，
+ * 用于回执；`kept*` 是现状，用于刷新那一行读数）。
+ *
+ * [keepCount] 单列的理由：保留集为 0（一个项目 lock 都没有）与保留集很大，
+ * 在 `keptEntries` 上看起来可能差不多，但含义完全不同 —— 前者说明「缓存里能删的
+ * 全删了」，后者说明「删不动，都是别人在用的」。
+ *
+ * [indexRebuilt] 是**如实记账位**：回收顺带修 index（悬空引用会让在线安装直接
+ * `ENOENT`，实测 npm 10.9.8）。true = 本次真改写过（说明缓存里本来就有坏引用，
+ * 那些引用此前一直在悄悄弄坏在线安装）；false = 缓存本来就是干净的。
+ * **不把它做成「成功/失败」**：修 index 是副作用不是目的，回收本身没失败过。
+ */
+data class NpmCacheReclaimReport(
+    val removedEntries: Int,
+    val removedBytes: Long,
+    val keptEntries: Int,
+    val keptBytes: Long,
+    val keepCount: Int,
+    val indexRebuilt: Boolean,
+)
+
+/**
  * 快照导出引用（§10.9.4 高信任通道：node_modules.zip + manifest 链 + ledger + lock.sig → SAF）。
  *
  * [sha256] 是**归档字节**的摘要，供调用方在落盘/传输后自校验文件没坏；它与
@@ -319,6 +369,28 @@ interface PackageManagerFacade {
     suspend fun offlineGap(projectId: String): List<MissingPkg>
     suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String? = null)
     suspend fun storage(): Map<String, NodeModulesStats>
+
+    /**
+     * 按 lock 闭包**回收** npm 缓存（§10.9 第 5 条「包大小管理页」的 cache clean 那颗按钮）。
+     *
+     * **不是 `npm cache clean --force`**（用户 2026-10-09 裁定）：§10 整卷的离线能力
+     * （`--prefer-offline`、精选种子首装、`offlineGap` 体检）全建在这个缓存上，全清等于把
+     * 紧挨着的「按 lock 重装」那颗按钮变成**必须联网**。本口删的是「没有任何项目 lock
+     * 需要的那些」，保留集 = **全部项目** lock 闭包的并集（只按当前项目算会删掉别的项目
+     * 离线重装要用的包，而那个后果用户在点按钮时完全看不见）。
+     *
+     * 顺带修 index：content 与指向它的 index 行不一致时，**离线**只是不命中，但**在线**
+     * 会直接 `ENOENT … Invalid response body`（实测 npm 10.9.8）—— 悬空 index 让缓存从
+     * 「没用」变成「有害」，而它在界面上看不出来。
+     *
+     * 返回的是**回收后**的账（[NpmCacheReclaimReport.keptEntries] 等）：界面要回答的是
+     * 「点完了还占多大地方」，那才是用户下一步的依据。
+     */
+    suspend fun reclaimCache(): NpmCacheReclaimReport =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "缓存回收未接线：本实现没有接上 npm 缓存目录",
+        )
 
     /**
      * 全局镜像源读数（§10.9 第 8 条；管理面板「镜像源管理」的读口）。
@@ -481,6 +553,13 @@ object InstallHistoryOp {
 
     /** `update`（facade 有实现，今天零生产调用方）。 */
     const val UPDATE = "update"
+    /**
+     * 缓存回收（`reclaimCache()` 的产物；§10.9 第 5 条那颗 cache clean 按钮）。
+     *
+     * **不叫 `cache_clean`**：这个动作不是 npm 的 `cache clean`（那个是整目录全清），
+     * 名字跟着语义走 —— 审计页上两件事长得一样的话，将来真接了全清就分不出来了。
+     */
+    const val CACHE_RECLAIM = "cache_reclaim"
 
     /** T1 门禁的三种动作（`ApprovalAction.name.lowercase()` 的产物）。 */
     const val RUN_SCRIPT = "run_script"
