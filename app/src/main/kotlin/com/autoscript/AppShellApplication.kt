@@ -11,6 +11,9 @@ import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.InstallHistoryEntry
+import com.autoscript.domain.npm.NpmCacheReclaimReport
+import com.autoscript.domain.npm.NpmMaintenanceAction
+import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.host.ShellSummary
@@ -803,6 +806,43 @@ class AppShellApplication : Application(), HostSummary {
             "npm 未接线：审计史无处读取（原因见装配日志的 npmCliFailure）"
         }
         return facade.history()
+    }
+
+    /**
+     * 依赖维护动作（§10.9 第 5 条，[HostSummary] 的生产实现）。
+     *
+     * 直接转给 facade 的同名方法：`ci` 那条路**必须**经过 facade 的 `ci()`
+     * （`lockSigner.verifyOrThrow` 就在它第一行），绕过去等于把验签这道门跳过 ——
+     * 而按钮比控制台更容易被当成「安全的重装」。
+     */
+    override suspend fun runNpmMaintenance(
+        projectId: String,
+        action: NpmMaintenanceAction,
+    ): InstallHandle {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：依赖维护暂不可用" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：依赖维护无处执行（原因见装配日志的 npmCliFailure）"
+        }
+        return when (action) {
+            NpmMaintenanceAction.PRUNE -> facade.prune(projectId)
+            NpmMaintenanceAction.DEDUPE -> facade.dedupe(projectId)
+            NpmMaintenanceAction.CI -> facade.ci(projectId, offline = true)
+        }
+    }
+
+    /**
+     * 缓存回收（§10.9 第 5 条，[HostSummary] 的生产实现）。
+     *
+     * 与 [npmHistory] 同一条纪律：读的是**装配产物里那个 facade**（第二个
+     * `InstallCoordinator` 会拿另一份缓存目录，那就删到别处去了）；未接线**抛**，
+     * 不回一份「删了 0 条」的报告 —— 那个数字会被界面原样念给用户。
+     */
+    override suspend fun reclaimNpmCache(): NpmCacheReclaimReport {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：缓存回收暂不可用" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：缓存无处回收（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.reclaimCache()
     }
 
     /**

@@ -4,6 +4,7 @@ import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.ApprovalRequest
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
+import com.autoscript.domain.npm.NpmMaintenanceAction
 
 /**
  * 依赖管理页呈现态（纯数据，Compose 之外可 JVM 测）。
@@ -31,6 +32,14 @@ data class NpmState(
     val opNotice: String? = null,
     /** 有审批决定在挂起中 —— 按钮禁用防连点（决定本身幂等，连点无害但回执会抖）。 */
     val deciding: Boolean = false,
+    /**
+     * 有维护动作在挂起中（null = 没有）—— 与 [deciding] 同一条防连点理由，
+     * 但**要记住是哪一个**：三颗按钮同时禁用，其中被按下的那颗显示「进行中」，
+     * 不记的话界面只能说"有件事在跑"，用户不知道是哪件。
+     */
+    val maintenance: NpmMaintenanceAction? = null,
+    /** 缓存回收在挂起中（与 [maintenance] 分开：它不占安装会话，是另一条时长量级）。 */
+    val reclaimingCache: Boolean = false,
 ) {
     /** 当前项目的读数（没选 / 读到的快照里没这个项目 → null，界面据此说"没有项目"）。 */
     val project: NpmProjectSnapshot?
