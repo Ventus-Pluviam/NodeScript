@@ -20,6 +20,8 @@ class PackageManagerFacadeContractTest {
             "audit", "importOfflineBundle", "importTarball", "cancel",
             // 轻操作
             "list", "offlineGap", "config", "storage", "snapshot",
+            // 全局镜像源（§10.9 第 8 条；读口 + 写口，界面不经桥）
+            "globalRegistry", "setGlobalRegistry",
             // 审批（人机分离：requestApprove 仅入队 / resolveApproval 仅 UI 回调）
             "requestApprove", "resolveApproval", "pendingApprovals",
             // P1
@@ -44,6 +46,19 @@ class PackageManagerFacadeContractTest {
         )
         assertEquals(listOf("seq", "event"), SequencedInstallEvent::class.java.declaredFields.map { it.name })
         assertEquals(listOf("seq", "request"), SequencedApproval::class.java.declaredFields.map { it.name })
+    }
+
+    @Test
+    fun `全局镜像源读数三件套（生效值由 configured 决定，呈现层不写死 URL）`() {
+        assertEquals(
+            listOf("configured", "defaultRegistry", "secondaryRegistry"),
+            NpmRegistrySnapshot::class.java.declaredFields.map { it.name },
+        )
+        assertEquals(
+            NpmRegistryKeys.OFFICIAL,
+            NpmRegistrySnapshot(null, NpmRegistryKeys.OFFICIAL, NpmRegistryKeys.MIRROR).effective,
+            "没设过时生效的就是出厂缺省",
+        )
     }
 
     @Test

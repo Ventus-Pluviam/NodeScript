@@ -1,5 +1,18 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 83）
+
+- [2026-10-09 · 批 83：镜像源管理（§10.9 新增第 8 条）+ registry 两条断链收口](2026-10-09.md)：
+  管理面板「镜像源管理」落地 = **npm registry 全局配置面**，归 `:app-service:npm`，粒度**全局一份**
+  （用户裁定），对应 §10.2 三层链的 `files/.npmrc`(userconfig) 那一层（此前零实现）。
+  判据唯一一份住 `:domain`（`NpmRegistryKeys`，`NpmRegistryVerifier` 改为委托它、URL 字面量只剩一份）；
+  解析链两层：项目 `.npmrc` → 全局 → 出厂官方，**交叉校验的首选与实际安装同源**（本批真正的交付物）。
+  **同批修两条断链**（实测：npm 12.2.0 下 `--prefix` 一给，项目级配置只看 `prefix/.npmrc`）：
+  `--registry` 因生产唯一构造点从不传参而永远钉官方；项目 `.npmrc` 因不拷进 workDir 而根本没被 npm 读到
+  —— 净效果是 `setRegistry`/`config()` 写入侧生产上空转。口径见
+  [`design-decisions.md`](../design-decisions.md) 第 53 项。**未做**：首启引导 ping 探测/镜像候选表、
+  审计页、`proxy`/`cache-retention` 两键；真机网络连通性未验。
+
 ## 最新追记（2026-10-09，批 82）
 
 - [2026-10-09 · 批 82：脚本全局环境变量（§8.1 新增契约）](2026-10-09.md)：

@@ -188,6 +188,88 @@ class AppShellNpmCliTest {
         }
     }
 
+    // —— registry 一条链的装配接线（§10.2；2026-10-09 批 83）——
+
+    /**
+     * **本批修掉的 bug 的回归钉**：生产装配出的执行体，argv 里到底有没有 `--registry`。
+     *
+     * 此前 `HostNodeExecutor` 的 `registry` 缺省官方、而这里（唯一的生产构造点）
+     * 从不传它 —— 于是每次安装都被强制钉在官方源，用户设的镜像源对真实安装毫无影响。
+     * 这条用例走的是**真装配路径**（`wireNpmExecutor` 出来的那个执行体），
+     * 不是另造一个来问 argv —— 否则测的是 `npmArgv` 自己的单测（那在 `:app-service:npm`）。
+     */
+    @Test
+    fun `装配出的执行体：有 userconfig、没有钉死的 registry`() {
+        val src = MemSource(listOf("bin/npm-cli.js", "bin/npx-cli.js"))
+        val wiring = AppShellKit.wireNpmExecutor(
+            filesDir = files,
+            cacheDir = cache,
+            source = src,
+            host = dir.resolve("libnoden.so").toString(),   // 只要非 null：本用例不起 node
+            gateDeploy = { com.autoscript.appservice.npm.NpmSpawnGate.Deploy.Ready(dir.resolve("gate.cjs")) },
+        )
+        val executor = assertInstanceOf(
+            com.autoscript.appservice.npm.HostNodeExecutor::class.java,
+            wiring.executor,
+            "素材齐 + 有宿主 + 门禁就位 = 必须注入真执行体",
+        )
+        val argv = executor.npmArgv(
+            com.autoscript.appservice.npm.HeavyOp(
+                nonce = "n1",
+                projectId = "main",
+                args = listOf("install", "lodash@4.17.21"),
+                projectRoot = dir,
+                stageDir = dir.resolve("stage"),
+                timeoutMillis = 30_000,
+            ),
+            workDir = dir.resolve("work"),
+        )
+        assertTrue(
+            argv.contains("--userconfig"),
+            "全局镜像源靠 userconfig 送达 npm（--registry 只赢 registry= 一个键）：$argv",
+        )
+        assertEquals(
+            files.resolve(".npmrc").toAbsolutePath().toString(),
+            argv[argv.indexOf("--userconfig") + 1],
+            "userconfig 必须指向 files/.npmrc —— 与 InstallCoordinator 读的是同一个文件",
+        )
+        assertTrue(
+            !argv.contains("--registry"),
+            "生产不许再钉死注册表，否则用户设的镜像源永远不生效：$argv",
+        )
+    }
+
+    @Test
+    fun `项目 npmrc 跟着进 workDir——否则 --prefix 一给，它就成了死配置`() {
+        // npm 实测：`--prefix` 一旦给出，项目级配置只看 `prefix/.npmrc`，cwd 不再参与。
+        // workDir 就是 prefix，故项目 .npmrc 必须被拷进去（HostNodeExecutor.prepareWorkDir）。
+        val projectRoot = dir.resolve("proj")
+        Files.createDirectories(projectRoot)
+        Files.write(projectRoot.resolve("package.json"), """{"name":"p","version":"0.0.1"}""".toByteArray())
+        Files.write(projectRoot.resolve(".npmrc"), listOf("registry=https://project.example.com"))
+        val src = MemSource(listOf("bin/npm-cli.js", "bin/npx-cli.js"))
+        val wiring = AppShellKit.wireNpmExecutor(
+            filesDir = files,
+            cacheDir = cache,
+            source = src,
+            host = dir.resolve("libnoden.so").toString(),
+            gateDeploy = { com.autoscript.appservice.npm.NpmSpawnGate.Deploy.Ready(dir.resolve("gate.cjs")) },
+        )
+        val workDir = dir.resolve("work")
+        (wiring.executor as com.autoscript.appservice.npm.HostNodeExecutor)
+            .prepareWorkDir(
+                com.autoscript.appservice.npm.HeavyOp(
+                    nonce = "n1", projectId = "p", args = listOf("install"),
+                    projectRoot = projectRoot, stageDir = dir.resolve("stage"), timeoutMillis = 30_000,
+                ),
+                workDir,
+            )
+        assertTrue(
+            Files.isRegularFile(workDir.resolve(".npmrc")),
+            "项目 .npmrc 必须在 workDir 里 —— 它是 npm 唯一会读的那个位置",
+        )
+    }
+
     // —— T2 装配接线（§10.5-1 / §11.3 第 8 条）——
 
     /**

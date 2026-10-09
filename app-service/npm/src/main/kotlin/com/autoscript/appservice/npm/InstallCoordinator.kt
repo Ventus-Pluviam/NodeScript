@@ -18,6 +18,8 @@ import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConfigKey
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmRegistryKeys
+import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.npm.PackageManagerFacade
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.npm.PkgNode
@@ -64,6 +66,14 @@ class InstallCoordinator(
      * 测试显式关校验/换源时才注入。
      */
     registryOf: ((String) -> String?)? = null,
+    /**
+     * 全局镜像源（§10.2 registry 三层链的 userconfig 层，2026-10-09 批 83）。
+     *
+     * null = 未接线 → [resolveRegistry] 只读项目 `.npmrc`，再退到出厂官方。
+     * 与 [registryOf] 同为「解析来源」，故并列在构造面上而**不进 [NpmServices]** ——
+     * 那会把它推到 detekt `LongParameterList` 的构造阈值线上。
+     */
+    private val globalConfig: NpmGlobalConfig? = null,
     freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
         Files.getFileStore(it).usableSpace
     },
@@ -96,16 +106,25 @@ class InstallCoordinator(
     private val cacheIndex: CacheIndex = services.cacheIndex
     private val bundleImporter: NpmOfflineBundleImporter? = services.bundleImporter
     private val registryVerifier: RegistryVerifier? = services.registryVerifier
-    private val registryOf: (String) -> String? = registryOf ?: ::readRegistryFromNpmrc
+    private val registryOf: (String) -> String? = registryOf ?: ::resolveRegistry
 
-    /** 项目 `.npmrc` 的 registry=（§10.2 默认首选；缺文件/缺键/空值 → null，不猜镜像）。 */
+    /**
+     * 本次首选注册表的**两层解析**（§10.2）：项目 `.npmrc` → 全局 `files/.npmrc` → null。
+     *
+     * 返回 null 不是「永远不知道」，而是「两层都没设」—— 调用方（校验器）据此用出厂官方，
+     * 与 `HostNodeExecutor` 不注入 `--registry` 时 npm 自己解析到的**同一家**。
+     *
+     * **这一条链就是批 83 的交付物**：此前项目 `.npmrc` 只被校验器读到、没被 npm 读到
+     * （`HostNodeExecutor` 无条件注入 `--registry` 官方 + workDir 里没有 `.npmrc`），
+     * 于是「校验的首选」与「实际安装的那家」可以不是同一家。
+     */
+    private fun resolveRegistry(projectId: String): String? =
+        readRegistryFromNpmrc(projectId) ?: globalConfig?.readRegistry()
+
+    /** 项目 `.npmrc` 的 registry=（§10.2 第一层；缺文件/缺键/空值 → null，不猜镜像）。 */
     private fun readRegistryFromNpmrc(projectId: String): String? {
         val rc = layout.npmrc(projectId)   // projectId 合法性由 NpmProjectLayout 把着
-        if (!Files.isRegularFile(rc)) return null
-        return Files.readAllLines(rc).asReversed()
-            .firstOrNull { it.startsWith("registry=") }
-            ?.substringAfter("registry=")
-            ?.trim()?.takeIf { it.isNotEmpty() }
+        return NpmrcFile.readKey(rc, NpmGlobalConfig.REGISTRY_KEY)
     }
 
     /** lifecycle 脚本字段（§10.5-3 的扫描面）：出现任一即视为「装了但脚本没跑」。 */
@@ -411,12 +430,45 @@ class InstallCoordinator(
         // scope 缺省/null = 全局 registry 键。作用域键与全局键互为一对一替换，不叠加。
         val scoped = scope?.takeIf { it.isNotBlank() }
         val keyName = if (scoped != null) "$scoped:$k" else k
-        val lines = if (Files.exists(npmrc)) Files.readAllLines(npmrc).toMutableList() else mutableListOf()
-        lines.removeIf { it.startsWith("$keyName=") }
-        if (value != null) lines.add("$keyName=$value")
-        Files.createDirectories(npmrc.parent)
-        Files.write(npmrc, lines)
+        // 写盘走 NpmrcFile（与全局那份**同一份**实现）：两处各写一份「读全行 → removeIf
+        // → 写回」必然漂，而漂的方向是「一处认 `registry = x` 带空格的写法、另一处不认」。
+        NpmrcFile.writeKey(npmrc, keyName, value)
         history?.record(InstallHistory.Op.REGISTRY, projectId, true, "$keyName=$value")
+    }
+
+    /**
+     * 全局镜像源读数（§10.9 第 8 条；管理面板「镜像源管理」的读口）。
+     *
+     * 未接线（[globalConfig] 为 null）时**如实**回「没设过 + 出厂缺省」——
+     * 这是「本装配没接这一层」的诚实表达，而不是假装读到了一个空配置。
+     */
+    override suspend fun globalRegistry(): NpmRegistrySnapshot = NpmRegistrySnapshot(
+        configured = globalConfig?.readRegistry(),
+        defaultRegistry = NpmRegistryKeys.OFFICIAL,
+        secondaryRegistry = NpmRegistryKeys.MIRROR,
+    )
+
+    /**
+     * 设 / 清全局镜像源（§10.9 第 8 条）。
+     *
+     * 校验在**写盘之前**（[NpmRegistryKeys.reject]，判据的唯一一份）：不过就抛，
+     * 原文点名用户输入的那个串 —— 静默收下一个坏地址，后果是此后每次安装都失败，
+     * 而用户不知道自己刚才那一步就是病因。
+     *
+     * 审计行的 `projectId` 传**空串**，这不是笔误：全局变更没有项目维度，
+     * 而 [InstallHistory.Entry.projectId] 是非空 String。改行格式会动审计契约，
+     * 空串在审计页上正好读作「全局」。
+     */
+    override suspend fun setGlobalRegistry(raw: String?) {
+        val cfg = globalConfig ?: throw AutojsException(
+            ErrorCode.ERR_NOT_IMPLEMENTED,
+            "全局镜像源未接线（装配层未注入 files/.npmrc）：写下去也无处生效",
+        )
+        val trimmed = raw?.trim().orEmpty()
+        NpmRegistryKeys.reject(trimmed)?.let { throw IllegalArgumentException(it) }
+        val value = trimmed.takeIf { it.isNotEmpty() }
+        cfg.writeRegistry(value)
+        history?.record(InstallHistory.Op.REGISTRY, "", true, "registry=${value ?: "(恢复出厂)"}")
     }
 
     /**

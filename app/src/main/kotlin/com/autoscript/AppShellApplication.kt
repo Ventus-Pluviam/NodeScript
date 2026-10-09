@@ -9,6 +9,7 @@ import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmPanelSnapshot
+import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
@@ -741,6 +742,31 @@ class AppShellApplication : Application(), HostSummary {
             requestId,
             if (approve) ApprovalDecision.APPROVE else ApprovalDecision.REJECT,
         )
+    }
+
+    /**
+     * 全局镜像源读数（§10.9 第 8 条，[HostSummary] 的生产实现）。
+     *
+     * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个
+     * `InstallCoordinator` 会各自持账本/句柄表，写侧两份即失真）；
+     * 未接线**抛**，不返回假的出厂值 —— 那会把「宿主没接这个口」画成「你用的就是出厂源」。
+     */
+    override suspend fun npmRegistry(): NpmRegistrySnapshot {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：镜像源暂不可读" }
+        val facade = checkNotNull(built.npmFacade) { "npm 未接线：镜像源无处读取" }
+        return facade.globalRegistry()
+    }
+
+    /**
+     * 设 / 清全局镜像源（[HostSummary] 的生产实现）。
+     *
+     * 校验不过由 facade 侧**抛** [IllegalArgumentException]，原文点名用户输入的那个串
+     * （判据的唯一一份在 `:domain` 的 `NpmRegistryKeys.reject`）—— 本类只转发，不另判一遍。
+     */
+    override suspend fun setNpmRegistry(raw: String?) {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：镜像源无处落账" }
+        val facade = checkNotNull(built.npmFacade) { "npm 未接线：镜像源无处落账" }
+        facade.setGlobalRegistry(raw)
     }
 
     override fun createSyntaxHighlighter(relPath: String): SyntaxHighlighter =

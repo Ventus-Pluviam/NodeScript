@@ -1,14 +1,45 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-09 追记（批 83：镜像源管理落地 + registry 两条断链收口）
+
+- **「镜像源管理」归属未裁那条已结项（2026-10-09，批 83）**：裁 = **npm registry 的全局配置面**，
+  归 `:app-service:npm`，**粒度全局一份**（用户裁定）。它确实与 §10 的 registry 配置是同一件事 ——
+  这一条现在有了契约条目（**§10.9 第 8 条**，本批新增）。口径见
+  [`design-decisions.md`](design-decisions.md) 第 53 项。
+- **两条断链的实测证据留档**（这是本批比 UI 占位更值得留的东西，别再让它们悄悄回来）：
+  1. **生产环境的 `--registry` 永远指向官方** —— `HostNodeExecutor.registry` 缺省
+     `NpmRegistryVerifier.OFFICIAL` 并写进 argv，而**全仓唯一的构造点**
+     `AppShellKit.wireNpmExecutor` 从不传这个参数 ⇒ 用户经 `setRegistry` 设的镜像对真实安装
+     **零影响**。修法：`registryOverride: String?`（null = 不注入）+ `--userconfig`。
+     防复发断言在 `AppShellNpmCliTest`（走**真装配路径**断言 argv 里有 `--userconfig`、没有钉死的
+     `--registry`）。
+  2. **项目 `.npmrc` 根本没被 npm 读到** —— `prepareWorkDir` 只拷 `package.json`/
+     `package-lock.json`，而 `runNpm` 用 `--prefix workDir`。本机 **npm 12.2.0**（与 vendored 同版本）
+     实测：**`--prefix` 一旦给出，npm 的项目级配置就只看 `prefix/.npmrc`，cwd 不再参与**
+     （`--registry` 显式给出时赢 `registry=` 键，但文件仍被读 —— `@scope:registry`/proxy/cache 都靠它，
+     所以两者都要给，不是二选一）。修法：`prepareWorkDir` 拷 `.npmrc` 进 workDir。
+  - **两条的净效果**：`setRegistry`/`config()` 的写入侧**生产上是空转**，且交叉校验的首选
+    与实际安装的那家可以不是一家。任何"再引入一条 registry 读数路径"的改动，先看这条。
+- **真机验证积压（批 83 新增两条）**：① 镜像源在**真机网络**下能否连通 —— 企业内网/自建 registry
+  的证书与代理行为，本机验不到；② `--userconfig` 指向的 `files/.npmrc` 在 Android 上的路径可达性
+  （SELinux/应用私有目录）。**不单列条目号**，随下次真机冒烟一并看。
+- **未做（批 83 明确划界，仍在池里）**：§10.9 第 6 条首启引导（registry ping 探测 + 镜像候选表 +
+  代理配置）、审计页（`InstallHistory` 至今**零 UI 消费方** —— approve/registry 变更/lock 重签
+  都写进去了但没人读）、`proxy`/`cache-retention` 两个 `NpmConfigKey`（桥面本来就没有入口）。
+- **`NpmServices.registryOf` 全仓零引用**（批 83 探查时发现）：本批**不模仿它**（新参数放
+  `InstallCoordinator` 构造），也**不顺手删**（删除是另一件事，且要确认没有反射/装配路径在读它）。
+  留作一条待清的死成员。
 ## 2026-10-09 追记（批 82：脚本全局环境变量 —— 管理面板「环境变量」落地）
 
 - **管理面板四项入口里，「环境变量」已由 toast 占位转真入口（2026-10-09，批 82）**。
   动手前先查契约面：**这一条在 12 卷设计里没有对应条目**（`grep -rn "环境变量" docs/design/*.md`
   只命中 §11 的 token 段与 §13 的 apksigner 口令段），故本批是**新增契约**（先写进 §8.1 再动代码）。
   口径见 [`design-decisions.md`](design-decisions.md) 第 52 项。
-- **同组仍剩一行未落**：管理面板的**「镜像源管理」**仍是 `toast?.show("…尚未开放")`。
+- ~~**同组仍剩一行未落**：管理面板的**「镜像源管理」**仍是 `toast?.show("…尚未开放")`。
   它与 npm 镜像源（§10 的 registry 配置）是不是同一件事、归 `:app-service:npm` 还是新建面，
-  **尚未裁定** —— 要做先裁归属，别照着「环境变量」这次的形状照抄（那是脚本面，这是 npm 面）。
+  **尚未裁定** —— 要做先裁归属，别照着「环境变量」这次的形状照抄（那是脚本面，这是 npm 面）。~~
+  **已结项（2026-10-09，批 83）**：归属裁定 = `:app-service:npm`（它本来就在管 registry），
+  粒度 = 全局一份，解析链 = 项目 `.npmrc` → 全局 `files/.npmrc` → 出厂官方。见本文件顶部追记。
 - **真机验证积压（新增一条）**：脚本进程里 `process.env` 的实际可读性、以及用户设的值与
   Node 自身 `process.env` 的交互（Node 启动后是否改写/删除某些键），**本机验不到**（无设备），
   要装包才验得到。**不单列条目号**，随下次真机冒烟一并看。

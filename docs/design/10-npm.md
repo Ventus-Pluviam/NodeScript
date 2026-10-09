@@ -52,6 +52,7 @@
 - `files/npm/`：vendored npm CLI（assets→filesDir 原子部署 tmp+sha256+rename；首启/升级落盘）。**已落地（2026-10-01）**：素材根 = `assets/npm/**`（键形状 `npm/<rel>`，零点条目 —— AssetManager 对点条目的可见性 ROM 间不一致），幂等锚 = `files/npm/.cli-manifest.sha256`（内容 = 全树清单规范化后的 sha256；2026-10-06 B9 起，构建期生成 `assets/npm-manifest.json`，含 count/bytes/files[path,sha256]。部署先核对 APK 文件集合、总字节和每件摘要，再核对落盘树；一致才免写，缺件/不可读/坏摘要拒绝部署并保留旧树。每次启动需要读盘校验，不再承诺零 IO）。**剪裁口径已实测**：按此口径剪出来的树（1668 文件 / 9MiB / 点条目 0）`npm ls`（装进 arborist）与真 `npm install` 都通过 —— 「丢点条目会不会弄瘸 npm」有实测答案，不走推断。
 - `files/offline-bundles/<bundleId>`、`files/npm-import/`：离线 bundle / 本地 tarball 导入区。
 - registry 配置：项目 `.npmrc` → `files/.npmrc`(userconfig) → `NPM_CONFIG_REGISTRY` env；默认 **`registry.npmjs.org` 官方**（§18 第 7 项 2026-09-26 拍板；要快自己 `setRegistry` 切 npmmirror/华为/腾讯），`replace-registry-host=npmjs` 使 lockfile 跨 registry 可用；代理 `Settings.Global.HTTP_PROXY` → 引擎 env `HTTP(S)_PROXY`。
+  **userconfig 层已落地（2026-10-09 批 83）**：`files/.npmrc` 由 `NpmGlobalConfig` 读写（整文件重写，非行级 append —— 用户手编的文件，行级追加会让同一个键出现两行），并与喂给 npm 的 `--userconfig` 指**同一个文件**；项目级那份由 `HostNodeExecutor.prepareWorkDir` 拷进 workDir，而 `--prefix` 就是 workDir —— 于是 npm 的项目级配置读的就是它。此前 `--prefix` 一给、`.npmrc` 不拷，项目 `.npmrc` 是**死配置**。
 
 ### 10.3 spawn 三层策略与不可行边界
 
@@ -137,6 +138,7 @@
 
    **已落地（裁决与处置，`:app-service:npm`）**：`NpmRegistryVerifier` 是三分裁决而非布尔——`Agreed` / `Disagreed` / `Unverifiable`，调用方必须能区分「验过且一致」与「没能验」（否则 UI 只能画同一个绿勾）。第二意见恒为 `registry.npmjs.org`，**不随用户首选变**（首选容易被自己改成 npmjs，那就成了自己跟自己比）。
    处置写死在 `InstallCoordinator.crossCheckRegistry` 一处：`Disagreed` → `ERR_REGISTRY_UNAVAILABLE` + 两家版本/完整 integrity，安装会话不起、事务不建、拒本身入史；`Unverifiable` → **不拦安装**但发 `InstallEvent.Warning(TRUST_DOWNGRADED)` + 入史「来源未校验」（副镜像不可达 / 版本只在一侧 / 无 integrity 锚点都是「没验成」而非「验出问题」，当分歧拒掉会把镜像同步窗口期误判成攻击）。
+   **首选来源与实际安装同源（2026-10-09 批 83）**：`crossCheckRegistry` 的 primary 取自 `InstallCoordinator.resolveRegistry` —— 项目 `.npmrc` → 全局 `files/.npmrc` → 出厂官方**两层解析链**，与喂给 npm CLI 的配置同一处读出。此前 primary 只读项目 `.npmrc`、而安装被 `--registry` 钉死在官方，两者可以不是一家 —— 交叉校验就变成了「拿 A 跟 B 比、装的是 C」。
    判定对象是 `dist.integrity` 而非两个 tarball 的字节（结论等价、少一倍下载）。JS 侧 `auto.npm.onWarning` 的 `kind` 联合与 `InstallEvent.Kind` 五值逐字对齐。**生产投递走事件拉取口**（`drainEvents` → JS 轮询泵 → 过 `feedWarning` 做 kind 校验；`feedWarning` 自身降为注入缝供装配/测试直调，2026-09-26 起不再是唯一投递方 —— 在那之前它零生产调用者）；
    未知 kind 抛错而非静默丢弃（契约漂移即响亮错误）。诚实边界：**不**回答「镜像 hardcode 的摘要是否真由上游产生」——那要 sigstore/官方签名端点，记为未决项。
 2. **审批 = 人的动作（人机分离）**（整改自批判「程序化绕过」）：
@@ -171,6 +173,8 @@ interface PackageManager {
   suspend fun runScript(projectId, name, args) / exec(bin, args, env)   // P1 T1：宿主重算内容哈希 → ledger 命中才放行，纯 JS bin 白名单（已落 2026-09-29，见 §10.3 T1 落地追记）
   suspend fun importOfflineBundle(uri) / importTarball(path)   // 验签→校验→入缓存→ci
   suspend fun config(projectId?, key, value)                   // .npmrc 层；registry 变更经 :main 卡可配列表+审计
+  suspend fun globalRegistry(): NpmRegistrySnapshot            // 全局镜像源读数（configured/defaultRegistry/secondaryRegistry；2026-10-09 批 83）
+  suspend fun setGlobalRegistry(raw: String?)                  // 设/清全局镜像源；null 或空白 = 恢复出厂官方；校验不过抛原文
   fun progress(projectId): Flow<InstallEvent>              // :main 订阅用（Flow 无重放）
   fun approvals(projectId): Flow<ApprovalRequest>
   suspend fun drainEvents(projectId, sinceSeq, batch=32): InstallEventBatch   // 脚本侧拉取口（§7.5 桥无宿主→脚本推送面）
@@ -249,6 +253,12 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 5. **包大小管理页**：per-project `node_modules` + `npm-cache` 尺寸（Kotlin 遍历）+ 配额条（80%黄/100%拦）→ 一键 prune/dedupe/ci 重装/cache clean；明确标注 node_modules 计入系统「App 数据」。
 6. **首启引导**：原子部署 assets/npm CLI + 播种精选缓存 → registry ping 探测 → 选镜像（**默认官方 npmjs**，§18 第 7 项；镜像是加速选项不是开箱前提）与配置代理（能力中心网络项）。
 7. **打包向导联动**：node_modules 默认入 APK + `.autojs.build.ignore` 排除规则 + 「完全离线变体」（宿主预装 node_modules.zip）+ 项目 lock 签名生成。
+8. **镜像源管理**（2026-10-09 批 83）：管理面板 → 镜像源管理（`RegistryScreen`），编的是 **npm registry 全局缺省**，**粒度全局一份**（用户 2026-10-09 裁定；不做「全局缺省 + 项目覆盖」的编辑面 —— 项目那层仍可手编 `.npmrc`，界面不代管）。
+   - **归属 `:app-service:npm`**：它本来就在管这件事（`NpmConfigKey.REGISTRY`、项目 `.npmrc`、`InstallHistory.Op.REGISTRY` 审计键、交叉校验首选），搬去别处就是第二份 registry 判据。
+   - **判据唯一一份住 `:domain`**（`NpmRegistryKeys`，与批 82 `ScriptEnvKeys` 同形）：`canonicalize`（规整化）与 `reject`（拒收原文）同时被 `NpmRegistryVerifier` 的缝边界与 `:ui` 的输入校验调用 —— 界面另判一遍必然漂移，漂移方向最坏（界面放行的串在写入侧被拒）。`NpmRegistryVerifier.OFFICIAL`/`MIRROR` 改为指向它的别名，URL 字面量从此只有一份。
+   - **写入侧存原样（只 trim）不规整化**：规整化会丢 query，自建网关用 `?token=…` 的凭据会被静默剥掉 —— 表现为「保存成功」之后永久 401。
+   - **校验不过抛原文**、`null`/空白 = 删键（恢复出厂，不是写一个空值行 —— 后者让 npm 拿到空 registry 而每次安装都失败）；变更入 `InstallHistory.Op.REGISTRY`，审计行 `projectId` 传空串（全局变更没有项目；改行格式会动审计契约）。
+   - **未落**：首启引导的 ping 探测与镜像候选表（第 6 条）、审计页（`InstallHistory` 仍无 UI 消费方）、`proxy`/`cache-retention` 两个 `NpmConfigKey`（桥面本来就没有入口）。
 
 ### 10.10 与既有机制的关系
 

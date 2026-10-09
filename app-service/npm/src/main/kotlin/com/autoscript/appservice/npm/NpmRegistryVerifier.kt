@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.npm.NpmRegistryKeys
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
@@ -144,11 +145,16 @@ class NpmRegistryVerifier(
     }
 
     companion object {
-        /** 镜像（国内实测存活；出厂时做**第二意见**，也可被项目 `.npmrc` 提成首选）。 */
-        const val MIRROR = "https://registry.npmmirror.com"
+        /**
+         * 镜像（国内实测存活；出厂时做**第二意见**，也可被用户提成首选）。
+         *
+         * 字面量住 [NpmRegistryKeys]（`:domain` 的**唯一一份**），本处只是别名：
+         * 界面校验与缝边界必须对「合法 registry」有一致口径，抄两份必然漂。
+         */
+        const val MIRROR = NpmRegistryKeys.MIRROR
 
-        /** 官方注册表（**出厂首选**，§18 第 7 项；也是别家首选时的第二意见）。 */
-        const val OFFICIAL = "https://registry.npmjs.org"
+        /** 官方注册表（**出厂首选**，§18 第 7 项；也是别家首选时的第二意见）。见 [MIRROR] 的说明。 */
+        const val OFFICIAL = NpmRegistryKeys.OFFICIAL
 
         /** 精确版本（可带 v 前缀）；带范围字符（^~><=* 空格）的都不算精确。 */
         private val EXACT = Regex("""^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$""")
@@ -164,21 +170,17 @@ class NpmRegistryVerifier(
         /**
          * 规整化 registry 基址：去尾斜杠、限 https。
          *
-         * 在**缝边界**做而不是只在 [HttpRegistrySource] 里做：调用方的注册表字符串可能
-         * 带尾斜杠/子路径（`https://harbor.example.com/registry/`），若不先统一，下一跳
-         * 字符串拼接就会得出 `//dayjs` 这种双斜杠 URL（真机上多半 200——静默错更难查）；
-         * 非 https 返回 null，由调用方折叠成 Unverifiable。
+         * **实现委托 [NpmRegistryKeys.canonicalize]**（2026-10-09 批 83）：判据的消费方
+         * 有两个 —— 这里的缝边界（规范化后才拼 packument URL）与 `:ui` 的输入校验，
+         * 而 `:ui` 只依赖 `:domain`、够不着本类。口径只有一份，两处不可能漂。
+         *
+         * 保留本函数（而不是让调用方直接调 `:domain` 那个）是为了不动既有调用点与
+         * [HttpRegistrySource.normalize] 的委托链；行为与拆分前逐字相同 ——
+         * [NpmRegistryVerifierTest] 的 `harbor.example.com/registry/` 那条是回归钉。
+         *
+         * 非 https / 无 host / 形态非法 → null，由调用方折叠成 `Unverifiable`（绝不折成「通过」）。
          */
-        internal fun canonicalRegistry(base: String): String? {
-            val u = try {
-                URI(base.trim())
-            } catch (e: IllegalArgumentException) {
-                return null
-            }
-            if (!u.scheme.equals("https", ignoreCase = true) || u.host.isNullOrEmpty()) return null
-            val p = u.path?.trimEnd('/') ?: ""
-            return u.scheme + "://" + u.authority + p
-        }
+        internal fun canonicalRegistry(base: String): String? = NpmRegistryKeys.canonicalize(base)
 
         private fun requireName(name: String) {
             val n = name.trim()

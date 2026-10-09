@@ -10,6 +10,7 @@ import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmPanelSnapshot
+import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.permission.Capability
 import com.autoscript.domain.scripts.ScriptEnvEntry
 
@@ -80,4 +81,10 @@ open class FakeHost(
 
     override suspend fun removeScriptEnv(key: String): Unit =
         throw UnsupportedOperationException("本替身未提供 removeScriptEnv（用例按需覆盖）")
+
+    override suspend fun npmRegistry(): NpmRegistrySnapshot =
+        throw UnsupportedOperationException("本替身未提供 npmRegistry（用例按需覆盖）")
+
+    override suspend fun setNpmRegistry(raw: String?): Unit =
+        throw UnsupportedOperationException("本替身未提供 setNpmRegistry（用例按需覆盖）")
 }
