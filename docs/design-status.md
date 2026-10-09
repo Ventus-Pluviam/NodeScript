@@ -14,7 +14,7 @@
 > ③ `:app` 两条生产实现（`runNpmPanelCommand` 直接委托 `runNpmCommand`）；
 > ④ `:ui` `NpmInstallOps` + `InstallProgressState`（六档 + `ORDER`）+ `NpmState` 六字段两条派生
 > + `NpmScreen` 的 `InstallCard` 与「卸载」按钮 + `MainActivity` 五条回调（`reloadNpm()` 兼作续拉）；
-> ⑤ 测试 `NpmInstallOpsTest`（17 例）+ `CacacheIndexBytesTest`（4 例）+ `InstallCoordinatorTest` 两例
+> ⑤ 测试 `NpmInstallOpsTest`（19 例）+ `CacacheIndexBytesTest`（4 例）+ `InstallCoordinatorTest` 两例
 > + 契约方法面冻结补 `cacheStorage`。
 > **五条口径**：**走的是与控制台同一条宿主口**（`runNpmPanelCommand` → 同一个 `runConsoleCommand`：
 > 同一份判据、同一套装前多镜像交叉校验、同一道磁盘/配额预检、同一把项目锁与全局安装会话 ——
