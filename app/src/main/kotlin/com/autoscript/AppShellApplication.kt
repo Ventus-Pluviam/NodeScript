@@ -13,6 +13,7 @@ import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmMaintenanceAction
+import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmRegistrySnapshot
@@ -855,6 +856,31 @@ class AppShellApplication : Application(), HostSummary {
         val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：控制台输出暂不可读" }
         val facade = checkNotNull(built.npmFacade) { "npm 未接线：控制台输出无可读之处" }
         return facade.consoleOutput(projectId, sinceSeq, maxLines)
+    }
+
+    /**
+     * 依赖面板的变更半边（§10.9 第 1 条，[HostSummary] 的生产实现，2026-10-09 批 87）。
+     *
+     * **与 [runNpmCommand] 是同一个口**（依赖面板的输入行与控制台敲的是同一种东西，
+     * 门禁强度不该取决于用户从哪个界面按下去）—— 这里只是把控制台那个调用名换成一个
+     * 说得清来意的名字，实现体一个字不改。判据/预检/锁/会话全在 facade 侧那一处。
+     */
+    override suspend fun runNpmPanelCommand(projectId: String, line: String): NpmConsoleHandle =
+        runNpmCommand(projectId, line)
+
+    /**
+     * 安装会话进度读数（§10.9 第 1 条的阶段进度条，[HostSummary] 的生产实现）。
+     *
+     * 读的是**装配产物里那个 facade**（第二个 `InstallCoordinator` 会各自持事件环，
+     * 阶段条就会看着一本与安装互不相干的账）；未接线**抛**，不回空批次 ——
+     * 空批次是「读了、确实没有事件」的样子，会把「宿主没接这个口」画成「安装还没开始」。
+     */
+    override suspend fun npmInstallEvents(projectId: String, sinceSeq: Long, maxBatch: Int): InstallEventBatch {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：安装进度暂不可读" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：安装进度无处读取（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.drainEvents(projectId, sinceSeq, maxBatch)
     }
 
     override fun createSyntaxHighlighter(relPath: String): SyntaxHighlighter =

@@ -2,6 +2,8 @@ package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,10 +12,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
@@ -26,6 +35,7 @@ import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.ApprovalRowState
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.NpmRowState
+import com.autoscript.ui.state.InstallProgressState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.ui.state.Status
@@ -42,12 +52,23 @@ import com.autoscript.ui.theme.ThemeColors
  * （安装 / 卸载 / 镜像源变更 / 审批放行…），所以从本页进而不是从管理面板当第五项 ——
  * 从面板直进会让人以为它与依赖管理是并列的另一件事。
  *
- * 这一屏刻意**不做**的三件事（做了就是撒谎）：
- * - 不画安装输入行/进度条：那要 `install` 会话（§10.9.1 的完整形态），而本屏读口
- *   只到"看"这一层。没有执行体时画一个按下去必失败的输入框，比不画更糟。
+ * 这一屏刻意**不做**的几件事（做了就是撒谎）：
+ * - **不画百分比进度**：`InstallEvent.Progress.percent` 全仓从无赋值，npm 进程内的
+ *   reify 是黑盒 —— 画一条会动的百分比条就是编一个拿不到的数。画的是六档**阶段条**
+ *   （见 [InstallProgressState]）。§10.9 第 1 条原文写的「job 数」同理拿不到。
  * - 不画"依赖树"：`list(depth)` 的 depth 参数宿主侧目前只用 0（lockfile 是平铺的
  *   闭包，层级要真跑 `npm ls --all`）。画一棵假的树就是把平铺清单伪装成树。
  * - 不画 0% 配额条：尺寸没量到时显示「未量到」，不显示"这个项目不占地方"。
+ * - **不画 registry 选择器**：镜像源是**全局**配置面（§10.9 第 8 条，管理面板 →
+ *   镜像源管理），在这里再放一个就是第二份 registry 判据，还会让人以为"这次用这家、
+ *   下次用那家"。
+ * - **不画 `hasInstallScript` 前置告警**：那要 packument 解析面，今天没有 ——
+ *   界面不假装自己知道装之前该警告什么（装完之后的 `SCRIPTS_SKIPPED` 是**事后**的）。
+ *
+ * **变更半边已落（2026-10-09 批 87）**：原文写的是「不画安装输入行/进度条」——
+ * 那条口径的前提是"没有执行体"，而执行体（`runConsoleCommand`）批 84 已经落了。
+ * 本批补上输入行 + 两颗旗标 + 阶段条 + 清单行「卸载」，走的是与控制台**同一条**宿主口
+ * （门禁强度不取决于用户从哪个界面按下去）。
  *
  * 维护动作（§10.9 第 5 条的动作半边，2026-10-09 批 86）落在配额条下面一行：
  * `prune` / `dedupe` / `ci` 重装 / 缓存回收。在此之前配额满了那句提示把用户指去**控制台**
@@ -65,6 +86,11 @@ fun NpmScreen(
     onMaintenance: (NpmMaintenanceAction) -> Unit,
     onReclaimCache: () -> Unit,
     onOpenAudit: () -> Unit,
+    onInstallDraft: (String) -> Unit,
+    onToggleDev: (Boolean) -> Unit,
+    onToggleOffline: (Boolean) -> Unit,
+    onSubmitInstall: () -> Unit,
+    onRemoveInstalled: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -75,6 +101,9 @@ fun NpmScreen(
         emptyText = "这个项目还没有依赖",
         unit = "个已装包",
     )
+    // 「刷新」兼作进度续拉（`:ui` 没有常驻轮询循环，见 `pollInstallEvents` 的 KDoc）：
+    // 宿主是入队即返回的，一次现取多半只拿到 `QUEUED`，再点一次就能看到下一步。
+    // 续拉在 `MainActivity.reloadNpm()` 里与快照一起发生 —— 本屏不持有读口。
     val refresh = rememberRefreshAction { onRefresh() }
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         ActionBar(
@@ -125,6 +154,15 @@ fun NpmScreen(
                 }
             }
             item { QuotaCard(state) }
+            item {
+                InstallCard(
+                    state = state,
+                    onDraft = onInstallDraft,
+                    onToggleDev = onToggleDev,
+                    onToggleOffline = onToggleOffline,
+                    onSubmit = onSubmitInstall,
+                )
+            }
             item { MaintenanceCard(state, onMaintenance, onReclaimCache) }
             item { SectionTitle("待审批（${state.pending.size}）") }
             if (state.load.isLoaded && state.pending.isEmpty()) {
@@ -139,10 +177,168 @@ fun NpmScreen(
                 item { EmptyHint("读到了，这个项目还没有依赖（先装点什么）") }
             }
             items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
-                InstalledRow(row)
+                InstalledRow(row, enabled = state.canInstall, onRemove = onRemoveInstalled)
                 Separator()
             }
         }
+    }
+}
+
+/**
+ * 安装输入行 + 旗标 + 阶段进度条（§10.9 第 1 条的变更半边，2026-10-09 批 87）。
+ *
+ * **两颗旗标只有两颗**（`-D` 与「离线优先」）：§10.9 第 1 条还提到「registry 选择器」，
+ * 但镜像源已经是一个**全局**配置面（§10.9 第 8 条，管理面板 → 镜像源管理），
+ * 在这里再放一个选择器就是第二份 registry 判据 —— 而且它会让人以为"这次安装用这家、
+ * 下次用那家"，与"全局缺省"那条口径直接冲突。
+ *
+ * **进度条是六档阶段条，不是百分比**（见 [InstallProgressState] 的 KDoc）：
+ * job 数拿不到，画百分比就是编一个数。
+ *
+ * **不画 `hasInstallScript` 前置告警**：那要 packument 解析面，今天没有。
+ * 装完之后的 `SCRIPTS_SKIPPED` 警告在事件流里（控制台可见），那是**事后**的，不是事前的 ——
+ * 界面不假装自己知道装之前该警告什么。
+ */
+@Composable
+private fun InstallCard(
+    state: NpmState,
+    onDraft: (String) -> Unit,
+    onToggleDev: (Boolean) -> Unit,
+    onToggleOffline: (Boolean) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        ToneText("安装（装进当前项目的 node_modules）", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+        Row(
+            Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            InstallField(
+                value = state.installDraft,
+                onChange = onDraft,
+                enabled = state.canInstall,
+                onSubmit = onSubmit,
+                modifier = Modifier.weight(1f),
+            )
+            PillButton(
+                text = if (state.installing) "提交中…" else "安装",
+                selected = state.installing,
+                enabled = state.canInstall && state.installDraft.isNotBlank(),
+                onClick = onSubmit,
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PillButton(
+                text = "-D（开发依赖）",
+                selected = state.installDev,
+                enabled = state.canInstall,
+                onClick = { onToggleDev(!state.installDev) },
+            )
+            PillButton(
+                text = "离线优先",
+                selected = state.installOffline,
+                enabled = state.canInstall,
+                onClick = { onToggleOffline(!state.installOffline) },
+            )
+        }
+        // 「离线优先」不是「仅离线」—— 这条旗标让 npm 先查缓存、缺了仍会联网。
+        // 用一个词把两件事混成一件，用户会在断网时以为"勾了就能装上"。
+        ToneText(
+            "「离线优先」= 先查本地缓存，缺的仍会联网；真正断网要装，靠的是缓存里恰好有全部依赖。",
+            StatusTone.MUTED,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        state.installProgress?.let { p -> InstallProgressRow(p) }
+    }
+}
+
+/** 输入框（与 `ConsoleScreen.CommandField` 同形；`:ui` 里两个地方各画一份，不抽公共件 —— 两者提示语与禁用条件都不同）。 */
+@Composable
+private fun InstallField(
+    value: String,
+    onChange: (String) -> Unit,
+    enabled: Boolean,
+    onSubmit: () -> Unit,
+    modifier: Modifier,
+) {
+    val palette = ThemeColors
+    Row(
+        modifier
+            .height(36.dp)
+            .background(palette.fieldBackground, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f)) {
+            if (value.isEmpty()) {
+                Text(
+                    text = "axios 或 axios@1.7.0",
+                    color = palette.text.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                )
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onChange,
+                enabled = enabled,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = if (enabled) palette.text else palette.text.copy(alpha = 0.5f),
+                ),
+                cursorBrush = SolidColor(palette.featuredButton),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (enabled) onSubmit() }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
+ * 阶段条：六档排开，点亮到当前那一档。
+ *
+ * 收尾之后（[InstallProgressState.done]）**保留一行结论**而不是整条消失：
+ * 「装完了 / 失败了 + 病因」是这次操作唯一需要留在屏幕上的东西，抹掉它等于让用户
+ * 自己去清单里找变化。成功时不再画阶段格子（那六格已经没有信息量）。
+ */
+@Composable
+private fun InstallProgressRow(p: InstallProgressState) {
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        if (p.done) {
+            ToneText(
+                text = if (p.ok) (p.detail ?: "安装完成") else "失败：${p.detail ?: "（无详情）"}",
+                tone = if (p.ok) StatusTone.MUTED else StatusTone.PROBLEM,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            return@Column
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            val reached = InstallProgressState.ORDER.indexOf(p.phase)
+            InstallProgressState.ORDER.forEachIndexed { i, _ ->
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(3.dp)
+                        .background(
+                            color = if (i <= reached) ThemeColors.featuredButton else ThemeColors.fieldBackground,
+                            shape = RoundedCornerShape(2.dp),
+                        ),
+                )
+            }
+        }
+        ToneText(
+            text = p.label + (p.pkg?.let { "  $it" } ?: ""),
+            tone = StatusTone.MUTED,
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 
@@ -165,24 +361,36 @@ private fun SectionTitle(text: String) {
  */
 @Composable
 private fun QuotaCard(state: NpmState) {
-    val label = state.quotaLabel ?: return
-    val snap = state.project ?: return
-    val fraction = snap.quotaFraction
+    val label = state.quotaLabel
+    val snap = state.project
+    // npm 缓存那一行（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）：
+    // **与 node_modules 那行并列画在同一张卡里** —— 两者都是"尺寸读数"，且用户看的就是
+    // 它们之间的关系（node_modules 占了多少 / 缓存里还压着多少）。但两行**各自独立**
+    // 判空：量不到 node_modules 不该把缓存那一行也吞掉（反之亦然）——
+    // 缓存是全局读数，项目目录出问题时它照样是有效的。
+    val cache = state.cacheLabel
+    if (label == null && cache == null) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        ToneText("node_modules：$label", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-        when {
-            fraction == null -> ToneText("未量到", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-            snap.overQuota -> ToneText(
-                "已达配额上限：新的安装会被拒（用下面的「清理多余包」腾地方）",
-                StatusTone.PROBLEM,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            snap.quotaWarned -> ToneText(
-                "已用超过 80%：再装大包可能撞上限",
-                StatusTone.ATTENTION,
-                style = MaterialTheme.typography.bodySmall,
-            )
+        if (label != null && snap != null) {
+            ToneText("node_modules：$label", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+            when {
+                snap.quotaFraction == null ->
+                    ToneText("未量到", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+                snap.overQuota -> ToneText(
+                    "已达配额上限：新的安装会被拒（用下面的「清理多余包」腾地方）",
+                    StatusTone.PROBLEM,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                snap.quotaWarned -> ToneText(
+                    "已用超过 80%：再装大包可能撞上限",
+                    StatusTone.ATTENTION,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
+        // 文案里那句「全机一份」由 [NpmState.cacheLabel] 给（缓存按内容寻址、跨项目共享，
+        // 写成「本项目缓存」会让人以为删掉这个项目就能腾出这些字节）。
+        cache?.let { ToneText(it, StatusTone.MUTED, style = MaterialTheme.typography.bodySmall) }
     }
 }
 
@@ -218,9 +426,13 @@ private fun MaintenanceCard(
             Modifier.fillMaxWidth().padding(top = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            MaintenanceButton("清理多余包", NpmMaintenanceAction.PRUNE, busy, onMaintenance)
-            MaintenanceButton("依赖去重", NpmMaintenanceAction.DEDUPE, busy, onMaintenance)
-            MaintenanceButton("按 lock 重装", NpmMaintenanceAction.CI, busy, onMaintenance)
+            // 三颗维护按钮在**任一动作**进行中整体禁用（`globalSession` 全局互斥，同时只跑一个
+            // 安装会话）—— 包括安装输入行那次：只禁被按下的那颗会让另外几颗看起来还能按，
+            // 按下去是排队，用户以为卡了。
+            val enabled = state.canInstall || busy != null
+            MaintenanceButton("清理多余包", NpmMaintenanceAction.PRUNE, busy, enabled, onMaintenance)
+            MaintenanceButton("依赖去重", NpmMaintenanceAction.DEDUPE, busy, enabled, onMaintenance)
+            MaintenanceButton("按 lock 重装", NpmMaintenanceAction.CI, busy, enabled, onMaintenance)
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp),
@@ -229,7 +441,7 @@ private fun MaintenanceCard(
             PillButton(
                 text = if (state.reclaimingCache) "回收中…" else "回收缓存",
                 selected = false,
-                enabled = !state.reclaimingCache && busy == null,
+                enabled = !state.reclaimingCache && busy == null && !state.installing,
                 onClick = onReclaimCache,
             )
         }
@@ -250,12 +462,13 @@ private fun MaintenanceButton(
     label: String,
     action: NpmMaintenanceAction,
     busy: NpmMaintenanceAction?,
+    enabled: Boolean,
     onClick: (NpmMaintenanceAction) -> Unit,
 ) {
     PillButton(
         text = if (busy == action) "$label…" else label,
         selected = busy == action,
-        enabled = busy == null,
+        enabled = enabled,
         onClick = { onClick(action) },
     )
 }
@@ -283,13 +496,28 @@ private fun ApprovalCard(row: ApprovalRowState, enabled: Boolean, onDecide: (Str
     }
 }
 
+/**
+ * 已装包一行：名字 + 版本 + 「卸载」。
+ *
+ * **卸载那颗按钮走的是命令通道**（`npm uninstall <name>` → `runNpmPanelCommand`），
+ * 不是另开一条 `facade.uninstall` 的宿主口 —— 门禁强度不该取决于用户从哪个界面按下去
+ * （与安装输入行同一条纪律）。包名来自这份清单（宿主读 lockfile 的结果），不是用户敲的。
+ */
 @Composable
-private fun InstalledRow(row: NpmRowState) {
+private fun InstalledRow(row: NpmRowState, enabled: Boolean, onRemove: (String) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(row.name, color = ThemeColors.text, modifier = Modifier.weight(1f))
         ToneText(row.version, StatusTone.MUTED)
+        PillButton(
+            text = "卸载",
+            selected = false,
+            enabled = enabled,
+            onClick = { onRemove(row.name) },
+            modifier = Modifier.padding(start = 8.dp),
+        )
     }
 }

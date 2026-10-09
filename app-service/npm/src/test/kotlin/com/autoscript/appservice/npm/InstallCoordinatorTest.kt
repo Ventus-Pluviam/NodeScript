@@ -1677,6 +1677,44 @@ class InstallCoordinatorTest {
         assertEquals(1500L, c.storage()["p1"]!!.totalBytes, "TTL 过期必须重测")
     }
 
+    /**
+     * 缓存体积读数 + 它进依赖面板快照（§10.9 第 5 条的 `npm-cache` 尺寸栏，批 87）。
+     *
+     * 两条一起断，因为它们是一件事的两半：量到了却进不了快照，界面上那栏就永远是 0
+     * （而那看起来与"缓存真的是空的"一模一样）。
+     *
+     * **缓存是全机一份**：这里只有一个项目，但 `cache` 字段的值来自全局读数 ——
+     * 断言它在项目条目上出现，是为了钉住"呈现层从哪儿取这个数字"。
+     */
+    @Test
+    fun `缓存体积进快照：量到 content-v2 的字节，且全机一份`() = runBlocking {
+        val payload = "seed".repeat(200).toByteArray()
+        val integrity = "sha512-" + java.util.Base64.getEncoder().encodeToString(
+            java.security.MessageDigest.getInstance("SHA-512").digest(payload),
+        )
+        val content = NpmCacheSeedDeployer.contentPath(cacheDir(), integrity)
+        Files.createDirectories(content.parent)
+        Files.write(content, payload)
+
+        val c = coordinator(cache = CacacheIndex(cacheDir()))
+        assertEquals(payload.size.toLong(), c.cacheStorage().totalBytes)
+        assertEquals("", c.cacheStorage().projectId, "全局读数没有项目")
+
+        writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
+        val snap = c.snapshot()
+        val p1 = snap.projects.first { it.projectId == "p1" }
+        assertEquals(payload.size.toLong(), p1.cache?.totalBytes)
+        // 配额口径**只对 node_modules 成立**：缓存没有配额（§10.9 第 5 条拦的是 node_modules）
+        assertEquals(0L, p1.cache?.cacheBytes)
+    }
+
+    /** 缓存目录还不存在 → 0 字节（是"这个缓存是空的"，不是"没量到"）。 */
+    @Test
+    fun `缓存不存在时读数是 0 字节而不是 null`() = runBlocking {
+        val c = coordinator(cache = CacacheIndex(cacheDir()))
+        assertEquals(0L, c.cacheStorage().totalBytes)
+    }
+
     /** 走「未获批 → 自请入队 → 人工批准」完整路径，返回宿主重算出的内容哈希。 */
     private fun approveRunScript(led: ApprovalLedger, projectId: String, name: String): String {
         val hash = NpmScriptResolver.projectScripts(layout.projectRoot(projectId), projectId)!!.versionHash

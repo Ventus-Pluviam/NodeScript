@@ -1,5 +1,23 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 87）
+
+- [2026-10-09 · 批 87：依赖面板变更半边（§10.9 第 1 条）+ `npm-cache` 尺寸栏（第 5 条）](2026-10-09.md)：
+  §10.9 第 1 条的「安装输入行 / 旗标 / 阶段进度条」此前登记为未落，前提是"没有执行体"；
+  批 84 把 `InstallCoordinator.runConsoleCommand` 做出来之后这条前提**已经不成立**，
+  剩下的是没人把面板接上去。本批补上输入行 + 两颗旗标（`-D` / 「离线优先」）+ 六档**阶段条**
+  + 清单行上的「卸载」，以及第 5 条要的 `npm-cache` 尺寸栏。`:domain`
+  `PackageManagerFacade.cacheStorage()` + `NpmProjectSnapshot.cache` + `HostSummary` 两条呈现面读口；
+  `:app-service:npm` `InstallCoordinator.cacheStorage()`（只量 `content-v2`）+ 快照里缓存读数提到
+  项目循环外；`:app` 两条生产实现；`:ui` `NpmInstallOps` + `InstallProgressState` + `InstallCard`
+  + `QuotaCard` 里那一行缓存读数。
+  **五条口径**：**走的是与控制台同一条宿主口**（`runNpmPanelCommand` → 同一个
+  `runConsoleCommand`，门禁强度不取决于用户从哪个界面按下去）/ **进度是阶段不是百分比**
+  （`InstallEvent.Progress.percent` 全仓从无赋值，画百分比条就是编一个拿不到的数 —— 这是对原文的
+  **收窄**）/ 「离线优先」是 `--prefer-offline` 不是"仅离线" / 草稿失败不清（宿主先落 ECHO 行**再抛**）/ 换项目要把阶段条与游标一起归零（seq 环内全局
+  单调，沿用旧游标会漏掉新项目 seq 更小的事件，阶段条会永远停在「进行中」）。
+  **边界**：真机未验；进度是现取不是常驻轮询（通常只走到 `QUEUED`，点「刷新」续拉）。
+
 ## 最新追记（2026-10-09，批 86）
 
 - [2026-10-09 · 批 86：依赖维护四颗按钮 + 缓存按 lock 闭包回收（§10.9 第 5 条动作半边）](2026-10-09.md)：

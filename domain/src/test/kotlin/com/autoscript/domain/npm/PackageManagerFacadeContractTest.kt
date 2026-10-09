@@ -36,6 +36,8 @@ class PackageManagerFacadeContractTest {
             "history",
             // 缓存回收（§10.9 第 5 条的动作半边；**不是** npm cache clean，见该方法的 KDoc）
             "reclaimCache",
+            // npm-cache 体积读数（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）
+            "cacheStorage",
         )
         assertEquals(expected, names, "门面方法面必须与 §10.7 冻结清单一致")
     }
