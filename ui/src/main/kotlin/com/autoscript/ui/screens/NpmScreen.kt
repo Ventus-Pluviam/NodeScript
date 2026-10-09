@@ -27,6 +27,7 @@ import com.autoscript.ui.state.ApprovalRowState
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.NpmState
+import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
@@ -48,9 +49,10 @@ import com.autoscript.ui.theme.ThemeColors
  *   闭包，层级要真跑 `npm ls --all`）。画一棵假的树就是把平铺清单伪装成树。
  * - 不画 0% 配额条：尺寸没量到时显示「未量到」，不显示"这个项目不占地方"。
  *
- * 还有一件**有入口但没做**的事，如实写在这里：配额满了那句提示让用户「先 prune 或删掉
- * 不用的包」，而 prune/dedupe 的按钮**不在本页** —— 今天要去控制台敲 `npm prune`。
- * 那是**可操作的**（不是死路），但把用户指去另一页；按钮半边见 backlog 的下一批。
+ * 维护动作（§10.9 第 5 条的动作半边，2026-10-09 批 86）落在配额条下面一行：
+ * `prune` / `dedupe` / `ci` 重装 / 缓存回收。在此之前配额满了那句提示把用户指去**控制台**
+ * 敲 `npm prune` —— 那条路是通的，但「有路可走」不等于「有一键」，而这个页面的全部意义
+ * 就是让用户在这一屏把地方腾出来。
  *
  * 读取与刷新由外壳驱动（进入本页/手动刷新）；本屏只画，状态原样来自 [NpmState]。
  */
@@ -60,6 +62,8 @@ fun NpmScreen(
     onRefresh: suspend () -> Unit,
     onDecide: (requestId: String, approve: Boolean) -> Unit,
     onSelectProject: (String) -> Unit,
+    onMaintenance: (NpmMaintenanceAction) -> Unit,
+    onReclaimCache: () -> Unit,
     onOpenAudit: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -121,6 +125,7 @@ fun NpmScreen(
                 }
             }
             item { QuotaCard(state) }
+            item { MaintenanceCard(state, onMaintenance, onReclaimCache) }
             item { SectionTitle("待审批（${state.pending.size}）") }
             if (state.load.isLoaded && state.pending.isEmpty()) {
                 item { EmptyHint("没有等待人工决定的审批") }
@@ -168,7 +173,7 @@ private fun QuotaCard(state: NpmState) {
         when {
             fraction == null -> ToneText("未量到", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
             snap.overQuota -> ToneText(
-                "已达配额上限：新的安装会被拒（去控制台敲 npm prune，或删掉不用的包）",
+                "已达配额上限：新的安装会被拒（用下面的「清理多余包」腾地方）",
                 StatusTone.PROBLEM,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -179,6 +184,80 @@ private fun QuotaCard(state: NpmState) {
             )
         }
     }
+}
+
+/**
+ * 维护动作一行（§10.9 第 5 条「包大小管理页」的动作半边）。
+ *
+ * 四颗按钮，**每颗都写清它改的是什么**（不靠用户猜 `dedupe` 是什么意思）：
+ * `prune`/`dedupe`/`ci` 入队走安装会话（几十秒量级），缓存回收是瞬间的本地删除 ——
+ * 后者的回执是**一次算出来的读数**而不是"入队了"，两者在界面上不共用一套措辞。
+ *
+ * **不做「cache clean 全清」**（用户 2026-10-09 裁定）：§10 整卷的离线能力全建在
+ * npm 缓存上，全清等于把紧挨着的「按 lock 重装」变成必须联网。这颗按钮删的是
+ * 「没有任何项目 lock 需要的那些」，按钮文案因此写「回收」而不是「清空」。
+ *
+ * 三颗维护按钮在任一动作进行中**整体禁用**（`globalSession` 全局互斥，同时只跑一个
+ * 安装会话 —— 只禁被按下的那颗会让另外两颗看起来还能按，按下去是排队，用户以为卡了）。
+ * 被按下的那颗显示「进行中」，所以 [NpmState.maintenance] 记的是**哪一个**。
+ */
+@Composable
+private fun MaintenanceCard(
+    state: NpmState,
+    onMaintenance: (NpmMaintenanceAction) -> Unit,
+    onReclaimCache: () -> Unit,
+) {
+    val busy = state.maintenance
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        ToneText(
+            "维护（都在当前项目的 node_modules 上）",
+            StatusTone.MUTED,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MaintenanceButton("清理多余包", NpmMaintenanceAction.PRUNE, busy, onMaintenance)
+            MaintenanceButton("依赖去重", NpmMaintenanceAction.DEDUPE, busy, onMaintenance)
+            MaintenanceButton("按 lock 重装", NpmMaintenanceAction.CI, busy, onMaintenance)
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PillButton(
+                text = if (state.reclaimingCache) "回收中…" else "回收缓存",
+                selected = false,
+                enabled = !state.reclaimingCache && busy == null,
+                onClick = onReclaimCache,
+            )
+        }
+        // 这一句不是装饰：这颗按钮删的是别的项目离线重装要用的东西的**补集**，
+        // 用户有权在按之前知道保留判据是什么。
+        ToneText(
+            "回收缓存只删没有任何项目 lock 需要的包（离线重装仍可用）；" +
+                "「按 lock 重装」会先验 lock 签名，签名不对会被拒。",
+            StatusTone.MUTED,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+/** 一颗维护按钮：进行中的那颗显示「…中」，其余禁用（见 [MaintenanceCard] 的 KDoc）。 */
+@Composable
+private fun MaintenanceButton(
+    label: String,
+    action: NpmMaintenanceAction,
+    busy: NpmMaintenanceAction?,
+    onClick: (NpmMaintenanceAction) -> Unit,
+) {
+    PillButton(
+        text = if (busy == action) "$label…" else label,
+        selected = busy == action,
+        enabled = busy == null,
+        onClick = { onClick(action) },
+    )
 }
 
 /**

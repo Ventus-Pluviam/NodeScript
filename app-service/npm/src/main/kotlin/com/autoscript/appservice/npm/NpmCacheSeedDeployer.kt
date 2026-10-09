@@ -65,8 +65,20 @@ object NpmCacheSeedDeployer {
     /** 部署结果：ready=true 表示本次有内容落位；zero 表示全部已就位（幂等命中）。 */
     data class Outcome(val deployed: Int, val skipped: Int, val bytes: Long)
 
-    /** 缓存根（`cacheDir/npm-cache`）；content 在 `_cacache/content-v2` 下。 */
-    fun cacheRoot(cacheDir: Path): Path = cacheDir
+    /**
+     * npm 缓存根（`cacheDir/npm-cache`，§10.2）—— content 在 `<root>/_cacache/content-v2` 下。
+     *
+     * **这是「npm 的缓存在哪」的唯一一份**（2026-10-09 批 86）：这个根被四处读 ——
+     * 喂给 npm 的 `--cache`、[CacacheIndex] 的查询根、[NpmCacheReclaim] 的回收根、
+     * 离线 bundle 导入的落点。此前四处各拼各的，实测（`grep -rn "npm-cache"`）对不上：
+     * `--cache` 拿到的是 `cacheDir` 本身、[CacacheIndex] 读的是 `cacheDir/npm-cache`、
+     * 导入落点又是第三个目录（协调器的 `projectsRoot` 同级兜底）。三处不一致的后果不是
+     * 报错而是**静默失效**：`offlineGap` 恒报缺口、导入完 `ci --offline` 照样不命中。
+     *
+     * 本函数此前是恒等映射（`= cacheDir`）却挂着「缓存根（cacheDir/npm-cache）」的注释
+     * —— 注释与实现相反，正是上面那次分家的起点。
+     */
+    fun cacheRoot(cacheDir: Path): Path = cacheDir.resolve("npm-cache")
 
     fun cacacheDir(cacheDir: Path): Path = cacheDir.resolve("_cacache")
 

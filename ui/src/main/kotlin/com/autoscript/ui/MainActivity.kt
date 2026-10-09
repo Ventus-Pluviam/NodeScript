@@ -91,6 +91,8 @@ import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.filterAudit
 import com.autoscript.ui.state.loadAudit
+import com.autoscript.ui.state.reclaimNpmCacheOp
+import com.autoscript.ui.state.runNpmMaintenanceOp
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
 import com.autoscript.ui.state.selectConsoleProject
@@ -619,6 +621,8 @@ class MainActivity : ComponentActivity() {
                 onRefresh = { reloadNpm() },
                 onDecide = { id, approve -> scope.launch { decideApprovalOp(id, approve) } },
                 onSelectProject = { npmState = npmState.copy(selectedProjectId = it) },
+                onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
+                onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
                 onOpenAudit = onOpenAudit,
                 onBack = onCloseNpm,
                 modifier = Modifier,

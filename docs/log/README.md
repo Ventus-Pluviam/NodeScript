@@ -1,5 +1,25 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 86）
+
+- [2026-10-09 · 批 86：依赖维护四颗按钮 + 缓存按 lock 闭包回收（§10.9 第 5 条动作半边）](2026-10-09.md)：
+  §10.9 第 5 条此前只有尺寸/配额条那半截，配额满时把用户指去控制台敲 `npm prune`（路是通的，
+  但不是一键）。本批补上动作面：依赖管理页配额条下面一行四颗按钮（`清理多余包`/`依赖去重`/
+  `按 lock 重装`/`回收缓存`）。`:domain` `NpmMaintenanceAction`（三态）+ `NpmCacheReclaimReport`
+  （六字段）+ `PackageManagerFacade.reclaimCache()` + `InstallHistoryOp.CACHE_RECLAIM`；
+  `:app-service:npm` 新增 `NpmCacheReclaim`（按 lock 闭包回收 + **摘悬空 index 行**）+
+  `InstallCoordinator.reclaimCache()`（保留集 = **所有项目** lock 并集，读不出的点名入史）；
+  `:app` `HostSummary` 两条；`:ui` `NpmMaintenanceOps` + `MaintenanceCard`。**六裁定**：
+  按 lock 闭包回收而非 `npm cache clean`（全清会把「按 lock 重装」变成必须联网）/ 保留集取所有
+  项目并集（只看当前项目会毁掉别的项目的离线能力，用户看不见）/ op 名 `cache_reclaim` /
+  **回收必须同时摘掉悬空 index 行**（实测 npm 10.9.8：悬空 index 让**在线** `npm install` 报
+  `ENOENT … Invalid response body while trying to fetch` —— 缓存从「没用」变成「有害」且界面上
+  看不出来）/ 认不出形状的条目一律保留、删不掉的不计入 removed / `CI` 那颗不绕过验签。
+  **同批修一处真错**：`NpmCacheSeedDeployer.cacheRoot` 成为缓存目录的**唯一一份**判据（四处读者
+  此前各拼各的、实测互不相同，后果是静默失效：`offlineGap` 恒报缺口、导入完 `ci --offline` 照样
+  不命中）。口径见 [`design-decisions.md`](../design-decisions.md) 第 56 项。**边界**：真机未验；
+  index 修复只在 npm 10.9.8 上实测过；`cacheDir/npm-cache-seed` 仍无生产部署路径。
+
 ## 最新追记（2026-10-09，批 85）
 
 - [2026-10-09 · 批 85：审计页落地（§10.5-2）](2026-10-09.md)：§10.5-2 写的是「审计日志落 App

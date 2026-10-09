@@ -6,6 +6,7 @@ import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.InstallHistoryEntry
+import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.permission.Capability
@@ -306,6 +307,52 @@ interface HostSummary {
         throw com.autoscript.domain.core.AutojsException(
             com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
             "审计史读口未接线：本宿主没有接上 npm 审计入口",
+        )
+
+    /**
+     * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条「包大小管理页」的 cache clean 按钮）。
+     *
+     * 与依赖面板/审批卡/镜像源/审计同一条分工：**宿主自己的界面入口，不经桥** ——
+     * 桥面是脚本侧的面，而这个按钮改的是**磁盘占用**，只有人在界面上按得下去。
+     *
+     * 语义不是 `npm cache clean`：删的是「没有任何项目 lock 需要的那些」，见
+     * [com.autoscript.domain.npm.PackageManagerFacade.reclaimCache]。
+     *
+     * 失败**抛**（不回一份「删了 0 条」的报告）：这个动作的产物是**磁盘上少了东西**，
+     * 静默失败会让用户以为清了、其实没清 —— 他下次点开才发现还是满的，而中间那段时间
+     * 他一直以为问题解决了。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
+     */
+    suspend fun reclaimNpmCache(): NpmCacheReclaimReport =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "缓存回收未接线：本宿主没有接上 npm 缓存目录",
+        )
+
+    /**
+     * 依赖维护动作（§10.9 第 5 条：`prune` / `dedupe` / `ci` 三颗按钮）。
+     *
+     * 与 [runNpmCommand] 的分工：那条路收的是**用户敲的一行字**（要解析、要白名单、
+     * 要在控制台回显），这条路收的是**界面上一颗按钮**（动作在编译期就定死了，
+     * 没有可解析的东西）。合成一条会让按钮走一遍「把动作名拼成命令行再解析回来」的
+     * 往返 —— 那条路上任何一次白名单调整都会**静默**改掉按钮的行为。
+     *
+     * 返回 [com.autoscript.domain.npm.InstallHandle]（与 [runNpmCommand] 同）：
+     * 重操作是入队即返回，产物要走 `snapshot()`/`consoleOutput` 看。
+     *
+     * 失败**抛**原文（`ci` 的验签拒绝、磁盘/配额预检都是这样上来的）：界面不按错误码
+     * 另编一句话 —— `lock.sig` 缺失那句里已经写清了为什么拒，界面再译一遍就是第二份判据。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
+     */
+    suspend fun runNpmMaintenance(
+        projectId: String,
+        action: com.autoscript.domain.npm.NpmMaintenanceAction,
+    ): com.autoscript.domain.npm.InstallHandle =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "依赖维护动作未接线：本宿主没有接上 npm 安装会话入口",
         )
 
     /**
