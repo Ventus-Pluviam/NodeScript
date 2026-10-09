@@ -15,8 +15,11 @@ import java.util.concurrent.TimeUnit
  * （§9.3 三通道里的 adb 那条）。
  *
  * **为什么 adb 通道非得有它**：应用自己 fork 的 `sh` 身份仍是应用 uid，`input` 注不进事件；
- * 要让注入以 **shell uid** 发生，必须借一个由 adb 启动的服务进程 —— Shizuku 就是那个
- * 服务（用户装 Shizuku、用 `adb shell sh /sdcard/…/start.sh` 起它、再授权本应用）。
+ * 要让注入换一个**比应用更高**的身份发生，必须借一个由 adb（或 root）启动的服务进程
+ * —— Shizuku 就是那个服务（用户装 Shizuku、用 `adb shell sh /sdcard/…/start.sh` 起它、
+ * 再授权本应用）。**子进程的身份 = Shizuku 服务进程的身份**：服务以 adb 启动时是
+ * shell uid（2000），以 root 启动时是 root（0）—— 故本文件不承诺具体 uid
+ * （2026-10-10 外审第 3 条：原先写死「shell uid」，在 root 启动的 Shizuku 上是错的）。
  *
  * **为什么本文件不 import `rikka.shizuku.*`**：那是**冻结文件**（`gradle/libs.versions.toml`）
  * 里的新依赖，且该依赖只在**真机**上有意义（JVM 单测跑在 mock android.jar 上，碰
@@ -193,6 +196,21 @@ object ShizukuInput {
         cause,
     )
 
+    /**
+     * 超时的失败话术：**码是 `ERR_TIMEOUT`，不是 `ERR_PERMISSION_DENIED`**
+     * （2026-10-10 外审第 1 条）。
+     *
+     * 本通道的其余失败（没装 / 没启动 / 版本不符）确实是权限面，但**超时不是** ——
+     * 它是「命令发出去了、到点还没回来」。折成权限码，脚本侧按 `e.error` 分类时会把它
+     * 读成「能力未授权或被降级」，进而做出「去能力中心/换通道」的错误处置；而控制台那条
+     * 同形路径（`ConsoleShellRunner.timedOut`）本来就是 `ERR_TIMEOUT`，这里与它对齐。
+     */
+    internal fun timedOut(timeoutMillis: Long) = AutojsException(
+        ErrorCode.ERR_TIMEOUT,
+        "adb 输入通道超时：Shizuku 命令超时 ${timeoutMillis}ms（已尝试终止）",
+        null,
+    )
+
     /** 本通道的枚举值（装配层用它登记 `channels` 表）。 */
     val channel: InputChannel get() = InputChannel.ADB
 }
@@ -270,8 +288,8 @@ internal object ShizukuProcessReader {
     }
 
     /**
-     * 等进程结束；超时即**尝试终止**并如实抛（[ErrorCode.ERR_PERMISSION_DENIED]，
-     * 与其余失败同一个码 —— 调用方只关心「这条通道这次没跑成」）。
+     * 等进程结束；超时即**尝试终止**并如实抛（[ErrorCode.ERR_TIMEOUT] —— 超时不是权限问题，
+     * 见 [ShizukuInput.timedOut]）。
      *
      * 超时是**实现侧义务**：上层（`ConsoleShellRunner`）另有一层 `withTimeoutOrNull`，
      * 两层并存不冲突（先到的那个说了算）。
@@ -280,7 +298,7 @@ internal object ShizukuProcessReader {
         val finished = call(RemoteProcessApi.waitForTimeout, process, timeoutMillis, MILLIS_UNIT) as Boolean
         if (finished) return
         runCatching { RemoteProcessApi.destroy.invoke(process) }
-        throw ShizukuInput.denied("Shizuku 命令超时 ${timeoutMillis}ms（已尝试终止）", null)
+        throw ShizukuInput.timedOut(timeoutMillis)
     }
 
     private fun exitCode(process: Any): Int = call(RemoteProcessApi.exitValue, process) as Int

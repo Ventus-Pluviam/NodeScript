@@ -55,7 +55,7 @@ import kotlinx.coroutines.launch
  *
  * 三条边界写在这一屏上，因为用户在这里最容易误解：
  * - **shell 要显式进模式**（2026-10-09 用户口径：控制台要能执行 shell）：敲 `su` 进
- *   root（`su -c`）或 `shizuku` 进 adb（Shizuku，shell uid），`exit` 退出。默认模式下
+ *   root（`su -c`）或 `shizuku` 进 adb（Shizuku，身份由 Shizuku 服务进程决定），`exit` 退出。默认模式下
  *   裸命令按**依赖提供的命令**解析（`tsc` / `eslint`…），与 shell 面不混；
  *   模式徽标常驻可见 —— 用户不该在以为敲的是 npm 时把命令送进 root shell；
  * - **命令跑在某个项目上**：`npm install` 要落进那个项目的 `node_modules`，

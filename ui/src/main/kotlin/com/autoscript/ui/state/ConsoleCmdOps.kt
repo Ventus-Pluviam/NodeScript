@@ -175,7 +175,7 @@ private suspend fun dispatch(
 
 internal fun modeLabel(mode: ShellConsoleMode): String = when (mode) {
     ShellConsoleMode.ROOT -> "root 模式（su -c）"
-    ShellConsoleMode.ADB -> "Shizuku 模式（shell uid）"
+    ShellConsoleMode.ADB -> "Shizuku 模式"
     ShellConsoleMode.DEFAULT -> "默认模式"
 }
 

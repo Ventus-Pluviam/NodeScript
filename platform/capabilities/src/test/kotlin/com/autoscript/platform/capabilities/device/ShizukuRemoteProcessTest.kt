@@ -2,6 +2,7 @@ package com.autoscript.platform.capabilities.device
 
 import android.os.ParcelFileDescriptor
 import com.autoscript.domain.core.AutojsException
+import com.autoscript.domain.core.ErrorCode
 import com.autoscript.platform.capabilities.reflect.OutsidePackageCaller
 import java.io.ByteArrayInputStream
 import java.io.InputStream
@@ -116,6 +117,17 @@ class ShizukuRemoteProcessTest {
         }
         assertTrue("超时" in (e.message ?: ""), "话术要说是超时：${e.message}")
         assertTrue(ShizukuProbe.destroyed(p), "超时必须尝试终止远端进程（否则设备上留孤儿进程）")
+    }
+
+    @Test
+    fun `超时的错误码是 ERR_TIMEOUT，不是 ERR_PERMISSION_DENIED`() {
+        // 2026-10-10 外审第 1 条：超时折成权限码，脚本侧按 `e.error` 分类时会读成
+        // 「能力未授权或被降级」，进而做出「换通道 / 去能力中心」的错误处置 ——
+        // 而超时是「命令发出去了、到点还没回来」，与授权无关。
+        val e = assertThrows<AutojsException> {
+            ShizukuProcessReader.drainBoth(fake(finishes = false), 10L, Streams("x\n", null))
+        }
+        assertEquals(ErrorCode.ERR_TIMEOUT, e.error, "超时必须报 ERR_TIMEOUT（与 ConsoleShellRunner.timedOut 同码）")
     }
 
     @Test

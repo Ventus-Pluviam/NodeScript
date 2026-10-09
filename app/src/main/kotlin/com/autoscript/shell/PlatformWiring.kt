@@ -40,6 +40,8 @@ import com.autoscript.platform.capabilities.a11y.InMemoryUiTree
 import com.autoscript.platform.capabilities.a11y.SystemA11yBridge
 import com.autoscript.platform.editor.EditorHighlighters
 import java.nio.file.Path
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 生产能力装配：`SystemSpis` + `CapabilityNamespaces` → `AppShellKit.assemble` 的注入束
@@ -116,7 +118,9 @@ object PlatformWiring {
          *
          * **`adb` 档在这里被换掉**：`AndroidShellExecutor` 的 `ShellMode.ADB` 与 `DEFAULT`
          * 是同一行（`sh -c`，应用 uid）—— 那是它自己的口径，不是控制台要的。
-         * 控制台的 `adb` 档 = **Shizuku（shell uid）**，故本类把 ADB 档换成 Shizuku 实现，
+         * 控制台的 `adb` 档 = **Shizuku**（远端进程的身份由 Shizuku 服务进程决定 ——
+         * 服务以 adb 启动时是 shell uid，以 root 启动时是 root，故这里**不承诺具体 uid**），
+         * 故本类把 ADB 档换成 Shizuku 实现，
          * ROOT/DEFAULT 原样转给 [AndroidShellExecutor]。缺省 null = 未接线（JVM 装配）。
          */
         val shellExecutor: ShellExecutor? = null,
@@ -191,7 +195,15 @@ object PlatformWiring {
             put(InputChannel.ROOT, ShellInputProvider.root(shell))
             // ADB：Shizuku。装没装 + 服务活没活都要问过才登记（见 ShizukuInput.isAvailable）。
             if (ShizukuInput.isAvailable()) {
-                put(InputChannel.ADB, ShellInputProvider.adb { cmd -> ShizukuInput.run(cmd).toShellResult() })
+                // 反射调 Shizuku 的 `waitForTimeout` 是**阻塞**调用，`withTimeoutOrNull`
+                // 拦不住它；不切线程就会把**调用方所在的那个线程**钉住整个超时窗口
+                // （脚本桥那条链的调度器本包不掌握，故统一在此切走，不赌调用方是谁）。
+                put(
+                    InputChannel.ADB,
+                    ShellInputProvider.adb { cmd ->
+                        withContext(Dispatchers.IO) { ShizukuInput.run(cmd).toShellResult() }
+                    },
+                )
             }
         }
         return CapabilityNamespaces.a11y(
@@ -291,7 +303,7 @@ object PlatformWiring {
 
     /**
      * 控制台 shell 面的执行体：ROOT/DEFAULT 转给 [AndroidShellExecutor]，
-     * **ADB 换成 Shizuku**（shell uid）。
+     * **ADB 换成 Shizuku**（身份由 Shizuku 服务进程决定，不承诺具体 uid）。
      *
      * 为什么不是改 `AndroidShellExecutor` 的 ADB 档：那个类的 ADB 档有它自己的语义
      * （「设备侧已在 adb shell 内」，即应用 uid），改它会动到 a11y 的输入注入那条路
@@ -303,7 +315,17 @@ object PlatformWiring {
             when (mode) {
                 ShellMode.ROOT, ShellMode.DEFAULT -> platform.exec(command, mode, timeoutMillis)
                 ShellMode.ADB -> {
-                    val r = ShizukuInput.exec(command, timeoutMillis)
+                    // **必须切线程**：`ShizukuInput.exec` 阻塞在反射调用的
+                    // `IRemoteProcess.waitForTimeout` 上，`ConsoleShellRunner` 的
+                    // `withTimeoutOrNull` 只能取消协程、**打断不了这个阻塞调用**。
+                    // 控制台这条链一路跑在 `Dispatchers.Main` 上（MainActivity 的
+                    // `rememberCoroutineScope()`），不切就是拿 UI 线程陪跑到超时
+                    // —— 整个窗口在这段时间里画不出帧、也处理不了输入。
+                    //
+                    // 这**不是**「首次 `input tap` 挂 30s」那个 bug 的成因（那条实测
+                    // 只有冷置后的第 1 条挂，而本缺陷会让每一条都钉住 UI 线程），
+                    // 两者各自独立。2026-10-10 外审第 1 条。
+                    val r = withContext(Dispatchers.IO) { ShizukuInput.exec(command, timeoutMillis) }
                     // 逐字段转接（`:platform:capabilities` 看不到 `:platform:system` 的
                     // `ShellResult`，两边各有一个同形 DTO）。**`truncated` 必须一起搬**：
                     // 漏掉它，adb 档的输出被截到上限时控制台不会打那句「已截断」——

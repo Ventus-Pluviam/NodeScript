@@ -22,7 +22,7 @@ import com.autoscript.domain.core.ErrorCode
  * 调用方拿到的是 handler 的 `ERR_PERMISSION_DENIED`，而不是「命令跑不起来」。
  *
  * **`input` 命令为什么够**：`input tap x y` / `input swipe x1 y1 x2 y2 [ms]` 是
- * `cmd input` 的稳定面（AOSP `InputShellCommand`），在 shell uid 下即可注入 ——
+ * `cmd input` 的稳定面（AOSP `InputShellCommand`），换一个特权身份（shell uid 或 root）即可注入 ——
  * 这正是「adb/root 通道」与无障碍通道的**语义差异**：注入者的进程身份不同。
  *
  * **本类未经真机验证**：设备道 2026-10-06 已裁（backlog B3/E3）。JVM 侧用假
