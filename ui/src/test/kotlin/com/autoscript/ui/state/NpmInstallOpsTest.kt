@@ -219,6 +219,27 @@ class NpmInstallOpsTest {
         assertNull(after.opError, "进度是装饰性读数，读失败不该看起来像安装失败")
     }
 
+    @Test
+    fun `进度：换项目要把阶段条与游标一起归零（否则新项目的历史事件会被漏掉）`() {
+        val before = loaded(project("p1"), project("p2")).copy(
+            installProgress = InstallProgressState(InstallEvent.Phase.REIFY),
+            installSeq = 9L,
+            installDraft = "axios",
+            installDev = true,
+            installing = true,
+        )
+        val after = NpmState.withProject(before, "p2")
+        assertEquals("p2", after.selectedProjectId)
+        assertNull(after.installProgress, "游标归零了却留着旧阶段条，会画出一条不属于这个项目的进度")
+        assertEquals(0L, after.installSeq, "seq 是环内全局单调的：沿用旧游标会漏掉 seq 更小的那些事件")
+        assertEquals("axios", after.installDraft, "草稿是用户的输入，换项目不该清掉")
+        assertTrue(after.installDev, "旗标同上")
+        assertTrue(after.installing, "安装会话是全局互斥的，换个项目看不会让它停下来")
+
+        // 选中的还是同一个项目 → 原样返回（不把在跑的阶段条平白清掉）。
+        assertEquals(before, NpmState.withProject(before, "p1"))
+    }
+
     // ── 现取不抹操作面 ──────────────────────────────────────────────────────
 
     @Test

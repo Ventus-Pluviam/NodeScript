@@ -146,6 +146,10 @@ private suspend fun runPanelCommand(
  *
  * 游标只进不退：`InstallEventBatch.lastSeq` 是下次该传的值，读失败也**不**清零
  * （清零会把已经显示过的阶段重放一遍，看起来像"又跑了一遍"）。
+ *
+ * **唯一的归零点在换项目**（[NpmState.withProject]）：seq 是**环内全局单调**的、`drain`
+ * 才按 projectId 过滤，沿用上一个项目的游标会漏掉新项目 seq 更小的那些事件 —— 包括
+ * `Finished`，于是阶段条永远停在「进行中」。
  */
 internal suspend fun pollInstallEvents(host: HostSummary, state: NpmState, projectId: String): NpmState {
     if (state.selectedProjectId != projectId) return state

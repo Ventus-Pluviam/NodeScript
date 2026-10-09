@@ -146,6 +146,30 @@ data class NpmState(
         )
 
         /**
+         * 换一个项目看（[previous] 就是当前那份）。
+         *
+         * **换项目要把阶段条与游标一起归零**（与 `ConsoleCmdState.withProject` 同一条纪律，
+         * 2026-10-09 批 87）：seq 是**环内全局单调**的、`drain` 才按 projectId 过滤，所以
+         * 沿用上一个项目的游标会**漏掉**新项目 seq 更小的那些事件（它们对新项目是新的、
+         * 对那个游标却不是）—— 包括 `Finished`，于是阶段条会永远停在「进行中」。
+         * 归 0 不是"重头开始"，而是"把这个项目还留在环里的那些事件全取回来"。
+         *
+         * 归零的**只有项目域的那两样**：草稿与旗标是用户的输入（`axios` 换个项目照样是
+         * 要装的东西），`installing` 记的是全局在途（安装会话是全局互斥的，换个项目看
+         * 不会让它停下来）。
+         */
+        fun withProject(previous: NpmState, projectId: String): NpmState =
+            if (previous.selectedProjectId == projectId) {
+                previous
+            } else {
+                previous.copy(
+                    selectedProjectId = projectId,
+                    installProgress = null,
+                    installSeq = 0L,
+                )
+            }
+
+        /**
          * 读失败：**保留 [previous] 已读到的那份**（一次瞬时失败不该把依赖清单抹成空 ——
          * 空清单在界面上就是"这个项目没有依赖"，那是另一句话）。
          */

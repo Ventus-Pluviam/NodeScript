@@ -623,7 +623,7 @@ class MainActivity : ComponentActivity() {
                 state = npmState,
                 onRefresh = { reloadNpm() },
                 onDecide = { id, approve -> scope.launch { decideApprovalOp(id, approve) } },
-                onSelectProject = { npmState = npmState.copy(selectedProjectId = it) },
+                onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
                 onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
                 onOpenAudit = onOpenAudit,
