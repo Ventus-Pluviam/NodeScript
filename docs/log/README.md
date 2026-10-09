@@ -1,5 +1,28 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 88）
+
+- [2026-10-09 · 批 88：控制台 shell 面（`su` / `shizuku` 特权模式，用户口径）](2026-10-09.md)：
+  用户口径「也需要让控制台能执行 shell」+ 三条指定（`su` 进 root、`shizuku` 进 adb、`exit` 退出，
+  「这部分说的是控制台的」）。批 84 第 2 项裁定当时写的是「只有 npm，不加 shell」—— 本条是
+  **用户对该裁定的修订**：shell 进控制台，但**必须显式进模式**（不是「裸命令一律当 shell」）。
+  `:domain` `NpmConsoleKeys.parse(line, mode)` + 枚举 `ShellConsoleMode` + 三个新命令变体；
+  `HostSummary.runShellCommand` + `ShellConsoleResult`；`:app-service:npm` 新增
+  `ConsoleShellRunner`（执行 + 渲染，独立一件）+ `ShellOpExecutor` 缝；`:platform:capabilities`
+  `ShizukuInput.exec`（**并发**排空两条流）；`:app` `PlatformWiring.ConsoleShellExecutor`
+  （**ADB 档换成 Shizuku**）；`:ui` `ConsoleCmdState.mode` + 模式徽标。
+  **七条口径**：必须有模式、不许静默挑一条（root uid 与 shell uid 是两条不同身份的通道，
+  静默挑 = 让「我以为我在用 root」不可分辨）/ `su <cmd>` 与 `su` 是两件事（带参数 = 就地跑那一条）/
+  `DEFAULT` 一律拒且拒要落一行（先落 RESULT 再抛，拒绝不碰执行体）/ 非零退出是结果不是异常 /
+  超时不渲染半截输出 / shell 面与依赖树无关（不建事务、不占安装会话、不碰项目锁）/
+  `adb` 档 = Shizuku 且只在装配层换（`AndroidShellExecutor` 的 ADB 是**应用 uid**，
+  改它会动到 a11y 输入注入那条路）。
+  **顺手修两处**：`ShizukuInput.shizukuClass` 补接 `LinkageError`（JVM 实测
+  `NoClassDefFoundError` 不是 `Exception`，会越过 `AutojsException` 直穿到调用方）；
+  `NpmScriptResolver` 纯 JS 探测拆出 `PureJsProbe`（越 `TooManyFunctions` 线）。
+  **边界**：真机未验（无设备，由用户自测）；**已知缺口**：adb 档输出被截到 4 KiB 时
+  控制台不打「已截断」（root 档有真判据）。
+
 ## 最新追记（2026-10-09，批 87）
 
 - [2026-10-09 · 批 87：依赖面板变更半边（§10.9 第 1 条）+ `npm-cache` 尺寸栏（第 5 条）](2026-10-09.md)：
