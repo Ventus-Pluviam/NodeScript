@@ -129,6 +129,32 @@ class NpmInstallOpsTest {
     }
 
     @Test
+    fun `提交：空输入当场被告知写什么，不往返也不报"安装失败"`() = runBlocking {
+        // 这条路是可达的：安装那颗按钮在草稿为空时禁用，但输入行按回车不走那个禁用
+        // （`InstallField` 的 onDone 只看 canInstall）。
+        val host = PanelHost()
+        val state = submitInstall(host, loaded(project("demo")).copy(installDraft = "   "))
+        assertTrue(host.lines.isEmpty())
+        assertTrue(state.opError!!.contains("先写要装什么"))
+    }
+
+    @Test
+    fun `提交：宿主摘要未接线时说的是"没接线"，不是"安装失败"`() = runBlocking {
+        val state = submitInstall(null, loaded(project("demo")).copy(installDraft = "axios"))
+        assertTrue(state.opError!!.contains("宿主摘要未接线"))
+        assertFalse(state.installing)
+    }
+
+    @Test
+    fun `进度：拉的不是当前项目时原样返回（不把别的项目的阶段折进来）`() = runBlocking {
+        val host = PanelHost(events = listOf(InstallEvent.Progress("p1", "h1", InstallEvent.Phase.REIFY)))
+        val state = loaded(project("p2")).copy(installProgress = InstallProgressState(InstallEvent.Phase.QUEUED))
+        val after = pollInstallEvents(host, state, "p1")
+        assertEquals(state, after, "界面正看着 p2，p1 的事件不该折进这条阶段条")
+        assertEquals(0, host.polls, "连拉都不该拉")
+    }
+
+    @Test
     fun `卸载：走同一条命令通道（门禁强度不取决于入口）`() = runBlocking {
         val host = PanelHost()
         val state = removeInstalled(host, loaded(project("demo")), "esbuild")
