@@ -29,11 +29,11 @@ import java.util.Base64
  * 小文件，清它们要重建整棵桶树，收益与风险不成比例。故 [Report.keptEntries] 会**大于**
  * 真正被 lock 引用的条目数，这不是漏删，是刻意留的。
  *
- * **另一条边界（装配缺口，不在本对象修）**：生产装配今天喂给 npm 的 `--cache` 是
- * `cacheDir` 本身，而 [CacacheIndex] 读的是 `cacheDir/npm-cache` —— 两处**不是同一个目录**，
- * 且离线 bundle 导入还落在第三个地方（协调器的 `.npm-cache` 兜底，见
- * `InstallCoordinator.resolveCacheDir`）。本对象只回收**调用方给的那个目录**，不猜另外两个：
- * 猜错会把「回收」变成「删掉别人正在用的东西」。三处合一见 backlog。
+ * **调用方给哪个目录就只动哪个目录**（2026-10-09 批 86 已把四处读者合一到
+ * [NpmCacheSeedDeployer.cacheRoot]，但这条纪律不变）：本对象不替调用方猜「npm 的缓存
+ * 是不是在别处」—— 猜错会把「回收」变成「删掉别人正在用的东西」。合一之前那四处
+ * 实测互不相同（`--cache` 拿的是 `cacheDir` 本身、[CacacheIndex] 读 `cacheDir/npm-cache`、
+ * bundle 导入落第三个目录），后果是**静默失效**而非报错，见 `cacheRoot` 的 KDoc。
  */
 object NpmCacheReclaim {
 
