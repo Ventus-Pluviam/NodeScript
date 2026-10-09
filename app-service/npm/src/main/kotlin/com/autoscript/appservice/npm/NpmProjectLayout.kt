@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -14,9 +15,9 @@ import java.nio.file.Path
  */
 class NpmProjectLayout(val projectsRoot: Path) {
 
-    /** 防路径逃逸（与 FsProjectStore 同规约）。 */
+    /** 防路径逃逸（与 FsProjectStore 同规约）。判据在 [ScriptPaths.PROJECT_ID]（唯一一份）。 */
     fun projectRoot(projectId: String): Path {
-        require(PROJECT_ID.matches(projectId)) { "非法 projectId: $projectId" }
+        require(ScriptPaths.isValidProjectId(projectId)) { "非法 projectId: $projectId" }
         return projectsRoot.resolve(projectId)
     }
 
@@ -25,7 +26,14 @@ class NpmProjectLayout(val projectsRoot: Path) {
     fun npmrc(projectId: String): Path = projectRoot(projectId).resolve(".npmrc")
 
     companion object {
-        val PROJECT_ID = Regex("[A-Za-z0-9._-]+")
+        /**
+         * 项目号判据的**别名**（2026-10-09 批 84）：字面量已上提到
+         * [com.autoscript.domain.scripts.ScriptPaths.PROJECT_ID] —— 界面侧的命令行校验
+         * 也要用它，而 `:ui` 够不到本模块。留这个别名是为了让既有引用点零改动，
+         * **URL/正则字面量从此只有一份**（与批 83 把 `NpmRegistryVerifier.OFFICIAL`
+         * 改成 `NpmRegistryKeys.OFFICIAL` 的别名是同一手法）。
+         */
+        val PROJECT_ID: Regex = ScriptPaths.PROJECT_ID
     }
 }
 

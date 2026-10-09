@@ -22,6 +22,8 @@ class PackageManagerFacadeContractTest {
             "list", "offlineGap", "config", "storage", "snapshot",
             // 全局镜像源（§10.9 第 8 条；读口 + 写口，界面不经桥）
             "globalRegistry", "setGlobalRegistry",
+            // 控制台命令面（§10.9 第 3 条「npm 终端视图」；同样不经桥）
+            "runConsoleCommand", "consoleOutput",
             // 审批（人机分离：requestApprove 仅入队 / resolveApproval 仅 UI 回调）
             "requestApprove", "resolveApproval", "pendingApprovals",
             // P1
@@ -82,6 +84,21 @@ class PackageManagerFacadeContractTest {
         assertEquals(
             listOf("QUEUED", "RESOLVE", "DOWNLOAD", "REIFY", "POST_CHECK", "DONE"),
             InstallEvent.Phase.entries.map { it.name },
+        )
+    }
+
+    @Test
+    fun `控制台输出批次三件套（first 与 last 与 lines，与 a11y events 同口径）`() {
+        assertEquals(
+            listOf("firstSeq", "lastSeq", "lines", "running"),
+            NpmConsoleSnapshot::class.java.declaredFields.map { it.name },
+        )
+        assertEquals(listOf("seq", "line"), SequencedConsoleLine::class.java.declaredFields.map { it.name })
+        assertEquals(listOf("kind", "text", "atMillis"), NpmConsoleLine::class.java.declaredFields.map { it.name })
+        assertEquals(
+            listOf("ECHO", "PHASE", "OUTPUT", "WARNING", "RESULT"),
+            NpmConsoleLineKind.entries.map { it.name },
+            "呈现层按 kind 着色，宿主侧是唯一判读处 —— 枚举顺序变了要同步 §10.9 第 3 条",
         )
     }
 
