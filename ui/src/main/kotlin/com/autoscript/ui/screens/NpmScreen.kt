@@ -37,12 +37,20 @@ import com.autoscript.ui.theme.ThemeColors
  * 两个分段：**已装依赖**（`npm ls` 直读 lockfile 的权威清单 + 尺寸/配额）与
  * **待审批**（全局队列）。
  *
+ * 顶栏那颗「审计」进 [AuditScreen]（§10.5-2）：它记的就是**本页这些操作**发生过什么
+ * （安装 / 卸载 / 镜像源变更 / 审批放行…），所以从本页进而不是从管理面板当第五项 ——
+ * 从面板直进会让人以为它与依赖管理是并列的另一件事。
+ *
  * 这一屏刻意**不做**的三件事（做了就是撒谎）：
  * - 不画安装输入行/进度条：那要 `install` 会话（§10.9.1 的完整形态），而本屏读口
  *   只到"看"这一层。没有执行体时画一个按下去必失败的输入框，比不画更糟。
  * - 不画"依赖树"：`list(depth)` 的 depth 参数宿主侧目前只用 0（lockfile 是平铺的
  *   闭包，层级要真跑 `npm ls --all`）。画一棵假的树就是把平铺清单伪装成树。
  * - 不画 0% 配额条：尺寸没量到时显示「未量到」，不显示"这个项目不占地方"。
+ *
+ * 还有一件**有入口但没做**的事，如实写在这里：配额满了那句提示让用户「先 prune 或删掉
+ * 不用的包」，而 prune/dedupe 的按钮**不在本页** —— 今天要去控制台敲 `npm prune`。
+ * 那是**可操作的**（不是死路），但把用户指去另一页；按钮半边见 backlog 的下一批。
  *
  * 读取与刷新由外壳驱动（进入本页/手动刷新）；本屏只画，状态原样来自 [NpmState]。
  */
@@ -52,6 +60,7 @@ fun NpmScreen(
     onRefresh: suspend () -> Unit,
     onDecide: (requestId: String, approve: Boolean) -> Unit,
     onSelectProject: (String) -> Unit,
+    onOpenAudit: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -69,7 +78,10 @@ fun NpmScreen(
             onBack = onBack,
             subtitle = status.text,
             subtitleTone = status.tone,
-            actions = { ActionBarAction("刷新", refresh::trigger) },
+            actions = {
+                ActionBarAction("审计", onOpenAudit)
+                ActionBarAction("刷新", refresh::trigger)
+            },
         )
         // 读失败带原文（与日志管理页同一条：失败是**一句带原文的话**，不是一个空列表）。
         (state.load as? LoadState.Failed)?.let { failed ->
@@ -156,7 +168,7 @@ private fun QuotaCard(state: NpmState) {
         when {
             fraction == null -> ToneText("未量到", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
             snap.overQuota -> ToneText(
-                "已达配额上限：新的安装会被拒（先 prune 或删掉不用的包）",
+                "已达配额上限：新的安装会被拒（去控制台敲 npm prune，或删掉不用的包）",
                 StatusTone.PROBLEM,
                 style = MaterialTheme.typography.bodySmall,
             )

@@ -3,7 +3,10 @@
   <ManuallySuppressedIssues/>
   <CurrentIssues>
     <ID>CyclomaticComplexMethod:Glyphs.kt$@Composable fun Glyph( kind: GlyphKind, tint: Color, modifier: Modifier = Modifier, size: Dp = 24.dp, weight: Float = 1f, )</ID>
+    <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$@OptIn(ExperimentalFoundationApi::class) // LocalBringIntoViewSpec 在 foundation 1.7 仍是实验 API override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>CyclomaticComplexMethod:ProjectScreen.kt$@Composable fun ProjectScreen( state: ProjectState, /** * 主题两态切换（⋮ 第一格，TG 日/夜同款 —— 目标模式写菜单项上）。 * * 参数是**这颗 ⋮ 在根坐标里的中心**：外壳的圆形揭示从它长出来（见 `centerInRoot`）。 */ onSwitchTheme: (Offset) -&gt; Unit, /** * 那一格的**文案** = 点它切到的那一档（TG `DialogsActivity` 的日夜项： * 当前深色写 "Day Mode"、当前浅色写 "Night Mode"）。 * * 由外壳下发而不是本屏自己算：本屏拿不到 `ThemeMode`（那是 `:ui` 外壳的状态）， * 而"当下是明是暗"这个事实在 `MainActivity` 里已经有了（`themeMode.isDark()`）。 */ themeSwitchLabel: String, /** 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。 */ onCreate: (projectId: String, name: String, isFolder: Boolean) -&gt; Unit, /** 读一个脚本文件的文本（**点文件**进编辑面时调；失败原文抛，本屏如实显示）。 */ onReadFile: suspend (projectId: String, relPath: String) -&gt; String, /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */ onSaveFile: suspend (projectId: String, relPath: String, content: String) -&gt; Unit, /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */ onSortChange: (FileSort, Boolean) -&gt; Unit, /** * 本页是否是 pager 当前停稳的那一页。pager 预组合邻页（`beyondViewportPageCount = 1`）， * 本屏的返回键拦截若不看它，用户在任务页按返回会被邻页的项目屏吞掉（去退一层目录）。 */ active: Boolean = true, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:AuditScreen.kt$@Composable fun AuditScreen( state: AuditState, onRefresh: suspend () -&gt; Unit, onFilter: (String?) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:AuditScreen.kt$@Composable private fun AuditRow(row: AuditRowState)</ID>
     <ID>FunctionNaming:Chrome.kt$@Composable fun ActionBar( title: String? = null, modifier: Modifier = Modifier, subtitle: String? = null, subtitleTone: StatusTone = StatusTone.MUTED, onBack: (() -&gt; Unit)? = null, /** * 左侧那颗按钮的字形。缺省 `‹` = "退回上一层"；选择模式（action mode）传 `✕` * —— TG 的选择模式那颗是**关闭**不是返回（按它退的是模式，不是页面）， * 同一个位置画同一个箭头会让两种语义读成一件事。 */ backGlyph: String = "‹", actions: (@Composable () -&gt; Unit)? = null, /** * 标题样式覆盖（合并到 `titleLarge` 之上）。缺省 null = 全仓统一的 17sp Medium； * 主页（TG `DialogsActivity`）的标题是**品牌位**：20sp 粗体 + `telegram_color_dialogsLogo` * 蓝（createTitleTextView 的 bold 20dp 口径），只有它有权覆盖。 */ titleStyle: TextStyle? = null, /** * 顶栏底色覆盖（批 41：任务中心要跟页面同灰）。缺省 null = **与屏底同色** * （[ThemeColors.background]：白 / 夜间 #161E27）—— 用户口径（批 68）要的就是 * "顶栏、菜单、底栏与屏底一个黑"，所以缺省值不再取 [ThemeColors.surface] * （那是卡片色，夜间 0xFF232326，比屏底亮一档，留着就露一条"旧灰"）。 * 传色即整栏（含状态栏那一条）换底；浅色档 `background` 与 `surface` 同为白， * 所以这次改动在日间**零观感变化**。 */ background: Color? = null, )</ID>
     <ID>FunctionNaming:Chrome.kt$@Composable fun ActionBarAction( text: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, enabled: Boolean = true, tone: StatusTone = StatusTone.LINK, )</ID>
     <ID>FunctionNaming:Chrome.kt$@Composable fun TabBar( tabs: List&lt;TabItem&gt;, pagerState: PagerState, onSelect: (Int) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
@@ -26,7 +29,7 @@
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun MainShell( pagerState: PagerState, onSelectTab: (Int) -&gt; Unit, toast: ToastAction, modifier: Modifier = Modifier, content: @Composable (Modifier) -&gt; Unit, )</ID>
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun ManagementBackHandler(pagerState: PagerState, subPageOpen: Boolean, onBack: () -&gt; Unit)</ID>
     <ID>FunctionNaming:MainActivity.kt$@Composable private fun TabReloadEffect( resumeTick: Int, pagerState: PagerState, subPage: MainActivity.ManagementPage?, onSettled: suspend (MainActivity.Tab) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ManagementSubPageHost( page: ManagementPage, onCloseConsole: () -&gt; Unit, onCloseNpm: () -&gt; Unit, onCloseEnv: () -&gt; Unit, onCloseRegistry: () -&gt; Unit, onCloseLogManagement: () -&gt; Unit, scope: CoroutineScope, )</ID>
+    <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ManagementSubPageHost( page: ManagementPage, onCloseConsole: () -&gt; Unit, onCloseNpm: () -&gt; Unit, onCloseEnv: () -&gt; Unit, onCloseRegistry: () -&gt; Unit, onCloseAudit: () -&gt; Unit, onOpenAudit: () -&gt; Unit, onCloseLogManagement: () -&gt; Unit, scope: CoroutineScope, )</ID>
     <ID>FunctionNaming:MainActivity.kt$MainActivity$@Composable private fun ProjectTab(scope: CoroutineScope, themeSwitch: ThemeSwitchWiring, dark: Boolean, active: Boolean)</ID>
     <ID>FunctionNaming:ManagementScreen.kt$@Composable fun ManagementScreen( onOpenConsole: () -&gt; Unit, onOpenLogManagement: () -&gt; Unit, onOpenNpm: () -&gt; Unit, onOpenEnv: () -&gt; Unit, onOpenRegistry: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:MenuPopup.kt$@Composable internal fun MenuPopup( expanded: Boolean, visibleCount: Int, onDismissRequest: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
@@ -38,7 +41,7 @@
     <ID>FunctionNaming:Menus.kt$@Composable private fun MenuItemRow(action: MenuAction, position: Int, onDismiss: () -&gt; Unit)</ID>
     <ID>FunctionNaming:Menus.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ActionBottomSheet( title: String, onDismiss: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
     <ID>FunctionNaming:Motion.kt$fun OvershootEasing(tension: Float): Easing</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onDecide: (requestId: String, approve: Boolean) -&gt; Unit, onSelectProject: (String) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onDecide: (requestId: String, approve: Boolean) -&gt; Unit, onSelectProject: (String) -&gt; Unit, onOpenAudit: () -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ApprovalCard(row: ApprovalRowState, enabled: Boolean, onDecide: (String, Boolean) -&gt; Unit)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow(row: NpmRowState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun QuotaCard(state: NpmState)</ID>
@@ -116,6 +119,7 @@
     <ID>LoopWithTooManyJumpStatements:DeletionParticles.kt$DeletionParticles$for</ID>
     <ID>MatchingDeclarationName:Glyphs.kt$GlyphKind</ID>
     <ID>MatchingDeclarationName:Refresh.kt$RefreshAction</ID>
+    <ID>TooGenericExceptionCaught:AuditOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:ConsoleCmdOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:MainActivity.kt$MainActivity$t: Exception</ID>
     <ID>TooGenericExceptionCaught:RegistryOps.kt$t: Exception</ID>
