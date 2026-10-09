@@ -406,6 +406,86 @@ interface PackageManagerFacade {
 
     // —— 快照（高信任通道）——
     suspend fun exportSnapshot(projectId: String, uri: String): SnapshotRef
+
+    // —— 审计史（§10.5-2「审计日志落 App 且可导出」；2026-10-09 批 85）——
+    /**
+     * 安装审计史（append-only，落盘 `files/.autojs/install-history.jsonl`）。
+     *
+     * **为什么它是 `snapshot()` 之外的第二条读口**：两者问的是两件事，合并会让审计的
+     * 时间范围被依赖面板的刷新节奏绑死。`snapshot()` 答「此刻装了什么」（一份**当前**事实，
+     * 每次都现算）；本口答「过去发生过什么」（一份**历史**事实，写一次读一次，与当前状态
+     * 无关）。把后者塞进前者，等于每刷一次依赖面板就把全部历史重读一遍，而依赖面板根本
+     * 不显示它。
+     *
+     * **无参**：与 [pendingApprovals] 同一取舍 —— 全量 + 呈现层筛，不按项目问。按项目问
+     * 会让「全局变更」（[InstallHistoryOp.REGISTRY]，其 `projectId` 是空串）从任何一次
+     * 筛选里掉出去，而那条恰恰是审计最该看见的。
+     *
+     * 返回按写入序（**最新在最后** —— 那是文件里真实的顺序，读口不替呈现层决定怎么排）。
+     */
+    suspend fun history(): List<InstallHistoryEntry>
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 审计史（§10.5-2；`:ui` 审计页；2026-10-09 批 85）
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * 一条安装审计事实（§10.5-2）。
+ *
+ * **形状由落盘格式决定，不由「界面上想显示什么」决定**：`install-history.jsonl` 自
+ * 2026-09 起就是这五个字段，而本 DTO 是它的只读投影 —— 呈现层要的派生（时间怎么格式化、
+ * 操作名怎么翻人话）都在 `:ui` 侧算，不在这里加字段。加字段就要动落盘格式，
+ * 而那份文件是**审计**：改它的形状等于让历史行与将来行不可比。
+ *
+ * @property op 操作名（[InstallHistoryOp] 是已知取值的锚；未知值也如实收下 —— 落盘侧
+ *   刻意不因枚举不全而丢事件，读侧更不该把不认识的行悄悄藏掉）。
+ * @property projectId 项目号；**空串 = 全局变更**（[InstallHistoryOp.REGISTRY] 改的是
+ *   `files/.npmrc`，不属于任何项目），不是「项目号丢了」。
+ * @property success 那次操作的结局。**失败也入史**（落盘侧的口径）：审计要能回答
+ *   「用户当时看到成功了吗」，只记成功就答不了。
+ * @property detail 可读明细（失败原因是原文，成功是摘要）。
+ */
+data class InstallHistoryEntry(
+    val op: String,
+    val projectId: String,
+    val success: Boolean,
+    val detail: String? = null,
+    val atMillis: Long,
+)
+
+/**
+ * 已知操作名的**唯一一份**（落盘侧 `InstallHistory.Op` 与本对象同值；呈现层引用这里，
+ * 不在 Compose 里抄字面量 —— 抄了就会与落盘侧漂）。
+ *
+ * 与 [InstallHistoryEntry.op] 的 `String` 类型**刻意不一致**：取值域是开放的
+ * （未知 op 如实收下），这里只给已知的那些一个稳定的比较锚。
+ *
+ * 前八个是 `InstallHistory.Op` 的原样搬迁；后六个是**跑出来的**取值 ——
+ * `opName(args)` 把任何 argv 首词直接当 op 记，落盘侧从来没有拦住过它们。
+ * 这不是要收窄取值域，而是把「实际会出现的名字」写下来：呈现层要分组就得知道有哪些。
+ */
+object InstallHistoryOp {
+    const val INSTALL = "install"
+    const val CI = "ci"
+    const val UNINSTALL = "uninstall"
+    const val PRUNE = "prune"
+    const val DEDUPE = "dedupe"
+    const val REGISTRY = "registry"
+    const val IMPORT = "import"
+    const val EXPORT = "export"
+
+    /** 控制台轻操作（`opName` 直取 argv 首词的结果）。 */
+    const val LS = "ls"
+    const val AUDIT = "audit"
+
+    /** `update`（facade 有实现，今天零生产调用方）。 */
+    const val UPDATE = "update"
+
+    /** T1 门禁的三种动作（`ApprovalAction.name.lowercase()` 的产物）。 */
+    const val RUN_SCRIPT = "run_script"
+    const val EXEC = "exec"
+    const val INSTALL_SCRIPT = "install_script"
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

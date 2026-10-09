@@ -10,6 +10,7 @@ import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
+import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.host.ShellSummary
@@ -787,6 +788,21 @@ class AppShellApplication : Application(), HostSummary {
             "npm 未接线：控制台无法执行命令（原因见装配日志的 npmCliFailure）"
         }
         return facade.runConsoleCommand(projectId, line)
+    }
+
+    /**
+     * 安装审计史读数（§10.5-2，[HostSummary] 的生产实现）。
+     *
+     * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个
+     * `InstallCoordinator` 会各自持一本审计账，读侧读到的那本与写侧写进去的那本就不是同一本）；
+     * 未接线**抛**，不返回空表 —— 空表是「读成功且真的一条都没有」的样子。
+     */
+    override suspend fun npmHistory(): List<InstallHistoryEntry> {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：审计史暂不可读" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：审计史无处读取（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.history()
     }
 
     /**

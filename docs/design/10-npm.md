@@ -144,6 +144,7 @@
 2. **审批 = 人的动作（人机分离）**（整改自批判「程序化绕过」）：
    - `approveScript`/`runScript`/`exec` **不允许脚本直调**——脚本只能发出 `ApprovalRequest` 排队，等 UI 弹卡人工二次确认（可配生物特征），脚本侧限流 + 全量审计。
    - 审批记录绑定 `pkg+版本+脚本内容哈希`，版本升级必须重新审批；审计日志（approve/registry 变更/lock 重签）落 App 且可导出。
+     **落地现状（2026-10-09 批 85）**：「落 App」自始成立（`InstallHistory` → `files/.autojs/install-history.jsonl`，只追加、失败也记），但**读侧此前零消费方** —— 本批补上 `PackageManagerFacade.history()` → `HostSummary.npmHistory()` → `:ui` `AuditScreen`（入口在依赖管理页顶栏），见 §10.9 第 2 条。**「可导出」仍未落**：SAF 选目录 + 写文件那条通道没接，故界面上**不画导出按钮**（按下去什么都不发生的按钮比不画更糟）。
 3. **恶意包防线（缺省启用）**：
    - 默认**拒绝全部 install 脚本**（对操纵无障碍/root 的自动化脚本是最大投毒面）；postinstall 包装完即出「脚本未运行」显式警告，**禁止静默**。
    - 在线 `npm audit` + `audit signatures`（ECDSA）；离线捆绑 OSV 库 + `osv-scanner --offline`；签名端点不可用**绝不静默降级**。
@@ -184,6 +185,7 @@ interface PackageManager {
   suspend fun storage(): Map<ProjectId, NodeModulesStats>
   suspend fun exportSnapshot(uri): SnapshotRef                 // node_modules.zip+lock+ledger→SAF；高信任通道
   suspend fun cancel(handle: InstallHandle)               // TTL/取消 → quiesce 安装会话
+  suspend fun history(): List<InstallHistoryEntry>         // 审计史（2026-10-09 批 85）：append-only 历史，与 snapshot() 的「当前事实」是两件事
 }
 ```
 
@@ -193,6 +195,21 @@ interface PackageManager {
 512、DROP_OLDEST、单调 seq）由 `emit()`/`requestApprove` 唯一投递，`drainEvents`/`drainApprovals` 按调用方游标取批；回包 `{first,last,items}`，空增量 `first=last=sinceSeq`，
 环丢过最旧时 `first > sinceSeq+1` 即空洞可见（进度是可丢数据面，如实露洞不补造）。四个 DTO（`InstallEventBatch`/`SequencedInstallEvent`/`ApprovalBatch`/`SequencedApproval`）与两个新方法由 `PackageManagerFacadeContractTest` 冻结，
 JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
+
+**审计读口（2026-10-09 批 85，§10.5-2「审计日志落 App 且可导出」）**：`history()` 是
+`install-history.jsonl` 的只读投影，**无参**（与 `pendingApprovals` 同一取舍）—— 按项目筛会让
+`Op.REGISTRY` 那条（`projectId` 空串，改的是 `files/.npmrc`，不属于任何项目）从任何一次筛选里
+掉出去，而它恰恰是审计最该看见的。**它为什么不并进 `snapshot()`**：两者问的是两件事 ——
+`snapshot()` 答「此刻装了什么」（当前事实，每次现算），`history()` 答「过去发生过什么」（历史事实，
+落盘即定）；并进去等于每刷一次依赖面板就把全部历史重读一遍，而依赖面板根本不显示它。
+`InstallHistoryEntry` 五字段（`op`/`projectId`/`success`/`detail`/`atMillis`）**由落盘格式决定**，
+不由界面想显示什么决定 —— 加字段要动那份审计文件的形状，等于让历史行与将来行不可比。
+`InstallHistoryOp` 是已知操作名的**唯一一份**（落盘侧 `InstallHistory.Op` 改为指向它的别名；
+`:ui` 看不见 `:app-service:npm`），而 `InstallHistoryEntry.op` 仍是 `String`：取值域**开放**
+（`opName(args)` 直取 argv 首词、T1 动作名来自 `ApprovalAction.name.lowercase()`），落盘侧刻意
+不因枚举不全丢事件，读侧也不该把不认识的行藏掉。**读口不经桥**（同控制台/镜像源）。
+**同批补记**：`enqueueHeavy` 的磁盘/配额**预检拒绝**原先不入史（`crossCheckRegistry` 的拒绝一直在记），
+已补 —— 否则用户在审计页上看到的是「什么都没发生」，与屏幕上的报错对不上。
 
 **控制台两条读口（2026-10-09 批 84，§10.9 第 3 条）**：`runConsoleCommand`/`consoleOutput` 与上面两条
 `drain*` **同形不同面** —— `drain*` 是**脚本侧**的游标拉取口（过桥，`bridge/js` 消费），这两条是
@@ -256,9 +273,20 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
    第 2 条的审批卡已落（待审队列 → 批准/拒绝 → `resolveApproval`，§10.5-2 人机分离的**唯一**生产落点）。
    两条共用一个读口 `PackageManagerFacade.snapshot()`（`:domain` `NpmPanelSnapshot`），经 `HostSummary`
    现取、**不经桥**（桥面是脚本侧的面，依赖面板是宿主自己的界面）。
+   **审计页已落地（2026-10-09 批 85）**：第 2 条末段那句「批准记录入审计页」原先只有前半截 ——
+   `InstallHistory` 一直在写（approve / registry 变更 / lock 重签 / 每次安装的成败），但那条读口
+   在**生产里零消费方**。本批补上：`PackageManagerFacade.history()` → `HostSummary.npmHistory()` →
+   `:ui` `AuditScreen`/`AuditState`/`AuditOps`，入口在**依赖管理页顶栏**那颗「审计」（不另立管理面板
+   第五项 —— 它记的就是依赖面那些操作，从面板直进会让人以为它与依赖管理是并列的另一件事）。
+   呈现三条：**失败行不藏**（审计要能回答「用户当时看到成功了吗」）、**未知 op 原样显示**（不编
+   「未知操作」—— 那是把「还不认识」说成「记录有问题」）、**筛选只影响显示**（宿主读口无参全量，
+   筛掉失败行时状态栏说明「全部记录里共 N 条失败」）。**未落**：**导出**（§10.5-2 原话是
+   「落 App 且**可导出**」，可导出那条通道 = SAF 选目录 + 写文件，本批没接 —— 故不画按钮）。
    **未落**：安装输入行 / 旗标 / 阶段进度条（要 `install` 会话的完整形态）、依赖**树**（`list(depth)` 宿主侧
    只用 0，画树就是把平铺清单伪装成树）、`hasInstallScript` 前置告警（要 packument 解析面）、
    「全局禁止脚本」开关（出厂默认已是禁止，反向的**白名单放行**通道属 T1 之后）。
+   **另**：第 5 条（包大小管理页）的「一键 prune/dedupe/ci 重装/cache clean」按钮**仍未落** ——
+   配额满时那句提示今天把用户指去**控制台**敲 `npm prune`（可操作，但不是一键）。
 3. **npm 终端视图**（P1）：项目内终端 `npm install axios` / `npm ls`，stdout/stderr 流式输出 + exit code；与依赖面板同一安装会话队列。
    **落地现状（2026-10-09 批 84）**：控制台页从「日志屏」改成**命令面**（用户口径：「控制台不是放系统日志的地方，
    是用来执行命令的，比如 npm」）—— 管理面板 → 控制台，选项目 + 敲一行 + 看输出；原控制台的日志内容
@@ -310,6 +338,10 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 4. **离线包导入**：SAF 选择（tarball / lock+cacache bundle / 快照 node_modules.zip）→ 验签 → 队列安装；另提供「从内置精选缓存离线装 axios/dayjs/…」。`node_modules.zip` 导入**仅限高信任项目**，签名锚定 `HMAC(应用密钥, lock.sig + zip.sha256)`；市场脚本一律拒绝该格式（走 reify 产出 integrity）。
    **体积上限（2026-10-06，backlog B12）**：cacache bundle 解包前先卡**整包** 512 MiB（判据是文件系统上的字节数，不是 zip 声明的数），解包中逐条目卡 64 MiB —— 单条目读到顶即停、不入缓存。上限**整包拒收**（不截断、不返回部分结果）并回 `ERR_INVALID_PARAM`（「选错了文件」是可诊断的参数问题，不是 `ERR_FILE_NOT_FOUND`）。理由：这条路径收的是用户从 SAF 递进来的外部文件，**用户可能只是选错了**（视频、系统镜像、整个 Downloads 打成的一个包），而解包器在读到顶之前没有任何自然的停止点。
 5. **包大小管理页**：per-project `node_modules` + `npm-cache` 尺寸（Kotlin 遍历）+ 配额条（80%黄/100%拦）→ 一键 prune/dedupe/ci 重装/cache clean；明确标注 node_modules 计入系统「App 数据」。
+   **落地现状（2026-10-09 批 81 尺寸条 + 批 85 措辞订正）**：尺寸/配额条与判据已落（`NpmScreen` 的 `QuotaCard`，
+   读 `storage()` + `InstallConfig` 的 512MB/80%，呈现层不写死）；**动作半边未落** ——
+   今天配额满时那句提示把用户指去**控制台**敲 `npm prune`（那条路是真的通的，见第 3 条），
+   而不是假装有一颗「一键清理」的按钮。
 6. **首启引导**：原子部署 assets/npm CLI + 播种精选缓存 → registry ping 探测 → 选镜像（**默认官方 npmjs**，§18 第 7 项；镜像是加速选项不是开箱前提）与配置代理（能力中心网络项）。
 7. **打包向导联动**：node_modules 默认入 APK + `.autojs.build.ignore` 排除规则 + 「完全离线变体」（宿主预装 node_modules.zip）+ 项目 lock 签名生成。
 8. **镜像源管理**（2026-10-09 批 83）：管理面板 → 镜像源管理（`RegistryScreen`），编的是 **npm registry 全局缺省**，**粒度全局一份**（用户 2026-10-09 裁定；不做「全局缺省 + 项目覆盖」的编辑面 —— 项目那层仍可手编 `.npmrc`，界面不代管）。
@@ -317,7 +349,8 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
    - **判据唯一一份住 `:domain`**（`NpmRegistryKeys`，与批 82 `ScriptEnvKeys` 同形）：`canonicalize`（规整化）与 `reject`（拒收原文）同时被 `NpmRegistryVerifier` 的缝边界与 `:ui` 的输入校验调用 —— 界面另判一遍必然漂移，漂移方向最坏（界面放行的串在写入侧被拒）。`NpmRegistryVerifier.OFFICIAL`/`MIRROR` 改为指向它的别名，URL 字面量从此只有一份。
    - **写入侧存原样（只 trim）不规整化**：规整化会丢 query，自建网关用 `?token=…` 的凭据会被静默剥掉 —— 表现为「保存成功」之后永久 401。
    - **校验不过抛原文**、`null`/空白 = 删键（恢复出厂，不是写一个空值行 —— 后者让 npm 拿到空 registry 而每次安装都失败）；变更入 `InstallHistory.Op.REGISTRY`，审计行 `projectId` 传空串（全局变更没有项目；改行格式会动审计契约）。
-   - **未落**：首启引导的 ping 探测与镜像候选表（第 6 条）、审计页（`InstallHistory` 仍无 UI 消费方）、`proxy`/`cache-retention` 两个 `NpmConfigKey`（桥面本来就没有入口）。
+   - **未落**：首启引导的 ping 探测与镜像候选表（第 6 条）、`proxy`/`cache-retention` 两个 `NpmConfigKey`（桥面本来就没有入口）。
+   - ~~审计页（`InstallHistory` 仍无 UI 消费方）~~ **已落地（2026-10-09 批 85）**：见第 2 条末段。
 
 ### 10.10 与既有机制的关系
 

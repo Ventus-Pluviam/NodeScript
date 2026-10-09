@@ -13,6 +13,7 @@ import com.autoscript.domain.npm.SequencedApproval
 import com.autoscript.domain.npm.SequencedInstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.InstallHandle
+import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConfigKey
@@ -521,6 +522,35 @@ class InstallCoordinator(
         return NpmPanelSnapshot(projects = projects, pendingApprovals = pending)
     }
 
+    /**
+     * 安装审计史读数（§10.5-2；`:ui` 审计页，2026-10-09 批 85）。
+     *
+     * **为什么是 `snapshot()` 之外的第二条读口**：两者问的是两件事。`snapshot()` 答
+     * 「此刻装了什么」（当前事实，每次现算）；本口答「过去发生过什么」（历史事实，
+     * 落盘即定）。并进快照会让每次刷依赖面板都重读全部历史，而依赖面板根本不显示它。
+     *
+     * **无参**（与 `snapshot()` 里的待审队列同一取舍）：全量 + 呈现层筛，不按项目问 ——
+     * 按项目筛会让 `Op.REGISTRY` 那条（`projectId` 空串，全局变更）从任何一次筛选里
+     * 掉出去，而它恰恰是审计最该看见的。
+     *
+     * **未注入 history 时回空表**（不抛）：与 [snapshot] 的 `history` 用法一致 ——
+     * `history` 在构造里是可空的（测试替身不注入），审计史的「没有」与「读不到」在这里
+     * 合成一句「一条都没有」。这**不是**撒谎：`history?.record(...)` 在同一条路上写不进去时
+     * 也是静默的（可空注入的既有语义），读侧如实回它写下的那本账。
+     *
+     * 返回**按写入序**（最新在最后）：那是文件里真实的顺序，读口不替呈现层决定怎么排。
+     */
+    override suspend fun history(): List<InstallHistoryEntry> =
+        history?.all().orEmpty().map {
+            InstallHistoryEntry(
+                op = it.op,
+                projectId = it.projectId,
+                success = it.success,
+                detail = it.detail,
+                atMillis = it.atMillis,
+            )
+        }
+
     override suspend fun storage(): Map<String, NodeModulesStats> {
         if (!Files.isDirectory(layout.projectsRoot)) return emptyMap()
         val out = LinkedHashMap<String, NodeModulesStats>()
@@ -926,14 +956,19 @@ class InstallCoordinator(
         val root = layout.projectRoot(projectId)   // projectId 合法性在此校验（防路径逃逸）
         val free = freeSpaceProbe(root)
         if (free < config.minFreeBytes) {
-            throw AutojsException(
-                ErrorCode.ERR_DISK_FULL,
-                "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装",
-            )
+            val why = "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装"
+            // 预检拒绝也入史（2026-10-09 批 85）：审计要能回答「用户当时看到成功了吗」，
+            // 而「被配额/磁盘挡住」正是最该被看见的那类失败 —— 它不留痕的话，用户在审计页
+            // 上看到的是「什么都没发生」，与他屏幕上那句报错对不上。与 `crossCheckRegistry`
+            // 的预检拒绝同一条口径（那条一直在记，这两条是漏的）。
+            history?.record(opName(args), projectId, false, why)
+            throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
         val used = nodeModulesBytes(projectId)
         if (used >= config.projectQuotaBytes) {
-            throw AutojsException(ErrorCode.ERR_DISK_FULL, "项目 node_modules 已达配额 ${config.projectQuotaBytes / 1024 / 1024}MB")
+            val why = "项目 node_modules 已达配额 ${config.projectQuotaBytes / 1024 / 1024}MB"
+            history?.record(opName(args), projectId, false, why)
+            throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
         // 80% 黄（§10.2 「项目+全局配额(80%黄·100%拦）」）：不拦，发 Warning 事件
         val quotaWarned = used >= (config.projectQuotaBytes * config.quotaWarnRatio).toLong()

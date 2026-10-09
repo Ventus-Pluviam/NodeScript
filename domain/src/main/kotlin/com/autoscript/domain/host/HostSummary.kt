@@ -5,6 +5,7 @@ import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
+import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.permission.Capability
@@ -286,6 +287,25 @@ interface HostSummary {
         throw com.autoscript.domain.core.AutojsException(
             com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
             "控制台命令面未接线：本宿主没有接上 npm 命令执行入口",
+        )
+
+    /**
+     * 安装审计史读数（§10.5-2；管理面板 → 依赖管理 → 审计页）。
+     *
+     * 与依赖面板/审批卡/镜像源/控制台同一条分工：**宿主自己的界面读口，不经桥**。
+     *
+     * **无参**（与 [npmSnapshot] 里的待审队列同一取舍）：全量 + 呈现层筛 —— 按项目筛会让
+     * 「全局变更」（registry 改动，`projectId` 是空串）从任何一次筛选里掉出去。
+     *
+     * 读失败**抛**（与 [npmSnapshot]/[console] 同）：空表是「读成功且真的一条都没有」的样子，
+     * 会把「宿主读不到审计」画成「你没做过任何操作」—— 而审计页上那句话是安全相关的。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
+     */
+    suspend fun npmHistory(): List<InstallHistoryEntry> =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "审计史读口未接线：本宿主没有接上 npm 审计入口",
         )
 
     /**
