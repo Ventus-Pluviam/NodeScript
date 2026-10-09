@@ -3,6 +3,7 @@ package com.autoscript.ui.state
 import com.autoscript.domain.npm.NpmConsoleLine
 import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.NpmConsoleSnapshot
+import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.SequencedConsoleLine
 import java.time.Instant
 import java.time.ZoneId
@@ -54,6 +55,21 @@ data class ConsoleCmdState(
     val pageFull: Boolean = false,
     /** 输入框里正在敲的那行（**不规整化**：回显要与他敲的一致）。 */
     val draft: String = "",
+    /**
+     * 控制台**此刻**的特权模式（2026-10-09）。
+     *
+     * 它只改一件事：**裸首词是什么意思** —— [ShellConsoleMode.DEFAULT] 下裸首词 = npm bin
+     * （装好的依赖提供的命令），[ShellConsoleMode.ROOT]/[ShellConsoleMode.ADB] 下裸首词 =
+     * shell 命令。五个入口词（`npm`/`npx`/`su`/`shizuku`/`exit`）在任何模式下都优先，
+     * 否则进了 root 模式就再也退不出来。
+     *
+     * **为什么是呈现层状态而不是宿主状态**：`su`/`shizuku` 改的是「用户接下来敲的这行
+     * 怎么解析」，解析在界面侧先跑一遍（判据同一份，见 [NpmConsoleKeys.parse]）；
+     * 宿主每次只收到一条**已定形**的命令（`Shell(command, mode)`），它不需要知道
+     * 用户是不是还在特权模式里。这也让「换个项目」不必重置模式 —— 模式是人的姿势，
+     * 不是项目的属性。
+     */
+    val mode: ShellConsoleMode = ShellConsoleMode.DEFAULT,
     /** 上一次读失败的原文（[load] 已是 [LoadState.Failed]；供「保留旧行」时仍能显示原因）。 */
     val loadError: String? = null,
     /** 上一次**执行**操作的失败原文（≠ 读失败：两条账分开，与 [RegistryState] 同纪律）。 */

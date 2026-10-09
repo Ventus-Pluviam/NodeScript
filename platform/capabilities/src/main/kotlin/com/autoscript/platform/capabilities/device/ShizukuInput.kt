@@ -4,6 +4,7 @@ import com.autoscript.domain.automation.InputChannel
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import java.io.InputStream
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
@@ -105,7 +106,7 @@ object ShizukuInput {
                 try {
                     stream.bufferedReader().useLines { lines ->
                         lines.forEach { line ->
-                            if (tail.length < STDERR_TAIL_CHARS) tail.append(line).append('\n')
+                            if (tail.length < STDERR_TAIL_CHARS) tail.append(line)
                         }
                     }
                 } catch (_: Exception) {
@@ -122,6 +123,96 @@ object ShizukuInput {
         reader?.join(JOIN_MILLIS)
         val code = process.javaClass.getMethod("exitValue").invoke(process) as Int
         return code to tail.toString().ifBlank { null }
+    }
+
+    /**
+     * 与 [drain] 同形，但**两条流都排空并各自保留**（[exec] 用）。
+     *
+     * 两条流必须**并发**读（与 `AndroidShellExecutor` 第 3 条同一条账）：管道缓冲区写满即
+     * 阻塞子进程，先读干 stdout 再读 stderr 会在输出超过一屏时死锁。故两个守护线程。
+     * 上限同 [STDERR_TAIL_CHARS] —— 控制台要的是「命令说了什么」，不是全量转储
+     * （真流式/分页是另一条面，本批不做）。
+     */
+    private fun drainBoth(process: Any, timeoutMillis: Long): ShizukuExecResult {
+        val out = pump(process, "getInputStream", "shizuku-stdout")
+        val err = pump(process, "getErrorStream", "shizuku-stderr")
+        val waitForTimeout = process.javaClass.getMethod("waitForTimeout", Long::class.java, TimeUnit::class.java)
+        val finished = waitForTimeout.invoke(process, timeoutMillis, TimeUnit.MILLISECONDS) as Boolean
+        if (!finished) {
+            runCatching { process.javaClass.getMethod("destroy").invoke(process) }
+            throw denied("Shizuku 命令超时 ${timeoutMillis}ms（已尝试终止）", null)
+        }
+        out.join(); err.join()
+        val code = process.javaClass.getMethod("exitValue").invoke(process) as Int
+        return ShizukuExecResult(code, out.text(), err.text())
+    }
+
+    /** 起一条守护线程把 [getter] 那条流读到 EOF（截断到 [STDERR_TAIL_CHARS]）。 */
+    private fun pump(process: Any, getter: String, name: String): StreamTail {
+        val tail = StreamTail()
+        val stream = process.javaClass.getMethod(getter).invoke(process) as? InputStream
+        if (stream == null) {
+            tail.done()
+            return tail
+        }
+        Thread({
+            try {
+                stream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (tail.length < STDERR_TAIL_CHARS) tail.append(line)
+                    }
+                }
+            } catch (_: Exception) {
+                // 排水线程的收尾异常不影响判定：退出码才是判据（同 §8.5 的排水纪律）
+            } finally {
+                tail.done()
+            }
+        }, name).apply { isDaemon = true; start() }
+        return tail
+    }
+
+    /** 一条流的尾部缓冲（读到 EOF 或线程被丢弃时，读侧拿到的都是"此刻已读到的字节"）。 */
+    private class StreamTail {
+        private val sb = StringBuilder()
+        private val latch = CountDownLatch(1)
+        val length: Int get() = sb.length
+        fun append(line: String): StreamTail { sb.append(line).append('\n'); return this }
+        fun done() = latch.countDown()
+        fun join() { latch.await(JOIN_MILLIS, TimeUnit.MILLISECONDS) }
+        fun text(): String? = sb.toString().ifBlank { null }
+    }
+
+    /**
+     * 跑一条命令并**同时**取回两条流（2026-10-09 新增：控制台的 shell 面要用 stdout）。
+     *
+     * 与 [run] 的差别只有一个，但那个差别决定它能不能服务控制台：[run] 只为**输入注入**
+     * 服务（`input tap` 没有 stdout），故只留 stderr 尾部 4 KiB 用于报错；控制台敲
+     * `ls -la` 要的**正是 stdout**，用 [run] 会拿到一条永远为空的输出。
+     *
+     * 失败语义与 [run] 一致：一律抛 [AutojsException] `ERR_PERMISSION_DENIED` 并把
+     * 「是哪一步不行」写在 detail 里（不返回假退出码 —— 那会让「Shizuku 挂了」
+     * 看起来像「这条命令失败了」）。
+     */
+    fun exec(command: String, timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS): ShizukuExecResult {
+        val shizuku = shizukuClass()
+        val binder = step("Shizuku 服务未运行（binder 为 null）—— 请先启动 Shizuku 并授权本应用") {
+            shizuku.getMethod("getBinder").invoke(null)
+        }
+        val service = step("Shizuku 服务接口不可用（IShizukuService 形状不符）") {
+            val stub = Class.forName("moe.shizuku.server.IShizukuService\$Stub")
+            stub.getMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
+        }
+        val process = step("Shizuku newProcess 调用失败（服务版本不兼容？）") {
+            val api = Class.forName(IShizuku_SERVICE)
+            api.getMethod("newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java)
+                .invoke(service, arrayOf("sh", "-c", command), arrayOf<String>(), null)
+        }
+        return try {
+            drainBoth(process, timeoutMillis)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw denied("Shizuku 命令被中断", e)
+        }
     }
 
     /**
@@ -147,10 +238,27 @@ object ShizukuInput {
         }
     }
 
+    /**
+     * 取 Shizuku 主类。
+     *
+     * 接两种失败，**都是同一句给用户的话**（去装 / 去更新 Shizuku）：
+     * - `ClassNotFoundException`：类不在（没装，或 R8 把名字改了 —— 见 `proguard-rules.pro`）；
+     * - `LinkageError`（`NoClassDefFoundError` / `ExceptionInInitializerError`）：类在但
+     *   **初始化失败**（静态初始化依赖的 `android.*` 在 JVM 单测里是 mock、真机上也可能
+     *   因版本不符炸）。2026-10-09 实测：JVM 单测跑 ADB 档时抛的正是
+     *   `NoClassDefFoundError: Could not initialize class rikka.shizuku.Shizuku`，
+     *   而它**不是** Exception —— 原来只接 `ClassNotFoundException` 会让这条路径
+     *   越过 `AutojsException` 直穿到调用方，用户拿到的是一个栈而不是一句「去装 Shizuku」。
+     *
+     * 刻意**不写 `catch (Throwable)`**：那会把 `OutOfMemoryError` 这类也折成
+     * 「Shizuku 没装」，那是把真故障说成用户可修的问题。
+     */
     private fun shizukuClass(): Class<*> = try {
         Class.forName(SHIZUKU_CLASS)
     } catch (_: ClassNotFoundException) {
         throw denied("Shizuku 未安装（找不到 $SHIZUKU_CLASS）—— adb 输入通道需要 Shizuku", null)
+    } catch (e: LinkageError) {
+        throw denied("Shizuku 类无法初始化（$SHIZUKU_CLASS：${e.message}）—— 请更新或重装 Shizuku", e)
     }
 
     private fun denied(detail: String, cause: Throwable?) = AutojsException(
@@ -165,3 +273,19 @@ object ShizukuInput {
     /** 本通道的枚举值（装配层用它登记 `channels` 表）。 */
     val channel: InputChannel get() = InputChannel.ADB
 }
+
+/**
+ * [ShizukuInput.exec] 的结果：退出码 + 两条流（null = 该流没产出，**不拿空串冒充**）。
+ *
+ * 刻意不复用 `:platform:system` 的 `ShellResult`：本模块看不到那个类型
+ * （`platform/capabilities/build.gradle.kts` 只依赖 `:domain`），而且两者的口径确实不同
+ * —— 那个带 `truncated` 的内部判定，这里只有尾部截断。转接发生在 `:app` 的装配侧
+ * （`PlatformWiring`），那是唯一同时看得见两个模块的地方。
+ *
+ * **已知缺口（如实记，不假装没有）**：本 DTO **没有** `truncated` 字段，于是经
+ * `PlatformWiring` 转成 `ShellConsoleResult` 时它取缺省 `false` —— adb 档的输出被
+ * 截到 4 KiB 时，控制台**不会**打那句「输出超过上限，已截断」。root 档（走
+ * `AndroidShellExecutor`）有真判据，那一档会打。补法是给本 DTO 加一个 `truncated`
+ * 并让 [pump] 在越限时置位；本批没做（要先定「截断」在两条流上怎么算一个数）。
+ */
+data class ShizukuExecResult(val code: Int, val stdout: String?, val stderr: String?)

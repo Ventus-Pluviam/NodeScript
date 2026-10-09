@@ -11,10 +11,19 @@ package com.autoscript.domain.npm
  *
  * **本对象不依赖任何实现类**：白名单与拒收话术是**契约**，实现只能引用它。
  *
- * **只认 `npm` 与 `npx` 两个入口**（用户口径 2026-10-09：「不用加 sh 啊」）：
- * 本仓没有 shell，任意命令走 `auto.shell` 桥面（root/adb 三态门禁），那是脚本侧的面，
- * 与这里的命令面不是一回事。假装支持 `sh -c` 只会让「看起来能跑、实际没人守」
- * 的输入进来。
+ * **入口**（2026-10-09 二次裁定，用户口径：控制台要能执行 shell）：`npm` / `npx` 走
+ * npm 命令面；`su` / `shizuku` 走 **shell 命令面**并进入对应的特权模式；`exit` 退出特权
+ * 模式。默认（未进特权模式）的裸首词仍按 **npm bin** 解析 —— 那是「装好的依赖提供的
+ * 命令」那条路（`tsc` / `eslint` / `prettier`），与 shell 面不共用判据。
+ *
+ * **特权模式改的是「裸首词是什么意思」**：进了 `su`/`shizuku` 之后，裸首词一律当
+ * **shell 命令**（`ls -la` 就是 `ls -la`），而不是 npm bin —— 因为在特权模式里敲
+ * `ls` 的人要的是 shell 的 `ls`，不是某个恰好叫 `ls` 的包。要跑 bin 请用 `npx <bin>`。
+ *
+ * **为什么必须有模式而不是「一律自动挑一个」**：root 与 Shizuku 是两条**不同身份**的
+ * 通道（root uid vs shell uid），能做的事不同、留下的痕迹不同、失败话术也不同。
+ * 静默替用户挑一条 = 让「我以为我在用 root」和「实际用的是 shell」不可分辨 ——
+ * 与 §9.3「三通道必须显式指定」是同一条纪律。
  */
 object NpmConsoleKeys {
 
@@ -94,22 +103,30 @@ object NpmConsoleKeys {
         if (com.autoscript.domain.scripts.ScriptPaths.isValidProjectId(projectId)) null
         else "项目号不合法（只允许字母、数字、下划线、连字符）：$projectId"
 
+    /** 进入特权模式的入口词（用户口径 2026-10-09：`su` = root，`shizuku` = adb）。 */
+    const val ENTER_ROOT = "su"
+    const val ENTER_ADB = "shizuku"
+
+    /** 退出特权模式回到默认。 */
+    const val EXIT_MODE = "exit"
+
     /**
      * 解析一行命令。
      *
-     * **分词规则：按空白切分，不做 shell 引号解析。** 本仓没有 shell，假装支持引号
-     * 只会让 `npm install "a b"` 这类输入产生「看起来对、实际是另一个包名」的结果 ——
-     * 静默错比报错难查得多。规则写死在这里，界面与宿主读的是同一个结论。
+     * **分词规则：按空白切分，不做 shell 引号解析。** 认得的形态见类 KDoc；其余一律
+     * [NpmConsoleCommand.Rejected]，理由**点名用户输入的那个串**。
      *
-     * 认得的四种形态：
-     * - `npm <sub> [args…]`，`sub` 在 [SUBCOMMANDS] 内；
-     * - `npm run <script> [-- args…]`（`run-script` 同义）；
-     * - `npx <bin> [args…]`；
-     * - `npm exec <bin> [-- args…]`。
+     * [mode] 是控制台**此刻**的特权模式（默认 [ShellConsoleMode.DEFAULT]）。它只改一件事：
+     * **裸首词是什么意思** —— 默认模式下裸首词 = npm bin（[NpmConsoleCommand.Exec]），
+     * 特权模式下裸首词 = shell 命令（[NpmConsoleCommand.Shell]）。`npm`/`npx`/`su`/
+     * `shizuku`/`exit` 五个入口词**在任何模式下都优先**（否则进了 root 模式就再也退不出来
+     * —— 那五个词会被当成 shell 命令发给 `/system/bin/sh`）。
      *
-     * 其余一律 [NpmConsoleCommand.Rejected]，理由**点名用户输入的那个串**。
+     * **shell 命令的正文原样透传**（`t.drop(1).joinToString(" ")` 而不是重新分词）：
+     * shell 要的是它自己的分词与引号规则，宿主在这里切一遍再拼回去只会把
+     * `echo "a  b"` 的双空格吃掉 —— 那是**改用户的命令**，比报错难查得多。
      */
-    fun parse(line: String): NpmConsoleCommand {
+    fun parse(line: String, mode: ShellConsoleMode = ShellConsoleMode.DEFAULT): NpmConsoleCommand {
         val raw = line.trim()
         if (raw.isEmpty()) return NpmConsoleCommand.Rejected("命令为空：请写一行，例如 npm install axios")
         val t = raw.split(WHITESPACE)
@@ -120,11 +137,29 @@ object NpmConsoleKeys {
                     ?: return NpmConsoleCommand.Rejected("npx 后面要跟一个命令名：$raw（例如 npx esbuild --version）")
                 NpmConsoleCommand.Exec(bin = bin, args = stripSeparator(t.drop(2)))
             }
-            else -> NpmConsoleCommand.Rejected(
-                "只认 npm 与 npx 两个入口（本平台没有 shell，任意命令走脚本的 auto.shell）：$raw",
-            )
+            ENTER_ROOT -> modeEntry(raw, t, ShellConsoleMode.ROOT)
+            ENTER_ADB -> modeEntry(raw, t, ShellConsoleMode.ADB)
+            EXIT_MODE -> if (t.size == 1) NpmConsoleCommand.ExitMode
+            else NpmConsoleCommand.Rejected("exit 不带参数（它只用来退出 su/shizuku 特权模式）：$raw")
+            else -> if (mode == ShellConsoleMode.DEFAULT) {
+                // 裸首词 = npm bin（装好的依赖提供的命令）。存在性由宿主查盘后答
+                //（判据这里看不到文件系统），查不到时宿主给的是带 su/shizuku 指路的话术。
+                NpmConsoleCommand.Exec(bin = t[0], args = t.drop(1))
+            } else {
+                NpmConsoleCommand.Shell(command = raw, mode = mode)
+            }
         }
     }
+
+    /**
+     * `su` / `shizuku` 单独一行 = **进模式**；带参数 = **就地跑一条 shell 命令**。
+     *
+     * 两种形态都要，因为两种用法都自然：`su id` 是「用 root 跑这一条」，
+     * 而 `su` 回车再连敲几条是「接下来都在 root 里」。前者不需要用户先切模式再切回来。
+     */
+    private fun modeEntry(raw: String, t: List<String>, mode: ShellConsoleMode): NpmConsoleCommand =
+        if (t.size == 1) NpmConsoleCommand.EnterMode(mode)
+        else NpmConsoleCommand.Shell(command = raw.substringAfter(' ').trim(), mode = mode)
 
     private fun parseNpm(raw: String, t: List<String>): NpmConsoleCommand {
         val sub = t.getOrNull(1)
@@ -180,9 +215,34 @@ sealed interface NpmConsoleCommand {
     /** `npm run <script> [args…]` / `npm run-script <script>`。 */
     data class Run(val script: String, val args: List<String>) : NpmConsoleCommand
 
-    /** `npx <bin> [args…]` / `npm exec <bin> [args…]`。 */
+    /** `npx <bin> [args…]` / `npm exec <bin> [args…]` / 默认模式下的裸首词。 */
     data class Exec(val bin: String, val args: List<String>) : NpmConsoleCommand
+
+    /**
+     * 一条 shell 命令（`su <cmd>` / `shizuku <cmd>` / 特权模式下的裸行）。
+     *
+     * [command] 是**原样正文**（不含入口词），交给实现侧起 `sh -c`。
+     */
+    data class Shell(val command: String, val mode: ShellConsoleMode) : NpmConsoleCommand
+
+    /** 进入特权模式（`su` / `shizuku` 单独一行）—— **界面侧的会话状态**，不派发到宿主。 */
+    data class EnterMode(val mode: ShellConsoleMode) : NpmConsoleCommand
+
+    /** 退出特权模式（`exit`）—— 同上，界面侧状态。 */
+    data object ExitMode : NpmConsoleCommand
 
     /** 拒收：`reason` 是给用户看的那句话（点名输入 + 说清为什么不收）。 */
     data class Rejected(val reason: String) : NpmConsoleCommand
 }
+
+/**
+ * 控制台的特权模式（2026-10-09）。
+ *
+ * - [DEFAULT]：**未进特权模式**。shell 命令在这里一律拒（如实说「需要 root 或 Shizuku」），
+ *   裸首词按 npm bin 解析。
+ * - [ROOT]：`su -c`，root uid。
+ * - [ADB]：Shizuku（`newProcess`），**shell uid**（不是「设备侧已在 adb shell 内」那层
+ *   —— 那是 `:platform:system` 的 `ShellMode.ADB` 语义，本枚举刻意不复用那个类型：
+ *   `:domain` 看不到 `:platform:*`，而且两者的语义确实不同，同名会让人以为是一条路）。
+ */
+enum class ShellConsoleMode { DEFAULT, ROOT, ADB }

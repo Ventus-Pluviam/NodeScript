@@ -453,6 +453,28 @@ interface PackageManagerFacade {
         )
 
     /**
+     * 控制台 **shell 面**：跑一条 shell 命令（2026-10-09 用户口径：控制台要能执行 shell）。
+     *
+     * 与 [runConsoleCommand] 并列的第二条执行面，**不走 npm 那条链**：不建事务、不占安装
+     * 会话、不碰项目锁 —— shell 命令与依赖树无关。结果同步返回（与轻操作同形），
+     * 同时投影进那个项目的控制台环（[consoleOutput] 读得到）。
+     *
+     * [ShellConsoleMode.DEFAULT] 一律拒（如实说需要 root 或 Shizuku）。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身**不假装跑过**。
+     */
+    suspend fun runShellCommand(
+        projectId: String,
+        command: String,
+        mode: com.autoscript.domain.npm.ShellConsoleMode,
+        timeoutMillis: Long = 30_000L,
+    ): com.autoscript.domain.host.ShellConsoleResult =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "控制台 shell 面未接线：本实现没有接上 shell 执行入口",
+        )
+
+    /**
      * 控制台输出读数（seq 游标拉取，§10.9 第 3 条）。
      *
      * 缺省实现回**空增量 + 没在跑**：老替身（只关心别的面的假门面）零改动即可编译，

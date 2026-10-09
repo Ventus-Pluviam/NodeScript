@@ -5,7 +5,11 @@ import android.os.Process
 import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
+import com.autoscript.appservice.npm.ShellOpExecutor
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.shell.asShellOpExecutor
+import com.autoscript.domain.npm.ShellConsoleMode
+import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmConsoleHandle
@@ -368,6 +372,11 @@ class AppShellApplication : Application(), HostSummary {
                 // 同一本账，引用计数共存，框架 stop 只放框架自己的那一份。
                 powerManagerHandler = PlatformWiring.powerManagerHandler(foregroundKeeper()),
                 systemHandlers = wiring.systemHandlers,
+                // 控制台 shell 面（2026-10-09）：真实现住 PlatformWiring（它同时看得见
+                // :platform:system 与 :platform:capabilities），这里只递那条缝。
+                // 缺省（JVM 装配/单测不传）→ Unavailable，如实 ERR_NOT_IMPLEMENTED；
+                // 生产由 PlatformWiring.inject 恒填（见那条的 KDoc）。
+                shellExecutor = wiring.shellExecutor?.asShellOpExecutor() ?: ShellOpExecutor.Unavailable,
             )
             // accept 开 serve：壳 router 就绪才收（bind 与 start 之间的入连接在内核 backlog
             // 排队，start 后取用）；必须在 install 前 —— install 后闹钟路线即通，执行体可能
@@ -774,6 +783,25 @@ class AppShellApplication : Application(), HostSummary {
         val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：镜像源无处落账" }
         val facade = checkNotNull(built.npmFacade) { "npm 未接线：镜像源无处落账" }
         facade.setGlobalRegistry(raw)
+    }
+
+    /**
+     * 在控制台执行一条 **shell 命令**（2026-10-09 用户口径，[HostSummary] 的生产实现）。
+     *
+     * 与 [runNpmCommand] 同一条分工：交给**装配产物里那个 facade**（第二个协调器会各自持
+     * 一条控制台环，用户就会看到一本与 npm 命令互不相干的账）；未接线**抛**，不假装跑过。
+     */
+    override suspend fun runShellCommand(
+        projectId: String,
+        command: String,
+        mode: ShellConsoleMode,
+        timeoutMillis: Long,
+    ): ShellConsoleResult {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：控制台无法执行 shell 命令" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：控制台 shell 面不可用（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.runShellCommand(projectId, command, mode, timeoutMillis)
     }
 
     /**

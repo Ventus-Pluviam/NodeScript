@@ -3,6 +3,7 @@ package com.autoscript.ui.state
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.npm.NpmConsoleCommand
 import com.autoscript.domain.npm.NpmConsoleKeys
+import com.autoscript.domain.npm.ShellConsoleMode
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -112,13 +113,30 @@ internal suspend fun runConsoleCmd(host: HostSummary?, state: ConsoleCmdState): 
             opNotice = null,
         )
     NpmConsoleKeys.rejectProjectId(projectId)?.let { return state.copy(opError = it, opNotice = null) }
-    val parsed = NpmConsoleKeys.parse(state.draft)
+    // 判据读**此刻的模式**（见 ConsoleCmdState.mode）：它决定裸首词是 npm bin 还是 shell 命令。
+    val parsed = NpmConsoleKeys.parse(state.draft, state.mode)
     if (parsed is NpmConsoleCommand.Rejected) return state.copy(opError = parsed.reason, opNotice = null)
+    // 进/退特权模式是**界面侧的会话状态**，不派发到宿主（宿主每次只收一条已定形的命令）。
+    when (parsed) {
+        is NpmConsoleCommand.EnterMode -> return state.copy(
+            draft = "",
+            mode = parsed.mode,
+            opError = null,
+            opNotice = "已进入 ${modeLabel(parsed.mode)}：接下来的裸命令按 shell 解析（exit 退出）",
+        )
+        NpmConsoleCommand.ExitMode -> return state.copy(
+            draft = "",
+            mode = ShellConsoleMode.DEFAULT,
+            opError = null,
+            opNotice = "已退出特权模式：裸命令按 npm 依赖提供的命令解析",
+        )
+        else -> Unit
+    }
     if (host == null) {
         return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
     }
     return try {
-        host.runNpmCommand(projectId, state.draft)
+        dispatch(host, projectId, parsed, state.draft)
         loadConsoleCmd(host, state.copy(draft = "", opError = null, opNotice = null))
             .copy(opNotice = noticeFor(parsed))
     } catch (e: CancellationException) {
@@ -128,6 +146,37 @@ internal suspend fun runConsoleCmd(host: HostSummary?, state: ConsoleCmdState): 
         loadConsoleCmd(host, state.copy(opError = null, opNotice = null))
             .copy(opError = t.message ?: t.javaClass.simpleName, opNotice = null)
     }
+}
+
+/**
+ * 按解析结果派发到对应的宿主口。
+ *
+ * **两条面分开走**：npm 命令面（`runNpmCommand`，含审批门禁/安装会话）与
+ * shell 命令面（`runShellCommand`，同步现取、与依赖树无关）。判据同一份
+ * （[NpmConsoleKeys.parse]），但落到宿主的是两个口 —— 把 shell 塞进 npm 那条链
+ * 会让「敲一条 `ls`」占住全局安装会话。
+ *
+ * npm 那条面交出去的是 [draft]**原文**（不是从解析结果拼回去的）：宿主会再解析一遍，
+ * 而控制台的 ECHO 行显示的是宿主收到的那串 —— 拼回去会把用户敲的 `tsc --version`
+ * 显示成 `npx tsc --version`。回显与输入不一致，是「我说的和我看到的不是一件事」。
+ * shell 那条面交 [NpmConsoleCommand.Shell.command]（入口词已剥），宿主那边起 `sh -c`。
+ */
+private suspend fun dispatch(
+    host: HostSummary,
+    projectId: String,
+    cmd: NpmConsoleCommand,
+    draft: String,
+) {
+    when (cmd) {
+        is NpmConsoleCommand.Shell -> host.runShellCommand(projectId, cmd.command, cmd.mode)
+        else -> host.runNpmCommand(projectId, draft)
+    }
+}
+
+internal fun modeLabel(mode: ShellConsoleMode): String = when (mode) {
+    ShellConsoleMode.ROOT -> "root 模式（su -c）"
+    ShellConsoleMode.ADB -> "Shizuku 模式（shell uid）"
+    ShellConsoleMode.DEFAULT -> "默认模式"
 }
 
 /**
@@ -145,5 +194,9 @@ private fun noticeFor(cmd: NpmConsoleCommand): String = when (cmd) {
         "已提交 npm run ${cmd.script}：未获批会入队，请到依赖管理的审批卡确认后**重敲这一行**"
     is NpmConsoleCommand.Exec ->
         "已提交 npx ${cmd.bin}：未获批会入队，请到依赖管理的审批卡确认后**重敲这一行**"
+    is NpmConsoleCommand.Shell ->
+        "已执行（${modeLabel(cmd.mode)}）：结果见上方"
+    is NpmConsoleCommand.EnterMode -> "已进入 ${modeLabel(cmd.mode)}"   // 到不了这里（上面已 return）
+    NpmConsoleCommand.ExitMode -> "已退出特权模式"                       // 同上
     is NpmConsoleCommand.Rejected -> cmd.reason   // 到不了这里（上面已拦），穷尽 when 而已
 }

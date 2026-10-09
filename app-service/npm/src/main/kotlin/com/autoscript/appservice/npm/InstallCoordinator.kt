@@ -1,5 +1,7 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.host.ShellConsoleResult
+import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalRequest
@@ -70,6 +72,21 @@ class InstallCoordinator(
      * 缺省 [ScriptOpExecutor.Unavailable] = 装配缺口 → 有审批票也如实 ERR_NOT_IMPLEMENTED。
      */
     private val scriptExecutor: ScriptOpExecutor = ScriptOpExecutor.Unavailable,
+    /**
+     * 控制台 **shell 面**的执行缝（2026-10-09）。缺省 [ShellOpExecutor.Unavailable] =
+     * 未接线 → 如实 ERR_NOT_IMPLEMENTED。真实现由 `:app` 的 `PlatformWiring` 注入
+     * （见 [ShellOpExecutor] 的 KDoc：本模块看不到 `:platform:*`）。
+     */
+    private val shellExecutor: ShellOpExecutor = ShellOpExecutor.Unavailable,
+    /**
+     * 控制台 shell 命令的 TTL（毫秒，2026-10-09）。
+     *
+     * **为什么做成构造参数而不是常量**：`install`/`ci` 那条重操作链要 120 秒级
+     * （[HeavyOp.timeoutMillis]），而 shell 命令 30 秒就该掐 —— 但**掐多少是宿主策略，
+     * 不是本模块的知识**。装配层（`:app`）按自己的口径给，测试注入毫秒级值来验超时路径。
+     * 常量会把「想改超时」变成「改 `:app-service:npm` 再发版」。
+     */
+    private val consoleShellTimeoutMillis: Long = DEFAULT_CONSOLE_SHELL_TIMEOUT_MILLIS,
     /**
      * 首选注册表解析（缺省读项目 `.npmrc`）。null ≠ 「永远不知道」：
      * 与 [NpmServices.registryOf] 同一约定——未传时用协调器自己的 npmrc 读取，
@@ -182,6 +199,13 @@ class InstallCoordinator(
      * 而「一个项目刚跑完的命令」正是它要显示的东西。
      */
     private val consoleRing = SeqRing<NpmConsoleLine>(capacity = RING_CAPACITY)
+    /**
+     * 控制台 shell 面的执行与渲染（2026-10-09 拆出，见 [ConsoleShellRunner]）。
+     *
+     * 与依赖树无关的那条链（不建事务、不占安装会话、不碰项目锁）**整体**住在那一个类里：
+     * 留在这里会让「敲一条 `ls`」看起来像是走了 npm 的编排。
+     */
+    private val shellRunner = ConsoleShellRunner(shellExecutor, consoleRing, now)
     private val handles = ConcurrentHashMap<String, TrackedOp>()
     private val handleSeq = AtomicLong(0)
 
@@ -709,6 +733,19 @@ class InstallCoordinator(
                 consoleLine(projectId, echoLine(line, at))
                 exec(projectId, cmd.bin, cmd.args)
             }
+            is NpmConsoleCommand.Shell -> {
+                consoleLine(projectId, echoLine(line, at))
+                shellRunner.run(projectId, cmd.command, cmd.mode, consoleShellTimeoutMillis)
+            }
+            // 进/退特权模式是**界面侧的会话状态**（`:ui` 的 ConsoleCmdState.mode），
+            // 宿主侧没有可做的事 —— 但**不是静默忽略**：走到这里说明界面把一条它该
+            // 自己消化的命令发下来了，如实报出来（不假装执行过）。
+            is NpmConsoleCommand.EnterMode -> throw IllegalArgumentException(
+                "进特权模式（${cmd.mode}）由控制台界面处理，不经宿主执行入口：$line",
+            )
+            NpmConsoleCommand.ExitMode -> throw IllegalArgumentException(
+                "exit 由控制台界面处理，不经宿主执行入口：$line",
+            )
         }
         return NpmConsoleHandle(handleId = handleId, projectId = projectId, line = line, enqueuedAtMillis = at)
     }
@@ -777,6 +814,28 @@ class InstallCoordinator(
             projectId,
             NpmConsoleLine(NpmConsoleLineKind.RESULT, "npm ${cmd.sub} 完成（轻操作：Kotlin 直读，零 Node 进程）", now()),
         )
+    }
+
+    /**
+     * 控制台的 **shell 面**（2026-10-09 用户口径：控制台要能执行 shell）。
+     *
+     * 与 [runLightConsoleCommand] 同形：**同步现取**、跑完才返回，结果渲染成
+     * OUTPUT（stdout/stderr）+ RESULT（退出码）两行。**不建事务、不占安装会话、不碰项目锁**
+     * —— shell 命令与依赖树无关，把它塞进 npm 的编排链只会让「敲一条 `ls`」占住全局安装会话。
+     *
+     * 执行与渲染整体委托 [ConsoleShellRunner]（三条纪律写在那里：DEFAULT 一律拒、
+     * 非零退出是结果不是异常、执行体抛错才走异常）。本方法只做一件事：**把项目号判据
+     * 与落盘侧对齐**（与 [runConsoleCommand] 同一条），再交给它。
+     */
+    override suspend fun runShellCommand(
+        projectId: String,
+        command: String,
+        mode: ShellConsoleMode,
+        timeoutMillis: Long,
+    ): ShellConsoleResult {
+        // 项目号判据与落盘侧同源（与 [runConsoleCommand] 同一条）。
+        NpmConsoleKeys.rejectProjectId(projectId)?.let { throw IllegalArgumentException(it) }
+        return shellRunner.run(projectId, command, mode, timeoutMillis)
     }
 
     // ══════════ 审批（人机分离 §10.5） ══════════
@@ -849,7 +908,12 @@ class InstallCoordinator(
         // 纯 JS 白名单在解析层就拒（ERR_NOT_SUPPORTED），不在这里另写一份判据。
         val b = NpmScriptResolver.binTarget(root, bin) ?: throw AutojsException(
             ErrorCode.ERR_NOT_FOUND,
-            "node_modules 里没有声明 bin「$bin」的包（项目 $projectId）",
+            // 指路那半句是**契约要求**的（见 `NpmConsoleKeys.parse` 的 KDoc：默认模式下
+            // 裸首词按 bin 解析，查不到时宿主给的话术要带 su/shizuku）。少了它，用户在
+            // 默认模式敲 `ls -la` 拿到的是一句「没有声明 bin「ls」的包」—— 那句话是
+            // **对的但没用**：他想要的从来不是某个叫 ls 的包。
+            "node_modules 里没有声明 bin「$bin」的包（项目 $projectId）。" +
+                "如果这是想跑的 shell 命令，请先敲 su（root）或 shizuku（adb）进入特权模式",
         )
         // 同上：`npm exec <args> -- <bin>`，分隔符必须在 bin 名之前，否则 bin 会被当 args 的一员。
         val npmArgs = if (args.isEmpty()) listOf("exec", "--", bin) else listOf("exec") + args + listOf("--", bin)
@@ -1301,6 +1365,16 @@ class InstallCoordinator(
          * ERR_TIMEOUT 并由执行体走 TERM→SIGKILL 回收。
          */
         const val SCRIPT_TIMEOUT_MILLIS = 60_000L
+
+        /**
+         * 控制台 shell 命令 TTL 的**缺省值**（真值走构造参数 [consoleShellTimeoutMillis]）。
+         *
+         * 铁律 3「每次操作必有 TTL」：shell 命令在设备上可能挂死（等输入、等锁），
+         * 而控制台的输入行会一直灰着 —— 到点即 ERR_TIMEOUT，不留无限等待。
+         * 30 秒的理由：交互式命令（`ls`/`id`/`getprop`）在一秒内回，而 30 秒还没回的
+         * 多半是挂死了（等输入、等锁），继续等下去只是让输入行一直灰着。
+         */
+        const val DEFAULT_CONSOLE_SHELL_TIMEOUT_MILLIS = 30_000L
 
         /**
          * node_modules 尺寸缓存 TTL（见 [sizeCache]）。

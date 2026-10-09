@@ -36,6 +36,9 @@ import java.nio.file.Path
  * 可空即未接线（与 [NpmServices] 同一诚实口径）：
  * - [executor] 缺省 [HeavyOpExecutor.Unavailable] —— 编排照走，
  *   重操作如实 `ERR_NOT_IMPLEMENTED`（真引擎/真 npm CLI 到了再换）；
+ * - [shellExecutor] 缺省 [ShellOpExecutor.Unavailable] —— 控制台 shell 面
+ *   如实 `ERR_NOT_IMPLEMENTED`（真实现由 `:app` 的 `PlatformWiring` 注入，
+ *   本模块看不到 `:platform:*`）；
  * - [scriptExecutor] 缺省 [ScriptOpExecutor.Unavailable] —— T1 lifecycle
  *   门禁照走（解析/哈希/审批自请入队都在协调器内，纯 Kotlin 不依赖执行体），但**已获批也跑不起来**
  *   如实 `ERR_NOT_IMPLEMENTED`（spawn 桥本体未接，§10.3 T1 下半段）；
@@ -58,6 +61,13 @@ object NpmShellKit {
         executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
         /** T1 lifecycle 执行体（spawn 桥接上后注入；缺省即"门禁过但跑不起来"）。 */
         scriptExecutor: ScriptOpExecutor = ScriptOpExecutor.Unavailable,
+        /** 控制台 **shell 面**的执行缝（2026-10-09）。缺省 = 未接线 → 如实 ERR_NOT_IMPLEMENTED。 */
+        shellExecutor: ShellOpExecutor = ShellOpExecutor.Unavailable,
+        /**
+         * 控制台 shell 命令的 TTL（2026-10-09）。缺省与 [InstallCoordinator] 同值；
+         * 装配层要改就改这里 —— 参数从这里穿过去，本对象不另存一份判断。
+         */
+        consoleShellTimeoutMillis: Long = InstallCoordinator.DEFAULT_CONSOLE_SHELL_TIMEOUT_MILLIS,
         registryVerifier: NpmRegistryVerifier? = NpmRegistryVerifier(),
         /**
          * 审批账本持久化（§10.2 `files/.autojs/approve-ledger.jsonl`）。缺省即落盘 ——
@@ -95,6 +105,8 @@ object NpmShellKit {
                 services = services,
                 executor = executor,
                 scriptExecutor = scriptExecutor,
+                shellExecutor = shellExecutor,
+                consoleShellTimeoutMillis = consoleShellTimeoutMillis,
                 // 全局镜像源（§10.2 userconfig 层，2026-10-09 批 83）：与喂给 npm 的
                 // `--userconfig` 是**同一个文件** —— 解析链读到的与 npm 读到的必须是同一份，
                 // 否则「界面显示生效了」与「npm 真去哪家」又会分家。

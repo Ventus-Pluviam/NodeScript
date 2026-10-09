@@ -11,6 +11,8 @@ import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalStatus
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.InstallFlags
+import com.autoscript.domain.host.ShellConsoleResult
+import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.InstallHistoryOp
@@ -139,6 +141,8 @@ class InstallCoordinatorTest {
         now: () -> Long = { System.currentTimeMillis() },
         /** 全局镜像源（§10.2 userconfig 层）；null = 未接线，解析链退到项目 .npmrc → null。 */
         globalConfig: NpmGlobalConfig? = null,
+        /** 控制台 shell 面执行缝；null = 缺省 [ShellOpExecutor.Unavailable]（未接线）。 */
+        shell: ShellOpExecutor? = null,
     ) = InstallCoordinator(
         services = NpmServices(
             layout = layout,
@@ -158,6 +162,7 @@ class InstallCoordinatorTest {
         registryOf = registryOf,
         globalConfig = globalConfig,
         scriptExecutor = script ?: ScriptOpExecutor.Unavailable,
+        shellExecutor = shell ?: ShellOpExecutor.Unavailable,
     )
 
     /**
@@ -1511,7 +1516,9 @@ class InstallCoordinatorTest {
     @Test
     fun `控制台拒收：抛原文且不排队（不落句柄、不写输出环）`() = runBlocking {
         val c = coordinator()
-        for (line in listOf("", "   ", "ls -la", "npm publish", "npm run", "npm install git+https://x.git")) {
+        // `ls -la` 自 2026-10-09 起**不再**是拒收行：默认模式下它是 npm bin
+        // （`Exec("ls")`），走的是「node_modules 里没有这个 bin」那条 ERR_NOT_FOUND。
+        for (line in listOf("", "   ", "npm publish", "npm run", "npm install git+https://x.git")) {
             val ex = assertThrows(IllegalArgumentException::class.java) {
                 runBlocking { c.runConsoleCommand("p1", line) }
             }
@@ -1522,6 +1529,68 @@ class InstallCoordinatorTest {
             c.consoleOutput("p1", 0, 64).lines.isEmpty(),
             "拒收连回显都不该写 —— 界面侧当场拒与宿主侧拒读的是同一句话，环里多一行只会让人以为它跑过",
         )
+    }
+
+    @Test
+    fun `控制台 shell：默认模式拒收（没跑 ≠ 跑了但非零退出）`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val c = coordinator(shell = ShellOpExecutor { cmd, _, _ ->
+            seen += cmd
+            ShellConsoleResult(0, "should-not-run", null)
+        })
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.runShellCommand("p1", "id", ShellConsoleMode.DEFAULT) }
+        }
+        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, ex.error)
+        assertTrue(seen.isEmpty(), "默认模式必须**不执行**：$seen")
+        assertTrue(
+            c.consoleOutput("p1", 0, 64).lines.any { !it.line.ok },
+            "拒收要留一行失败结论（用户看得见为什么没跑）",
+        )
+    }
+
+    @Test
+    fun `控制台 shell：root 模式执行并把 stdout 与退出码投影进控制台环`() = runBlocking {
+        val c = coordinator(shell = ShellOpExecutor { cmd, mode, _ ->
+            assertEquals("id", cmd)
+            assertEquals(ShellConsoleMode.ROOT, mode)
+            ShellConsoleResult(0, "uid=0(root) gid=0(root)", null)
+        })
+        val r = c.runShellCommand("p1", "id", ShellConsoleMode.ROOT)
+        assertEquals(0, r.code)
+        val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
+        assertTrue(lines.any { it.kind == NpmConsoleLineKind.OUTPUT && it.text.contains("uid=0(root)") }, "$lines")
+        val result = lines.last { it.kind == NpmConsoleLineKind.RESULT }
+        assertEquals("退出码 0", result.text)
+        assertTrue(result.ok)
+    }
+
+    @Test
+    fun `控制台 shell：非零退出是结果不是异常（照原样进 RESULT 且标失败）`() = runBlocking {
+        val c = coordinator(shell = ShellOpExecutor { _, _, _ -> ShellConsoleResult(1, null, "no such file") })
+        val r = c.runShellCommand("p1", "ls /nope", ShellConsoleMode.ADB)
+        assertEquals(1, r.code)
+        val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
+        assertTrue(
+            lines.any { it.kind == NpmConsoleLineKind.WARNING && it.text.contains("no such file") },
+            "stderr 进 WARNING 行：$lines",
+        )
+        val result = lines.last { it.kind == NpmConsoleLineKind.RESULT }
+        assertEquals("退出码 1", result.text)
+        assertFalse(result.ok, "非零退出必须标失败（呈现层不按文本猜）")
+    }
+
+    @Test
+    fun `控制台 shell：执行体抛错时原文进 RESULT 且异常继续往上抛`() = runBlocking {
+        val c = coordinator(shell = ShellOpExecutor { _, _, _ ->
+            throw AutojsException(ErrorCode.ERR_PERMISSION_DENIED, "Shizuku 服务未运行")
+        })
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.runShellCommand("p1", "id", ShellConsoleMode.ADB) }
+        }
+        assertTrue("Shizuku" in (ex.message ?: ""), ex.message)
+        val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
+        assertTrue(lines.any { !it.ok && it.text.contains("Shizuku") }, "失败原因要落到环里：$lines")
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.autoscript.domain.host
 
+import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.InstallEventBatch
@@ -292,6 +293,36 @@ interface HostSummary {
         )
 
     /**
+     * 在控制台执行一条 **shell 命令**（2026-10-09 用户口径：控制台要能执行 shell）。
+     *
+     * 与 [runNpmCommand] 并列的第二条执行面，**不走 npm 那条链**：shell 命令与
+     * 依赖树无关（不建事务、不占安装会话、不碰项目锁），它就是「跑一条命令、把输出拿回来」。
+     *
+     * [projectId] 只用于**把输出落进那个项目的控制台环**（shell 命令与依赖树无关，
+     * 不碰项目锁、不建事务）—— 与控制台其余读口同一个作用域。
+     *
+     * [mode] 的语义见 [ShellConsoleMode]：`DEFAULT` 一律拒（如实说需要 root 或 Shizuku），
+     * `ROOT` 走 `su -c`，`ADB` 走 Shizuku。**mode 由调用方显式给**，宿主不替它挑 ——
+     * 静默降级会让「我以为在用 root」与「实际用的是 shell」不可分辨（§9.3 同一条纪律）。
+     *
+     * 返回的是**命令自己的结果**（退出码 + 双流 + 截断标志），不是事件流：shell 命令
+     * 是**同步现取**的（与轻操作 `ls`/`audit` 同形），跑完才返回。控制台把它渲染成
+     * OUTPUT + RESULT 两行。**没有流式**（与 npm 输出尾部同一条边界）。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身**不假装跑过**。
+     */
+    suspend fun runShellCommand(
+        projectId: String,
+        command: String,
+        mode: ShellConsoleMode,
+        timeoutMillis: Long = 30_000L,
+    ): ShellConsoleResult =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "控制台 shell 面未接线：本宿主没有接上 shell 执行入口",
+        )
+
+    /**
      * 安装审计史读数（§10.5-2；管理面板 → 依赖管理 → 审计页）。
      *
      * 与依赖面板/审批卡/镜像源/控制台同一条分工：**宿主自己的界面读口，不经桥**。
@@ -481,6 +512,24 @@ data class ShellSummary(
     val missedAlarms: Int,
     val keepAliveActive: Boolean,
 )
+
+/**
+ * 一条 shell 命令的执行结果（[HostSummary.runShellCommand] 的返回）。
+ *
+ * **为什么不直接用 `:platform:system` 的 `ShellResult`**：`:domain` 看不到 `:platform:*`
+ * （依赖方向铁律），而且那个类型带 `truncated` 的内部口径 —— 控制台要的是「退出码 +
+ * 两条流 + 有没有被截断」这四件事，与它逐字同形但**必须住在 `:domain`**。
+ * 两处字段若漂了，编译期不会红（各是各的类型）—— 故 `:app` 的装配侧有一条
+ * 逐字段转接的测试钉住（`PlatformWiringTest` 的「控制台 shell 面接线」）。
+ */
+data class ShellConsoleResult(
+    val code: Int,
+    val stdout: String?,
+    val stderr: String?,
+    val truncated: Boolean = false,
+) {
+    val isSuccess: Boolean get() = code == 0
+}
 
 /**
  * 脚本文件清单快照（项目页文件列表）。

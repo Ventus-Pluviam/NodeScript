@@ -28,6 +28,10 @@ import com.autoscript.platform.system.SystemNamespaces
 import com.autoscript.platform.system.power.PowerManagerNamespaceHandler
 import com.autoscript.platform.system.SystemSpis
 import com.autoscript.platform.system.shell.ShellExecutor
+import com.autoscript.domain.npm.ShellConsoleMode
+import com.autoscript.domain.host.ShellConsoleResult
+import com.autoscript.appservice.npm.ShellOpExecutor
+import com.autoscript.platform.system.shell.ShellMode
 import com.autoscript.platform.system.shell.ShellInputProvider
 import com.autoscript.platform.system.shell.ShellResult
 import com.autoscript.platform.system.power.WakeLockLedger
@@ -102,6 +106,20 @@ object PlatformWiring {
          * 探针如实报"没有活动会话"，`startCapturer` 走兼容路径或如实不可用。
          */
         val projectionSessions: MediaProjectionSessions? = null,
+        /**
+         * 控制台 shell 面的执行体（2026-10-09）。
+         *
+         * **为什么要有这一条**：控制台挂在 npm 模块上，而 `:app-service:npm` 的
+         * `ArchitectureTest` 禁 `com.autoscript.platform..` —— 它编译期看不到
+         * `ShellExecutor`。转接放在本类（`:app` 的 shell 装配包，包级例外二，本来就
+         * 同时看得见两个平台模块），npm 侧只认 `:domain` 的 `HostSummary.runShellCommand`。
+         *
+         * **`adb` 档在这里被换掉**：`AndroidShellExecutor` 的 `ShellMode.ADB` 与 `DEFAULT`
+         * 是同一行（`sh -c`，应用 uid）—— 那是它自己的口径，不是控制台要的。
+         * 控制台的 `adb` 档 = **Shizuku（shell uid）**，故本类把 ADB 档换成 Shizuku 实现，
+         * ROOT/DEFAULT 原样转给 [AndroidShellExecutor]。缺省 null = 未接线（JVM 装配）。
+         */
+        val shellExecutor: ShellExecutor? = null,
     )
 
     /**
@@ -151,6 +169,10 @@ object PlatformWiring {
         // ERR_NOT_IMPLEMENTED，绝不塞一个看不见像素的假分析器。
         imagesHandler = images?.let { SystemNamespaces.images(it) },
         projectionSessions = projection,
+        // ADB 档 = Shizuku（见 Injection.shellExecutor 的 KDoc）。Shizuku 没装/服务没活
+        // 时不换 —— 让调用方拿到的失败话术指向「去启动 Shizuku」（`ShizukuInput.exec`
+        // 自己那句），而不是「命令跑不起来」。
+        shellExecutor = ConsoleShellExecutor(spis.shell),
     )
 
     /**
@@ -268,6 +290,28 @@ object PlatformWiring {
         PowerManagerNamespaceHandler(keeper.wakeLocks(), keeper)
 
     /**
+     * 控制台 shell 面的执行体：ROOT/DEFAULT 转给 [AndroidShellExecutor]，
+     * **ADB 换成 Shizuku**（shell uid）。
+     *
+     * 为什么不是改 `AndroidShellExecutor` 的 ADB 档：那个类的 ADB 档有它自己的语义
+     * （「设备侧已在 adb shell 内」，即应用 uid），改它会动到 a11y 的输入注入那条路
+     * （`ShellInputProvider.adb` 传的是 Shizuku 缝，不走 `ShellMode.ADB`）。两条面各要
+     * 各的语义，故**在装配层分流**，两边都不动。
+     */
+    private class ConsoleShellExecutor(private val platform: ShellExecutor) : ShellExecutor {
+        override suspend fun exec(command: String, mode: ShellMode, timeoutMillis: Long): ShellResult =
+            when (mode) {
+                ShellMode.ROOT, ShellMode.DEFAULT -> platform.exec(command, mode, timeoutMillis)
+                ShellMode.ADB -> {
+                    val r = ShizukuInput.exec(command, timeoutMillis)
+                    // 逐字段转接（`:platform:capabilities` 看不到 `:platform:system` 的
+                    // `ShellResult`，两边各有一个同形 DTO）。
+                    ShellResult(code = r.code, stdout = r.stdout, stderr = r.stderr)
+                }
+            }
+    }
+
+    /**
      * `filesDir` 缺省 = App 私有文件目录（§9.2 录屏产物落点根，实际落点是
      * `ScriptPaths.recordingsDir(filesDir, projectId)`）；传 null = 不接录屏腿
      * （那种装配下 `screen.startRecording` 如实 `ERR_NOT_IMPLEMENTED`）。
@@ -296,4 +340,25 @@ object PlatformWiring {
             filesDir = filesDir,
         )
     }
+}
+
+/**
+ * `ShellExecutor`（`:platform:system` 的 SPI）→ `ShellOpExecutor`（`:domain` 的缝）。
+ *
+ * 为什么需要这一层转接：`ShellConsoleResult`（`:domain`）与 `ShellResult`
+ * （`:platform:system`）是同形但**两个类型** —— 后者带 `truncated` 的内部口径，
+ * 而 `:app-service:npm` 看不到 `:platform:*`。转接点只能在本包（唯一同时看得见
+ * 两个平台模块的地方，包级例外二）。
+ */
+fun ShellExecutor.asShellOpExecutor(): ShellOpExecutor = ShellOpExecutor { command, mode, timeoutMillis ->
+    // `:domain` 的模式 → `:platform:system` 的模式（一一对应，两个枚举刻意同名不同型）。
+    // 转接表就写在这里而不是另起一个 `consoleShellMode`：它只服务这一处，且**必须**与
+    // 上面的 `when` 分支同进同出 —— 拆开会让「枚举加一个成员」只改一边就编译过。
+    val platformMode = when (mode) {
+        ShellConsoleMode.DEFAULT -> ShellMode.DEFAULT
+        ShellConsoleMode.ROOT -> ShellMode.ROOT
+        ShellConsoleMode.ADB -> ShellMode.ADB
+    }
+    val r = exec(command, platformMode, timeoutMillis)
+    ShellConsoleResult(code = r.code, stdout = r.stdout, stderr = r.stderr, truncated = r.truncated)
 }

@@ -59,6 +59,7 @@ import com.autoscript.platform.capabilities.screen.AndroidFrameProducer
 import com.autoscript.platform.capabilities.screen.ProducedFrame
 import com.autoscript.platform.capabilities.screen.ScreenshotSource
 import com.autoscript.domain.editor.SyntaxHighlighter
+import com.autoscript.domain.npm.ShellConsoleMode
 
 /**
  * 生产能力装配验证（§12.2 接线现状 + §6 包级例外二）。
@@ -96,8 +97,10 @@ class PlatformWiringTest {
 
     private class FakeShell : ShellExecutor {
         var lastCommand: String? = null
+        var lastMode: ShellMode? = null
         override suspend fun exec(command: String, mode: ShellMode, timeoutMillis: Long): ShellResult {
             lastCommand = command
+            lastMode = mode
             return ShellResult(code = 0, stdout = "uid=0", stderr = null)
         }
     }
@@ -453,6 +456,45 @@ class PlatformWiringTest {
             )
         }
         Unit
+    }
+
+    /**
+     * 控制台 shell 面的接线（2026-10-09）：**ADB 档必须走 Shizuku，其余走平台 shell**。
+     *
+     * 这条用例守的是一个**只在真机上才会暴露**的错接：`ConsoleShellExecutor` 若把
+     * `ShellConsoleMode.ADB` 也转给 `platform.exec`，JVM 单测与编译全都绿，而真机上
+     * 用户敲 `shizuku ls` 拿到的是**应用 uid** 的结果 —— 与「没进特权模式」不可分辨。
+     * 断言的是**派发去向**（ADB 一次都不碰平台 SPI、ROOT 必须碰），不是输出文本。
+     *
+     * Shizuku 缺席时（本机、CI 都是）ADB 档如实 `ERR_PERMISSION_DENIED` ——
+     * 那正是「没装 Shizuku」该给用户的话；不断言具体文案（措辞属平台层）。
+     */
+    @Test
+    fun `控制台 shell 面接线：ROOT 走平台 shell，ADB 不落到应用 uid`() {
+        val spis = bundle()
+        val wiring = PlatformWiring.inject(spis)
+        val op = requireNotNull(wiring.shellExecutor).asShellOpExecutor()
+        val fake = spis.shell as FakeShell
+
+        // ROOT：真命令 + 真模式（平台 SPI 侧收 `ShellMode.ROOT`，不是 DEFAULT）。
+        fake.lastCommand = null
+        val root = runBlocking { op.execute("id", ShellConsoleMode.ROOT, 5_000L) }
+        assertEquals("id", fake.lastCommand, "ROOT 档必须落到平台 shell SPI")
+        assertEquals(ShellMode.ROOT, fake.lastMode)
+        assertEquals(0, root.code)
+
+        // DEFAULT：也不许静默升级成特权 —— 与 ROOT 同路（拒绝发生在更上一层）。
+        fake.lastCommand = null
+        runBlocking { op.execute("id", ShellConsoleMode.DEFAULT, 5_000L) }
+        assertEquals(ShellMode.DEFAULT, fake.lastMode)
+
+        // ADB：**一次都不许碰平台 SPI**（碰了就是拿应用 uid 冒充 shell uid）。
+        fake.lastCommand = null
+        val e = assertThrows<AutojsException> {
+            runBlocking { op.execute("id", ShellConsoleMode.ADB, 5_000L) }
+        }
+        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, e.error)
+        assertNull(fake.lastCommand, "ADB 档落到平台 shell = 拿应用 uid 冒充 shell uid")
     }
 
     @Test
