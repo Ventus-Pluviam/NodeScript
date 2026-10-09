@@ -1,5 +1,7 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.npm.InstallHistoryOp
+
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -53,16 +55,24 @@ class InstallHistory(private val dir: Path) {
 
     fun forProject(projectId: String): List<Entry> = all().filter { it.projectId == projectId }
 
-    /** 已知操作名（UI 分组/导出用；未知 op 不受此限）。 */
+    /**
+     * 已知操作名（UI 分组/导出用；未知 op 不受此限）。
+     *
+     * **别名，不是第二份**（2026-10-09 批 85）：`:domain` 的 [InstallHistoryOp] 是判据的
+     * 唯一一份 —— `:ui` 审计页要按 op 分组，它只依赖 `:domain`（§4.1 依赖方向铁律），
+     * 看不见本模块。字面量抄两份必然漂，而漂的那一份正好是呈现层用来分组的。
+     */
     object Op {
-        const val INSTALL = "install"
-        const val CI = "ci"
-        const val UNINSTALL = "uninstall"
-        const val PRUNE = "prune"
-        const val DEDUPE = "dedupe"
-        const val REGISTRY = "registry"     // §10.5-2 registry 变更须审计
-        const val IMPORT = "import"
-        const val EXPORT = "export"
+        const val INSTALL = InstallHistoryOp.INSTALL
+        const val CI = InstallHistoryOp.CI
+        const val UNINSTALL = InstallHistoryOp.UNINSTALL
+        const val PRUNE = InstallHistoryOp.PRUNE
+        const val DEDUPE = InstallHistoryOp.DEDUPE
+
+        /** §10.5-2 registry 变更须审计。 */
+        const val REGISTRY = InstallHistoryOp.REGISTRY
+        const val IMPORT = InstallHistoryOp.IMPORT
+        const val EXPORT = InstallHistoryOp.EXPORT
     }
 
     private fun append(line: String) {

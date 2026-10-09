@@ -973,6 +973,64 @@ class InstallCoordinatorTest {
         assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
     }
 
+    // ═══ 审计史读口（§10.5-2；2026-10-09 批 85） ═══
+
+    @Test
+    fun `审计史按写入序返回全部项目，全局变更不因筛项目而掉出去`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
+        writeManifest("p2", """{"name":"p2","version":"1.0.0"}""")
+        val c = coordinator(globalConfig = NpmGlobalConfig(dir))
+        c.install("p1", listOf(PackageSpec("axios")))
+        c.setGlobalRegistry("https://mirror.example.com/")
+        c.install("p2", listOf(PackageSpec("dayjs")))
+
+        val all = c.history()
+        assertEquals(
+            listOf("install", "registry", "install"),
+            all.map { it.op },
+            "按写入序（最新在最后）；registry 那条的 projectId 是空串（全局变更），" +
+                "读口无参正是为了让它不掉出去",
+        )
+        assertEquals(listOf("p1", "", "p2"), all.map { it.projectId })
+        assertEquals(true, all[1].success, "全局镜像源变更如实入史（§10.5-2）")
+        assertTrue(all.all { it.atMillis > 0L }, "每条都要有时间戳（审计要能排序）")
+    }
+
+    @Test
+    fun `失败也入史：执行体失败与门禁拒绝两条路都留痕`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
+        // ① 执行体自己失败（runHeavy 的 catch 分支）
+        val boomHistory = InstallHistory(dir.resolve(".autojs-boom"))
+        val boom = coordinator(executor = FakeExecutor { error("npm 挂了") }, history = boomHistory)
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { boom.install("p1", listOf(PackageSpec("axios"))) }
+        }
+        val execFail = boomHistory.all().single()
+        assertEquals("install", execFail.op)
+        assertEquals(false, execFail.success)
+        assertEquals("npm 挂了", execFail.detail, "失败原因是原文，不是重编的一句话")
+
+        // ② 磁盘/配额**预检**拒绝（在 handle 存在之前就抛，与 crossCheckRegistry 同一条口径）
+        val nm = layout.nodeModules("full")
+        Files.createDirectories(nm)
+        java.io.RandomAccessFile(nm.resolve("blob").toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
+        val gateHistory = InstallHistory(dir.resolve(".autojs-gate"))
+        val tight = coordinator(history = gateHistory)
+        assertThrows(AutojsException::class.java) {
+            runBlocking { tight.install("full", listOf(PackageSpec("axios"))) }
+        }
+        val gateFail = gateHistory.all().single()
+        assertEquals("full", gateFail.projectId)
+        assertEquals(false, gateFail.success)
+        assertTrue(gateFail.detail!!.contains("配额"), "预检拒绝也要说清为什么（实为 ${gateFail.detail}）")
+    }
+
+    @Test
+    fun `未注入 history 时审计史读口回空表（不是抛）`() = runBlocking {
+        val c = coordinator(history = null)
+        assertTrue(c.history().isEmpty(), "history 在构造里可空（测试替身不注入）：写侧静默，读侧如实回空")
+    }
+
     // ═══ 快照导出（§10.9.4 高信任通道） ═══
 
     @Test
