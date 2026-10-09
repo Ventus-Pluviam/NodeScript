@@ -265,6 +265,16 @@ data class NpmConsoleLine(
     val kind: NpmConsoleLineKind,
     val text: String,
     val atMillis: Long,
+    /**
+     * 这一行是不是**成功**的结论。只有 [NpmConsoleLineKind.RESULT] 行有判别意义
+     * （其余四类恒 `true`，它们的成败由类别本身表达）。
+     *
+     * **为什么要有这个字段**：终态行要按成败着色（失败标红），而失败的那句是宿主
+     * 拼出来的（`"失败：…"`）。让呈现层去 `startsWith("失败：")` 就是**按文本猜**——
+     * 宿主哪天改了措辞，颜色会静默失效，而这条链上唯一该做判读的地方是宿主侧
+     * （见 [NpmConsoleLineKind] 的 KDoc）。判读一处、呈现一处，两者靠这个布尔值接上。
+     */
+    val ok: Boolean = true,
 )
 
 /**

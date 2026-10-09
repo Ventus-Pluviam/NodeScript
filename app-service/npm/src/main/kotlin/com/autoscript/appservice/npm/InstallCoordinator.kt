@@ -638,6 +638,7 @@ class InstallCoordinator(
                     NpmConsoleLineKind.RESULT,
                     "项目 $projectId 的目录不存在（$root）：先在项目页建一个项目再装依赖",
                     at,
+                    ok = false,
                 ),
             )
             return
@@ -754,6 +755,12 @@ class InstallCoordinator(
      * 会为一个不改 node_modules 的操作凭空造出 stageDir + commit 记录，journal 里全是
      * 没有产物的假事务。两条通道共用 TTL/取消/事件，差异只在「产物要不要落位」。
      *
+     * ⚠ **批准之后要重敲那一行**（2026-10-09 批 84 如实登记）：本层只**入队**请求就抛，
+     * 不替用户把命令排下去 —— 于是控制台里「已入队」与「真的跑了」是两次动作。
+     * 这样做是因为排队会让「批准」这个动作**顺带执行一段任意代码**，而人机分离的
+     * 全部意义就是让人在按下批准之前看清楚他要放行的是什么。重敲一行的代价，
+     * 换的是「批准 ≠ 执行」这条边界不模糊。
+     *
      * ⚠ 这一层是**接缝**：[ScriptOpExecutor.Unavailable] 是缺省 → ERR_NOT_IMPLEMENTED。
      * spawn 桥（child_process shim → 临时引擎，§10.3 T1 下半段）未接之前，
      * 有审批票也跑不起来 —— 门禁是诚实的，失败点被如实标出来而不是假装跑过。
@@ -774,7 +781,7 @@ class InstallCoordinator(
             throw AutojsException(
                 ErrorCode.ERR_PERMISSION_DENIED,
                 (if (action == ApprovalAction.EXEC) "npm exec $what" else "npm run $what") +
-                    " 未获人工批准（§10.5）：请求已入队，请到能力中心的审批卡确认后重试",
+                    " 未获人工批准（§10.5）：请求已入队，请到管理面板 → 依赖管理的审批卡确认后重试",
             )
         }
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
@@ -1142,6 +1149,8 @@ class InstallCoordinator(
             kind = NpmConsoleLineKind.RESULT,
             text = if (e.success) (e.detail ?: "完成") else "失败：${e.detail ?: "（无详情）"}",
             atMillis = now(),
+            // 成败是**判读**，在宿主侧定：呈现层据此着色，不去猜那句中文怎么写。
+            ok = e.success,
         )
     }
 
