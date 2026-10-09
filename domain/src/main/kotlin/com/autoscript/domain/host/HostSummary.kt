@@ -2,6 +2,8 @@ package com.autoscript.domain.host
 
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.npm.ApprovalTicket
+import com.autoscript.domain.npm.NpmConsoleHandle
+import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmRegistrySnapshot
@@ -262,6 +264,40 @@ interface HostSummary {
      * 缺省实现是空操作（未接线时不落账也不假装成功）。
      */
     suspend fun setNpmRegistry(raw: String?) {}
+
+    /**
+     * 在控制台执行一行 npm 命令（§10.9 第 3 条「npm 终端视图」；管理面板 → 控制台）。
+     *
+     * 与依赖面板/审批卡/镜像源同一条分工：**宿主自己的界面入口，不经桥** —— 桥面是
+     * 脚本侧的面，而控制台是人在宿主界面上敲命令的地方。
+     *
+     * 契约（判据的唯一一份在 `:domain` 的 `NpmConsoleKeys`，本口不另判一遍）：
+     * - 命令行不合法**抛** [IllegalArgumentException]，原文点名用户敲的那个串；
+     * - 项目号不合法同样抛（与落盘侧的 `require` 同源）；
+     * - 重操作**入队即返回**（与 `install` 同语义，含磁盘预检/配额/项目锁/全局会话），
+     *   输出走 [consoleOutput] 拉；
+     * - `npm run` / `npx` 走 T1 门禁：未获批 → `ERR_PERMISSION_DENIED`（且请求已入队），
+     *   获批但 spawn 桥未接 → `ERR_NOT_IMPLEMENTED`。两条都**如实**，不假装跑过。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但**不静默**
+     * —— 让「没接线」与「跑了但没输出」在界面上长得不一样。
+     */
+    suspend fun runNpmCommand(projectId: String, line: String): NpmConsoleHandle =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "控制台命令面未接线：本宿主没有接上 npm 命令执行入口",
+        )
+
+    /**
+     * 控制台输出读数（seq 游标拉取，与 [console] 同口径）。
+     *
+     * [NpmConsoleSnapshot.running] 由实现按**句柄账**判定（不是「有没有新行」）：
+     * 呈现层据此禁用输入行，而「排队中」正是用户最需要看到「它还没结束」的那一段。
+     *
+     * 缺省实现回空快照（未接线 = 没有输出，如实）。
+     */
+    suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int = 256): NpmConsoleSnapshot =
+        NpmConsoleSnapshot(firstSeq = sinceSeq, lastSeq = sinceSeq, lines = emptyList(), running = false)
 }
 
 /**

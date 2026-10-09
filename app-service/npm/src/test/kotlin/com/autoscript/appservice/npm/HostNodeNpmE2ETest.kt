@@ -1,6 +1,7 @@
 package com.autoscript.appservice.npm
 
 import com.autoscript.domain.scripts.ScriptPaths
+import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.PackageSpec
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -77,6 +78,35 @@ class HostNodeNpmE2ETest {
         assertTrue(Files.exists(lockInProject), "package-lock.json 必须生成于项目根")
         // 轻操作直读：list 应能看到 lodash（lockfile v3 被 LockfileReader 解析）
         assertTrue(c.list("e2e", 0).any { it.name == "lodash" && it.version == "4.17.21" })
+
+        // 控制台那条链在**真 npm** 上也成立（§10.9 第 3 条，2026-10-09 批 84）。
+        // 安装走的是 install()，故没有 ECHO 行（那是用户敲的那行，只有控制台入口才落）；
+        // 但 PHASE/OUTPUT/RESULT 三类必须有，且 OUTPUT 是 **npm 自己说的话** ——
+        // 这一条正是 `HeavyOpOutcome.outputTail` 那条链的端到端证据：没有它，
+        // 控制台里就只有「npm install 完成」这句摘要，用户看不到 npm 到底报了什么。
+        val installLines = c.consoleOutput("e2e", 0, 512).lines.map { it.line }
+        val kinds = installLines.map { it.kind }.toSet()
+        assertEquals(
+            setOf(NpmConsoleLineKind.PHASE, NpmConsoleLineKind.OUTPUT, NpmConsoleLineKind.RESULT),
+            kinds,
+            "安装链必须投影出阶段/输出/终态三类行（实为 $kinds）",
+        )
+        val output = installLines.first { it.kind == NpmConsoleLineKind.OUTPUT }.text
+        assertTrue(
+            output.contains("added") || output.contains("up to date"),
+            "OUTPUT 行必须是 npm 自己说的那段话（实为「${output.take(120)}」）",
+        )
+
+        // 控制台入口那一半：轻操作 `npm ls` 当场出结果，ECHO 行与结果行都在。
+        val before = c.consoleOutput("e2e", 0, 512).lastSeq
+        c.runConsoleCommand("e2e", "npm ls")
+        val consoleLines = c.consoleOutput("e2e", before, 64).lines.map { it.line }
+        assertEquals(
+            listOf(NpmConsoleLineKind.ECHO, NpmConsoleLineKind.OUTPUT, NpmConsoleLineKind.RESULT),
+            consoleLines.map { it.kind },
+            "控制台敲一行 → 回显 / 结果 / 终态（实为 ${consoleLines.map { it.kind }}）",
+        )
+        assertTrue(consoleLines[1].text.contains("lodash@4.17.21"), "结果里要有真装上的那个包")
     }
 
     @Test

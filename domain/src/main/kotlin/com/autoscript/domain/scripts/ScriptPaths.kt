@@ -26,6 +26,32 @@ object ScriptPaths {
     fun projectRoot(filesDir: Path, projectId: String): Path = projectsRoot(filesDir).resolve(projectId)
 
     /**
+     * 项目号的合法形态（**唯一一份**判据）。
+     *
+     * 为什么住这里：这条正则被三个地方读 —— `:app-service:npm` 的 `NpmProjectLayout.projectRoot`
+     * （防路径逃逸的 `require`）、界面侧的命令行校验（`NpmConsoleKeys.rejectProjectId`，
+     * 用户敲错要当场被告知）、以及将来任何以 projectId 拼路径的地方。抄两份必然漂，
+     * 而漂的方向最坏：界面放行的 id 在落盘侧被 `require` 拒（用户看到的是「执行失败」
+     * 而不是「这个项目号不合法」）。与 `PROJECTS_DIR` 同一条理由 —— 拼错的路径不会
+     * 编译失败，只会表现为「写进去了但读不到」这种**没有报错**的故障。
+     *
+     * 与 [com.autoscript.domain.npm.NpmConsoleKeys.rejectProjectId] 的分工：那是**话术**
+     * （拒收原文，给用户看），这是**判据**（是/否）。
+     */
+    val PROJECT_ID: Regex = Regex("[A-Za-z0-9_-]+")
+
+    /**
+     * [PROJECT_ID] 的布尔投影（`NpmProjectLayout.projectRoot` 与界面校验共用一处）。
+     *
+     * 注意判据里**没有 `.`**：原正则 `[A-Za-z0-9._-]+` 收 `.` 与 `..`，而
+     * `projectsRoot.resolve("..")` 正好跳出项目根 —— 那条 `require` 自称「防路径逃逸」，
+     * 实际把最经典的一种逃逸放行了（`.` 本身则让 `files/scripts/.` 变成项目根，
+     * 于是「项目 `.npmrc`」落在共享目录上）。`.` 在项目号里也没有真实用途：
+     * 项目号来自目录名，而仓库自己的项目就叫 `main`。批 84 收口时一并钉住。
+     */
+    fun isValidProjectId(projectId: String): Boolean = PROJECT_ID.matches(projectId)
+
+    /**
      * 脚本文件的绝对路径：`files/scripts/<projectId>/<scriptPath>`（§9.6 项目内相对路径）。
      *
      * 引擎宿主拿到的必须是绝对路径：引擎进程有自己的 cwd（native 侧由 `:engine:node-process`

@@ -216,6 +216,88 @@ data class NpmRegistrySnapshot(
 }
 
 /**
+ * 控制台一次命令的句柄（§10.9 第 3 条「npm 终端视图」）。
+ *
+ * 与 [InstallHandle] 分开是刻意的：那个是「一次安装会话」的账，这个是「用户敲了一行」
+ * 的账 —— 一行 `npm run build` 走的是 T1 通道（无事务），一行 `npm ls` 甚至不起进程，
+ * 把它们塞进同一个句柄类型会让 `cancel()`/journal 的语义含糊。
+ *
+ * @property line 用户敲的那行**原文**（回显用）。刻意不规整化：回显要与他敲的一致，
+ *   否则「我明明写的是 X，屏幕上显示 Y」本身就是一条假账。
+ */
+data class NpmConsoleHandle(
+    val handleId: String,
+    val projectId: String,
+    val line: String,
+    val enqueuedAtMillis: Long,
+)
+
+/**
+ * 控制台输出读数（seq 游标拉取，与 [InstallEventBatch] 同形；§10.9 第 3 条）。
+ *
+ * **空洞判据不在这里**：`first > sinceSeq + 1` 里的 `sinceSeq` 是**调用方**发请求时
+ * 用的那个值，快照自己不知道。呈现层拿它发请求前的游标判「中间丢过」——
+ * 与 `ConsoleSnapshot` 把 `droppedTotal`/`pageFull` 原样带上、由呈现层下结论同一条分工。
+ *
+ * @property running 该项目此刻有没有在跑的命令。判据在协调器（它持有句柄账），
+ *   呈现层**不猜** —— 猜出来的「在跑」会让输入行在命令早就结束时仍然禁用。
+ */
+data class NpmConsoleSnapshot(
+    val firstSeq: Long,
+    val lastSeq: Long,
+    val lines: List<SequencedConsoleLine>,
+    val running: Boolean,
+)
+
+/** 带序号的控制台行（`seq` 即下一次拉取的游标，与 [SequencedInstallEvent] 同形）。 */
+data class SequencedConsoleLine(val seq: Long, val line: NpmConsoleLine)
+
+/**
+ * 控制台一行。
+ *
+ * 由安装事件（[InstallEvent]）与命令回显投影而来 —— 呈现层只画，不重新判读。
+ * 为什么不让呈现层直接消费 [InstallEvent]：控制台还要显示**不是事件**的东西
+ * （用户敲的那行、轻操作 `ls`/`audit` 的渲染结果、npm 自己的输出尾部），
+ * 而且脚本侧的事件契约（`bridge/js` 的 `onProgress` 等）不能因为宿主多了一个界面
+ * 而改形状。投影发生在宿主侧，一处。
+ */
+data class NpmConsoleLine(
+    val kind: NpmConsoleLineKind,
+    val text: String,
+    val atMillis: Long,
+    /**
+     * 这一行是不是**成功**的结论。只有 [NpmConsoleLineKind.RESULT] 行有判别意义
+     * （其余四类恒 `true`，它们的成败由类别本身表达）。
+     *
+     * **为什么要有这个字段**：终态行要按成败着色（失败标红），而失败的那句是宿主
+     * 拼出来的（`"失败：…"`）。让呈现层去 `startsWith("失败：")` 就是**按文本猜**——
+     * 宿主哪天改了措辞，颜色会静默失效，而这条链上唯一该做判读的地方是宿主侧
+     * （见 [NpmConsoleLineKind] 的 KDoc）。判读一处、呈现一处，两者靠这个布尔值接上。
+     */
+    val ok: Boolean = true,
+)
+
+/**
+ * 控制台一行的种类（呈现层据此着色；**判据在宿主侧**，界面不按文本猜）。
+ */
+enum class NpmConsoleLineKind {
+    /** 用户敲的那行（`$ npm install axios`）。 */
+    ECHO,
+
+    /** 阶段进度（queued/resolve/download/reify/post-check/done）。 */
+    PHASE,
+
+    /** 命令自己的输出（npm 输出尾部 / `ls` 与 `audit` 的渲染结果）。 */
+    OUTPUT,
+
+    /** 警告（`scripts-skipped` / `disk-quota` / `registry-fallback` 等）。 */
+    WARNING,
+
+    /** 终态（成功摘要 / 失败原文）。 */
+    RESULT,
+}
+
+/**
  * npm 包管理门面（§10.7）。实现侧：全局唯一安装调度器 + 每项目互斥锁；
  * 所有重操作可取消（[cancel]），进度经 [progress] 流式回传。
  */
@@ -257,6 +339,31 @@ interface PackageManagerFacade {
      * 缺省实现是空操作：未接线的替身不落任何账，也不假装成功（调用方按返回值/异常判定）。
      */
     suspend fun setGlobalRegistry(raw: String?) {}
+
+    /**
+     * 在控制台执行一行命令（§10.9 第 3 条）。
+     *
+     * 解析不过**抛** [IllegalArgumentException]（原文点名，判据的唯一一份在
+     * [NpmConsoleKeys.parse]）；项目号不合法同样抛。合法时立刻返回句柄 ——
+     * 重操作是**入队即返回**（与 [install] 同语义），输出走 [consoleOutput] 拉。
+     *
+     * 缺省实现如实抛 [com.autoscript.domain.core.AutojsException] `ERR_NOT_IMPLEMENTED`：
+     * 未接线的替身**不假装跑过**，也不返回一个永远没有输出的句柄。
+     */
+    suspend fun runConsoleCommand(projectId: String, line: String): NpmConsoleHandle =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "控制台命令面未接线：本实现没有接上 npm 命令执行入口",
+        )
+
+    /**
+     * 控制台输出读数（seq 游标拉取，§10.9 第 3 条）。
+     *
+     * 缺省实现回**空增量 + 没在跑**：老替身（只关心别的面的假门面）零改动即可编译，
+     * 且空增量是「没有新行」的诚实表达，不是「读不到」—— 后者由调用方抛异常表达。
+     */
+    suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int = 256): NpmConsoleSnapshot =
+        NpmConsoleSnapshot(firstSeq = sinceSeq, lastSeq = sinceSeq, lines = emptyList(), running = false)
 
     /**
      * 依赖面板读数（§10.9.1）：一次现取**全部项目**的已装清单 + 离线缺口 + 尺寸配额，

@@ -95,6 +95,21 @@ data class ConsoleState(
 }
 
 /**
+ * 日志管理页三段各自的数据源过滤（**唯一一份**；屏幕与用例读同一个函数）。
+ *
+ * 为什么提出来：`runId == 0` 是「引擎外」（宿主自己的行），非 0 是「脚本进程的输出」——
+ * 这条判据原先散在 `ConsoleScreen` 与 `LogManagementScreen` 两处的 `filter` 里，
+ * 2026-10-09 批 84 把日志整体搬去日志管理时收成一处：两处各写一份的话，
+ * 同一行日志可以在两个页签下**同时**出现或**同时**消失，而没人会立刻发现。
+ *
+ * 第三段（任务日志）不过这里 —— 它是另一本账（[TaskLogState]），不是 console 行的子集。
+ */
+fun ConsoleState.systemLogLines(): List<ConsoleLineState> = lines.filter { it.external }
+
+/** 脚本进程的 console 输出（见 [systemLogLines] 的 KDoc）。 */
+fun ConsoleState.scriptOutputLines(): List<ConsoleLineState> = lines.filter { !it.external }
+
+/**
  * 一行控制台输出的呈现态。
  *
  * @property levelLabel 级别的中文说法（[LevelText.describe]）；[level] 原值也在 ——
@@ -143,6 +158,16 @@ data class ActiveRunState(
     val poolLabel: String,
     val drift: Boolean,
 ) {
+    /**
+     * 复制用的执行摘要 —— 与行里画的那句**同源**（改一处两边都改）。
+     *
+     * **唯一一份**（2026-10-09 批 84）：此前控制台屏与任务中心屏各有一份私有副本，
+     * 日志搬家时顺手收成这一处 —— 留第三份的代价不是多几行，而是两屏复制出去的话
+     * 可以不一样（用户贴给别人看的时候没人知道哪份是准的）。
+     */
+    fun summaryText(): String =
+        "#$runId 池侧：$poolLabel · ${hostLabel ?: "宿主状态读不到（引擎已死或未接线）"}"
+
     /** 「池侧 / 宿主」那一行的着色档：读不到宿主或两端分歧都值得注意。 */
     val tone: StatusTone
         get() = when {

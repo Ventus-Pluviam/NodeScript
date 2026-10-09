@@ -36,7 +36,7 @@ class NpmEventDrainTest {
 
     /** 重操作假体：只回摘要，不碰网络/磁盘（安装编排照走真路径）。 */
     private class OkExecutor : HeavyOpExecutor {
-        override suspend fun execute(op: HeavyOp, sink: ProgressSink): String = "ok"
+        override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome = HeavyOpOutcome("ok")
     }
 
     private fun coordinator(): InstallCoordinator = InstallCoordinator(

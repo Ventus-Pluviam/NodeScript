@@ -79,7 +79,7 @@ class HostNodeExecutor(
         require(Files.isRegularFile(npmCliJs)) { "npm-cli.js 不存在: $npmCliJs" }
     }
 
-    override suspend fun execute(op: HeavyOp, sink: ProgressSink): String =
+    override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome =
         withContext(Dispatchers.IO) {
             sink.emit(
                 com.autoscript.domain.npm.InstallEvent.Progress(
@@ -97,7 +97,7 @@ class HostNodeExecutor(
                         com.autoscript.domain.npm.InstallEvent.Phase.REIFY,
                     ),
                 )
-                runNpm(op, workDir)
+                val output = runNpm(op, workDir)
                 harvest(op, workDir)
                 sink.emit(
                     com.autoscript.domain.npm.InstallEvent.Progress(
@@ -105,7 +105,12 @@ class HostNodeExecutor(
                         com.autoscript.domain.npm.InstallEvent.Phase.DONE,
                     ),
                 )
-                "npm ${op.args.first()} 完成"
+                HeavyOpOutcome(
+                    summary = "npm ${op.args.first()} 完成",
+                    // 尾部截断（见 [HeavyOpOutcome.outputTail] 的 KDoc）：控制台要的是
+                    // 「npm 最后说了什么」，不是几万行安装日志。
+                    outputTail = output.trim().takeLast(OUTPUT_TAIL_CHARS).ifBlank { null },
+                )
             } finally {
                 workDir.toFile().deleteRecursively()
             }
@@ -241,3 +246,6 @@ class HostNodeExecutor(
         }
     }
 }
+
+/** 控制台回显用的命令输出尾部长度上限（[HeavyOpOutcome.outputTail]）。 */
+private const val OUTPUT_TAIL_CHARS = 8_000
