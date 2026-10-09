@@ -34,11 +34,11 @@ RuntimeBridge (单例)                        ← requestId 生成/关联、TTL�
 两类消息都带 `ctxId + seq` 与 generation 校验。
 
 - **消费侧已落地（2026-09-24，控制台屏）**：Kotlin 侧 `ConsoleCollector`（有界 2000、容量满丢最老并计数、`drain(sinceSeq, max)` seq 游标**非破坏**拉取） → 读口 `HostSummary.console(sinceSeq, maxLines)`（DTO `ConsoleSnapshot` 住 `:domain`，
-  拼装 `ConsoleRead` 住 `:app` 壳装配包、纯 JVM 可测）→ `:ui` 第四页签控制台屏。呈现纪律：**游标只进不退、行累积**（刷新 = 增量拉取不是重画；并发同游标按 seq 去重）、
+  拼装 `ConsoleRead` 住 `:app` 壳装配包、纯 JVM 可测）→ `:ui` 第四页签控制台屏。**2026-10-09 批 84 改名**：那个页签**不再是控制台** —— 用户口径「控制台不是放系统日志的地方，是用来执行命令的」，控制台改做命令面（§10.9 第 3 条，读口是 `HostSummary.runNpmCommand`/`consoleOutput`，**与本节这条读口无关**），而这条读口（`HostSummary.console`）的消费方改为**管理面板 → 日志管理**（系统日志/脚本输出/任务日志三段）与任务中心的在途执行块。**数据面一个字没动**：`ConsoleCollector`、游标语义、`stopRun`、`ConsoleSnapshot` 的字段与纪律全同下。呈现纪律：**游标只进不退、行累积**（刷新 = 增量拉取不是重画；并发同游标按 seq 去重）、
   **读失败保留旧行与游标**（瞬时失败抹掉用户已看到的日志比报错更糟；失败只亮原因）、拉满标「可能还有」不假装到底、**丢包非零不藏**（`droppedTotal` 上屏 —
   — 显示的不是全部得说出来）、在途执行两端对照随快照带上（§8.3：宿主读不到如实说读不到、**不渲染成某个状态**；分歧标红，判据仍在 `RuntimeController` 不在呈现层）。
   刷新时机与能力中心/任务中心同构：回前台/切页签现取，页大小 256，读失败不自激。**停止操作面同批落地（2026-09-24）**：读口 `HostSummary.stopRun(runId)`（`:domain`）→ `AssembledShell.stopRun`（壳持有的在途表 `RuntimeController.stop` → 池四步 quiesce，
-  `AlreadyGone` 如实 false 不抛）→ `AppShellApplication.stopRun`（壳未装配抛）→ `:ui` 控制台在途行每行一个「停止」按钮（`ConsoleState.stopError/stopNotice/stopInFlight` 与读账分开记账、
+  `AlreadyGone` 如实 false 不抛）→ `AppShellApplication.stopRun`（壳未装配抛）→ `:ui` **日志管理「脚本输出」段的在途行**每行一个「停止」按钮（批 84 前在控制台）（`ConsoleState.stopError/stopNotice/stopInFlight` 与读账分开记账、
   刷新现取归零；回执措辞：true = 已请求停止、false = 已不在途；挂起中按钮禁用）。与 `Scheduler.stopLastRun` 的分工：那是调度单槽快捷口（恢复重投会覆盖），
   本口按 runId 精确命中在途表、不受覆盖影响。
 ### 7.4 数据与对象生命周期
@@ -93,7 +93,7 @@ P0 起用 **unix domain socket**（同应用可持久连接、双向流、背压
 
 **日志归属与边界**：`ConsoleCollector.handle` 必须从认证上下文取 `engineRunId`，缺身份回
 `ERR_PERMISSION_DENIED`，绝不回退 0；宿主 `HostLog` 直写仍用 0。系统日志仅显示宿主行，
-脚本行在控制台按 `[#runId]` 显示；日志归属是 `EngineRunReceipt.runId`，不是 intentRunId/池槽/runNonce。
+脚本行在**日志管理的「脚本输出」段**按 `[#runId]` 显示（2026-10-09 批 84 前那是控制台页）；日志归属是 `EngineRunReceipt.runId`，不是 intentRunId/池槽/runNonce。
 队列仍有界、TSF 仍可丢包、强制退出仍可损失尾行，不新增持久化或完整 logcat。
 `consoleSink` 捕获桥错误后会通过 `onQueueError` 报告并正常兑现 Promise，故 **await 完成不证明送达**；
 验收须核对原始 RPC 成功 ACK 与宿主实际入队行，入队亦不代表永久保存。

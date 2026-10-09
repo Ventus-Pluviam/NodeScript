@@ -175,6 +175,8 @@ interface PackageManager {
   suspend fun config(projectId?, key, value)                   // .npmrc 层；registry 变更经 :main 卡可配列表+审计
   suspend fun globalRegistry(): NpmRegistrySnapshot            // 全局镜像源读数（configured/defaultRegistry/secondaryRegistry；2026-10-09 批 83）
   suspend fun setGlobalRegistry(raw: String?)                  // 设/清全局镜像源；null 或空白 = 恢复出厂官方；校验不过抛原文
+  suspend fun runConsoleCommand(projectId, line): NpmConsoleHandle  // 控制台命令面（2026-10-09 批 84）：解析→回显→派发；解析不过抛原文
+  suspend fun consoleOutput(projectId, sinceSeq, maxLines=256): NpmConsoleSnapshot  // 控制台输出读数（seq 游标拉取，同 drainEvents 的形）
   fun progress(projectId): Flow<InstallEvent>              // :main 订阅用（Flow 无重放）
   fun approvals(projectId): Flow<ApprovalRequest>
   suspend fun drainEvents(projectId, sinceSeq, batch=32): InstallEventBatch   // 脚本侧拉取口（§7.5 桥无宿主→脚本推送面）
@@ -191,6 +193,16 @@ interface PackageManager {
 512、DROP_OLDEST、单调 seq）由 `emit()`/`requestApprove` 唯一投递，`drainEvents`/`drainApprovals` 按调用方游标取批；回包 `{first,last,items}`，空增量 `first=last=sinceSeq`，
 环丢过最旧时 `first > sinceSeq+1` 即空洞可见（进度是可丢数据面，如实露洞不补造）。四个 DTO（`InstallEventBatch`/`SequencedInstallEvent`/`ApprovalBatch`/`SequencedApproval`）与两个新方法由 `PackageManagerFacadeContractTest` 冻结，
 JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
+
+**控制台两条读口（2026-10-09 批 84，§10.9 第 3 条）**：`runConsoleCommand`/`consoleOutput` 与上面两条
+`drain*` **同形不同面** —— `drain*` 是**脚本侧**的游标拉取口（过桥，`bridge/js` 消费），这两条是
+**宿主自己界面**的读口（经 `HostSummary` 现取，**不经桥**，§7.3 方法表一条不加）。四个新 DTO
+（`NpmConsoleHandle`/`NpmConsoleSnapshot`/`SequencedConsoleLine`/`NpmConsoleLine` 与枚举
+`NpmConsoleLineKind`）住 `:domain`，由 `PackageManagerFacadeContractTest` 的方法面冻结一并覆盖。
+`NpmConsoleHandle` 与 `InstallHandle` **刻意分开**：那个是「一次安装会话」的账，这个是「用户敲了一行」
+的账 —— 一行 `npm run build` 走 T1 通道（无事务），一行 `npm ls` 甚至不起进程，塞进同一个句柄类型
+会让 `cancel()`/journal 的语义含糊。输出环是 `InstallCoordinator` 里**另一个** `SeqRing`（有界 512），
+与 `InstallEvent` 那条环互不干扰（前者给界面看，后者给脚本拉）。
 
 ### 10.8 JS API —— `auto.npm`
 
@@ -248,6 +260,53 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
    只用 0，画树就是把平铺清单伪装成树）、`hasInstallScript` 前置告警（要 packument 解析面）、
    「全局禁止脚本」开关（出厂默认已是禁止，反向的**白名单放行**通道属 T1 之后）。
 3. **npm 终端视图**（P1）：项目内终端 `npm install axios` / `npm ls`，stdout/stderr 流式输出 + exit code；与依赖面板同一安装会话队列。
+   **落地现状（2026-10-09 批 84）**：控制台页从「日志屏」改成**命令面**（用户口径：「控制台不是放系统日志的地方，
+   是用来执行命令的，比如 npm」）—— 管理面板 → 控制台，选项目 + 敲一行 + 看输出；原控制台的日志内容
+   **一行不少地**搬去管理面板 → 日志管理（§7.3 的消费侧随之改名）。四件：
+   - **判据唯一一份住 `:domain`**（`NpmConsoleKeys`，与批 82 `ScriptEnvKeys`、批 83 `NpmRegistryKeys` 同形）：
+     `parse`（一行命令 → `Npm`/`Run`/`Exec`/`Rejected` 四形态）、`SUBCOMMANDS` 白名单、
+     `HEAVY_SUBCOMMANDS`/`LIGHT_SUBCOMMANDS`（§10.6 的轻/重拆分）、`packageSpecsIn`、`gitSpecIn`、
+     `rejectProjectId`。宿主侧执行入口与 `:ui` 的输入行读的是**同一个结论** —— 界面当场拒的话术
+     就是宿主抛出来的那句原文。
+   - **白名单**（不在表内即拒，并把整张表念给用户听）：`install / uninstall / ci / ls / list / prune / dedupe / audit`，
+     外加 `npm run`（`run-script` 同义）与 `npx` / `npm exec` 两种执行入口。**不是黑名单**：npm 有 60+ 子命令，
+     `publish`/`login`/`token`/`owner`/`config`/`init`/`link`/`cache` 要么改宿主全局状态、要么要凭据、
+     要么在本平台没有意义，黑名单漏一个就是一条没人守的路。**只认 `npm` 与 `npx` 两个入口**
+     （用户口径 2026-10-09：「不用加 sh 啊」）：本仓没有 shell，任意命令走脚本的 `auto.shell` 桥面，
+     那是另一个面；假装支持 `sh -c` 只会让「看起来能跑、实际没人守」的输入进来。
+   - **分词按空白切，不做 shell 引号解析**（`parse` 的 KDoc 写死了这条）：本仓没有 shell，假装支持引号
+     会让 `npm install "a b"` 产生「看起来对、实际是另一个包名」的结果 —— 静默错比报错难查得多。
+     同理 `packageSpecsIn` 只处理裸包名，**旗标带值的形态（`--registry <url>`）会被误读成包名**；
+     这条边界如实写在契约里，且**只影响装前的多镜像交叉校验**（结论是「未校验」不是「不一致」，不误拦）——
+     **真 argv 一个字不改地透传**给 npm，装的东西与手敲完全一致。
+   - **输出粒度 = 事件流 + npm 输出尾部**（用户 2026-10-09 裁定，否掉「新开真流式 stdout 事件」那案）：
+     `InstallEvent` → `NpmConsoleLine` 的投影在宿主侧一处发生（`InstallCoordinator.projectConsoleLine`），
+     四类 `NpmConsoleLineKind`（`ECHO`/`PHASE`/`OUTPUT`/`WARNING`/`RESULT`）；npm 自己的输出取
+     `HeavyOpOutcome.outputTail` 作 `OUTPUT` 行。**不新开桥面事件** —— 脚本侧的事件契约
+     （`bridge/js` 的 `onProgress` 等）不能因为宿主多了一个界面而改形状。
+     `NpmConsoleLine.ok: Boolean` 是终态行的**成败位**：失败标红由它决定，呈现层**不按文本猜**
+     （`startsWith("失败：")` 那种写法会在宿主改措辞时静默失效）。
+   - **依赖提供的命令照实接线**（用户 2026-10-09 裁定「照实接线」）：`npm run <script>` 与 `npx <bin>`
+     走 §10.3 T1 的 `runScript`/`exec` 门禁。**未获批** → `ERR_PERMISSION_DENIED` 且审批请求已入队
+     （回执话术指向**真的那一页**：管理面板 → 依赖管理的审批卡）；**获批但 T1 spawn 桥未接** →
+     `ERR_NOT_IMPLEMENTED`。两条都如实，且都在 ECHO 行之后抛出 —— 用户看得见自己敲的那行。
+     **审批 ≠ 执行**：门禁只入队不排队命令，批完要**重敲那一行**（这条写进了 `runScriptOps` 的 KDoc
+     与界面回执，别让用户以为批完就会自己跑）。
+   - **门禁强度不取决于入口**：控制台敲 `npm install axios` 与依赖面板装同一个包，走的是**同一套**
+     装前多镜像交叉校验（§10.5-1）、磁盘预检/配额/项目锁/全局安装会话。入史那一栏只记**子命令**
+     而不是完整 argv —— 审计表要长期留存，而用户手敲的 argv 可能夹着凭据形态的参数
+     （`--//registry/:_authToken=…`、`--otp`），存原文等于把用户手滑敲进来的东西永久写进盘。
+   - **读口不经桥**：`HostSummary.runNpmCommand(projectId, line)` / `consoleOutput(projectId, sinceSeq, maxLines)`
+     —— 控制台是**宿主自己的界面**，桥面是脚本侧的面，故 §7.3 的方法表**一条不加**。
+     输出走 `InstallCoordinator` 的 `SeqRing<NpmConsoleLine>`（有界 512、DROP_OLDEST、单调 seq、
+     `drain(projectId, sinceSeq, batch)` 非破坏拉取），空洞判据（`first > sinceSeq + 1`）由**呈现层**
+     用发请求前的游标判 —— 与 `ConsoleSnapshot` 把 `droppedTotal`/`pageFull` 原样带上、由呈现层下结论同一条分工。
+     `NpmConsoleSnapshot.running` 的判据是**句柄账**（不是「有没有新行」）：正在排队的重操作也算在跑。
+   - **未落**：真流式 stdout（`OUTPUT` 行是 npm 退出后的尾部，不是逐行推送）、shell 引号解析、
+     命令历史持久化（`NpmConsoleHandle` 只回 `handleId`/`projectId`/`line`/`enqueuedAtMillis`，
+     不落盘、不跨进程重启保留）、`npm config`/`publish` 一类子命令（白名单外）、T1 spawn 桥本体
+     （`scriptExecutor` 仍缺，§11.2 T2）、命令的**取消**（`NpmConsoleHandle` 与 `InstallHandle`
+     刻意分开，故没有 `cancel()`）。
 4. **离线包导入**：SAF 选择（tarball / lock+cacache bundle / 快照 node_modules.zip）→ 验签 → 队列安装；另提供「从内置精选缓存离线装 axios/dayjs/…」。`node_modules.zip` 导入**仅限高信任项目**，签名锚定 `HMAC(应用密钥, lock.sig + zip.sha256)`；市场脚本一律拒绝该格式（走 reify 产出 integrity）。
    **体积上限（2026-10-06，backlog B12）**：cacache bundle 解包前先卡**整包** 512 MiB（判据是文件系统上的字节数，不是 zip 声明的数），解包中逐条目卡 64 MiB —— 单条目读到顶即停、不入缓存。上限**整包拒收**（不截断、不返回部分结果）并回 `ERR_INVALID_PARAM`（「选错了文件」是可诊断的参数问题，不是 `ERR_FILE_NOT_FOUND`）。理由：这条路径收的是用户从 SAF 递进来的外部文件，**用户可能只是选错了**（视频、系统镜像、整个 Downloads 打成的一个包），而解包器在读到顶之前没有任何自然的停止点。
 5. **包大小管理页**：per-project `node_modules` + `npm-cache` 尺寸（Kotlin 遍历）+ 配额条（80%黄/100%拦）→ 一键 prune/dedupe/ci 重装/cache clean；明确标注 node_modules 计入系统「App 数据」。
@@ -270,7 +329,7 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 
 - **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警 + 审批卡 UI（仅请求）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；
   依赖面板 + `auto.npm` 核心 API；打包向导 node_modules 入包。
-- **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ **lifecycle 脚本真实执行**（§18 第 7 项 2026-09-26 口径：安装时让用户自己选跑不跑，不设出厂卡口，也**不是**"审批通过才跑"的流）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；npm 终端视图；
+- **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ **lifecycle 脚本真实执行**（§18 第 7 项 2026-09-26 口径：安装时让用户自己选跑不跑，不设出厂卡口，也**不是**"审批通过才跑"的流）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；~~npm 终端视图~~ **已落地（2026-10-09 批 84）**：控制台改做命令面，白名单子命令 + `npm run`/`npx` 照实接线到 T1 门禁，输出粒度 = 事件流 + npm 输出尾部（真流式 stdout **未落**）—— 见 §10.9 第 3 条；
   在线 audit + audit signatures + OSV 离线；`offlineGap` + 种子金标准测试。（原「QuickJS 白名单库独立 vendored」随第 1 项裁掉。）
 - **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；native 依赖 **wasm 方案**（2026-09 拍板）：
   优先取上游 wasm 构建（`esbuild-wasm`、`argon2-wasm`、sql.js 等——Node 内置 `WebAssembly`，无 ABI/无 dlopen、一份全平台、随 bundle 离线送达），无 wasm 产物的回落纯 JS 替代/

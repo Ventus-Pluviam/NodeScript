@@ -1,5 +1,19 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-09，批 84）
+
+- [2026-10-09 · 批 84：控制台改做命令面（§10.9 第 3 条）+ 日志整体搬去「日志管理」](2026-10-09.md)：
+  用户口径「控制台不是放系统日志的地方，是用来执行命令的，比如 npm」。控制台从「日志屏」改成**命令面**：
+  选项目 + 敲一行 npm 命令 + 看输出；原控制台的日志内容**一行不少地**搬去管理面板 → 日志管理
+  （三段：系统日志 / 脚本输出 / 任务日志）。判据唯一一份住 `:domain`（`NpmConsoleKeys`：`parse` 四形态 /
+  白名单 `install·uninstall·ci·ls·list·prune·dedupe·audit` / 轻·重拆分 / `packageSpecsIn` / `gitSpecIn`）；
+  输出粒度 = **事件流 + npm 输出尾部**（`HeavyOpOutcome.outputTail`，真流式 stdout **未落**）；
+  `npm run`/`npx` **照实接线**到 §10.3 T1 门禁（未获批 → 已入队；获批但 spawn 桥未接 → `ERR_NOT_IMPLEMENTED`；
+  **审批 ≠ 执行**，批完要重敲那一行）；读口 `HostSummary.runNpmCommand`/`consoleOutput`，**不经桥**。
+  同批修 `ScriptPaths.PROJECT_ID` 放行 `.`（`resolve("..")` 正好跳出项目根）。口径见
+  [`design-decisions.md`](../design-decisions.md) 第 54 项（第 40 项「控制台不动」已就地划掉）。
+  **边界**：真机行为未验；命令历史不落盘。
+
 ## 最新追记（2026-10-09，批 83）
 
 - [2026-10-09 · 批 83：镜像源管理（§10.9 新增第 8 条）+ registry 两条断链收口](2026-10-09.md)：
