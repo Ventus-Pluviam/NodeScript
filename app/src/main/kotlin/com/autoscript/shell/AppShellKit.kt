@@ -6,6 +6,7 @@ import com.autoscript.appservice.npm.NpmGlobalConfig
 import com.autoscript.appservice.npm.InstallCoordinator
 import com.autoscript.appservice.npm.LockSigner
 import com.autoscript.appservice.npm.NpmCliDeployer
+import com.autoscript.appservice.npm.NpmCacheSeedDeployer
 import com.autoscript.appservice.npm.NpmBridgeHandler
 import com.autoscript.appservice.npm.NpmShellKit
 import com.autoscript.appservice.npm.NpmSpawnGate
@@ -449,7 +450,7 @@ object AppShellKit {
         return try {
             NpmWiring(
                 HostNodeExecutor(
-                    deployed.cliJs, cacheDir, nodeBin = host, spawnGateFile = gate,
+                    deployed.cliJs, NpmCacheSeedDeployer.cacheRoot(cacheDir), nodeBin = host, spawnGateFile = gate,
                     // 全局镜像源走 userconfig（§10.2 三层链；2026-10-09 批 83）。
                     // **不再传 registryOverride**：此前无条件注入 `--registry 官方`，
                     // 于是用户设的镜像源对真实安装毫无影响。现在让 npm 自己按

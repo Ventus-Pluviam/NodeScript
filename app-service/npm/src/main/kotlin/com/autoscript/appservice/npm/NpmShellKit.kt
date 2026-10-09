@@ -86,7 +86,7 @@ object NpmShellKit {
             history = InstallHistory(autojsDir),
             lockSigner = lockKey?.let { LockSigner(autojsDir, it) },
             snapshots = if (snapshots && lockKey != null) NpmSnapshot(layout, autojsDir, lockKey) else null,
-            cacheIndex = CacacheIndex(cacheDir.resolve("npm-cache")),
+            cacheIndex = CacacheIndex(NpmCacheSeedDeployer.cacheRoot(cacheDir)),
             bundleImporter = NpmOfflineBundleImporter,
             registryVerifier = registryVerifier,
         )
@@ -99,6 +99,10 @@ object NpmShellKit {
                 // `--userconfig` 是**同一个文件** —— 解析链读到的与 npm 读到的必须是同一份，
                 // 否则「界面显示生效了」与「npm 真去哪家」又会分家。
                 globalConfig = NpmGlobalConfig(filesDir),
+                // 离线 bundle 导入的落点此前是第三个目录（协调器的 projectsRoot 同级兜底）：
+                // 导入说「合入缓存了」、`ci --offline` 却查 `cacheDir/npm-cache` —— 两处都
+                // 不报错，只是不命中。这里把同一份判据喂进去（2026-10-09 批 86）。
+                npmCacheDir = NpmCacheSeedDeployer.cacheRoot(cacheDir),
                 freeSpaceProbe = freeSpaceProbe,
             ),
         )

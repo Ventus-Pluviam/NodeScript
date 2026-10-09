@@ -13,6 +13,7 @@
     <ID>LongMethod:NpmBridgeHandler.kt$NpmBridgeHandler$private suspend fun payload(request: BridgeRequest): String?</ID>
     <ID>LongParameterList:InstallCoordinatorTest.kt$InstallCoordinatorTest$( executor: HeavyOpExecutor = FakeExecutor(), free: Long = 10L * 1024 * 1024 * 1024, cache: CacheIndex = CacheIndex { false }, ledger: ApprovalLedger = ApprovalLedger(), history: InstallHistory? = newHistory(), lockSigner: LockSigner? = null, snapshots: NpmSnapshot? = null, bundleImporter: NpmOfflineBundleImporter? = null, registryVerifier: RegistryVerifier? = null, /** * 真校验器接上装路径（`:app-service:npm`）：两镜像声明比对 → 三分裁决 → 处置。 * null = 走 InstallCoordinator 自己的缺省（读项目 npmrc 的 registry=）。 */ registryOf: ((String) -&gt; String?)? = null, /** T1 lifecycle 执行体（null = 缺省 [ScriptOpExecutor.Unavailable]，即"门禁过了也跑不起来"）。 */ script: ScriptOpExecutor? = null, /** 时钟（尺寸缓存的 TTL 判定读它；不注入则走真实时间）。 */ now: () -&gt; Long = { System.currentTimeMillis() }, /** 全局镜像源（§10.2 userconfig 层）；null = 未接线，解析链退到项目 .npmrc → null。 */ globalConfig: NpmGlobalConfig? = null, )</ID>
     <ID>LoopWithTooManyJumpStatements:AssetTreeCliSource.kt$AssetTreeCliSource$for</ID>
+    <ID>LoopWithTooManyJumpStatements:NpmCacheReclaim.kt$NpmCacheReclaim$for</ID>
     <ID>LoopWithTooManyJumpStatements:NpmCacheSeedDeployerTest.kt$NpmCacheSeedDeployerTest$for</ID>
     <ID>LoopWithTooManyJumpStatements:NpmOfflineBundleImporter.kt$NpmOfflineBundleImporter$while</ID>
     <ID>LoopWithTooManyJumpStatements:NpmProjectLayout.kt$LockfileReader$while</ID>

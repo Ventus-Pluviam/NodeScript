@@ -13,6 +13,7 @@ import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.npm.InstallHandle
+import com.autoscript.domain.npm.InstallHistoryOp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -1029,6 +1030,135 @@ class InstallCoordinatorTest {
     fun `未注入 history 时审计史读口回空表（不是抛）`() = runBlocking {
         val c = coordinator(history = null)
         assertTrue(c.history().isEmpty(), "history 在构造里可空（测试替身不注入）：写侧静默，读侧如实回空")
+    }
+
+    // ═══ 缓存回收（§10.9 第 5 条的动作半边，2026-10-09 批 86） ═══
+
+    /**
+     * 往协调器真正会读的那个目录里放一份 content，返回 integrity。
+     *
+     * 路径一律经 [NpmCacheSeedDeployer.contentPath]（唯一一份判据）算，不自己拼
+     * `_cacache/content-v2/...` —— 拼错了这条用例会退化成「回收了一个空目录也算过」。
+     * 注意 [cacheDir] 是**协调器 resolveCacheDir() 的返回**（生产 = `cacheRoot(cacheDir)`），
+     * 它本身就是种子部署器口中的 `cacheDir`，故这里**不再**套一层 [NpmCacheSeedDeployer.cacheRoot]。
+     */
+    private fun seedCacheContent(payload: String): String {
+        val bytes = payload.toByteArray()
+        val integrity = "sha512-" + java.util.Base64.getEncoder().encodeToString(
+            java.security.MessageDigest.getInstance("SHA-512").digest(bytes),
+        )
+        val p = NpmCacheSeedDeployer.contentPath(cacheDir(), integrity)
+        Files.createDirectories(p.parent)
+        Files.write(p, bytes)
+        return integrity
+    }
+
+    /** 造一个项目 + 一份 lock（只写回收要用到的 packages 段）。 */
+    private fun seedProjectLock(projectId: String, vararg entries: Pair<String, String?>) {
+        val proj = Files.createDirectories(layout.projectRoot(projectId))
+        val pkgs = entries.joinToString(",") { (name, integ) ->
+            val i = integ?.let { "\"integrity\":\"$it\"" } ?: "\"integrity\":null"
+            "\"node_modules/$name\":{\"version\":\"1.0.0\",$i}"
+        }
+        Files.write(proj.resolve("package-lock.json"), ("{\"lockfileVersion\":3,\"packages\":{\"\":{},$pkgs}}").toByteArray())
+    }
+
+    private fun cacheContentFile(integrity: String): Path =
+        NpmCacheSeedDeployer.contentPath(cacheDir(), integrity)
+
+    @Test
+    fun `回收按所有项目 lock 的并集保命（不是只看当前项目）`() = runBlocking {
+        // p1 要 a、p2 要 b：回收 p1 时若只按 p1 的 lock 算，p2 离线重装就废了 —— 而这一点
+        // 用户在点按钮时完全看不见（§10.9 第 5 条「省了空间、坏了别的项目」）。
+        val a = seedCacheContent("pkg-a")
+        val b = seedCacheContent("pkg-b")
+        val orphan = seedCacheContent("pkg-orphan")
+        seedProjectLock("p1", "a" to a)
+        seedProjectLock("p2", "b" to b)
+
+        val r = coordinator().reclaimCache()
+
+        assertTrue(Files.isRegularFile(cacheContentFile(a)), "p1 lock 需要的必须留着")
+        assertTrue(Files.isRegularFile(cacheContentFile(b)), "p2 lock 需要的也必须留着（并集）")
+        assertFalse(Files.exists(cacheContentFile(orphan)), "没有 lock 引用的才删")
+        assertEquals(1, r.removedEntries)
+        assertEquals(2, r.keptEntries)
+        assertEquals(2, r.keepCount)
+    }
+
+    @Test
+    fun `lock 里 integrity 为 null 的条目不算进保留集（没有可保护的对象）`() = runBlocking {
+        val orphan = seedCacheContent("orphan")
+        seedProjectLock("p1", "a" to null)
+
+        val r = coordinator().reclaimCache()
+
+        assertFalse(Files.exists(cacheContentFile(orphan)), "lock 没给 integrity = 无从证明它需要这份 content")
+        assertEquals(1, r.removedEntries)
+        assertEquals(0, r.keepCount)
+    }
+
+    @Test
+    fun `lock 读不出来的项目如实入史点名（它的依赖没被保护）`() = runBlocking {
+        val orphan = seedCacheContent("orphan")
+        // 半截 JSON：LockfileReader 不抛（手写解析尽力而为），故这里用「目录冒充 lockfile」
+        // 制造真正的读失败 —— 用例要证明的是「读不到时不许当它不存在」。
+        val bad = Files.createDirectories(layout.lockfile("p2"))
+        assertTrue(Files.isDirectory(bad))
+        val h = newHistory()
+
+        val r = coordinator(history = h).reclaimCache()
+
+        assertEquals(1, r.removedEntries)
+        assertFalse(Files.exists(cacheContentFile(orphan)))
+        val e = h.all().single { it.op == InstallHistoryOp.CACHE_RECLAIM }
+        assertTrue(e.success)
+        assertTrue(e.detail!!.contains("p2"), "读不到 lock 的项目必须点名：${e.detail}")
+        assertTrue(e.detail!!.contains("未被保护"), "且要说清后果：${e.detail}")
+    }
+
+    @Test
+    fun `回收入史：op 名 cache_reclaim 且明细带删与留两侧数字`() = runBlocking {
+        val kept = seedCacheContent("kept")
+        seedCacheContent("gone")
+        seedProjectLock("p1", "a" to kept)
+        val h = newHistory()
+
+        val r = coordinator(history = h).reclaimCache()
+
+        val e = h.all().single()
+        assertEquals(InstallHistoryOp.CACHE_RECLAIM, e.op, "不许叫 cache_clean：那不是 npm 的 cache clean")
+        assertTrue(e.success)
+        assertTrue(e.detail!!.contains("removed=1"), "删了多少要能回看：${e.detail}")
+        assertTrue(e.detail!!.contains("保留 1 条"), "留了多少也要：${e.detail}")
+        assertTrue(e.detail!!.contains("lock 闭包 1 项"), "保留集大小要单列：${e.detail}")
+        assertEquals(1, r.keepCount)
+    }
+
+    @Test
+    fun `顺带修掉悬空 index 时明细如实说（且报告置位）`() = runBlocking {
+        val gone = seedCacheContent("gone")
+        val bucket = cacheDir().resolve("_cacache/index-v5/aa/bb/b1")
+        Files.createDirectories(bucket.parent)
+        val json = "{\"key\":\"k\",\"integrity\":\"$gone\"}"
+        Files.write(bucket, ("\n" + "0".repeat(40) + "\t" + json).toByteArray())
+        Files.delete(cacheContentFile(gone))   // 制造悬空：content 没了，index 行还在
+
+        val h = newHistory()
+        val r = coordinator(history = h).reclaimCache()
+
+        assertTrue(r.indexRebuilt, "悬空引用必须被修掉")
+        assertFalse(Files.exists(bucket), "全悬空的桶不留空壳")
+        assertTrue(h.all().single().detail!!.contains("悬空"), "明细要点名这次顺带修了什么")
+    }
+
+    @Test
+    fun `没有项目也没有缓存 → 空账不抛（首次进入依赖页就能点）`() = runBlocking {
+        val r = coordinator().reclaimCache()
+        assertEquals(0, r.removedEntries)
+        assertEquals(0, r.keptEntries)
+        assertEquals(0, r.keepCount)
+        assertFalse(r.indexRebuilt)
     }
 
     // ═══ 快照导出（§10.9.4 高信任通道） ═══

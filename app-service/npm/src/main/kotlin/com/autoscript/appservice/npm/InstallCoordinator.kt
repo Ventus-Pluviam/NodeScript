@@ -14,6 +14,8 @@ import com.autoscript.domain.npm.SequencedInstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.InstallHistoryEntry
+import com.autoscript.domain.npm.InstallHistoryOp
+import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConfigKey
@@ -550,6 +552,69 @@ class InstallCoordinator(
                 atMillis = it.atMillis,
             )
         }
+
+    /**
+     * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条那颗 cache clean 按钮）。
+     *
+     * **保留集 = 全部项目 lock 闭包的并集**（不是当前项目的）：只按当前项目算会删掉别的
+     * 项目离线重装要用的包，而那个后果用户在点按钮时完全看不见 —— 他只看到「省了 80MB」。
+     * 一个项目都读不到 lock 时保留集为空，那时缓存里能删的全删（也正是这个按钮最该被
+     * 按下去的场景：装了又删、缓存里全是没人要的 tarball）。
+     *
+     * 读 lock 失败的**单个**项目按「没有闭包」处理（不因一个坏 lock 让整次回收失败），
+     * 但那是**如实**的：它的包会被删掉。所以保留集里还要塞进「读不到的项目目录名」——
+     * 见下方 `unreadable`，宁可少删不可错删。
+     *
+     * 回收失败（目录被占/权限）抛 [AutojsException] 原文：这个动作的产物是**磁盘上少了
+     * 东西**，静默失败会让用户以为清了其实没清（下一次点才发现还是满的）。
+     */
+    override suspend fun reclaimCache(): NpmCacheReclaimReport {
+        val cacheDir = resolveCacheDir()
+        val keep = LinkedHashSet<String>()
+        val unreadable = ArrayList<String>()
+        if (Files.isDirectory(layout.projectsRoot)) {
+            Files.list(layout.projectsRoot).use { s ->
+                s.filter { Files.isDirectory(it) }.forEach { proj ->
+                    val id = proj.fileName.toString()
+                    val lock = layout.lockfile(id)
+                    // 没 lockfile = 「这个项目还没装过」，正常，不点名；
+                    // lockfile **在**但读不出来（目录冒充、损坏到读不动、半路被删）= 点名：
+                    // 那种项目不是「不需要保护」，是「想保护但保护不了」，用户有权知道。
+                    if (!Files.exists(lock)) return@forEach
+                    val locked = try {
+                        LockfileReader.readLocked(lock)
+                    } catch (e: Exception) {
+                        unreadable += id
+                        return@forEach
+                    }
+                    locked.mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
+                }
+            }
+        }
+        val report = try {
+            NpmCacheReclaim.reclaim(cacheDir, keep)
+        } catch (e: java.io.IOException) {
+            throw AutojsException(ErrorCode.ERR_IO, "缓存回收失败（${cacheDir}）：${e.message}", e)
+        }
+        // 入史：与 install/prune 同一条纪律 —— 「清了多少」是用户回看时唯一能对上的凭据。
+        // detail 里带上读不到 lock 的项目名：那些项目的包**没有**被保护，用户有权知道。
+        val why = buildString {
+            append("removed=${report.removedEntries} entries/")
+            append(report.removedBytes / 1024 / 1024).append("MB；保留 ").append(report.keptEntries)
+            append(" 条（lock 闭包 ").append(report.keepCount).append(" 项）")
+            if (report.indexRebuilt) append("；顺带修复了缓存索引里的悬空引用")
+            if (unreadable.isNotEmpty()) append("；以下项目 lock 读不出来，其依赖未被保护：").append(unreadable.sorted())
+        }
+        history?.record(InstallHistoryOp.CACHE_RECLAIM, "", true, why)
+        return NpmCacheReclaimReport(
+            removedEntries = report.removedEntries,
+            removedBytes = report.removedBytes,
+            keptEntries = report.keptEntries,
+            keptBytes = report.keptBytes,
+            keepCount = report.keepCount,
+            indexRebuilt = report.indexRebuilt,
+        )
+    }
 
     override suspend fun storage(): Map<String, NodeModulesStats> {
         if (!Files.isDirectory(layout.projectsRoot)) return emptyMap()
@@ -1119,13 +1184,18 @@ class InstallCoordinator(
      *
      * 布局：npm cache 目录下**直接**就是 `_cacache/`（`cacache(cache)` = `<cache>/_cacache`，
      * 见 cacache `contentDir`），故 `--cache <dir>` 与 [NpmCacheSeedDeployer.cacacheDir]
-     * 之间差一层 `_cacache`。生产形态应是 `<App 数据根>/cache/npm-cache`（与 filesDir 平级，
-     * §10.2「系统可自动清，损失可接受」）；但协调器只被喂了 projectsRoot，**没有 cacheDir
-     * 这个真值**——反推 `<projectsRoot>/../../cache/npm-cache` 在 `files/scripts` 布局下才对，
-     * 一旦 projectsRoot 不在这棵树下（测试/非常规布局）就静默指错地方。
+     * 之间差一层 `_cacache`。真值是 `<App 数据根>/cache/npm-cache`（与 filesDir 平级，
+     * §10.2「系统可自动清，损失可接受」），判据的唯一一份是
+     * [NpmCacheSeedDeployer.cacheRoot]。
      *
-     * 处置：承认这是装配缺口而不是猜。缺省用 projectsRoot 同级的 `.npm-cache`（可预测、
-     * 测试可断言），并保留 [npmCacheDir] 注入点供 Android 装配层传入真值。
+     * 协调器只被喂了 projectsRoot，**没有 cacheDir 这个真值**——反推
+     * `<projectsRoot>/../../cache/npm-cache` 在 `files/scripts` 布局下才对，一旦 projectsRoot
+     * 不在这棵树下（测试/非常规布局）就静默指错地方。故仍保留 [npmCacheDir] 注入点。
+     *
+     * **生产装配已接上（2026-10-09 批 86）**：`NpmShellKit` 传
+     * `NpmCacheSeedDeployer.cacheRoot(cacheDir)` —— 此前不传，于是「喂给 npm 的 `--cache`」
+     * 与「bundle 导入落点」是两个目录，导入完 `ci --offline` 照样不命中（两边都不报错）。
+     * 缺省（未注入）仍退到 projectsRoot 同级的 `.npm-cache`（可预测、测试可断言）。
      */
     private fun resolveCacheDir(): Path =
         npmCacheDir ?: layout.projectsRoot.resolveSibling(".npm-cache")
