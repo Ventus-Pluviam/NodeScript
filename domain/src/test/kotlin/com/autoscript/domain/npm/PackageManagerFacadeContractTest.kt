@@ -94,7 +94,11 @@ class PackageManagerFacadeContractTest {
             NpmConsoleSnapshot::class.java.declaredFields.map { it.name },
         )
         assertEquals(listOf("seq", "line"), SequencedConsoleLine::class.java.declaredFields.map { it.name })
-        assertEquals(listOf("kind", "text", "atMillis"), NpmConsoleLine::class.java.declaredFields.map { it.name })
+        assertEquals(
+            listOf("kind", "text", "atMillis", "ok"),
+            NpmConsoleLine::class.java.declaredFields.map { it.name },
+            "ok 是终态行的成败位：呈现层按它着色，**不按文本猜**（宿主改措辞不该让颜色静默失效）",
+        )
         assertEquals(
             listOf("ECHO", "PHASE", "OUTPUT", "WARNING", "RESULT"),
             NpmConsoleLineKind.entries.map { it.name },
