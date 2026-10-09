@@ -26,6 +26,26 @@ data class InstallConfig(
     val quotaWarnRatio: Double = 0.8,                  // 80% 黄
 )
 
+/**
+ * 一次重操作的结果。
+ *
+ * [summary] 进审计与 `Finished.detail`（一句话的人类可读结论）。
+ *
+ * [outputTail] 是**命令自己的输出尾部**（2026-10-09 批 84 新增）：控制台要把
+ * 「npm 到底说了什么」显示出来，而 `Finished.detail` 只放得下一句摘要。
+ * null = 该执行体给不出（[HeavyOpExecutor.Unavailable]、测试替身）——
+ * **不拿摘要冒充输出**：控制台会把它渲染成「本次没有捕获到命令输出」，
+ * 而不是把摘要原样贴第二遍。
+ *
+ * 为什么是**尾部**而不是全量：npm 装一个大依赖能刷出几万行，而用户真正要看的是
+ * 最后那段（错误栈、警告、`added N packages in Xs`）。有界截断是契约的一部分，
+ * 全量 stdout 是另一条面（真流式，本批明确不做）。
+ */
+data class HeavyOpOutcome(
+    val summary: String,
+    val outputTail: String? = null,
+)
+
 fun interface HeavyOpExecutor {
     /**
      * 在已分配的事务上下文里执行重操作；args 为 npm CLI 参数（install/ci/…）。
@@ -36,11 +56,11 @@ fun interface HeavyOpExecutor {
      * 合作式响应取消（阻塞 IO 拆成可中断段、子进程随取消销毁）——不响应取消的执行体
      * 会在超时后变成孤儿：项目锁虽已释放，但它仍可能与新会话争抢同一 stageDir。
      */
-    suspend fun execute(op: HeavyOp, sink: ProgressSink): String   // 返回摘要（人类可读）
+    suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome
 
     /** 默认：无引擎可用 → 如实 ERR_NOT_IMPLEMENTED。 */
     object Unavailable : HeavyOpExecutor {
-        override suspend fun execute(op: HeavyOp, sink: ProgressSink): String {
+        override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
             throw AutojsException(
                 ErrorCode.ERR_NOT_IMPLEMENTED,
                 "安装会话引擎未接入：重操作 ${op.args.joinToString(" ")} 未执行（编排已完成：journal=${op.nonce}）",

@@ -135,6 +135,32 @@ class NpmConsoleKeysTest {
         }
     }
 
+    // —— 包说明符抽取（宿主侧装前预检用）——
+
+    @Test
+    fun `包说明符抽取：名字与范围分开，旗标不算包`() {
+        assertEquals(
+            listOf(PackageSpec("axios", "1.7.0"), PackageSpec("dayjs")),
+            NpmConsoleKeys.packageSpecsIn(listOf("axios@1.7.0", "--save-dev", "dayjs")),
+        )
+    }
+
+    @Test
+    fun `scope 包名的 @ 不是版本分隔符（切第一个会把 @acme 切坏）`() {
+        assertEquals(listOf(PackageSpec("@acme/pkg")), NpmConsoleKeys.packageSpecsIn(listOf("@acme/pkg")))
+        assertEquals(
+            listOf(PackageSpec("@acme/pkg", "2.0.0")),
+            NpmConsoleKeys.packageSpecsIn(listOf("@acme/pkg@2.0.0")),
+            "切点必须是最后一个 @：首位那个是 scope 的",
+        )
+    }
+
+    @Test
+    fun `没有包说明符时给空表（预检据此跳过，不拿空包名去问）`() {
+        assertEquals(emptyList<PackageSpec>(), NpmConsoleKeys.packageSpecsIn(listOf("--offline", "--no-save")))
+        assertEquals(emptyList<PackageSpec>(), NpmConsoleKeys.packageSpecsIn(emptyList()))
+    }
+
     // —— 项目号判据（唯一一份在 ScriptPaths）——
 
     @Test

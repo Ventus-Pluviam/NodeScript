@@ -28,9 +28,9 @@ class NpmBridgeHandlerTest {
     private val installed = mutableListOf<Pair<String, List<PackageSpec>>>()
 
     private class RecordingExecutor(val sink: (String, List<PackageSpec>) -> Unit) : HeavyOpExecutor {
-        override suspend fun execute(op: HeavyOp, sink2: ProgressSink): String {
+        override suspend fun execute(op: HeavyOp, sink2: ProgressSink): HeavyOpOutcome {
             sink(op.projectId, op.args.drop(1).map { s -> parseLikeHandler(s) })
-            return "ok"
+            return HeavyOpOutcome("ok")
         }
 
         /** 与 NpmBridgeHandler.parseSpec 同规则的 spec 反拆（双断言防漂移）。 */

@@ -16,6 +16,13 @@ import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConfigKey
+import com.autoscript.domain.npm.NpmConsoleCommand
+import com.autoscript.domain.npm.NpmConsoleHandle
+import com.autoscript.domain.npm.NpmConsoleKeys
+import com.autoscript.domain.npm.NpmConsoleLine
+import com.autoscript.domain.npm.NpmConsoleLineKind
+import com.autoscript.domain.npm.NpmConsoleSnapshot
+import com.autoscript.domain.npm.SequencedConsoleLine
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NpmRegistryKeys
@@ -160,6 +167,18 @@ class InstallCoordinator(
     // 桥没有主动推面，脚本只能带游标来取 —— 两个环与两条 Flow 在同一批投递点一起写）。
     private val installEventRing = SeqRing<InstallEvent>(capacity = RING_CAPACITY)
     private val approvalRing = SeqRing<ApprovalRequest>(capacity = RING_CAPACITY)
+    /**
+     * 控制台输出环（§10.9 第 3 条，2026-10-09 批 84）。
+     *
+     * **与 [installEventRing] 分开而不是复用它**：事件环装的是 [InstallEvent]（脚本侧的
+     * 契约形状，`bridge/js` 逐字对齐），控制台还要显示**不是事件**的东西 ——
+     * 用户敲的那行（ECHO）、`ls`/`audit` 这类轻操作的渲染结果（OUTPUT）。把 ECHO 塞进
+     * 事件环等于为宿主的一个界面去改脚本侧的事件契约。
+     *
+     * 按 projectId 过滤与事件环同款（[SeqRing.drain]）——控制台一次只看一个项目，
+     * 而「一个项目刚跑完的命令」正是它要显示的东西。
+     */
+    private val consoleRing = SeqRing<NpmConsoleLine>(capacity = RING_CAPACITY)
     private val handles = ConcurrentHashMap<String, TrackedOp>()
     private val handleSeq = AtomicLong(0)
 
@@ -203,8 +222,10 @@ class InstallCoordinator(
     // ══════════ 重操作 ══════════
 
     override suspend fun install(projectId: String, specs: List<PackageSpec>, flags: InstallFlags): InstallHandle {
-        // 入口即拒：git: 依赖（§10.3 明确不可行）
-        specs.firstOrNull { (it.version ?: "").startsWith("git") || it.name.startsWith("git:") }
+        // 入口即拒：git: 依赖（§10.3 明确不可行）。判据是 [NpmConsoleKeys.isGitSpec] 的
+        // **唯一一份** —— 控制台那条路（`npm install git+…`）读的是同一个函数，
+        // 抄第二份必然漂，而漂的那份正好是用户看到的那句话。
+        specs.firstOrNull { NpmConsoleKeys.isGitSpec(it.version ?: "") || NpmConsoleKeys.isGitSpec(it.name) }
             ?.let {
                 throw AutojsException(
                     ErrorCode.ERR_NOT_SUPPORTED,
@@ -515,6 +536,132 @@ class InstallCoordinator(
             }
         }
         return out
+    }
+
+    // ══════════ 控制台命令面（§10.9 第 3 条，2026-10-09 批 84） ══════════
+
+    /**
+     * 在控制台执行一行命令。
+     *
+     * 三段式：**解析 → 回显 → 派发**。解析用 [NpmConsoleKeys.parse]（判据的唯一一份，
+     * 与界面侧读的是同一个结论）；回显是**先**落 ECHO 行**再**派发 —— 于是
+     * 「我敲了什么」与「为什么没跑成」在控制台里同一处看得见，而不是靠界面去猜
+     * `runScript` 抛出来的异常是「已入队」还是「跑不起来」。
+     *
+     * 派发按 §10.6 的轻/重拆分：
+     * - 轻操作（`ls`/`list`/`audit`）**同步现取**、不占安装会话（与 [list] 同纪律），
+     *   结果渲染成 OUTPUT 行 —— 这正是「控制台是 npm 终端」在 P0 上能立刻兑现的那一半；
+     * - 重操作（`install`/`uninstall`/`ci`/`prune`/`dedupe`）走 [enqueueHeavy]，
+     *   磁盘预检/配额/项目锁/全局会话**一道不少**（复用，不另起一套门禁）；
+     * - `npm run` / `npx` 走 T1 门禁（[runScript]/[exec]）：未获批 → `ERR_PERMISSION_DENIED`
+     *   且请求已入队；获批但 spawn 桥未接 → `ERR_NOT_IMPLEMENTED`。两条都**如实**，
+     *   且都在 ECHO 行之后抛出（用户看得见自己敲的那行）。
+     *
+     * 解析不过抛 [IllegalArgumentException] 原文；项目号不合法同样抛。
+     */
+    override suspend fun runConsoleCommand(projectId: String, line: String): NpmConsoleHandle {
+        val handleId = "con-${handleSeq.incrementAndGet()}"
+        val at = now()
+        // 项目号判据与落盘侧同源（[NpmConsoleKeys.rejectProjectId] → `ScriptPaths.PROJECT_ID`）。
+        NpmConsoleKeys.rejectProjectId(projectId)?.let { throw IllegalArgumentException(it) }
+        when (val cmd = NpmConsoleKeys.parse(line)) {
+            is NpmConsoleCommand.Rejected -> throw IllegalArgumentException(cmd.reason)
+            is NpmConsoleCommand.Npm -> {
+                consoleLine(projectId, echoLine(line, at))
+                if (cmd.sub in NpmConsoleKeys.LIGHT_SUBCOMMANDS) {
+                    runLightConsoleCommand(projectId, cmd)
+                } else {
+                    // 装前多镜像交叉校验（§10.5-1）**不能**只在 [install] 那条路上：
+                    // 控制台敲 `npm install axios` 若绕过它，同一个动作就会因为入口不同
+                    // 而受不同程度的保护 —— 门禁的强度不该取决于用户从哪个界面按下去。
+                    // 包说明符由 [NpmConsoleKeys.packageSpecsIn] 从原样透传的 argv 里取
+                    // （argv 本身一个字不改，装的东西与手敲 npm 完全一致）。
+                    //
+                    // 入史那一栏只给 `listOf(cmd.sub)` 而不是完整 argv：审计表要长期留存，
+                    // 而用户手敲的 argv 可能夹着凭据形态的参数（`--//registry/:_authToken=…`、
+                    // `--otp`）—— 存原文等于把用户手滑敲进来的东西永久写进盘。真正的 argv
+                    // 一个字不改地交给 npm（见下一行的 `listOf(cmd.sub) + cmd.args`）。
+                    if (cmd.sub == "install") {
+                        crossCheckRegistry(projectId, NpmConsoleKeys.packageSpecsIn(cmd.args), listOf(cmd.sub))
+                    }
+                    enqueueHeavy(projectId, listOf(cmd.sub) + cmd.args)
+                }
+            }
+            is NpmConsoleCommand.Run -> {
+                consoleLine(projectId, echoLine(line, at))
+                runScript(projectId, cmd.script, cmd.args)
+            }
+            is NpmConsoleCommand.Exec -> {
+                consoleLine(projectId, echoLine(line, at))
+                exec(projectId, cmd.bin, cmd.args)
+            }
+        }
+        return NpmConsoleHandle(handleId = handleId, projectId = projectId, line = line, enqueuedAtMillis = at)
+    }
+
+    /**
+     * 控制台输出读数（seq 游标拉取）。
+     *
+     * [running] 的判据是**句柄账**（不是「有没有新行」）：正在排队的重操作也算在跑 ——
+     * 呈现层据此禁用输入行，而「排队中」正是用户最需要看到「它还没结束」的那一段。
+     */
+    override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot {
+        val (first, last, picked) = consoleRing.drain(projectId, sinceSeq, maxLines)
+        return NpmConsoleSnapshot(
+            firstSeq = first,
+            lastSeq = last,
+            lines = picked.map { SequencedConsoleLine(it.first, it.second) },
+            running = handles.values.any { it.handle.projectId == projectId && !it.done },
+        )
+    }
+
+    /** 用户敲的那行（原文回显；`$ ` 前缀是控制台的读法，不是命令的一部分）。 */
+    private fun echoLine(line: String, atMillis: Long) = NpmConsoleLine(
+        kind = NpmConsoleLineKind.ECHO,
+        text = "$ " + line.trim(),
+        atMillis = atMillis,
+    )
+
+    /**
+     * 轻操作在控制台里的**同步**执行与渲染（零 Node 进程，§10.6）。
+     *
+     * 项目目录不存在时如实说 —— 不 `createDirectories`：控制台敲 `npm ls` 不该
+     * 顺手造出一个空项目（那是部署/新建脚本的事）。
+     */
+    private suspend fun runLightConsoleCommand(projectId: String, cmd: NpmConsoleCommand.Npm) {
+        val at = now()
+        val root = layout.projectRoot(projectId)
+        if (!Files.isDirectory(root)) {
+            consoleLine(
+                projectId,
+                NpmConsoleLine(
+                    NpmConsoleLineKind.RESULT,
+                    "项目 $projectId 的目录不存在（$root）：先在项目页建一个项目再装依赖",
+                    at,
+                ),
+            )
+            return
+        }
+        val text = when (cmd.sub) {
+            "ls", "list" -> {
+                val locked = LockfileReader.readLocked(layout.lockfile(projectId))
+                if (locked.isEmpty()) "（没有已装的依赖：package-lock.json 不存在或为空）"
+                else locked.sortedBy { it.name }.joinToString("\n") { "${it.name}@${it.version}" }
+            }
+            "audit" -> {
+                val report = audit(projectId, offline = true)
+                if (report.vulnerabilities.isEmpty()) "离线 OSV 库：未发现已知漏洞（offline=${report.offline}）"
+                else report.vulnerabilities.joinToString("\n") {
+                    "${it.severity} ${it.pkgName} ${it.id}"
+                }
+            }
+            else -> "（内部错误：$cmd 不在轻操作白名单里）"
+        }
+        consoleLine(projectId, NpmConsoleLine(NpmConsoleLineKind.OUTPUT, text, at))
+        consoleLine(
+            projectId,
+            NpmConsoleLine(NpmConsoleLineKind.RESULT, "npm ${cmd.sub} 完成（轻操作：Kotlin 直读，零 Node 进程）", now()),
+        )
     }
 
     // ══════════ 审批（人机分离 §10.5） ══════════
@@ -833,7 +980,7 @@ class InstallCoordinator(
             // 不会把外层协程的取消（用户取消/UI 销毁）吞成异常再往下传。
             // 无此时限的后果是具体故障而非理论风险：npm 会话卡死 → projectLock 与
             // globalSession 双双不释放 → 此后所有 npm 操作排队到天荒地老。
-            val summary = withTimeoutOrNull(timeoutMillis) {
+            val outcome = withTimeoutOrNull(timeoutMillis) {
                 executor.execute(
                     HeavyOp(nonce, projectId, args, layout.projectRoot(projectId), stageDir, timeoutMillis),
                 ) { ev -> events.tryEmit(ev) }
@@ -861,8 +1008,19 @@ class InstallCoordinator(
                     "lock 签名失败（应用密钥不可用？§10.5-1 安全降级须显式）：${e.message}",
                 )
             }
-            history?.record(opName(args), projectId, true, summary)
-            emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
+            // 命令自己的输出尾部先进控制台环（§10.9 第 3 条，2026-10-09 批 84），再发终态：
+            // 顺序反了会看到「完成」压在输出上面。执行体给不出（null）时**如实说**，
+            // 不拿摘要冒充输出。
+            consoleLine(
+                projectId,
+                NpmConsoleLine(
+                    kind = NpmConsoleLineKind.OUTPUT,
+                    text = outcome.outputTail ?: "（本次没有捕获到命令输出）",
+                    atMillis = now(),
+                ),
+            )
+            history?.record(opName(args), projectId, true, outcome.summary)
+            emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = outcome.summary))
         } catch (e: CancellationException) {
             // 事务与句柄须先收尾，再原样传播调用方取消。
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
@@ -952,7 +1110,49 @@ class InstallCoordinator(
         // 先落环再进 Flow：两条路是同一批事件的两个视图（拉取侧有界重放、订阅侧即收即走），
         // 顺序反了会出现「Flow 已发、环还没记」的窗口 —— 拉取方在同一刻会拿到旧批次。
         installEventRing.push(e.projectId, e)
+        // 控制台投影在**唯一一处**（2026-10-09 批 84）：runHeavy 与 runScriptOps 的全部
+        // 阶段/警告/终态都经这里，两条执行路径不必各写一遍，也就不会有一条忘了投影。
+        consoleLine(e.projectId, projectConsoleLine(e))
         events.emit(e)
+    }
+
+    /** 推一行进控制台输出环（唯一投递点，与 [emit] 同纪律）。 */
+    private fun consoleLine(projectId: String, line: NpmConsoleLine) {
+        consoleRing.push(projectId, line)
+    }
+
+    /**
+     * [InstallEvent] → 控制台行的投影（判读只在这一处，呈现层按 [NpmConsoleLineKind] 着色）。
+     *
+     * 事件环与控制台环是**两个视图**，谁也不替代谁：脚本侧的 `onProgress`/`onWarning`
+     * 形状一个字不改（那是 §10.8 的契约），控制台只是宿主自己的界面。
+     */
+    private fun projectConsoleLine(e: InstallEvent): NpmConsoleLine = when (e) {
+        is InstallEvent.Progress -> NpmConsoleLine(
+            kind = NpmConsoleLineKind.PHASE,
+            text = phaseText(e.phase) + (e.pkg?.let { "  $it" } ?: ""),
+            atMillis = now(),
+        )
+        is InstallEvent.Warning -> NpmConsoleLine(
+            kind = NpmConsoleLineKind.WARNING,
+            text = e.message,
+            atMillis = now(),
+        )
+        is InstallEvent.Finished -> NpmConsoleLine(
+            kind = NpmConsoleLineKind.RESULT,
+            text = if (e.success) (e.detail ?: "完成") else "失败：${e.detail ?: "（无详情）"}",
+            atMillis = now(),
+        )
+    }
+
+    /** 阶段的中文说法（控制台是给人看的；`bridge/js` 那边仍走 `phaseWire` 的连字符口径）。 */
+    private fun phaseText(p: InstallEvent.Phase): String = when (p) {
+        InstallEvent.Phase.QUEUED -> "排队中"
+        InstallEvent.Phase.RESOLVE -> "解析依赖"
+        InstallEvent.Phase.DOWNLOAD -> "下载"
+        InstallEvent.Phase.REIFY -> "写入 node_modules"
+        InstallEvent.Phase.POST_CHECK -> "收尾校验"
+        InstallEvent.Phase.DONE -> "完成"
     }
 
 

@@ -61,15 +61,38 @@ object NpmConsoleKeys {
         args.firstOrNull { !it.startsWith("-") && isGitSpec(it) }
 
     /**
+     * 一行命令里的包说明符（`name[@range]`），供宿主侧的装前预检用。
+     *
+     * 切分点取**最后一个** `@` 且不在首位 —— 首位那个是 scope 的（`@acme/pkg`），
+     * 切了会把 `@acme/pkg` 读成「空名字 + 范围 acme/pkg」。
+     *
+     * **已知边界（如实写在契约里，不假装没有）**：不处理「旗标带值」的形态 ——
+     * `npm install --registry https://x axios` 里的那个 URL 会被当成包名。真 argv 是
+     * **原样透传**给 npm 的（装的东西一点没错），受影响的只有装前的多镜像交叉校验
+     * （它会拿一个不存在的包名去问，结论是「未校验」而不是「不一致」—— 不会误拦）。
+     * 要修就得重写 npm 的参数文法，而半吊子重写正是「看起来对、实际是另一个包」
+     * 这类静默错的来源，与 [parse] 拒绝 shell 引号解析是同一条理由。
+     */
+    fun packageSpecsIn(args: List<String>): List<PackageSpec> =
+        args.filter { !it.startsWith("-") }.map { token ->
+            val at = token.lastIndexOf('@')
+            if (at > 0) PackageSpec(token.substring(0, at), token.substring(at + 1)) else PackageSpec(token)
+        }
+
+    /**
      * 项目号合法性：合法 → null；不合法 → **拒收原文**。
      *
      * 判据在 [com.autoscript.domain.scripts.ScriptPaths.PROJECT_ID]（项目路径约定的
      * 单一事实来源），本函数只是把它翻成一句给用户看的话 —— 界面当场拒与落盘侧
      * `require` 因此同源。
+     *
+     * 话术里**没有「点」**：`ScriptPaths.PROJECT_ID` 于 2026-10-09 批 84 收掉了 `.`
+     * （它放行 `..`，而 `projectsRoot.resolve("..")` 正好跳出项目根）。话术跟着判据走，
+     * 否则用户按话术写一个 `a.b` 却被拒 —— 那比不写还坏。
      */
     fun rejectProjectId(projectId: String): String? =
         if (com.autoscript.domain.scripts.ScriptPaths.isValidProjectId(projectId)) null
-        else "项目号不合法（只允许字母、数字、点、下划线、连字符）：$projectId"
+        else "项目号不合法（只允许字母、数字、下划线、连字符）：$projectId"
 
     /**
      * 解析一行命令。

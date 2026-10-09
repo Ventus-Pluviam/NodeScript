@@ -6,6 +6,7 @@ import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.NpmRegistryKeys
+import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.ApprovalDecision
 import com.autoscript.domain.npm.ApprovalStatus
 import com.autoscript.domain.npm.InstallEvent
@@ -55,10 +56,12 @@ class InstallCoordinatorTest {
         val block: suspend (HeavyOp) -> Unit = {},
     ) : HeavyOpExecutor {
         val calls = mutableListOf<HeavyOp>()
-        override suspend fun execute(op: HeavyOp, sink: ProgressSink): String {
+        override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
             calls += op
             block(op)
-            return "ok:${op.args.first()}"
+            // 带上 outputTail：控制台那条链（§10.9 第 3 条）要它，返回 null 会让
+            // 「没有捕获到命令输出」把真正的输出盖掉。
+            return HeavyOpOutcome("ok:${op.args.first()}", "npm output for ${op.args.first()}")
         }
     }
 
@@ -69,7 +72,7 @@ class InstallCoordinatorTest {
      */
     private fun harvesting(vararg deps: Pair<String, String>): HeavyOpExecutor =
         object : HeavyOpExecutor {
-            override suspend fun execute(op: HeavyOp, sink: ProgressSink): String {
+            override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
                 for ((name, version) in deps) {
                     val p = op.stageDir.resolve(name)
                     Files.createDirectories(p)
@@ -80,7 +83,7 @@ class InstallCoordinatorTest {
                 val lockJson = deps.joinToString(",") { (n, v) -> "\"node_modules/$n\":{\"version\":\"$v\",\"integrity\":\"sha512-x\"}" }
                 Files.write(op.projectRoot.resolve("package.json"), ("""{"name":"p1","version":"1.0.0","dependencies":{""" + depJson + """}}""").toByteArray())
                 Files.write(op.projectRoot.resolve("package-lock.json"), ("""{"lockfileVersion":3,"packages":{"":{},""" + lockJson + """}}""").toByteArray())
-                return "ok:" + op.args.first()
+                return HeavyOpOutcome("ok:" + op.args.first(), "npm output for ${op.args.first()}")
             }
         }
 
@@ -375,12 +378,12 @@ class InstallCoordinatorTest {
         val inflight = java.util.concurrent.atomic.AtomicInteger()
         val peak = java.util.concurrent.atomic.AtomicInteger()
         val exec = object : HeavyOpExecutor {
-            override suspend fun execute(op: HeavyOp, sink: ProgressSink): String {
+            override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
                 val now = inflight.incrementAndGet()
                 peak.updateAndGet { maxOf(it, now) }
                 delay(50)
                 inflight.decrementAndGet()
-                return "ok"
+                return HeavyOpOutcome("ok")
             }
         }
         val c = coordinator(executor = exec)
@@ -1279,6 +1282,164 @@ class InstallCoordinatorTest {
             }
         }
         assertTrue(asked.isEmpty(), "非法输入连请求都不该发出：$asked")
+    }
+
+    // ═══ 控制台命令面（§10.9 第 3 条，2026-10-09 批 84） ═══
+
+    @Test
+    fun `控制台拒收：抛原文且不排队（不落句柄、不写输出环）`() = runBlocking {
+        val c = coordinator()
+        for (line in listOf("", "   ", "ls -la", "npm publish", "npm run", "npm install git+https://x.git")) {
+            val ex = assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { c.runConsoleCommand("p1", line) }
+            }
+            assertTrue(!ex.message.isNullOrBlank(), "拒收必须给出理由原文（输入「$line」）")
+        }
+        assertTrue(cHandles(c).isEmpty(), "拒收的命令不得在句柄账里留下东西")
+        assertTrue(
+            c.consoleOutput("p1", 0, 64).lines.isEmpty(),
+            "拒收连回显都不该写 —— 界面侧当场拒与宿主侧拒读的是同一句话，环里多一行只会让人以为它跑过",
+        )
+    }
+
+    @Test
+    fun `控制台轻操作不占全局安装会话（重操作在跑时仍读得到）`() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val c = coordinator(executor = FakeExecutor { entered.complete(Unit); release.await() })
+        writeManifest("heavy", """{"name":"heavy","version":"1.0.0"}""")
+        writeLock("p2", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0"}}}""")
+
+        val install = launch { c.install("heavy", listOf(PackageSpec("axios"))) }
+        entered.await()   // 重操作已占住 globalSession
+
+        // 轻操作若也去抢 globalSession，这一句会一直挂到 release 之后（withTimeout 当场红）
+        withTimeout(5_000) { c.runConsoleCommand("p2", "npm ls") }
+        val snap = c.consoleOutput("p2", 0, 64)
+        assertTrue(
+            snap.lines.any { it.line.kind == NpmConsoleLineKind.OUTPUT && it.line.text.contains("axios@1.7.0") },
+            "轻操作必须当场出结果（实为 ${snap.lines.map { it.line } }）",
+        )
+        assertFalse(snap.running, "running 的判据是句柄账：在跑的是别的项目，p2 上没有命令")
+
+        release.complete(Unit)
+        install.join()
+    }
+
+    @Test
+    fun `控制台重操作走 enqueueHeavy：磁盘预检与收尾路径一道不少`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
+
+        // ① 磁盘预检不得因入口是控制台就被绕过（同一动作在两个界面下强度必须相同）
+        val tight = coordinator(free = 100L * 1024 * 1024)
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { tight.runConsoleCommand("p1", "npm install axios") }
+        }
+        assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
+
+        // ② 门禁过了就真排队：执行体收到的是**原样透传**的 argv
+        val exec = FakeExecutor()
+        val c = coordinator(executor = exec)
+        c.runConsoleCommand("p1", "npm install axios@1.7.0")
+        assertEquals(listOf("install", "axios@1.7.0"), exec.calls.single().args)
+        assertTrue(cHandles(c).isEmpty(), "终态即逐出句柄（与 install 同一条收尾路径）")
+    }
+
+    @Test
+    fun `控制台输出环按 projectId 过滤，且丢包留洞不静默`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
+        writeManifest("p2", """{"name":"p2","version":"1.0.0"}""")
+        val c = coordinator()
+        c.runConsoleCommand("p1", "npm ls")
+        c.runConsoleCommand("p2", "npm ls")
+
+        val p1 = c.consoleOutput("p1", 0, 64).lines
+        val p2 = c.consoleOutput("p2", 0, 64).lines
+        assertEquals(3, p1.size, "ECHO + OUTPUT + RESULT")
+        assertEquals(3, p2.size)
+        assertTrue(p1.all { it.seq < p2.first().seq }, "seq 是环内全局单调的，drain 才按 projectId 过滤")
+
+        // 洞：塞满一个环再多一条，最旧那条被丢 —— first > sinceSeq+1 就是「中间丢过」
+        val c2 = coordinator()
+        writeManifest("p3", """{"name":"p3","version":"1.0.0"}""")
+        repeat(InstallCoordinator.RING_CAPACITY + 1) { c2.runConsoleCommand("p3", "npm ls") }
+        val snap = c2.consoleOutput("p3", 0, 8)
+        assertTrue(snap.firstSeq > 1, "丢最旧必须留洞（firstSeq=${snap.firstSeq}）：静默断流才是要禁的")
+        assertEquals(8, snap.lines.size, "batch 截断，未取完的下一批从 lastSeq+1 续")
+    }
+
+    @Test
+    fun `控制台 npx 与 npm run：先落 ECHO 行再抛，且请求真的入队`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"echo hi"}}""")
+        val pkg = layout.projectRoot("p1").resolve("node_modules/tooly")
+        Files.createDirectories(pkg)
+        Files.write(pkg.resolve("package.json"), ("""{"name":"tooly","version":"2.0.0","bin":"cli.js"}""").toByteArray())
+        Files.write(pkg.resolve("cli.js"), "#!/usr/bin/env node\n".toByteArray())
+
+        val c = coordinator()
+        val run = assertThrows(AutojsException::class.java) {
+            runBlocking { c.runConsoleCommand("p1", "npm run build") }
+        }
+        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, run.error)
+        val npx = assertThrows(AutojsException::class.java) {
+            runBlocking { c.runConsoleCommand("p1", "npx tooly") }
+        }
+        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, npx.error)
+
+        val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
+        assertEquals(
+            listOf("$ npm run build", "$ npx tooly"),
+            lines.filter { it.kind == NpmConsoleLineKind.ECHO }.map { it.text },
+            "抛之前必须已经回显：否则用户只看到一句错误，不知道自己敲的那行被拒了",
+        )
+        assertTrue(c.pendingApprovals("p1").isNotEmpty(), "「已入队」得是真的入队，不是错误话术里的一句话")
+    }
+
+    @Test
+    fun `控制台 npm run 已获批：门禁过了但 spawn 桥未接，如实 ERR_NOT_IMPLEMENTED`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"echo hi"}}""")
+        val led = ApprovalLedger()
+        approveRunScript(led, "p1", "build")
+        val c = coordinator(ledger = led)   // script 缺省 = ScriptOpExecutor.Unavailable
+
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { c.runConsoleCommand("p1", "npm run build") }
+        }
+        assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED, ex.error, "门禁是诚实的：过了也不假装跑过")
+        assertTrue(
+            c.consoleOutput("p1", 0, 64).lines.any { it.line.kind == NpmConsoleLineKind.ECHO },
+            "失败的那次也要留下回显",
+        )
+    }
+
+    @Test
+    fun `控制台输出环收到执行体带出的 npm 输出尾部（不拿摘要冒充）`() = runBlocking {
+        val c = coordinator()   // FakeExecutor 的 outputTail = "npm output for install"
+        c.install("p1", listOf(PackageSpec("axios")))
+        val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
+        assertTrue(
+            lines.any { it.kind == NpmConsoleLineKind.OUTPUT && it.text == "npm output for install" },
+            "执行体给了 outputTail 就必须原样显示（实为 $lines）",
+        )
+        assertEquals(NpmConsoleLineKind.RESULT, lines.last().kind, "终态行必须压在输出之后")
+    }
+
+    @Test
+    fun `执行体给不出输出时如实说，不拿摘要冒充输出`() = runBlocking {
+        val exec = object : HeavyOpExecutor {
+            override suspend fun execute(op: HeavyOp, sink: ProgressSink) = HeavyOpOutcome("ok")
+        }
+        val c = coordinator(executor = exec)
+        c.install("p1", listOf(PackageSpec("axios")))
+        val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
+        assertTrue(
+            lines.any { it.kind == NpmConsoleLineKind.OUTPUT && it.text.contains("没有捕获到命令输出") },
+            "给不出就说给不出（实为 $lines）",
+        )
+        assertTrue(
+            lines.none { it.kind == NpmConsoleLineKind.OUTPUT && it.text == "ok" },
+            "摘要不得冒充输出：那会让「npm 什么都没说」与「npm 说了 ok」看起来一样",
+        )
     }
 
     // —— helpers ——
