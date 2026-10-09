@@ -2,6 +2,7 @@ package com.autoscript.domain.host
 
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.npm.ApprovalTicket
+import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
@@ -365,6 +366,43 @@ interface HostSummary {
      */
     suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int = 256): NpmConsoleSnapshot =
         NpmConsoleSnapshot(firstSeq = sinceSeq, lastSeq = sinceSeq, lines = emptyList(), running = false)
+
+    /**
+     * 依赖面板的**变更半边**入口：跑一行安装/卸载命令（§10.9 第 1 条，2026-10-09 批 87）。
+     *
+     * **为什么是「一行命令」而不是「一组 `PackageSpec`」**：门禁强度不该取决于用户从哪个
+     * 界面按下去 —— 依赖面板的输入行与控制台敲的是同一种东西，故两者走**同一条**执行入口
+     * （`InstallCoordinator.runConsoleCommand`）：同一份判据（`NpmConsoleKeys.parse`）、
+     * 同一套装前多镜像交叉校验、同一道磁盘/配额预检、同一把项目锁与全局安装会话。
+     * 新开一条「按 spec 装」的宿主口就是第二份安装入口，而两份入口的差别只在
+     * 「谁先忘了加某道门」上体现出来。
+     *
+     * 参数是**拼好的那一行原文**（`"npm install axios --save-dev"`），由 `:ui` 的
+     * `NpmInstallOps` 从输入框与旗标开关拼出来 —— 拼装规则住在呈现层（那里看得见开关），
+     * 而**判据**在宿主侧与界面侧读同一份。
+     *
+     * 与 [runNpmCommand] 是**同一个口**：后者是控制台的调用名，本方法只是让依赖面板
+     * 不必假装自己是控制台。实现方应把两者指向同一个函数体。
+     */
+    suspend fun runNpmPanelCommand(projectId: String, line: String): NpmConsoleHandle =
+        runNpmCommand(projectId, line)
+
+    /**
+     * 安装会话的**进度读数**（§10.9 第 1 条的阶段进度条，2026-10-09 批 87）。
+     *
+     * 与 [consoleOutput] 同形同纪律（seq 游标拉取、有界、空洞可见），但**问的是另一件事**：
+     * 控制台答「命令行发生了什么」（ECHO/OUTPUT/WARNING/RESULT 混在一条流里），
+     * 本口答「这次安装走到哪一步了」—— 故读的是**事件环**（`InstallEvent` 原样，
+     * 不经过控制台那层投影），呈现层据此画阶段条。
+     *
+     * **为什么不让呈现层从控制台输出里认阶段**：控制台那条流是给人看的文本，
+     * 从 `"下载"` 这样的中文串里认阶段就是**按文本猜**——宿主哪天改了措辞，
+     * 阶段条会静默停在第一格（与 `NpmConsoleLine.ok` 那条「成败不在呈现层猜」同一条纪律）。
+     *
+     * 缺省实现回空批次（未接线 = 没有事件，如实；游标原样带回，调用方以游标为准）。
+     */
+    suspend fun npmInstallEvents(projectId: String, sinceSeq: Long, maxBatch: Int = 64): InstallEventBatch =
+        InstallEventBatch(firstSeq = sinceSeq, lastSeq = sinceSeq, events = emptyList())
 }
 
 /**

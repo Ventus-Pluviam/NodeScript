@@ -10,6 +10,7 @@ import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.InstallHistoryEntry
+import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmMaintenanceAction
@@ -110,4 +111,10 @@ open class FakeHost(
 
     override suspend fun reclaimNpmCache(): NpmCacheReclaimReport =
         throw UnsupportedOperationException("本替身未提供 reclaimNpmCache（用例按需覆盖）")
+
+    override suspend fun runNpmPanelCommand(projectId: String, line: String): NpmConsoleHandle =
+        throw UnsupportedOperationException("本替身未提供 runNpmPanelCommand（用例按需覆盖）")
+
+    override suspend fun npmInstallEvents(projectId: String, sinceSeq: Long, maxBatch: Int): InstallEventBatch =
+        throw UnsupportedOperationException("本替身未提供 npmInstallEvents（用例按需覆盖）")
 }

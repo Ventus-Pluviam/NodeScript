@@ -41,10 +41,13 @@
     <ID>FunctionNaming:Menus.kt$@Composable private fun MenuItemRow(action: MenuAction, position: Int, onDismiss: () -&gt; Unit)</ID>
     <ID>FunctionNaming:Menus.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ActionBottomSheet( title: String, onDismiss: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
     <ID>FunctionNaming:Motion.kt$fun OvershootEasing(tension: Float): Easing</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onDecide: (requestId: String, approve: Boolean) -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onReclaimCache: () -&gt; Unit, onOpenAudit: () -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onDecide: (requestId: String, approve: Boolean) -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onReclaimCache: () -&gt; Unit, onOpenAudit: () -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onToggleDev: (Boolean) -&gt; Unit, onToggleOffline: (Boolean) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ApprovalCard(row: ApprovalRowState, enabled: Boolean, onDecide: (String, Boolean) -&gt; Unit)</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow(row: NpmRowState)</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceButton( label: String, action: NpmMaintenanceAction, busy: NpmMaintenanceAction?, onClick: (NpmMaintenanceAction) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallCard( state: NpmState, onDraft: (String) -&gt; Unit, onToggleDev: (Boolean) -&gt; Unit, onToggleOffline: (Boolean) -&gt; Unit, onSubmit: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallField( value: String, onChange: (String) -&gt; Unit, enabled: Boolean, onSubmit: () -&gt; Unit, modifier: Modifier, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallProgressRow(p: InstallProgressState)</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow(row: NpmRowState, enabled: Boolean, onRemove: (String) -&gt; Unit)</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceButton( label: String, action: NpmMaintenanceAction, busy: NpmMaintenanceAction?, enabled: Boolean, onClick: (NpmMaintenanceAction) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onReclaimCache: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun QuotaCard(state: NpmState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun SectionTitle(text: String)</ID>
@@ -118,12 +121,14 @@
     <ID>LongMethod:MainActivity.kt$MainActivity$@OptIn(ExperimentalFoundationApi::class) // LocalBringIntoViewSpec 在 foundation 1.7 仍是实验 API override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>LongMethod:ProjectScreen.kt$@Composable fun ProjectScreen( state: ProjectState, /** * 主题两态切换（⋮ 第一格，TG 日/夜同款 —— 目标模式写菜单项上）。 * * 参数是**这颗 ⋮ 在根坐标里的中心**：外壳的圆形揭示从它长出来（见 `centerInRoot`）。 */ onSwitchTheme: (Offset) -&gt; Unit, /** * 那一格的**文案** = 点它切到的那一档（TG `DialogsActivity` 的日夜项： * 当前深色写 "Day Mode"、当前浅色写 "Night Mode"）。 * * 由外壳下发而不是本屏自己算：本屏拿不到 `ThemeMode`（那是 `:ui` 外壳的状态）， * 而"当下是明是暗"这个事实在 `MainActivity` 里已经有了（`themeMode.isDark()`）。 */ themeSwitchLabel: String, /** 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。 */ onCreate: (projectId: String, name: String, isFolder: Boolean) -&gt; Unit, /** 读一个脚本文件的文本（**点文件**进编辑面时调；失败原文抛，本屏如实显示）。 */ onReadFile: suspend (projectId: String, relPath: String) -&gt; String, /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */ onSaveFile: suspend (projectId: String, relPath: String, content: String) -&gt; Unit, /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */ onSortChange: (FileSort, Boolean) -&gt; Unit, /** * 本页是否是 pager 当前停稳的那一页。pager 预组合邻页（`beyondViewportPageCount = 1`）， * 本屏的返回键拦截若不看它，用户在任务页按返回会被邻页的项目屏吞掉（去退一层目录）。 */ active: Boolean = true, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:TaskCenterScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun TaskCenterScreen( state: TaskCenterState, /** 控制台状态：本屏只取在途执行那几样（activeRuns/停止三态/读账），不碰日志行。 */ console: ConsoleState, onRunNow: (TaskRowState) -&gt; Unit, onCancel: (TaskRowState) -&gt; Unit, onRegister: (RegistrationForm) -&gt; Unit, onStopRun: (ActiveRunState) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>LongParameterList:NpmScreen.kt$( state: NpmState, onRefresh: suspend () -&gt; Unit, onDecide: (requestId: String, approve: Boolean) -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onReclaimCache: () -&gt; Unit, onOpenAudit: () -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onToggleDev: (Boolean) -&gt; Unit, onToggleOffline: (Boolean) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LoopWithTooManyJumpStatements:DeletionParticles.kt$DeletionParticles$for</ID>
     <ID>MatchingDeclarationName:Glyphs.kt$GlyphKind</ID>
     <ID>MatchingDeclarationName:Refresh.kt$RefreshAction</ID>
     <ID>TooGenericExceptionCaught:AuditOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:ConsoleCmdOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:MainActivity.kt$MainActivity$t: Exception</ID>
+    <ID>TooGenericExceptionCaught:NpmInstallOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:NpmMaintenanceOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:RegistryOps.kt$t: Exception</ID>
     <ID>TooGenericExceptionCaught:ScriptEditorScreen.kt$t: Exception</ID>

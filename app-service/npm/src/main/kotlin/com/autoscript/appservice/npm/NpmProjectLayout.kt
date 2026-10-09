@@ -40,10 +40,25 @@ class NpmProjectLayout(val projectsRoot: Path) {
 /** lockfile v3 已锁定包（name@version + integrity + 尺寸不可得→0，由 cache/tarball 头补）。 */
 data class LockedPkg(val name: String, val version: String, val integrity: String?, val resolvedSize: Long = 0)
 
-/** 缓存索引接缝（cacache content-v2 的查询抽象；生产实现读 cacheDir/npm-cache/_cacache）。 */
+/**
+ * 缓存索引接缝（cacache content-v2 的查询抽象；生产实现读 cacheDir/npm-cache/_cacache）。
+ *
+ * **为什么 `contentBytes` 有缺省实现**：它是**读数**而不是判据，而绝大多数替身
+ * （测试里 `CacheIndex { false }` 那种）只关心 `has` 的答案。给它一个缺省值
+ * 就不必让每个替身都写一遍「我量不到体积」——缺省 0 也是这里唯一诚实的值
+ * （替身背后没有缓存目录，就是 0 字节）。`fun interface` 仍成立：唯一的抽象方法
+ * 还是 `has`，带缺省体的方法不参与 SAM 转换。
+ */
 fun interface CacheIndex {
     /** 该 integrity（sha512-…）是否已物化在缓存。 */
     fun has(integrity: String): Boolean
+
+    /**
+     * content-v2 的总字节（§10.9 第 5 条的 `npm-cache` 尺寸栏）。
+     *
+     * 只算 content-v2：这个数字的用途是回答「回收缓存能腾出多少」，而回收动的正是它。
+     */
+    fun contentBytes(): Long = 0
 }
 
 /** 极简 lockfile v3 读取（手写解析：只取 packages 段的 version/integrity，不引入 JSON 库）。 */

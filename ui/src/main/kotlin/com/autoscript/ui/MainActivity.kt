@@ -92,6 +92,9 @@ import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.filterAudit
 import com.autoscript.ui.state.loadAudit
 import com.autoscript.ui.state.reclaimNpmCacheOp
+import com.autoscript.ui.state.pollInstallEvents
+import com.autoscript.ui.state.removeInstalled
+import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
@@ -624,6 +627,11 @@ class MainActivity : ComponentActivity() {
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
                 onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
                 onOpenAudit = onOpenAudit,
+                onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },
+                onToggleDev = { npmState = npmState.copy(installDev = it) },
+                onToggleOffline = { npmState = npmState.copy(installOffline = it) },
+                onSubmitInstall = { scope.launch { npmState = submitInstall(hostSummary(), npmState) } },
+                onRemoveInstalled = { name -> scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) } },
                 onBack = onCloseNpm,
                 modifier = Modifier,
             )
@@ -816,7 +824,15 @@ class MainActivity : ComponentActivity() {
             if (host == null) {
                 NpmState.failed(IllegalStateException("宿主摘要未接线（Application 未实现 HostSummary）"), previous)
             } else {
-                NpmState.of(host.npmSnapshot(), previous)
+                // 快照与**安装进度**同一次现取（§10.9 第 1 条，2026-10-09 批 87）：
+                // `:ui` 没有常驻轮询循环，宿主又是入队即返回的，故「刷新」这颗按钮
+                // 同时是阶段条的续拉入口 —— 分两次现取会让两个数字来自不同时刻。
+                val refreshed = NpmState.of(host.npmSnapshot(), previous)
+                if (refreshed.selectedProjectId != null) {
+                    pollInstallEvents(host, refreshed, refreshed.selectedProjectId)
+                } else {
+                    refreshed
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

@@ -51,7 +51,7 @@ class CacacheIndex(private val cacheDir: Path) : CacheIndex {
     }
 
     /** 缓存总字节（UI「包大小管理页」的 npm-cache 一栏）。 */
-    fun contentBytes(): Long {
+    override fun contentBytes(): Long {
         val root = NpmCacheSeedDeployer.cacacheDir(cacheDir).resolve("content-v2")
         if (!Files.isDirectory(root)) return 0
         var total = 0L

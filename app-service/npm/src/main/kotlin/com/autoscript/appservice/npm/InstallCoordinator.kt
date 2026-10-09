@@ -511,6 +511,9 @@ class InstallCoordinator(
         val pending = ledger.all()
             .filter { it.second.status == ApprovalStatus.PENDING }
             .map { it.first }
+        // 缓存体积**全机一份**，故在循环外量一次（循环里量就是同一个数字抄 N 遍，
+        // 而每遍都是一次全目录遍历 —— 见 cacheStorage 的 KDoc）。
+        val cache = cacheStorage()
         val projects = stats.keys.sorted().map { id ->
             NpmProjectSnapshot(
                 projectId = id,
@@ -519,6 +522,7 @@ class InstallCoordinator(
                 storage = stats[id],
                 quotaBytes = config.projectQuotaBytes,
                 quotaWarnRatio = config.quotaWarnRatio,
+                cache = cache,
             )
         }
         return NpmPanelSnapshot(projects = projects, pendingApprovals = pending)
@@ -632,6 +636,21 @@ class InstallCoordinator(
         }
         return out
     }
+
+    /**
+     * npm 缓存体积（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）。
+     *
+     * 量的是 `content-v2`（[CacacheIndex.contentBytes]）而不是整个缓存目录：这个数字的
+     * 用途是回答「回收缓存能腾出多少」，而回收动的正是 content-v2 —— 把 `index-v5`
+     * （几 KB 级的索引）算进来，配额条上的数字就会与回收回执里的删/留对不上，
+     * 而那两个数字摆在同一个屏幕上。
+     *
+     * 量不到（缓存目录还不存在）如实报 0：目录不存在就是「这个缓存是空的」。
+     */
+    override suspend fun cacheStorage(): NodeModulesStats =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            NodeModulesStats(projectId = "", pkgCount = 0, totalBytes = cacheIndex.contentBytes(), cacheBytes = 0)
+        }
 
     // ══════════ 控制台命令面（§10.9 第 3 条，2026-10-09 批 84） ══════════
 

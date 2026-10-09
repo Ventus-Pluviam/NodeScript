@@ -371,6 +371,30 @@ interface PackageManagerFacade {
     suspend fun storage(): Map<String, NodeModulesStats>
 
     /**
+     * npm 缓存体积读数（§10.9 第 5 条「per-project `node_modules` + `npm-cache` 尺寸」的
+     * 后半截，2026-10-09 批 87）。
+     *
+     * **为什么与 [storage] 分开而不是并进去**：两者的**键空间不同**。`storage()` 是
+     * 「每个项目各占多大」（`Map<projectId, …>`），而缓存按内容寻址、**全机只有一份**
+     * （§10.2）—— 把它按项目铺开就是同一个数字抄 N 份，而那 N 份会让人以为
+     * 「删掉这个项目的缓存」是件说得通的事。
+     *
+     * `projectId` 传空串（全局读数没有项目），与 [InstallHistoryEntry] 里 `registry`
+     * 那条全局变更传空串是同一手法。
+     *
+     * **只报 content-v2 的体积**（[NodeModulesStats.pkgCount] 为 0、`cacheBytes` 为 0）：
+     * 这个数字的用途是回答「回收缓存能腾出多少」，而回收动的正是 content-v2
+     * （`index-v5` 是几 KB 级的索引，混进来会让回执里的删/留数字与配额条对不上）。
+     * 量不到（缓存目录还不存在）→ `totalBytes = 0`，**不是** null：目录不存在就是
+     * 「这个缓存是空的」，与「没量到」是两件事（同 [NodeModulesStats] 那条口径）。
+     *
+     * 缺省实现回 0 字节：未接线的替身零改动即可编译，且 0 是这里唯一诚实的值
+     * （它没有缓存可报）。
+     */
+    suspend fun cacheStorage(): NodeModulesStats =
+        NodeModulesStats(projectId = "", pkgCount = 0, totalBytes = 0, cacheBytes = 0)
+
+    /**
      * 按 lock 闭包**回收** npm 缓存（§10.9 第 5 条「包大小管理页」的 cache clean 那颗按钮）。
      *
      * **不是 `npm cache clean --force`**（用户 2026-10-09 裁定）：§10 整卷的离线能力
@@ -605,8 +629,14 @@ data class NpmPanelSnapshot(
  * @property offlineGap 离线闭包缺口（lock 闭包 − 缓存），带尺寸；空 = 离线可重建。
  * @property storage null = 本项目没量到尺寸（不该发生 —— 项目在列表里就说明目录存在；
  *   非 null 但 `totalBytes=0` 才是「量到了、就是 0 字节」）。
+ * @property cache npm 缓存体积（**全机一份**，与项目无关；`null` = 没量到）。
+ *   与 [storage] 同为「配额条上的数字」，故同一次现取里一起给 —— 分成两条读口会让
+ *   两个数字来自不同时刻，而用户看的就是它们之间的关系。
+ *   **它不是本项目的**：缓存按内容寻址、跨项目共享（§10.2），故这里给的是同一份全局读数，
+ *   呈现层也照这个口径写文案（写「本项目的缓存」是撒谎）。
  * @property quotaBytes / [quotaWarnRatio] 配额口径（来自 `InstallConfig`，**呈现层不自己写死
- *   512MB** —— 判据只有一处，写第二份就会与真拦人的那份漂移）。
+ *   512MB** —— 判据只有一处，写第二份就会与真拦人的那份漂移）。**只对 [storage] 成立**：
+ *   今天没有缓存配额（§10.9 第 5 条写的是「配额条」一处，拦的是 node_modules）。
  */
 data class NpmProjectSnapshot(
     val projectId: String,
@@ -615,6 +645,7 @@ data class NpmProjectSnapshot(
     val storage: NodeModulesStats?,
     val quotaBytes: Long,
     val quotaWarnRatio: Double,
+    val cache: NodeModulesStats? = null,
 ) {
     /** 已用 ≥ 配额（与 `InstallCoordinator` 那道 100% 拦的判据同源）。 */
     val overQuota: Boolean get() = (storage?.totalBytes ?: 0L) >= quotaBytes

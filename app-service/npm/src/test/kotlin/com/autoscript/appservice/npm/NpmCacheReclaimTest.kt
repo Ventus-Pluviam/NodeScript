@@ -230,3 +230,70 @@ class NpmCacheReclaimTest {
         assertTrue(text.contains("key-kept"))
     }
 }
+
+/**
+ * 缓存体积读数（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）。
+ *
+ * 断三件事，都对应实现里那条不肯让步的口径：
+ *
+ * - **只量 content-v2**：这个数字的用途是回答「回收缓存能腾出多少」，而回收动的正是
+ *   content-v2。把 `index-v5`（几 KB 级索引）算进来，配额条上的数字就会与回收回执里
+ *   的删/留对不上 —— 而那两个数字摆在同一个屏幕上；
+ * - **目录不存在 = 0 字节，不是"没量到"**：缓存空着与量不到是两件事
+ *   （与 `NodeModulesStats` 那条口径同源）；
+ * - **`has` 与体积各管各的**：`CacheIndex` 的缺省 `contentBytes()` 是给替身用的，
+ *   真实现必须真遍历 —— 否则依赖面板上那栏永远显示 0。
+ */
+class CacacheIndexBytesTest {
+
+    @TempDir
+    lateinit var dir: Path
+
+    private val cacheDir get() = dir.resolve("cache")
+
+    private fun seedContent(payload: String): String {
+        val bytes = payload.toByteArray()
+        val integrity = "sha512-" + Base64.getEncoder().encodeToString(
+            MessageDigest.getInstance("SHA-512").digest(bytes),
+        )
+        val p = NpmCacheSeedDeployer.contentPath(cacheDir, integrity)
+        Files.createDirectories(p.parent)
+        Files.write(p, bytes)
+        return integrity
+    }
+
+    @Test
+    fun `缓存目录还不存在 → 0 字节（是"空"不是"没量到"）`() {
+        assertEquals(0L, CacacheIndex(cacheDir).contentBytes())
+    }
+
+    @Test
+    fun `量的是 content-v2 的实际字节，且 index-v5 不计入`() {
+        seedContent("a".repeat(1000))
+        seedContent("b".repeat(250))
+        // index-v5 是几 KB 级的索引，不进这个数字（回收不动它）
+        val bucket = cacheDir.resolve("_cacache/index-v5/aa/bb/bucket")
+        Files.createDirectories(bucket.parent)
+        Files.write(bucket, ByteArray(4096))
+
+        assertEquals(1250L, CacacheIndex(cacheDir).contentBytes())
+    }
+
+    @Test
+    fun `同一份内容被删掉之后如实变小（数字随盘走，不是算出来的）`() {
+        val integrity = seedContent("x".repeat(700))
+        val index = CacacheIndex(cacheDir)
+        assertEquals(700L, index.contentBytes())
+
+        Files.delete(NpmCacheSeedDeployer.contentPath(cacheDir, integrity))
+        assertEquals(0L, index.contentBytes())
+    }
+
+    @Test
+    fun `缺省 contentBytes 是 0 —— 替身不必写"我量不到体积"`() {
+        val fake = object : CacheIndex {
+            override fun has(integrity: String) = true
+        }
+        assertEquals(0L, fake.contentBytes())
+    }
+}
