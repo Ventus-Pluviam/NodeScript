@@ -21,7 +21,7 @@
 - `auto.datastore` / `auto.settings`  / `auto.zip`
 - ~~`auto.ocr`（P1）~~ **不内置（2026-09-26 拍板，见 §9.7）** / `auto.plugins`（P2）/ `auto.workManager`（定时/Intent 任务）
 - `auto.power`（脚本电源：`power_manager` 桥面的 `acquire`/`release`/`status`，§8.7）
-- `auto.npm`（包管理与依赖生态，§10：install/ci/list/audit/offlineGap/importOfflineBundle/requestApprove——审批人机分离；事件面 `onProgress`/`onApproval`/`onWarning`/`onFinished` 四方法，wire 走 `events`/`approvals` 两个拉取口而非推送，§10.7）
+- `auto.npm`（包管理与依赖生态，§10：install/ci/list/audit/offlineGap/importOfflineBundle；事件面 `onProgress`/`onWarning`/`onFinished` 三方法，wire 走 `events` 拉取口而非推送，§10.7。~~`requestApprove`/`onApproval`/`approvals` 人工审批面~~ **已拆除（2026-10-11 用户裁定，决策第 62 项）**——控制台 `npm run`/`npx` 不再过审批卡，依赖面板回到纯安装/管理）
 - Node 内建：`fs/path/http/os/process` 等**完整可用**（除 `child_process` 显式报 `ERR_NOT_IMPLEMENTED`）；facade 侧 SDK（`require('auto')`，见 §12.1/§12.4）。
 
 **接线现状（Kotlin 侧，与 `AppShell.assemble` 对齐；未列出的命名空间在两侧都还没有 handler）**：
@@ -34,8 +34,8 @@
 > schema 方法必须被 facade 发或登记在 schema `aliases`（收了没人发的 wire 名要么 facade 漏调、要么写进 schema `aliases` 并说明为什么，且不许虚报）；生成物 `wire-types.ts`/
 > `WireMethods.kt` 由 `generate.mjs --check` 钉同步（CI 另跑 `npm run gen:wire && git diff --exit-code`）。它是 `npm test` 的一部分，随 CI 跑；a11y 选择器动作经 `call('<m>')` 字面量（schema `dynamicSinks` 登记）与 `findOneOrNull`、
 > `shell.shell()` 两条 alias 是仅有的登记（原「正则啃 `when` 块」的 `wire-reconcile.test.cjs` 已删，底账换 schema）。 同族另有三道：`event-wire.test.cjs`（npm **事件面** wire 逐字对账—
-> —宿主 `phaseWire`/`kindWire`/`actionWire`/`type` ⇄ `npm.ts` 的 `PHASES`/`WARNING_KINDS`/`APPROVAL_ACTIONS`/`routeInstallEvent` 分支双向集合相等，防 `.name.lowercase()` 折出 `post_check` 那类连字符漂移），
-> 并钉**键名面**——`encodeEvent`/审批 `mapOf` 发的每个键 ⇄ JS `w.x` 读的键逐分支对账，JS 读宿主不发的键即红、宿主发了没人读的键须登记 `UNREAD` 并写明理由（mock 测试发的永远是 JS 自己认识的键，
+> —宿主 `phaseWire`/`kindWire`/`type` ⇄ `npm.ts` 的 `PHASES`/`WARNING_KINDS`/`routeInstallEvent` 分支双向集合相等，防 `.name.lowercase()` 折出 `post_check` 那类连字符漂移；~~`actionWire`/`APPROVAL_ACTIONS`~~ 随审批面拆除，2026-10-11 决策第 62 项），
+> 并钉**键名面**——`encodeEvent`/事件 `mapOf` 发的每个键 ⇄ JS `w.x` 读的键逐分支对账，JS 读宿主不发的键即红、宿主发了没人读的键须登记 `UNREAD` 并写明理由（mock 测试发的永远是 JS 自己认识的键，
 > 键名漂移只有这道门能抓）与 `err-catalog.test.cjs`（错误目录三面对账，见 §7.6）；`wiring-table.test.cjs`（**本表 ↔ schema** 对账：facade 列点名的 `.ts` 真存在且与 schema `facade` 字段一致、
 > handler 列点名的类真存在（花括号组展开，且每行至少认出一个候选防改名绕过）、行覆盖与 schema 键**双向相等** + 状态列写「已挂/已可挂」的必须在 schema 里—
 > —表是手写的，§19 又宣布它为事实来源，就该有门看着；`register`↔schema 的那半由 wire-schema 门钉）；`pull-wire.test.cjs`（**另两条拉取环** a11y.events / sensors.drain 的回包键名 + 入参键名对账—
@@ -55,7 +55,7 @@
 | `notification` | `notification.ts`（`canPost`/`post`/`cancel` 三方法与 SPI 1:1；`post` 未授权**抛** `ERR_PERMISSION_DENIED`、`cancel` 回 void 无回执；不带 `channelId`/actions/`ongoing`） | `NotificationNamespaceHandler.kt`（`:platform:system`，经 `SystemNamespaces.notification(poster)` 转接；SPI = 同模块 `NotificationPoster`+`NotificationSpec`（6a 迁入），真身 `AndroidNotificationPoster`） | **已可挂**：`assemble` 的 `notificationHandler` **独立缝**（同 datastore/zip/settings —— `POST_NOTIFICATIONS` 判据在 SPI、与五命名空间不共担 OVERLAY/ROOT/ADB_INPUT，不入 `systemHandlers` 束；未注入则如实 `ERR_NOT_IMPLEMENTED`；`AppShellKit.assemble` 透传同一缝）。id 必填（§8.5「只发一次」的幂等键目标，不自动发号）。双侧钉子：`NotificationNamespaceHandlerTest` + `notification.test.cjs`；门禁语义钉在 `AndroidNotificationPosterTest`；生产已接（`PlatformWiring.of` → `inject` → `installWithFiles` 喂 `notificationHandler` 独立缝；`PlatformWiringTest` 同路径覆盖） |
 | `clipboard` | `clipboard.ts`（`getText`/`setText` 两方法与 SPI 1:1；读空回 `null`，空串是真值；写侧无门禁；不带 `clear`/`hasText`/富文本） | `ClipboardNamespaceHandler.kt`（`:platform:system`，经 `SystemNamespaces.clipboard(clipboard)` 转接；SPI = 同模块 `Clipboard`（6a 迁入），真身 `AndroidClipboard`+`ClipboardOps`） | **生产已接**：`assemble` 的 `clipboardHandler` **独立缝**（同 datastore/zip/settings/notification，不入 `systemHandlers` 束；未注入如实 `ERR_NOT_IMPLEMENTED`；`PlatformWiring.of` → `inject` → `installWithFiles` 喂缝；`PlatformWiringTest` 同路径覆盖）。双侧钉子：`ClipboardNamespaceHandlerTest` + `clipboard.test.cjs`；读写语义钉在 `AndroidClipboardTest` |
 | `sensors` | `sensors.ts`（`isSupported`/`register`/`unregister`/`unregisterAll`/`drain` 五方法与 SPI 1:1；拉取式游标不做 push 回调，`on('change')` 只是 facade 节流轮询；delay 缺省 `NORMAL`、wire 传名字面量；`ignoresUnsupported` 只折叠 `ERR_NOT_SUPPORTED`；P0 只做 motion/environment 名单） | `SensorsNamespaceHandler.kt`（`:platform:system`，经 `SystemNamespaces.sensors(sensors)` 转接；SPI = 同模块 `SensorSource`+`SensorDelay`/`SensorEvent`（6a 迁入），真身 `AndroidSensorSource`+`SensorOps`） | **生产已接**：`assemble` 的 `sensorsHandler` **独立缝**（同 datastore/zip/settings/notification/clipboard，不入 `systemHandlers` 束；未注入如实 `ERR_NOT_IMPLEMENTED`；`PlatformWiring.of` → `inject` → `installWithFiles` 喂缝；`PlatformWiringTest` 同路径覆盖）。双侧钉子：`SensorsNamespaceHandlerTest` + `sensors.test.cjs`；采样语义（归一化/发号/有界环/幂等/拒收折叠）钉在 `AndroidSensorSourceTest` |
-| `npm` | `npm.ts` | `NpmBridgeHandler`（`:app-service:npm`；步骤 4 起直挂——`mount()` 壳已删） | **已可挂**：`assemble` 的 `npmHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`；方法表 **14 项**（2026-10-09 批 81 订正：原写「13 项」，与生成物 `WireMethods.kt` / `wire.schema.json` 的 14 条不符 —— 是**数错**，不是漂移，桥面自 2026-09-26 起就是这 14 条） —— 含 `events`/`approvals` 两个事件拉取口，`resolveApproval` 刻意不在桥面，§10.5 人机分离）。**wire 形状已两侧对齐**（原与 `a11y.waitFor` 同类漂移：facade 读宿主从不发的键）：`install` → `:domain` `InstallHandle`（`{handleId,projectId,enqueuedAtMillis}`，非包体）；`audit` 键名 `vulns`；`list` 不带 `sizeBytes`；`offlineGap` 带 `version`；`requestApprove` 校验 + 回显 `scripts`；`InstallEvent.phase` 取 `:domain` 六阶段。钉子在 Kotlin `NpmBridgeHandlerTest` + JS `npm-contract.test.cjs`（mock 逐字复刻宿主回包）；事件面另有 `NpmEventDrainTest` + `npm-events.test.cjs`（游标/环语义与响亮分档，§10.7） |
+| `npm` | `npm.ts` | `NpmBridgeHandler`（`:app-service:npm`；步骤 4 起直挂——`mount()` 壳已删） | **已可挂**：`assemble` 的 `npmHandler` 缝（未注入则如实 `ERR_NOT_IMPLEMENTED`；方法表 **12 项**（2026-10-11 批 93 订正：`requestApprove`/`approvals` 随人工审批面拆除，14 → 12）—— 含 `events` 事件拉取口；`runScript`/`exec` **刻意不在桥面**（脚本到不了宿主执行面，§10.5 人机分离只覆盖脚本自发起那条）。**wire 形状已两侧对齐**（原与 `a11y.waitFor` 同类漂移：facade 读宿主从不发的键）：`install` → `:domain` `InstallHandle`（`{handleId,projectId,enqueuedAtMillis}`，非包体）；`audit` 键名 `vulns`；`list` 不带 `sizeBytes`；`offlineGap` 带 `version`；`InstallEvent.phase` 取 `:domain` 六阶段。钉子在 Kotlin `NpmBridgeHandlerTest` + JS `npm-contract.test.cjs`（mock 逐字复刻宿主回包）；事件面另有 `NpmEventDrainTest` + `npm-events.test.cjs`（游标/环语义与响亮分档，§10.7） |
 | `workManager`（create/cancel/list 建任务面） | `workManager.ts`（排期工具 + 桥门面） | `WorkManagerNamespaceHandler`（`:app-service:scheduler`，直驱本模块 `Scheduler`、直写注册表 —— 步骤 6c 自 `:app` 迁入，与 `EnginesNamespaceHandler` 住 runtime 同形态） | **已挂**（恒挂载，调度器是本壳自建、无注入缝；cron 非法表达式桥侧 `ERR_INVALID_PARAM`，校验出处 `CronTab.parse` 与 UI 侧同口径） |
 | `power_manager`（acquire/release/status 脚本电源面） | `power.ts`（`acquire`/`release`/`status`） | `PowerManagerNamespaceHandler`（`:platform:system` —— 步骤 6d 迁入，与 `WakeLockLedger` 同模块同一本账（账本随迁、语义零改）；keepalive 走 `:domain` `KeepAliveRenew` 窄缝，`ForegroundKeeper` 实现之） | **已挂**（`powerManagerHandler` **独立缝**，与 datastore/zip/settings/notification/clipboard/sensors 同形、不入 `systemHandlers` 束；生产由 `AppShellApplication.installWithFiles` 经 `PlatformWiring.powerManagerHandler(keeper)` 造好喂缝（根包零 platform 类型，见步骤 6d）；脚本锁必须限时、无期限只属框架；token 服务端分配；取不到锁 `ERR_SERVICE_DISABLED` 且未记账；直驱账本不走 `ForegroundKeeper.start(token)` 单槽） |
 
@@ -246,11 +246,9 @@ const gap = await auto.npm.offlineGap();                    // 离线闭包缺�
 const report = await auto.npm.audit({ offline: true });     // 键名是 vulns（不是 vulnerabilities）
 auto.npm.onProgress((e) => console.log(e.phase, e.name, e.percent));  // phase: queued/resolve/download/
                                                                      // reify/post-check/done
-auto.npm.onApproval((req) => notify('需人工确认', req.pkg)); // 只能提交请求，绝不脚本直调（人机分离）
 auto.npm.onFinished((f) => (f.success ? done() : fail(f.detail))); // 成功+失败都到（install 回包只是已入队）
-                                                             // 四条订阅 2026-09-26 起由 events/approvals 拉取口真投递
-await auto.npm.requestApprove('evil-pkg', { scripts: ['postinstall'] });  // → {requestId, status:'pending', scripts}
-                                                             // scripts 是**入参回显**（宿主确认收到了这份清单）
+                                                             // 三条订阅 2026-09-26 起由 events 拉取口真投递
+                                                             // （onApproval/requestApprove 已拆，2026-10-11 决策第 62 项）
 
 // ── console：数据面（可丢包，永不抛给脚本；丢包经 onQueueError 报）
 const offQe = auto.console.onQueueError((e) => console.warn('日志丢了', e.level, e.reason));
@@ -269,9 +267,8 @@ offQe();
 4. **未命中 / 缺键 / 空结果是答案，不是异常**：`findImage`/`matchTemplate`/`findColor` 未命中回裸 `null`（`findColor` 的 native 侧用 `x = -1` 哨兵，因为 `(0,0)` 是合法首像素）；`findOneOrNull` 回 `null`；`datastore.get` 缺键回 `undefined` 而存的 JSON `null` 回 `null`（两者不折叠）；`settings.getInt`/`clipboard.getText` 缺键回 `null`。
   **但"扫过 0 像素"（空 region / region 越界）是 `ERR_INVALID_PARAM`** —— 那不是"没有"，是"根本没找"，混成 `null` 会让脚本把空区域当成搜过一遍。**`findFeature` 未命中同款（回 `null`，见 §9.2 末）。
 5. **引擎会话的两个名字都是 v9 的两代形态，别照旧写法**：`engines.exec({projectId, scriptPath})`（不是 `{script}`）；`session.onExit(info => …)` 且 `info` 是 `CrashInfo | null`（不是 `on('exit', code => …)` 的数字码，也没有 `.on` 这个方法）；`session.channel` 恒 `null`，命名通道要 `engines.channel(name)` **显式打开**（隐式建通道会在宿主侧留一条永远没人 drain 的缓冲）。
-6. **npm 的事件订阅名与 §12.2 表格一致，不是 `on('progress')`**：`onProgress`/`onApproval`/`onWarning`/`onFinished` 四个独立方法（各有退订返回值）。`on('progress')`/`on('approval')` 在 facade 上**不存在**（会 `TypeError`），
-  wire 上也没有对应方法（§10.8 的示例同批改）。四条都是**拉取轮询**投递（首订立拉、退订自停）：宿主侧没有推给脚本的通道，谁把 wire 上的 `events`/
-  `approvals` 删了，`pump*` 会响亮抛 `ERR_NOT_IMPLEMENTED` 而不是安静空转。
+6. **npm 的事件订阅名与 §12.2 表格一致，不是 `on('progress')`**：`onProgress`/`onWarning`/`onFinished` 三个独立方法（各有退订返回值）。`on('progress')`/`on('approval')` 在 facade 上**不存在**（会 `TypeError`），
+  wire 上也没有对应方法（§10.8 的示例同批改）。三条都是**拉取轮询**投递（首订立拉、退订自停）：宿主侧没有推给脚本的通道，谁把 wire 上的 `events` 删了，`pump*` 会响亮抛 `ERR_NOT_IMPLEMENTED` 而不是安静空转。`onApproval`/`requestApprove` 随人工审批面拆除（2026-10-11 决策第 62 项），wire 与 facade 上都没有对应方法。
 7. **`engines.exec` 的 `timeoutMillis` 是必填的墙钟总时长，不是排队上限**（2026-10-01）：桥这条路拿到句柄就返回、**没人 await 终结**，而看门狗三路健康判据（心跳/
   CPU/RSS）全看进程表现 —— 心跳正常、CPU 空闲的长跑脚本三路都判它健康，谁也收不住它。所以期限必须由调用方声明，宿主对缺席/`null`/`非正` 一律回 `ERR_INVALID_PARAM`（**本层不预检**：
   两处校验必然漂移，与空事件名同一条纪律）。到点宿主落 `KillCause.TIMEOUT` 强杀，`onExit` 报 `{cause:'UNKNOWN'}`（外部结算同款：结算即离表，不把「查不到」伪造成干净结束）。

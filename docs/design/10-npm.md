@@ -29,13 +29,13 @@
 用户/IDE「安装」按钮 · auto.npm API · 打包内嵌依赖
   → :main InstallCoordinator（全局唯一安装调度器）
       门禁：项目信任分级 / CapabilityMask={fs-write,network} / per-project 互斥锁
-            / 磁盘 free≥500MB 预检 / 项目+全局配额(80%黄·100%拦) / 惰性脚本审批检查
+            / 磁盘 free≥500MB 预检 / 项目+全局配额(80%黄·100%拦)
       后台合并：走 SchedulerProvider 统一调度；强停后持久化队列恢复未完成安装
   → EnginePool.acquire(slotTag='npm', maxOldSpace=§10.6) 拉起专用 :nodeN 安装会话
   → 顶层脚本执行 node <filesDir>/npm/bin/npm-cli.js <install|ci|uninstall|ls|prune|dedupe|audit>
       --cache <cacheDir>/npm-cache --prefer-offline   （npm12 依赖脚本默认拒 · allow-scripts 白名单空，实测注见 §10.1）
-      + 强制注入 child_process 拦截 shim（非批准路径 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）
-  → 进度/警告/审批事件经 TSF 双队列 JSON-RPC 回 :main → UI 渲染
+      + 强制注入 child_process 拦截 shim（安装会话内 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）
+  → 进度/警告事件经 TSF 双队列 JSON-RPC 回 :main → UI 渲染
   → post-check（lock 验签 / hasInstallScript 告警 / 防篡改比对）→ 四步 quiesce 回收槽
 ```
 
@@ -47,7 +47,7 @@
 
 存储布局（**分层到不同生命周期目录**，整改自批判「状态单点系于 filesDir」）：
 - `files/scripts/<projectId>/`：`package.json`、`package-lock.json`(v3)、`node_modules/`、`.npmrc`（项目级）。⚠ `filesDir` 所在分区文件系统由厂商决定（ext4/f2fs 皆有）——f2fs+eMMC 纳入真机红测矩阵，bin-links/符号链接/20k 小文件写方差按最差形态设计超时。
-- `files/.autojs`（**App 私有、安装会话只读、HMAC keyed 于 :main**）：`approve-ledger.json`（审批记录，条目绑定 `pkg+版本+脚本内容哈希`，新版本必须重新审批）、`lock.sig`、`install.journal`（事务日志）、`install-history`（审计）。
+- `files/.autojs`（**App 私有、安装会话只读、HMAC keyed 于 :main**）：`lock.sig`、`install.journal`（事务日志）、`install-history`（审计）、历史账本（含旧审批记录只读 —— 审批面已拆，`approve-ledger.jsonl` 不再写入，2026-10-11 决策第 62 项）。
 - `cacheDir/npm-cache`（**系统可自动清，损失可接受**）：npm 内容寻址缓存 `content-v2 + index-v5`（非 SQLite）；`cacheDir/npm-cache-seed`：精选 tarball 种子（axios/dayjs/lodash/cheerio 等 ~5MB），首启播种。
   **「npm 的缓存在哪」只有一份判据（2026-10-09 批 86）**：`NpmCacheSeedDeployer.cacheRoot(cacheDir)` = `cacheDir/npm-cache`，四处读者（喂给 npm 的 `--cache`、`CacacheIndex` 查询根、缓存回收根、离线 bundle 导入落点）一律经它。此前四处各拼各的，实测**互不相同**：`--cache` 拿到的是 `cacheDir` 本身（少一层）、`CacacheIndex` 读 `cacheDir/npm-cache`、导入落点又是第三个目录（协调器 `npmCacheDir` 未传时的 `projectsRoot` 同级兜底）—— 而 `cacheRoot` 自己当时是**恒等映射**却挂着「缓存根（cacheDir/npm-cache）」的注释，注释与实现相反。后果不是报错而是**静默失效**：`offlineGap` 恒报缺口、导入完 `ci --offline` 照样不命中。
 - `files/npm/`：vendored npm CLI（assets→filesDir 原子部署 tmp+sha256+rename；首启/升级落盘）。**已落地（2026-10-01）**：素材根 = `assets/npm/**`（键形状 `npm/<rel>`，零点条目 —— AssetManager 对点条目的可见性 ROM 间不一致），幂等锚 = `files/npm/.cli-manifest.sha256`（内容 = 全树清单规范化后的 sha256；2026-10-06 B9 起，构建期生成 `assets/npm-manifest.json`，含 count/bytes/files[path,sha256]。部署先核对 APK 文件集合、总字节和每件摘要，再核对落盘树；一致才免写，缺件/不可读/坏摘要拒绝部署并保留旧树。每次启动需要读盘校验，不再承诺零 IO）。**剪裁口径已实测**：按此口径剪出来的树（1668 文件 / 9MiB / 点条目 0）`npm ls`（装进 arborist）与真 `npm install` 都通过 —— 「丢点条目会不会弄瘸 npm」有实测答案，不走推断。
@@ -75,19 +75,20 @@
 
 1. **解析（`NpmScriptResolver`，`:main` Kotlin 直读，零 Node 进程）**：从盘上 manifest 重算
    `(pkg, versionHash)`。两个哈希口径都与 `pkg@version` 绑定，故「改脚本 / 升版本 = 另一份授权」
-   自动生效（§10.5-2「版本升级必须重新审批」的同一条纪律）。scripts 哈希吃**键排序后的规范化文本**
+   自动生效。scripts 哈希吃**键排序后的规范化文本**
    （只换键序不该让用户重批），身份与正文**带长度**再拼（`("ab","c")` 与 `("a","bc")` 不得同哈希）。
    bin 侧另过**纯 JS 白名单**（`.js`/`.cjs`/`.mjs`）：非 JS 目标 `ERR_NOT_SUPPORTED` 并指向
    「wasm 优先、纯 JS 兜底」（本节「明确不可行」那节）；同名 bin 多包声明 → 拒绝并点名
-   （npm 靠安装顺序消歧，宿主重算不出稳定答案，猜一个就是让审批哈希对不上真正的执行目标）；
+   （npm 靠安装顺序消歧，宿主重算不出稳定答案，猜一个就是让版本哈希对不上真正的执行目标）；
    路径逃出包目录 → 拒。简写 `bin` 的隐含命令名按 npm 口径取**包名**（scope 剥掉），不是文件名 ——
    `{"name":"my-server","bin":"./server.js"}` 装出来的命令叫 `my-server`。
-2. **门禁（`InstallCoordinator.runScriptOps`）**：键 = `projectId + "<pkg>|<脚本名|bin名>" + versionHash + action`，
-   必须命中 ledger 的 APPROVED 票。**未获批时不是干巴巴报错**：请求自请入队（走 approvals 流 +
-   脚本侧 `drainApprovals` 拉取口），用户在能力中心审批卡上当场决定 —— 这正是 §18 第 7 项
-   「不做出厂卡口、安装时让用户自己选」的交互形态（§18 第 7 项的「口径在此定死，实现排 P1」
-   按本条落地，未重新拍）。键的哈希段**只能**由门禁自己重算，脚本既不知道也不该有资格编。
-3. **执行（`ScriptOpExecutor` 接缝）**：`Unavailable` 是缺省 → 有审批票也如实 `ERR_NOT_IMPLEMENTED`，
+2. **放行（`InstallCoordinator.runScriptOps`）**：解析层白名单即放行判据 —— 纯 JS bin 白名单、
+   路径不逃包目录、同名 bin 多包即拒（上面三条是「这条命令能不能跑」的真判据，与「谁点的」无关）。
+   **没有人工审批这道门了（2026-10-11 用户裁定，决策第 62 项）**：控制台与依赖面板都是**宿主自己的
+   界面**，敲下这一行的人就是用户本人；要拦的是**脚本自己发起**的路径，而桥面根本没有
+   `runScript`/`exec`（§10.8），脚本到不了宿主执行面。`versionHash` 仍随执行走到审计条目
+   （「我当时跑的是哪一份脚本」有据可查），但**不再是放行判据**。
+3. **执行（`ScriptOpExecutor` 接缝）**：`Unavailable` 是缺省 → 如实 `ERR_NOT_IMPLEMENTED`，
    并点名缺的是「child_process shim → 临时引擎」这一段。**刻意不复用 `HeavyOpExecutor`**：
    那条通道编排的是事务（stageDir + journal + 原子落位），为的是 npm CLI 会重写 `node_modules`；
    lifecycle 脚本不做 reify，走那条链会为一个不改依赖树的操作凭空造暂存目录与 commit 记录，
@@ -160,7 +161,7 @@ stdout/stderr/退出码经同一条 socket 以**假管道**回填（`BridgedChil
 - Doze/强停：安装统一走 SchedulerProvider；Doze 下降级为「仅解析+下载+离线物化 cache，reify 写 node_modules 推迟到前台机会」；网络失败返回 `ERR_REGISTRY_UNAVAILABLE`（可诊断）而非挂死。
 - 产品规则改为「**熄屏仅允许下载物化，reify 需前台或 specialUse FGS 持有时**」——而非一刀切「熄屏不安装」。
 
-### 10.5 供应链安全（带外信任锚 + 审批人机分离）
+### 10.5 供应链安全（带外信任锚 + 脚本自发起路径的人机分离）
 
 1. **Lockfile-first + 带外信任锚**（整改自批判「TOFU 自签」）：
    - **pin npm 官方 ECDSA 注册表签名公钥**；首装前验 packument/tarball 签名。
@@ -173,14 +174,21 @@ stdout/stderr/退出码经同一条 socket 以**假管道**回填（`BridgedChil
    **首选来源与实际安装同源（2026-10-09 批 83）**：`crossCheckRegistry` 的 primary 取自 `InstallCoordinator.resolveRegistry` —— 项目 `.npmrc` → 全局 `files/.npmrc` → 出厂官方**两层解析链**，与喂给 npm CLI 的配置同一处读出。此前 primary 只读项目 `.npmrc`、而安装被 `--registry` 钉死在官方，两者可以不是一家 —— 交叉校验就变成了「拿 A 跟 B 比、装的是 C」。
    判定对象是 `dist.integrity` 而非两个 tarball 的字节（结论等价、少一倍下载）。JS 侧 `auto.npm.onWarning` 的 `kind` 联合与 `InstallEvent.Kind` 五值逐字对齐。**生产投递走事件拉取口**（`drainEvents` → JS 轮询泵 → 过 `feedWarning` 做 kind 校验；`feedWarning` 自身降为注入缝供装配/测试直调，2026-09-26 起不再是唯一投递方 —— 在那之前它零生产调用者）；
    未知 kind 抛错而非静默丢弃（契约漂移即响亮错误）。诚实边界：**不**回答「镜像 hardcode 的摘要是否真由上游产生」——那要 sigstore/官方签名端点，记为未决项。
-2. **审批 = 人的动作（人机分离）**（整改自批判「程序化绕过」）：
-   - `approveScript`/`runScript`/`exec` **不允许脚本直调**——脚本只能发出 `ApprovalRequest` 排队，等 UI 弹卡人工二次确认（可配生物特征），脚本侧限流 + 全量审计。
-   - 审批记录绑定 `pkg+版本+脚本内容哈希`，版本升级必须重新审批；审计日志（approve/registry 变更/lock 重签）落 App 且可导出。
+2. **执行权 = 人的动作（人机分离，2026-10-11 收窄到「脚本自发起」这一条）**（整改自批判「程序化绕过」）：
+   - `runScript`/`exec` **不允许脚本直调**——这条不变，且是**结构性**的：桥面（§10.8）根本没有这两个方法，脚本到不了宿主执行面。
+     ~~脚本只能发出 `ApprovalRequest` 排队等 UI 弹卡人工二次确认~~ **审批面已拆除**（2026-10-11 用户裁定：
+     「审批不是这样用的……依赖面板是方便用户直接安装和管理依赖的地方。你把审批去掉吧」—— 见 `docs/design-decisions.md` 第 62 项）：
+     控制台 `npm run`/`npx` 是**用户在宿主自己的界面上敲的**，敲这一行的人就是本人，再插一张审批卡是拿一层仪式换零个安全增量；
+     `ApprovalLedger`/`approvalLedgerSnapshot` 的写入面、桥面 `requestApprove`/`approvals`、facade 的
+     `requestApprove`/`resolveApproval`/`pendingApprovals`/`drainApprovals` 与 UI 审批卡随之删除
+     —— **旧账只读保留**（审计页要能读历史）。
+   - 审计日志（registry 变更/lock 重签/脚本执行）落 App 且可导出；`versionHash` 随执行进审计条目，
+     回答「我当时跑的是哪一份脚本」（脚本一改哈希就变），但**不再作放行判据**。
      **落地现状（2026-10-09 批 85）**：「落 App」自始成立（`InstallHistory` → `files/.autojs/install-history.jsonl`，只追加、失败也记），但**读侧此前零消费方** —— 本批补上 `PackageManagerFacade.history()` → `HostSummary.npmHistory()` → `:ui` `AuditScreen`（入口在依赖管理页顶栏），见 §10.9 第 2 条。**「可导出」仍未落**：SAF 选目录 + 写文件那条通道没接，故界面上**不画导出按钮**（按下去什么都不发生的按钮比不画更糟）。
 3. **恶意包防线（缺省启用）**：
    - 默认**拒绝全部 install 脚本**（对操纵无障碍/root 的自动化脚本是最大投毒面）；postinstall 包装完即出「脚本未运行」显式警告，**禁止静默**。
    - 在线 `npm audit` + `audit signatures`（ECDSA）；离线捆绑 OSV 库 + `osv-scanner --offline`；签名端点不可用**绝不静默降级**。
-4. **低信任边界**：T1 脚本执行会话一律**独立最小 CapabilityMask**（仅 npm 目录 fs+network，无 a11y/shell/root），与用户脚本会话物理区分；UI 明示「审批 postinstall ≠ 授权自动化能力」；高信任须**可验证签名 + 用户显式升级**（不用软签名）。
+4. **低信任边界**：T1 脚本执行会话一律**独立最小 CapabilityMask**（仅 npm 目录 fs+network，无 a11y/shell/root），与用户脚本会话物理区分；UI 明示「跑一个 npm script ≠ 授权自动化能力」；高信任须**可验证签名 + 用户显式升级**（不用软签名）。
 5. ~~**QuickJS 白名单库独立 vendored**~~ **已裁（2026-09-26，§18 第 1 项）**：沙箱不在排期，白名单库不复存在。（"共享 store 要持 `store 哈希 == 各项目 lock 哈希` 的加签映射校验"那半句是 store 的纪律，随 P3 跨项目共享 store 保留。）
 
 ### 10.6 轻/重操作拆分与资源预算（整改自批判「过度设计+欠定义」）
@@ -202,8 +210,7 @@ interface PackageManager {
   suspend fun dedupe(projectId) / prune(projectId)             // 变更走安装会话
   suspend fun audit(projectId, offline): AuditReport           // 在线 audit(+签名) / 离线 OSV
   suspend fun offlineGap(projectId): List<MissingPkg>          // lock 闭包 − 缓存 的缺失清单(名+尺寸)
-  suspend fun approveScript(pkg:, versionHash:, action)        // 仅提交人工确认队列
-  suspend fun runScript(projectId, name, args) / exec(bin, args, env)   // P1 T1：宿主重算内容哈希 → ledger 命中才放行，纯 JS bin 白名单（已落 2026-09-29，见 §10.3 T1 落地追记）
+  suspend fun runScript(projectId, name, args) / exec(bin, args, env)   // P1 T1：宿主重算内容哈希 → **解析层白名单**放行（纯 JS bin / 路径不逃包目录 / 同名 bin 多包即拒；已落 2026-09-29，见 §10.3 T1 落地追记）。~~approveScript 仅提交人工确认队列~~ 审批面已拆（2026-10-11 决策第 62 项）
   suspend fun importOfflineBundle(uri) / importTarball(path)   // 验签→校验→入缓存→ci
   suspend fun config(projectId?, key, value)                   // .npmrc 层；registry 变更经 :main 卡可配列表+审计
   suspend fun globalRegistry(): NpmRegistrySnapshot            // 全局镜像源读数（configured/defaultRegistry/secondaryRegistry；2026-10-09 批 83）
@@ -213,12 +220,11 @@ interface PackageManager {
   suspend fun consoleHistory(projectId): List<String>              // 控制台命令历史读数（2026-10-10 批 90）：**按项目**、最近在最前、已去重
   suspend fun recordConsoleHistory(projectId, line)                // 同上写口：由 :ui 在**派发点**调（那里才有用户敲的原文，见下）
   fun progress(projectId): Flow<InstallEvent>              // :main 订阅用（Flow 无重放）
-  fun approvals(projectId): Flow<ApprovalRequest>
   suspend fun drainEvents(projectId, sinceSeq, batch=32): InstallEventBatch   // 脚本侧拉取口（§7.5 桥无宿主→脚本推送面）
-  suspend fun drainApprovals(projectId, sinceSeq, batch=32): ApprovalBatch    // 同上；游标由调用方持有
+  //   ~~approvals / drainApprovals~~ 审批拉取口已拆（2026-10-11 决策第 62 项）
   suspend fun storage(): Map<ProjectId, NodeModulesStats>   // 每项目 node_modules 体积
   suspend fun cacheStorage(): NodeModulesStats             // npm 缓存体积（**全机一份**；2026-10-09 批 87，§10.9 第 5 条的 npm-cache 尺寸栏）
-  suspend fun exportSnapshot(uri): SnapshotRef                 // node_modules.zip+lock+ledger→SAF；高信任通道
+  suspend fun exportSnapshot(uri): SnapshotRef                 // node_modules.zip+lock+历史账→SAF；高信任通道
   suspend fun cancel(handle: InstallHandle)               // TTL/取消 → quiesce 安装会话
   suspend fun history(): List<InstallHistoryEntry>         // 审计史（2026-10-09 批 85）：append-only 历史，与 snapshot() 的「当前事实」是两件事
   suspend fun reclaimCache(): NpmCacheReclaimReport        // 缓存按 lock 闭包回收（2026-10-09 批 86）：**不是** npm 的 cache clean，见 §10.9 第 5 条
@@ -226,14 +232,14 @@ interface PackageManager {
 ```
 
 **事件面是拉取不是推送（2026-09-26 收口的第三处落差）**：桥的入站面只有按 requestId 结算的 ok/err（§7.5），宿主没有任何主动推给脚本的通道 —— 在此之前 JS 的 `onProgress`/
-`onWarning`/`onApproval` **双侧都没有投递方**（订阅了但生产永远不响：`progress`/`approvals` 两个 SharedFlow 零订阅、`feedWarning` 零生产调用者、`InstallFailure` 连订阅口都没有），
-正是 `feedWarning` KDoc 自己写的「比没有这个 API 更糟」。接法沿用仓库既有的游标拉取（`a11y.events`/传感器批次/`startHeartbeat`）：`InstallCoordinator` 两条有界环（`SeqRing`，
-512、DROP_OLDEST、单调 seq）由 `emit()`/`requestApprove` 唯一投递，`drainEvents`/`drainApprovals` 按调用方游标取批；回包 `{first,last,items}`，空增量 `first=last=sinceSeq`，
-环丢过最旧时 `first > sinceSeq+1` 即空洞可见（进度是可丢数据面，如实露洞不补造）。四个 DTO（`InstallEventBatch`/`SequencedInstallEvent`/`ApprovalBatch`/`SequencedApproval`）与两个新方法由 `PackageManagerFacadeContractTest` 冻结，
+`onWarning` **双侧都没有投递方**（订阅了但生产永远不响：`progress` SharedFlow 零订阅、`feedWarning` 零生产调用者、`InstallFailure` 连订阅口都没有），
+正是 `feedWarning` KDoc 自己写的「比没有这个 API 更糟」。接法沿用仓库既有的游标拉取（`a11y.events`/传感器批次/`startHeartbeat`）：`InstallCoordinator` 的有界环（`SeqRing`，
+512、DROP_OLDEST、单调 seq）由 `emit()` 唯一投递，`drainEvents` 按调用方游标取批；回包 `{first,last,items}`，空增量 `first=last=sinceSeq`，
+环丢过最旧时 `first > sinceSeq+1` 即空洞可见（进度是可丢数据面，如实露洞不补造）。两个 DTO（`InstallEventBatch`/`SequencedInstallEvent`）与方法面由 `PackageManagerFacadeContractTest` 冻结，
 JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
 
 **审计读口（2026-10-09 批 85，§10.5-2「审计日志落 App 且可导出」）**：`history()` 是
-`install-history.jsonl` 的只读投影，**无参**（与 `pendingApprovals` 同一取舍）—— 按项目筛会让
+`install-history.jsonl` 的只读投影，**无参**（与依赖面板 `snapshot()` 的无参全量同一取舍）—— 按项目筛会让
 `Op.REGISTRY` 那条（`projectId` 空串，改的是 `files/.npmrc`，不属于任何项目）从任何一次筛选里
 掉出去，而它恰恰是审计最该看见的。**它为什么不并进 `snapshot()`**：两者问的是两件事 ——
 `snapshot()` 答「此刻装了什么」（当前事实，每次现算），`history()` 答「过去发生过什么」（历史事实，
@@ -242,7 +248,7 @@ JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
 不由界面想显示什么决定 —— 加字段要动那份审计文件的形状，等于让历史行与将来行不可比。
 `InstallHistoryOp` 是已知操作名的**唯一一份**（落盘侧 `InstallHistory.Op` 改为指向它的别名；
 `:ui` 看不见 `:app-service:npm`），而 `InstallHistoryEntry.op` 仍是 `String`：取值域**开放**
-（`opName(args)` 直取 argv 首词、T1 动作名来自 `ApprovalAction.name.lowercase()`），落盘侧刻意
+（`opName(args)` 直取 argv 首词、T1 动作名来自 `InstallHistoryOp.RUN_SCRIPT`/`EXEC`），落盘侧刻意
 不因枚举不全丢事件，读侧也不该把不认识的行藏掉。**读口不经桥**（同控制台/镜像源）。
 **同批补记**：`enqueueHeavy` 的磁盘/配额**预检拒绝**原先不入史（`crossCheckRegistry` 的拒绝一直在记），
 已补 —— 否则用户在审计页上看到的是「什么都没发生」，与屏幕上的报错对不上。
@@ -329,31 +335,26 @@ await auto.npm.setRegistry('https://registry.npmmirror.com', { scope: '@my' });
 await auto.npm.importOfflineBundle('/sdcard/Download/baseBundle.zip');   // SAF uri 亦可
 await auto.npm.importTarball('/sdcard/Download/pkg.tgz');
 
-// 审批（人机分离：只能发起请求，人工在 UI 弹卡确认）
-await auto.npm.requestApprove('esbuild', { scripts: ['postinstall'] });  // 不直接 approve；不 await 的话被拒会成 unhandled rejection
-
-// 事件（四个独立方法，**不是** `on('progress')` —— 那种写法在 facade 上会 TypeError，见 §12.3.2 第 6 条）
-// 实现是**带游标拉取轮询**（§7.5 桥没有宿主→脚本的推送面，§10.7 drainEvents/drainApprovals）：
+// 事件（三个独立方法，**不是** `on('progress')` —— 那种写法在 facade 上会 TypeError，见 §12.3.2 第 6 条）
+// 实现是**带游标拉取轮询**（§7.5 桥没有宿主→脚本的推送面，§10.7 drainEvents）：
 // 首订立拉一轮、之后按周期补拉、退订干净自停（定时器 unref 不保活事件循环，同 startHeartbeat）；
-// 宿主没实现 events/approvals → 响亮 ERR_NOT_IMPLEMENTED（「订阅了却永远收不到」禁静默），瞬时错误吞掉走下一拍。
+// 宿主没实现 events → 响亮 ERR_NOT_IMPLEMENTED（「订阅了却永远收不到」禁静默），瞬时错误吞掉走下一拍。
 const offP = auto.npm.onProgress(e => console.log(e.phase, e.name, e.percent));
-const offA = auto.npm.onApproval(req => notify('需人工确认', req.pkg));   // ApprovalRequest 六字段，无 scripts
 const offW = auto.npm.onWarning(e => console.log(e.kind, e.pkgs, e.message));
 const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // 成功**和**失败都发（install 回包只是已入队）
 // kind: scripts-skipped/trust-downgraded/registry-fallback/low-memory/disk-quota（:domain InstallEvent.Kind 同集）
 
-// 错误码新增：ERR_NPM_*（安装失败/审批被拒/SPAWN_BLOCKED）、ERR_NOT_SUPPORTED（git:依赖）、
+// 错误码新增：ERR_NPM_*（安装失败/SPAWN_BLOCKED）、ERR_NOT_SUPPORTED（git:依赖）、
 // ERR_REGISTRY_UNAVAILABLE（网络/镜像可诊断）、ERR_DISK_FULL、ERR_NPM_LOWMEM、ERR_NOT_IMPLEMENTED（node-gyp/exec）
 ```
 
 ### 10.9 UX 流程
 
 1. **依赖面板**（IDE 项目页）：搜索 / `npm install <spec>` 输入行 + 旗标（`-D`/`--offline`/registry 选择器）→ 阶段进度条（packument→下载→解包→链接，job 数）→ 完成横幅；hasInstallScript 包显式警告。
-2. **脚本审批卡**：带 install/postinstall 脚本的包 → 卡片列表（可展开「脚本=任意代码」风险说明）→ per-package 人工批准/拒绝 / 「全局禁止脚本」（出厂默认）→ 批准记录入审计页。
+2. **~~脚本审批卡~~ 已拆除（2026-10-11 用户裁定，决策第 62 项）**：~~带 install/postinstall 脚本的包 → 卡片列表 → per-package 人工批准/拒绝~~ —— 控制台 `npm run`/`npx` 不再过审批卡，依赖面板回到**纯安装/管理**（用户原话：依赖面板是方便用户直接安装和管理依赖的地方）。
    **落地现状（2026-10-09 批 81）**：第 1 条的**只读半边**已落 —— 管理面板 → 依赖管理（`NpmScreen`）
-   显示已装清单（`list()` 直读 lockfile）+ 尺寸/配额条（`storage()` + `InstallConfig` 的 512MB/80% 判据）；
-   第 2 条的审批卡已落（待审队列 → 批准/拒绝 → `resolveApproval`，§10.5-2 人机分离的**唯一**生产落点）。
-   两条共用一个读口 `PackageManagerFacade.snapshot()`（`:domain` `NpmPanelSnapshot`），经 `HostSummary`
+   显示已装清单（`list()` 直读 lockfile）+ 尺寸/配额条（`storage()` + `InstallConfig` 的 512MB/80% 判据）。
+   依赖面板用一个读口 `PackageManagerFacade.snapshot()`（`:domain` `NpmPanelSnapshot`），经 `HostSummary`
    现取、**不经桥**（桥面是脚本侧的面，依赖面板是宿主自己的界面）。
    **审计页已落地（2026-10-09 批 85）**：第 2 条末段那句「批准记录入审计页」原先只有前半截 ——
    `InstallHistory` 一直在写（approve / registry 变更 / lock 重签 / 每次安装的成败），但那条读口
@@ -424,14 +425,11 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
      `NpmConsoleLine.ok: Boolean` 是终态行的**成败位**：失败标红由它决定，呈现层**不按文本猜**
      （`startsWith("失败：")` 那种写法会在宿主改措辞时静默失效）。
    - **依赖提供的命令照实接线**（用户 2026-10-09 裁定「照实接线」）：`npm run <script>` 与 `npx <bin>`
-     走 §10.3 T1 的 `runScript`/`exec` 门禁。**未获批** → `ERR_PERMISSION_DENIED` 且审批请求已入队
-     （回执话术指向**真的那一页**：管理面板 → 依赖管理的审批卡）；**获批但 T1 spawn 桥未接** →
-     `ERR_NOT_IMPLEMENTED`。两条都如实，且都在 ECHO 行之后抛出 —— 用户看得见自己敲的那行。
-     **审批 ≠ 执行**：门禁只入队不排队命令，批完要**重敲那一行**（这条写进了 `runScriptOps` 的 KDoc
-     与界面回执，别让用户以为批完就会自己跑）。
-     ~~**获批但 T1 spawn 桥未接** → `ERR_NOT_IMPLEMENTED`~~ **该分支自 2026-10-10（批 91）起
-     不再命中**：桥本体已落（见 §10.3「已落（2026-10-10，T1 下半段）」），获批的那条命令
-     现在真跑。**未获批那条不变**（`ERR_PERMISSION_DENIED` + 请求入队）。
+     走 §10.3 T1 的 `runScript`/`exec` 执行面。**T1 spawn 桥未接** → `ERR_NOT_IMPLEMENTED`
+     （2026-10-10 批 91 起桥已落，正常装配下不再命中）。都在 ECHO 行之后抛出 —— 用户看得见自己敲的那行。
+     **没有审批这道门了（2026-10-11 用户裁定，决策第 62 项）**：~~未获批 → `ERR_PERMISSION_DENIED`
+     且审批请求已入队~~ —— 控制台 `npm run`/`npx` 直接执行，依赖面板回到纯安装/管理；放行判据是
+     解析层白名单（§10.3 T1 落地追记第 2 条），`versionHash` 只随执行进审计、不作放行判据。
    - **门禁强度不取决于入口**：控制台敲 `npm install axios` 与依赖面板装同一个包，走的是**同一套**
      装前多镜像交叉校验（§10.5-1）、磁盘预检/配额/项目锁/全局安装会话。入史那一栏只记**子命令**
      而不是完整 argv —— 审计表要长期留存，而用户手敲的 argv 可能夹着凭据形态的参数
@@ -511,7 +509,7 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 
 ### 10.11 优先级落定（npm 相关增补到 §14）
 
-- **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警 + 审批卡 UI（仅请求）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；
+- **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警（~~+ 审批卡 UI~~ 审批面已拆，2026-10-11 决策第 62 项）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；
   依赖面板 + `auto.npm` 核心 API；打包向导 node_modules 入包。
 - **P1**：~~spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）~~ **桥本体已落
   （2026-10-10，批 91；四处偏离见 §10.3「已落（2026-10-10，T1 下半段）」—— 引擎池那条路、
@@ -532,16 +530,16 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 
 | 风险 | 缓解 |
 |---|---|
-| `--ignore-scripts` 的「假装成功」（postinstall 下载二进制/自检、真原生包装上才炸） | packument `hasInstallScript` 前置扫描 + 显式 warning + 人工审批升级通道，**禁止静默** |
+| `--ignore-scripts` 的「假装成功」（postinstall 下载二进制/自检、真原生包装上才炸） | packument `hasInstallScript` 前置扫描 + 显式 warning，**禁止静默**（~~人工审批升级通道~~ 审批面已拆，2026-10-11 决策第 62 项） |
 | 第三方 `.node` V8 ABI 稀缺且难匹配（Node24 `NODE_MODULE_VERSION`=137 与 libnode 快照不一致则 dlopen 崩）；`process.platform` 非 android 会让平台探测失真 | 当前策略**不引入第三方 `.node`**（wasm 优先、纯 JS 兜底；prebuild 工具已移出排期，需要时再立）；自建 libnode 必须 `--dest-os=android` + CI `process.platform/arch` 断言 + 16KB 双门禁（本仓构建线照旧） |
 | vendored npm 12 要求 Node≥24.15，降级 npm11 会恢复「脚本默认执行」使护栏静默消失 | `:node-runtime-build` 钉版本下限。**该落差已发生（2026-10-01）**：素材取自 Node 24.21.0 的 `deps/npm` = **npm 11.19.0**，npm 12 的 `allowScripts=none` 默认语义**不在位**。三条补偿：① **主控与版本无关** —— `HostNodeExecutor` 对每条命令硬编码 `--ignore-scripts`（§11.1 T1 的零 spawn 主路径），"脚本默认执行"这条恢复不了它；② 版本钉死 + 断言 —— `NPM_CLI_VERSION` 与素材树 `package.json` 逐字比对，漂移即 `fetch-and-build.sh` §9 当场红（`npm install` 的 lifecycle 面不会静默换版）；③ 落差登记在 backlog（升级 = 换素材来源；「等 Node 线携带」已实测否掉 —— `nodejs.org/dist/index.json` 的 868 条发布里没有一条带 npm 12.x；改 `NPM_CLI_VERSION` 即触发全链回归）。**残余**：①只是"不跑脚本"，npm 11 与 12 在**非脚本** spawn 路径上的差异没有第二条兜底 —— §10.12 末行的 child_process 拦截 shim 仍未落（P0 未排）。~~**该落差已发生（2026-10-01）**~~ **已消解（2026-10-02 A6 落地）**：素材换 registry `npm@12.2.0`，npm 12 官方默认（依赖 lifecycle 拒 + allow-git/remote=none，§10.1 实测注）回到在位；①的主控角色不变、②③照旧。~~残余（child_process shim 未落）不变~~ **残余已收口（2026-10-09）**：该 shim 已落地，见 §10.3「已落」段 |
 | 设备端 100 依赖安装 15–60s（eMMC/f2fs 更差），非「秒级」 | 独立会话 + 分级超时 + FGS + 熄屏仅物化；进度如实展示 |
 | 锁 TOFU；缓存条目与 lock 版本绑定（更新依赖后旧 tarball EINTEGRITY） | 带外信任锚 + 多镜像交叉校验 + 设备端锁降信任标记；提示联网/升级包 |
-| **零 spawn 不变量漂移**（npm 升级引入新 spawn 路径，allowScripts 拦不住非脚本 spawn） | 安装会话**强制注入 child_process 拦截 shim**（非批准 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）；桌面 CI 金标准：child_process 替换为 throw 的 harness 里跑全命令矩阵必须全绿；vendored npm 升级只准通过此闸。**已落地（2026-10-09）**：见 §10.3「已落」段（`NpmSpawnGate` + `NpmSpawnGateMatrixTest`，后者已进 `check-e2e-ran.sh`） |
+| **零 spawn 不变量漂移**（npm 升级引入新 spawn 路径，allowScripts 拦不住非脚本 spawn） | 安装会话**强制注入 child_process 拦截 shim**（会话内 spawn 硬失败 ERR_NPM_SPAWN_BLOCKED）；桌面 CI 金标准：child_process 替换为 throw 的 harness 里跑全命令矩阵必须全绿；vendored npm 升级只准通过此闸。**已落地（2026-10-09）**：见 §10.3「已落」段（`NpmSpawnGate` + `NpmSpawnGateMatrixTest`，后者已进 `check-e2e-ran.sh`） |
 | 离线 bundle 与 lock 闭包不匹配（盯顶层包，锁含的传递依赖不在种子内 → ENOTCACHED） | `offlineGap` 返回缺失清单（名+尺寸）；导入先按当前 lock 校验；「仅凭种子 npm ci --offline」金标准 |
-| 审批/ledger 被已批准脚本改写（自批+改 registry） | ledger 迁 App 私有只读目录 + 条目绑定版本+脚本哈希 + post-check 防篡改比对 + .npmrc 变更经 :main 卡控审计 |
-| 数据被清（clear data/卸载重装）导致依赖与审批记录蒸发 | npm-cache/seed → cacheDir（可重建）；node_modules/ledger/lock → filesDir；导出/导入 SAF 快照；清后强制重审批并明示 |
-| esbuild 类原生 bin「install 成功、build 一律 W^X 拒绝」的过度承诺 | 审批卡标注是否需要原生 exec；run/exec 首版纯 JS bin 白名单（eslint/prettier/esbuild-wasm）并钱袋承诺，原生 exec 留代码签名通道 |
+| 历史账本被脚本改写（改 registry） | 账本迁 App 私有只读目录 + post-check 防篡改比对 + .npmrc 变更经 :main 卡控审计 |
+| 数据被清（clear data/卸载重装）导致依赖与审计记录蒸发 | npm-cache/seed → cacheDir（可重建）；node_modules/账本/lock → filesDir；导出/导入 SAF 快照；清后明示 |
+| esbuild 类原生 bin「install 成功、build 一律 W^X 拒绝」的过度承诺 | run/exec 首版纯 JS bin 白名单（eslint/prettier/esbuild-wasm）并钱袋承诺，原生 exec 留代码签名通道 |
 
 ---
 
