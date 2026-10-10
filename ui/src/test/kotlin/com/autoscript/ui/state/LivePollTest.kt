@@ -39,7 +39,6 @@ class LivePollTest {
 
         override suspend fun npmSnapshot(): NpmPanelSnapshot = NpmPanelSnapshot(
             projects = listOf(NpmProjectSnapshot("p1", emptyList(), emptyList(), null, 512L * 1024 * 1024, 0.8)),
-            pendingApprovals = emptyList(),
         )
 
         override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot {
@@ -76,7 +75,6 @@ class LivePollTest {
 
     private val projects = NpmPanelSnapshot(
         projects = listOf(NpmProjectSnapshot("p1", emptyList(), emptyList(), null, 512L * 1024 * 1024, 0.8)),
-        pendingApprovals = emptyList(),
     )
 
     @Test

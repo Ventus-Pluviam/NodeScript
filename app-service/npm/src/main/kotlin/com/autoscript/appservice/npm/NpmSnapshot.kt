@@ -21,7 +21,7 @@ import java.util.zip.ZipOutputStream
  * 高信任快照导出/验签（docs §10.9.4 + §10.7 [SnapshotRef]）。
  *
  * 产物 = `node_modules.zip`（含 `package.json` + `package-lock.json` + `node_modules` 全树
- * + `ledger/` 审批账本/审计史 + 随包同行的 `lock.sig`），外加一条 `snapshot.sig`：
+ * + `ledger/` 历史账（含旧审批只读）+ 随包同行的 `lock.sig`），外加一条 `snapshot.sig`：
  * `v1 <HMAC-SHA256>`，签名体 = `autojs-snapshot-v1|<projectId>|<lock.sig 原文>|<内容清单哈希>`。
  *
  * 为什么签**内容清单**而不是归档字节：归档头带时间戳/压缩方差，逐字节签会让同一棵树

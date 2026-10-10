@@ -1342,13 +1342,11 @@ readonly npm: {
   install: Promise<InstallQueued>;
   list: Promise<PkgNode[]>;
   offlineGap: Promise<MissingPkg[]>;
-  onApproval: () => void;
   onFinished: () => void;
   onProgress: () => void;
   onWarning: () => void;
   prune: Promise<void>;
   remove: Promise<void>;
-  requestApprove: Promise<ApprovalTicket>;
   setRegistry: Promise<void>;
 };
 ```
@@ -1505,24 +1503,6 @@ offlineGap(opts?): Promise<MissingPkg[]>;
 
 `Promise`\<`MissingPkg`[]\>
 
-#### onApproval()
-
-```ts
-onApproval(listener): () => void;
-```
-
-审批请求事件（宿主 approvals 拉取口；自己的轮询与安装事件互不牵连）。
-
-##### Parameters
-
-| Parameter | Type |
-| ------ | ------ |
-| `listener` | (`req`) => `void` |
-
-##### Returns
-
-() => `void`
-
 #### onFinished()
 
 ```ts
@@ -1614,35 +1594,6 @@ remove(spec, opts?): Promise<void>;
 ##### Returns
 
 `Promise`\<`void`\>
-
-#### requestApprove()
-
-```ts
-requestApprove(pkg, opts?): Promise<ApprovalTicket>;
-```
-
-审批：只提交请求，绝不脚本直调（人机分离，UI 人工确认）。
-
-回包 `{requestId, status, scripts}`：前两个是宿主票号与状态（`pending`），
-[ApprovalRequest.scripts] 是**入参回显** —— 宿主校验了数组形态并原样带回，
-让脚本能确认「我声明的脚本清单宿主收到了」。不回显的话，宿主与脚本各持一份
-scripts，改了哪一侧都看不出来（与 setRegistry 的 scope 同一条纪律）。
-
-若宿主拒绝提交，会抛 ERR_PERMISSION_DENIED/ERR_NPM_* —— 如实上抛。
-
-##### Parameters
-
-| Parameter | Type |
-| ------ | ------ |
-| `pkg` | `string` |
-| `opts` | \{ `scripts?`: readonly `string`[]; `timeout?`: `number`; `versionHash?`: `string`; \} |
-| `opts.scripts?` | readonly `string`[] |
-| `opts.timeout?` | `number` |
-| `opts.versionHash?` | `string` |
-
-##### Returns
-
-`Promise`\<`ApprovalTicket`\>
 
 #### setRegistry()
 

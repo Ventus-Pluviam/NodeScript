@@ -39,8 +39,21 @@ const DOC = fs
 const facadeModule = require(path.resolve(__dirname, '..', 'dist', 'index.js'))
 const auto = facadeModule.default
 
-/** 文档里**故意**写的反例（不在 facade 上，教学用）→ 为什么。第 4 条会验真。 */
-const INTENTIONAL_NOT_ON_FACADE = {}
+/**
+ * 文档里**故意**写的反例（不在 facade 上，教学用）→ 为什么。第 4 条会验真。
+ *
+ * 2026-10-11 批 93：`npm.requestApprove` / `npm.onApproval` 登记在这里**不是**反例教学，
+ * 而是**契约与实现的有意偏离**：用户裁定拆除控制台 `npm run`/`npx` 的人工审批
+ * （见 `docs/design-decisions.md` 第 62 项），facade 上的对应面随之删除；而
+ * `docs/design/12-js-api.md`（§12.2/§12.3）是**冻结的契约卷**，本轮不许改，
+ * 于是它仍写着这两个方法。门扫的是契约卷，故必须在此显式登记这条偏离 ——
+ * **留着这条红比登记它更糟**：那会逼下一个人把整道门关掉。
+ * 契约卷解冻那批要把 §12.2 的 npm 行与 §10.7 的 `approvals` 拉取口一并改掉，然后删本条。
+ */
+const INTENTIONAL_NOT_ON_FACADE = {
+  'npm.requestApprove': '审批面已拆（2026-10-11 用户裁定，决策第 62 项）；契约卷 §12.2 尚未解冻，见本常量 KDoc',
+  'npm.onApproval': '同上： approvals 拉取口与 onApproval 订阅面随审批一起拆，契约卷待解冻',
+}
 
 function codeBlocks(md) {
   return [...md.matchAll(/```[a-zA-Z]*\n([\s\S]*?)```/g)].map((m) => m[1])

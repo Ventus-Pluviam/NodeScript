@@ -44,8 +44,7 @@ class ConsoleCmdOpsTest {
                 projects = projects.map {
                     NpmProjectSnapshot(it, emptyList(), emptyList(), null, 512L * 1024 * 1024, 0.8)
                 },
-                pendingApprovals = emptyList(),
-            )
+                )
         }
 
         override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot {
@@ -176,12 +175,12 @@ class ConsoleCmdOpsTest {
 
     @Test
     fun `执行失败也拉一次——宿主先落 ECHO 行再抛`() = runBlocking {
-        val host = CmdHost(failRun = IllegalStateException("ERR_PERMISSION_DENIED: 未获人工批准（§10.5）：请求已入队，请到管理面板 → 依赖管理的审批卡确认后重试"))
+        val host = CmdHost(failRun = IllegalStateException("ERR_NPM_SPAWN_BLOCKED: T1 桥连接失败（/tmp/autoscript-t1-x.sock）：connect ECONNREFUSED"))
         val s0 = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED).copy(draft = "npm run build")
         host.lines = listOf(echo(1L, "$ npm run build"))
         val s = runConsoleCmd(host, s0)
         assertEquals(1, s.lines.size, "不拉这一次，用户就只看到一句错误、看不到自己敲的那行")
-        assertTrue("审批卡" in (s.opError ?: ""), "失败原文原样透传，界面不另译一遍：${s.opError}")
+        assertTrue("ERR_NPM_SPAWN_BLOCKED" in (s.opError ?: ""), "失败原文原样透传，界面不另译一遍：${s.opError}")
         assertEquals("npm run build", s.draft, "失败不清草稿：用户多半要改一改再敲")
         assertNull(s.opNotice, "失败不得给回执")
     }

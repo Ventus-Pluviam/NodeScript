@@ -8,20 +8,17 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * lifecycle 脚本的**宿主侧解析**（§10.3 T1 放行门禁的取数口）。
+ * lifecycle 脚本的**宿主侧解析**（§10.3 T1 的取数口）。
  *
- * 存在的理由：审批账本的键是 `projectId + pkg + versionHash + action`（[ApprovalLedger]），
- * 而 [InstallCoordinator.runScript] 的入参只有 `projectId + name` —— **它拿不到调用方当初
- * 提交审批时用的哈希**。于是放行判据只能由宿主从盘上现状重算，且必须与 `requestApprove`
- * 重算出**同一个**值，否则审批永远匹配不上（功能等于没接）。
- * 本类就是那个「唯一的重算处」：requestApprove 与 runScript/exec 都调它，不各算各的。
+ * 存在的理由：[InstallCoordinator.runScript]/[exec] 在**解析层**要回答「这条命令能不能跑」：
+ * `npm run <name>` 要确认项目 packages.json 里真有这个名字、`exec <bin>` 要确认这个 bin
+ * 由某个已装包声明、目标真是纯 JS 且不逃出包目录 —— 这些判据不依赖「谁点的」，是命令
+ * 本身的合法性。*宿主自己**不写脚本**，故这里从盘上 manifest / 包声明重算。
  *
- * 两个哈希口径（都带 `sha256:` 前缀，便于人眼分辨，且都与 pkg@version 绑在一起 ——
- * §10.5-2「审批记录绑定 pkg+版本+脚本内容哈希，版本升级必须重新审批」）：
+ * 两个哈希口径（都带 `sha256:` 前缀，便于人眼分辨，且都与 pkg@version 绑在一起）：
  * - [projectScripts]：**整个 scripts 映射**的规范化摘要（键排序后 `name=body` 逐行）。
- *   刻意不做「逐脚本一个哈希」：`npm run <name>` 要的是「这个项目此刻的脚本」这一整份授权，
- *   而审批时调用方未必知道脚本名与 body 的对应；改任何一个脚本 = 改整份 = 重新审批，
- *   与「版本升级必须重批」是同一条纪律的同一种粒度。
+ *   刻意不做「逐脚本一个哈希」：`npm run <name>` 读的是这份脚本的当前样貌，
+ *   [ScriptOp.versionHash] 带上它让审计能回答「我当时跑的是哪一份」——脚本一改哈希就变。
  * - [binTarget]：bin 声明（归属包 pkg@version + bin 名 + 目标相对路径）的摘要。
  *
  * 纯 JS bin 白名单（§10.3 T1「纯 JS bin 白名单」）：判据是**目标文件本身**，不是文件名后缀
@@ -40,7 +37,7 @@ internal object NpmScriptResolver {
         /** 包名（manifest 的 `name`；缺失时退到 projectId —— 那是唯一稳定的项目身份）。 */
         val pkg: String,
         val version: String,
-        /** 整份 scripts 的内容哈希（审批键的 versionHash 段）。 */
+        /** 整份 scripts 的内容哈希（versionHash：审计记「跑的是哪一份脚本」）。 */
         val versionHash: String,
         val scripts: Map<String, String>,
     )
@@ -82,7 +79,7 @@ internal object NpmScriptResolver {
      * 一条解析路径；从**声明侧**解析则两种布局同形，且「装出来是什么」以 manifest 为准。
      *
      * 多个包声明同名 bin → `ERR_NOT_SUPPORTED` 并点名候选：npm 自己的消歧依赖安装顺序与
-     * hoist 布局，宿主重算不出一个稳定答案，猜一个就是让审批哈希对不上真正的执行目标。
+     * hoist 布局，宿主重算不出一个稳定答案，猜一个就是让审计哈希对不上真正的执行目标。
      */
     fun binTarget(projectRoot: Path, bin: String): BinTarget? {
         val nodeModules = projectRoot.resolve("node_modules")
@@ -98,7 +95,7 @@ internal object NpmScriptResolver {
                 ErrorCode.ERR_NOT_SUPPORTED,
                 "多个包声明同名 bin「" + bin + "」（" +
                     hits.joinToString(", ") { it.first.fileName.toString() } +
-                    "）：宿主无法确定执行目标（npm 依赖安装顺序消歧，审批哈希须绑定唯一目标）",
+                    "）：宿主无法确定执行目标（npm 依赖安装顺序消歧，版本哈希须绑定唯一目标）",
             )
         }
         val (pkgDir, rel) = hits.single()
@@ -186,7 +183,7 @@ internal object NpmScriptResolver {
     /**
      * 规范化内容哈希：身份与正文**分别带长度**再拼，避免拼接歧义
      * （identity="ab" body="c" 与 identity="a" body="bc" 裸拼都是 `abc` —— 那会让两个不同的
-     * 审批主体落进同一张票）。
+     * 主体落进同一条执行账）。
      */
     private fun hashOf(identity: String, body: String): String {
         val canonical = identity.length.toString() + ":" + identity + " " + body.length.toString() + ":" + body

@@ -54,13 +54,6 @@ function installMockNpm() {
         if (p.registry == null) err('ERR_INVALID_PARAM', '缺字符串字段 registry')
         else ok(null)
         return undefined
-      // Kotlin：requestApprove → {requestId,status,scripts}（scripts 回显）
-      case 'requestApprove':
-        if (!p.pkg) err('ERR_INVALID_PARAM', '缺字符串字段 pkg')
-        else if (p.scripts != null && !Array.isArray(p.scripts)) {
-          err('ERR_INVALID_PARAM', '字段 scripts 必须是数组')
-        } else ok(JSON.stringify({ requestId: 'apr-1', status: 'pending', scripts: p.scripts ?? [] }))
-        return undefined
       default:
         err('ERR_NOT_IMPLEMENTED', `未知 npm 方法: ${method}`)
         return undefined
@@ -115,22 +108,6 @@ test('npm.audit 读 vulns 键（宿主曾发 vulnerabilities → report.vulns �
   assert.strictEqual(report.level, 'none')
   // 旧键名不得出现（宿主侧 NpmBridgeHandlerTest 反向钉同一件事）
   assert.strictEqual(report.vulnerabilities, undefined)
-})
-
-test('npm.requestApprove 回包带 requestId/status/scripts 回显', async () => {
-  installMockNpm()
-  const ticket = await npm.requestApprove('esbuild', { scripts: ['postinstall'] })
-  assert.strictEqual(ticket.requestId, 'apr-1')
-  assert.strictEqual(ticket.status, 'pending')
-  assert.deepStrictEqual(ticket.scripts, ['postinstall'], '声明的脚本须回显（宿主不校验 = 静默丢弃）')
-})
-
-test('npm.requestApprove 的 scripts 形态不对即 ERR_INVALID_PARAM', async () => {
-  installMockNpm()
-  await assert.rejects(
-    () => auto.bridge.invoke('npm', 'requestApprove', { pkg: 'esbuild', scripts: 'postinstall' }),
-    (e) => e.code === 'ERR_INVALID_PARAM',
-  )
 })
 
 test('npm.setRegistry 带 scope；未知方法 → ERR_NOT_IMPLEMENTED', async () => {

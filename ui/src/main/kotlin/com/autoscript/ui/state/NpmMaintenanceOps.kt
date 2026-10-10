@@ -12,7 +12,7 @@ import kotlinx.coroutines.CancellationException
  * 贴着 detekt 的 `TooManyFunctions` 线，且这段是"拿读口算下一份状态"的纯逻辑 ——
  * 放这里能用 `FakeHost` 直接测（`:ui` 的单测门跑 JVM，`MainActivity` 构造不出来）。
  *
- * 三落点与 `decideApprovalOp` 同构，不另立口径：
+ * 三落点（未接线原文透传 / 抛了原文透传 / 成功现取）不另立口径：
  * - 未接线 → `opError` 原文（**不冒充**「已清理」）；
  * - 抛（`ci` 的验签拒绝、磁盘/配额预检）→ `opError` 原文、**不清依赖清单**；
  * - 成功 → `opNotice` 回执 + 现取一次（清单变没变是宿主的账，界面不许自己先抹掉）。

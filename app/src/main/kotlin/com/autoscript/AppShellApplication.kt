@@ -10,8 +10,6 @@ import com.autoscript.domain.host.HostSummary
 import com.autoscript.shell.asShellOpExecutor
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.host.ShellConsoleResult
-import com.autoscript.domain.npm.ApprovalDecision
-import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.InstallHistoryEntry
@@ -42,6 +40,7 @@ import com.autoscript.shell.HostLog
 import com.autoscript.shell.LockKeyStore
 import com.autoscript.shell.AndroidAlarmPort
 import com.autoscript.shell.AndroidBridgeBinder
+import com.autoscript.shell.AndroidT1SocketBinder
 import com.autoscript.shell.AndroidForegroundOps
 import com.autoscript.shell.AndroidPermissionGates
 import com.autoscript.shell.AndroidScreenGate
@@ -352,6 +351,12 @@ class AppShellApplication : Application(), HostSummary {
                 // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
                 // 本类只递 Keystore 那条缝 —— 与 npmCliSource/npmNodeBin 同一分工。
                 npmLockKeys = LockKeyStore.AndroidKeystore,
+                // T1 桥 socket（§10.3 T1，2026-10-10 批 91）：**设备侧必须显式给这条**。
+                // 缺省那条（`NpmT1Bridge.fileSystemBinder`）是 JDK unix domain socket，
+                // 而 `java.net.UnixDomainSocketAddress` 根本不在 android.jar 里 ——
+                // 在设备上它不是"降级"而是 NoClassDefFoundError（Error 拦不住），
+                // 会把整个壳的装配掀翻。故 `assemble` 把它做成**必填参数**，忘传 = 编不过。
+                npmT1Binder = AndroidT1SocketBinder,
                 // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
                 // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，
                 // 不 import 任何 com.autoscript.platform..（ArchitectureTest 看住）。
@@ -744,21 +749,6 @@ class AppShellApplication : Application(), HostSummary {
         return facade.snapshot()
     }
 
-    /**
-     * 人工审批决定（§10.5-2 人机分离的**唯一**生产落点）。
-     *
-     * 脚本侧只能 `auto.npm.requestApprove` 入队（桥面没有 resolve），决定必须由 UI 回调
-     * 带进来 —— 本方法就是那个回调面。`PackageManagerFacade.resolveApproval` 在全仓
-     * 只该有这一个生产调用方。
-     */
-    override suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：审批决定无处落账" }
-        val facade = checkNotNull(built.npmFacade) { "npm 未接线：审批决定无处落账" }
-        return facade.resolveApproval(
-            requestId,
-            if (approve) ApprovalDecision.APPROVE else ApprovalDecision.REJECT,
-        )
-    }
 
     /**
      * 全局镜像源读数（§10.9 第 8 条，[HostSummary] 的生产实现）。

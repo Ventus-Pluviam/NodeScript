@@ -76,7 +76,7 @@ fun AuditScreen(
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         ToneText(
-            "依赖相关操作的记账（安装 / 卸载 / 镜像源变更 / 审批放行 …）。" +
+            "依赖相关操作的记账（安装 / 卸载 / 镜像源变更 / 脚本执行 …）。" +
                 "**失败也在这里** —— 审计要能回答「当时到底成没成」。点一行复制。",
             StatusTone.MUTED,
             style = MaterialTheme.typography.bodySmall,

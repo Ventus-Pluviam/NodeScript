@@ -29,12 +29,10 @@ class PackageManagerFacadeContractTest {
             "consoleHistory", "recordConsoleHistory",
             // 控制台 shell 面（2026-10-09 用户口径：控制台要能执行 shell）
             "runShellCommand",
-            // 审批（人机分离：requestApprove 仅入队 / resolveApproval 仅 UI 回调）
-            "requestApprove", "resolveApproval", "pendingApprovals",
             // P1
             "runScript", "exec",
             // 事件流（Flow 供 :main 订阅；drain* 是脚本侧拉取口，§10.7）
-            "progress", "approvals", "drainEvents", "drainApprovals",
+            "progress", "drainEvents",
             // 快照
             "exportSnapshot",
             // 审计史（§10.5-2；append-only 历史，与 snapshot() 的"当前事实"是两件事）
@@ -53,12 +51,7 @@ class PackageManagerFacadeContractTest {
             listOf("firstSeq", "lastSeq", "events"),
             InstallEventBatch::class.java.declaredFields.map { it.name },
         )
-        assertEquals(
-            listOf("firstSeq", "lastSeq", "requests"),
-            ApprovalBatch::class.java.declaredFields.map { it.name },
-        )
         assertEquals(listOf("seq", "event"), SequencedInstallEvent::class.java.declaredFields.map { it.name })
-        assertEquals(listOf("seq", "request"), SequencedApproval::class.java.declaredFields.map { it.name })
     }
 
     @Test
@@ -71,22 +64,6 @@ class PackageManagerFacadeContractTest {
             NpmRegistryKeys.OFFICIAL,
             NpmRegistrySnapshot(null, NpmRegistryKeys.OFFICIAL, NpmRegistryKeys.MIRROR).effective,
             "没设过时生效的就是出厂缺省",
-        )
-    }
-
-    @Test
-    fun `审批 DTO 绑定 pkg 与版本哈希`() {
-        val props = ApprovalRequest::class.java.declaredFields.map { it.name }.toSet()
-        assertTrue("versionHash" in props, "ApprovalRequest 必须携带 versionHash")
-        assertTrue("pkg" in props)
-        assertTrue("action" in props)
-    }
-
-    @Test
-    fun `审批状态机四态`() {
-        assertEquals(
-            listOf("PENDING", "APPROVED", "REJECTED", "EXPIRED"),
-            ApprovalStatus.entries.map { it.name },
         )
     }
 
@@ -143,7 +120,7 @@ class PackageManagerFacadeContractTest {
             ),
             "前八个与 InstallHistory.Op 逐字同值（那边现在是别名）；改了要同步 :ui 的分组",
         )
-        // 跑出来的取值：opName(args) 直取 argv 首词、T1 动作名来自 ApprovalAction.name.lowercase()。
+        // 跑出来的取值：opName(args) 直取 argv 首词，T1 两条由 runScript/exec 直接给常量。
         assertEquals("ls", InstallHistoryOp.LS)
         assertEquals("audit", InstallHistoryOp.AUDIT)
         assertEquals("update", InstallHistoryOp.UPDATE)

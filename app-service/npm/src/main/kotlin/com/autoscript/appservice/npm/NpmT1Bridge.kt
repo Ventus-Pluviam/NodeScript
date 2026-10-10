@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -57,7 +58,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * - **本桥不是安全边界**：shim 在脚本进程里，已获批的脚本能 `delete require.cache` 绕过它
  *   直接 require 未打补丁的 `child_process` —— 而设备上那个模块本来就不工作，绕过去只是
- *   回到"起不来"。真判据是审批（§10.5-2）与「宿主只跑它认得的那条命令」。
+ *   回到"起不来"。真判据是解析层白名单与「宿主只跑它认得的那条命令」。
  * - **不隔离**：本版起的进程与 App 同 UID（没有可用的隔离手段，见 §10.3 T1 的
  *   "最小 CapabilityMask"讨论）。**这一条是 T1 的已知欠账**，登记在
  *   `design-decisions.md` 与本批的流水里，不在这里假装。
@@ -140,6 +141,11 @@ object NpmT1Bridge {
      *
      * 与 `:app` 的 `BridgeSocketBinder` 同一个形状与同一条"失败即降级"口径 ——
      * 这里不 import 它（依赖方向），但语义刻意一致。
+     *
+     * **这条缝是"平台"而不是"可选项"**：设备侧必须由 `:app` 注入
+     * `android.net.LocalServerSocket` 那条实现，[fileSystemBinder] 在 Android 上必炸
+     * （见那边的 KDoc）。故装配层**没有**"忘了传就用缺省"这个安全缺省 ——
+     * `AppShellKit.assemble` 把它列成必填参数，编译器就是那道门。
      */
     fun interface SocketBinder {
         fun bind(socketName: String): BoundSocket?
@@ -177,14 +183,30 @@ object NpmT1Bridge {
     }
 
     /**
-     * 缺省绑定：JDK 的 unix domain socket。
+     * 缺省绑定：JDK 的 unix domain socket —— **桌面专用，Android 上永不可达**。
      *
      * **只支持文件系统路径**（JDK 17 的 `UnixDomainSocketAddress.of(Path)` 拒 NUL 前缀，
      * 故 abstract namespace 用它绑不上）。设备上要 abstract 得走 `android.net.LocalServerSocket`
      * —— 那条路由 `:app` 的装配层注入（本模块看不到 `android.*`），与本类无关。
+     *
+     * ## 为什么"Android 上永不可达"要写成硬约束而不是愿望（2026-10-10 真机实测）
+     *
+     * `java.net.UnixDomainSocketAddress` **在 android.jar 里根本不存在**（实查：整个
+     * `java/net/` 下没有这个类；`StandardProtocolFamily.UNIX` 与
+     * `ServerSocketChannel.open(ProtocolFamily)` 倒是有 —— 这正是"看起来能编过"的原因，
+     * 编译期只校验后者）。故本函数在设备上**不是"降级"，是必炸**，而且是
+     * `NoClassDefFoundError`（Error，不是 Exception）—— 任何 `catch (e: Exception)`
+     * 都拦不住它，它会一路掀翻整个壳的装配。
+     *
+     * 判据因此是**装配期注入**：`:app` 的生产装配必须传 `AndroidT1SocketBinder`
+     * （见 [SocketBinder] 这条缝的 KDoc）。本函数只该出现在桌面单测与 JVM 装配里。
      */
     fun fileSystemBinder(): SocketBinder = SocketBinder { name ->
-        val path = Path.of(System.getProperty("java.io.tmpdir")).resolve("autoscript-t1-$name.sock")
+        // `Paths.get` 而不是 `Path.of`：后者在 Android 上 since=34（`api-versions.xml` 实查），
+        // 本模块是**纯 JVM 模块、没有 lint**，故这条纪律在这里没有门禁兜着 —— 只能靠这行注释
+        // 与真机验证。2026-10-10 真机实测（API 33）：`Path.of` 抛 NoSuchMethodError，
+        // 且它把**整个壳的装配**掀翻了（见 [fileSystemBinder] 的 KDoc）。
+        val path = Paths.get(System.getProperty("java.io.tmpdir")).resolve("autoscript-t1-$name.sock")
         try {
             Files.deleteIfExists(path)
             val ch = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
