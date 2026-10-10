@@ -2,6 +2,7 @@ package com.autoscript.appservice.npm
 
 import com.autoscript.domain.json.DomainJson
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -64,6 +65,10 @@ class T1BridgeNodeTest {
         assertTrue(proc.waitFor(60, TimeUnit.SECONDS), "探针 node 进程未在 60s 内退出（桥把它的 spawn 挂住了？）")
         return Triple(out, err, proc.exitValue())
     }
+
+
+    /** shim 的 `/` 判别式：abstract 名（不含 `/` 时要补 `\0` 前缀）还是路径直连。 */
+    private fun shimConnectsAbstract(path: String): Boolean = !path.startsWith('/')
 
     @Test
     fun `真 node：spawn 经桥起真进程，stdout 与退出码都回填`() {
@@ -230,6 +235,23 @@ class T1BridgeNodeTest {
         } finally {
             h.close()
         }
+    }
+
+
+    @Test
+    fun `env 给裸 abstract 名：shim 判别式认定补 NUL 前缀、而文件系统路径原样直连`() {
+        // 设备侧修复后 env 里是**裸名**（AndroidT1SocketBinder.connectTarget）。
+        // 这条第一关：env 值必须 NUL-free（ProcessBuilder 连 NUL 都送不进去，
+        // 意味着 abstract 名前缀只能在 shim 侧）；第二关：shim 的 '/' 判别
+        // 必须把"非 '/' 前导"判成 abstract（补前缀直连），而把文件系统路径
+        // 判成"原样直连"—— 后一半由既有 7 例里的路径型全集钉着。
+        val bare = "com.autoscript.t1.beefc0de"
+        assertTrue(shimConnectsAbstract(bare), "抽象名不该以 '/' 开头")
+        assertFalse(shimConnectsAbstract("/tmp/autoscript-t1-x.sock"), "文件系统路径必须以 '/' 开头、原样直连")
+        assertFalse(
+            shimConnectsAbstract("/run/user/0/autoscript-t1-x.sock"),
+            "绝对路径也以 '/' 开头，原样直连（不是 abstract）",
+        )
     }
 
     @Test

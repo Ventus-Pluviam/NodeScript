@@ -1,4 +1,18 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 93（控制台 `npm run` / `npx` 拆除人工审批 + env-NUL 缺陷修复，真机实证）**：
+> 用户在真机上看清审批卡的形态后裁定「审批不是这样用的……依赖面板是方便用户直接安装和管理
+> 依赖的地方。你把审批去掉吧」—— **整面拆除**：`ApprovalLedger`/`ApprovalLedgerStore` 及
+> 测试、桥面 `requestApprove`/`approvals`、`:domain` 七个审批类型、facade 四个审批方法
+> （`approvalLedgerSnapshot` 保留只读供审计读旧账）、`HostSummary.resolveNpmApproval`、
+> UI 审批卡；依赖面板回到纯安装/管理。放行判据改**解析层白名单**，`versionHash` 只随
+> `ScriptOp` 进审计、不再作放行判据。同批修真机暴露的 **env-NUL** 缺陷：
+> `AndroidT1SocketBinder.connectTarget` 是 `"\0"+name`（abstract 名前缀），经 env 注入
+> `AUTOSCRIPT_T1_SOCKET` 后 `ProcessBuilder.start()` 见 NUL 必抛 —— 改 env 给**裸名**、
+> shim 侧按 `main.cpp` 同源判别（'/' 前导 = 路径直连，否则 abstract）补 `'\0'` 前缀。
+> 桌面路径型原样，`T1BridgeNodeTest`+`T1BridgeE2ETest` 继续绿 = 直连分支钉死。
+> 决策：[`design-decisions.md`](design-decisions.md) 第 62 项。守卫：完整 CI JVM 门 14 任务
+> 全绿。**边界**：真机行为由用户自测。
+> 细节见 [`log/2026-10-11.md`](log/2026-10-11.md)。
 
 > **2026-10-10 · 批 91（T1 spawn 桥本体 —— `npm run` / `npx` 第一次真跑起来）**：
 > 批 88/89 的审批卡、批 90 的流式输出，到这一步之前**全断在同一处**：`InstallSeams.kt` 的
@@ -451,6 +465,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 1 | 批 93：控制台 `npm run`/`npx` 拆除人工审批 + env-NUL 修复 —— 用户裁定「审批不是这样用的……依赖面板是方便用户直接安装和管理依赖的地方。你把审批去掉吧」，**整面拆**：账本两类/桥面 `requestApprove`+`approvals`/`:domain` 七个审批类型/facade 四个方法/UI 审批卡（`approvalLedgerSnapshot` 保留只读）；放行判据改解析层白名单，`versionHash` 只进审计。同批修真机暴露 env-NUL：`connectTarget` 的 `"\0"` 前缀经 env 进 `ProcessBuilder` 必抛 `Invalid environment variable value` —— 改 env 给裸名、shim 按 `main.cpp` 同源 '/' 判别补前缀；桌面路径型原样，`T1BridgeNodeTest`+`T1BridgeE2ETest` 继续绿 = 直连分支钉死。守卫：完整 CI JVM 门 14 任务全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-10 | 3 | 批 91：T1 spawn 桥本体 —— `npm run`/`npx` 第一次真跑起来（`npm-t1-bridge.cjs` 经 unix socket 把 spawn 报给宿主、宿主起真进程、stdio 假管道回填；只放行异步三兄弟，`detached` 当场拒；**两条 shim 互斥** —— T1 只注桥那一份）。最贵的一课：`Channels.newInputStream/newOutputStream` 共用 `blockingLock()`，读线程抱锁阻塞 → 写线程永远拿不到锁，双向协议被流包装锁成单向（两类测试双双挂死、报错面只有「超时」）；改直读 `SocketChannel` 即绿。同批修握手死锁（`send` 排队等 `ready` 而 `ready` 等 `helloAck`）与 socket 保活（`refWhileBusy()`：无在途子进程 unref、有则 ref）。守卫 16 例（真 node 7 / 真 npm 4 / 替身 5），T1 两类不设 `assumeTrue`。欠账：不用引擎池 / 同 UID 无最小掩码 / 无输出流式 / `signal` 恒 null / 孙子被 reparent 后杀树链断 | [`log/2026-10-10.md`](log/2026-10-10.md) |
 | 2026-10-10 | 2 | 批 90：控制台「活着」三件 —— **① 真流式 stdout**（`HostNodeExecutor.runNpm` 从「先 `readBytes()` 再 `waitFor`」改成专门读流线程 + 新的 `OutputSink` 缝；缝与 `ProgressSink` 分开 —— 那条装 `InstallEvent`（脚本侧契约形状），这条装 npm 原文；流真报过时不再补 `outputTail` 行、空行跳过 —— 后者是 `HostNodeNpmE2ETest` 抓到的：真实 npm 输出以空行结尾而 `takeLast(8000)` 取到空行）+ **② 常驻进度推送**（`:ui` 新增 `LivePoll.pollWhile` + 两个调用点：提交后跟到跑完 / 子页在前台时一直跟；**刻意不用**宿主的 `progress` SharedFlow —— 无重放，晚到订阅者永久丢一批；三条自我约束：有界 / 只依据宿主给的事实 / 每轮同一读口；间隔与轮数可注入）+ **③ 命令历史落盘**（新增 `ConsoleHistory`，`files/.autojs/console-history.jsonl`；与审计史纪律相反 —— 那个只追加永不清理、这个允许修剪，差别写进类 KDoc 防误搬；按项目分开读；带凭据形态的行**整条不记**（不打码：打码后的历史看起来能跑，点进去得到「认证失败」）；写口在 `:ui` **派发点**）。**同批修一处真错**（探针 `SinkRingProbeTest` 测出来的，三个环各自的测试都绿因为都只喂自己那条路）：两处执行体 sink 调用点写的是 `events.tryEmit(ev)`，只喂 `SharedFlow` 没经 `emit` —— 执行体独有的 `DOWNLOAD`/`REIFY` **从未进过事件环**，脚本侧 `onProgress` 收不到、阶段条停在 `RESOLVE`。守卫：`HostNodeExecutorStreamTest`（含到达时间戳断言）/ `NpmEventDrainTest` 新增一例 / `ConsoleHistoryTest` 9 例 / `LivePollTest` 4 例 / `ConsoleCmdOpsTest` 新增 3 例 / `InstallCoordinatorTest` 新增 2 例；反证四条各自命中。边界：真机未验；凭据守卫认参数名形态不是 DLP | [`log/2026-10-10.md`](log/2026-10-10.md) |
 | 2026-10-10 | 1 | 批 89：Shizuku 反射面 ↔ R8 keep 对齐门（`ShizukuKeepRuleTest`，三条判据双向比：类名集合 / 方法 `(名字, 参数表)` 集合 / 签名在真类上真解析；先剥 proguard 注释行，`proguard-rules.pro` 声明成测试输入 —— 不声明则改 keep 后任务 `UP-TO-DATE`、门静默不跑，实测复现；反证三条各自命中）+ 「`input tap` 挂 30s」成因订正（真机对照实验推翻 2026-10-09 记的「两者各自独立 / 只有冷置后的第 1 条挂」：打进应用自己窗口时**每一条都挂**，6 条 32.4–33.8 s；机理同一件事 —— `input` 的 `WAIT_FOR_FINISH` 要等目标窗口处理完，而主线程卡在 `IRemoteProcess.waitForTimeout` 上；证据 = ANR logcat + `/data/anr` main 线程栈逐帧吻合）。顺带订正测量口径：「延迟 2.4–2.5 s」是 `uiautomator dump` 的成本（~2.2 s），设备侧 tap 本身 0.038–0.081 s | [`log/2026-10-10.md`](log/2026-10-10.md) |

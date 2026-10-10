@@ -136,7 +136,7 @@ internal suspend fun selectConsoleProject(
  * 输入框里再留一份会让人以为"没执行"。
  *
  * **失败原文原样透传，界面不按错误码另编一句话**：`ERR_PERMISSION_DENIED` 那句里已经
- * 写清「请求已入队，请到管理面板 → 依赖管理的审批卡确认后重试」，`ERR_NOT_IMPLEMENTED`
+ * 写清缺的是哪一段（spawn 桥未接），`ERR_NOT_IMPLEMENTED`
  * 那句里写清了缺的是哪一段。界面再译一遍就是第二份判据，而漂掉的那一份正好是用户看到的
  * 那一份（与 `RegistryScreen` 不自己判地址合法性同一条理由）。
  */
@@ -205,7 +205,7 @@ internal suspend fun runConsoleCmd(
 /**
  * 按解析结果派发到对应的宿主口。
  *
- * **两条面分开走**：npm 命令面（`runNpmCommand`，含审批门禁/安装会话）与
+ * **两条面分开走**：npm 命令面（`runNpmCommand`，安装会话）与
  * shell 命令面（`runShellCommand`，同步现取、与依赖树无关）。判据同一份
  * （[NpmConsoleKeys.parse]），但落到宿主的是两个口 —— 把 shell 塞进 npm 那条链
  * 会让「敲一条 `ls`」占住全局安装会话。
@@ -237,17 +237,16 @@ internal fun modeLabel(mode: ShellConsoleMode): String = when (mode) {
  * 执行成功后的回执（**不替用户宣布结果** —— 结果在输出环里，这里只说"这一行去了哪"）。
  *
  * 三条路各自说清"接下来会发生什么"：轻操作当场出结果；重操作入队等安装会话；
- * `npm run`/`npx` 走 T1 门禁 —— 未获批会在依赖管理的审批卡上等人工确认，
- * 批完**要重敲那一行**（门禁只入队不排队，见 `InstallCoordinator.runScriptOps` 的 KDoc）。
+ * `npm run`/`npx` 走 T1 执行面（判据在解析层，不需要审批 —— 2026-10-10 裁定）。
  */
 private fun noticeFor(cmd: NpmConsoleCommand): String = when (cmd) {
     is NpmConsoleCommand.Npm ->
         if (cmd.sub in NpmConsoleKeys.LIGHT_SUBCOMMANDS) "已执行 npm ${cmd.sub}：结果见上方"
         else "已入队 npm ${cmd.sub}：安装会话在跑，输出见上方（完成前输入行停用）"
     is NpmConsoleCommand.Run ->
-        "已提交 npm run ${cmd.script}：未获批会入队，请到依赖管理的审批卡确认后**重敲这一行**"
+        "已提交 npm run ${cmd.script}：结果见上方"
     is NpmConsoleCommand.Exec ->
-        "已提交 npx ${cmd.bin}：未获批会入队，请到依赖管理的审批卡确认后**重敲这一行**"
+        "已提交 npx ${cmd.bin}：结果见上方"
     is NpmConsoleCommand.Shell ->
         "已执行（${modeLabel(cmd.mode)}）：结果见上方"
     is NpmConsoleCommand.EnterMode -> "已进入 ${modeLabel(cmd.mode)}"   // 到不了这里（上面已 return）

@@ -16,7 +16,7 @@ import kotlinx.coroutines.CancellationException
  * - 成功 → 全量覆盖（宿主读数是权威，不累积 —— 与 [loadConsoleCmd] 的增量语义相反，
  *   因为这份读口本来就是全量历史，不是游标流）。
  *
- * **审计页只读**：这里没有写操作。审批/安装/镜像源那些动作的入口在各自的页上，
+ * **审计页只读**：这里没有写操作。安装/镜像源那些动作的入口在各自的页上，
  * 本页是它们的**记录**，不是它们的按钮（§10.5-2 审计的意义就在这里）。
  */
 internal suspend fun loadAudit(host: HostSummary?, previous: AuditState): AuditState = try {

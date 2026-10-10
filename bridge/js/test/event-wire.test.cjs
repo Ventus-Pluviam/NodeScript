@@ -130,24 +130,6 @@ function tsReadKeysByCase(src) {
   return out
 }
 
-/** Kotlin `"requests" ->` 嵌套 mapOf 的键（审批条目）。 */
-function ktApprovalKeys(src) {
-  const start = src.indexOf('"requests" to got.requests')
-  assert.ok(start >= 0, 'Kotlin 找不到 approvals 回包')
-  const open = src.indexOf('mapOf(', start)
-  const body = src.slice(open + 'mapOf('.length, src.indexOf('\n                            )', open))
-  return [...new Set([...body.matchAll(/"([A-Za-z_][\w]*)"?\s+to\s/g)].map((x) => x[1]))].sort()
-}
-
-/** JS `pumpApprovals` 条目分支读的键。 */
-function tsApprovalReads(src) {
-  const start = src.indexOf('async function pumpApprovals(')
-  assert.ok(start >= 0, 'npm.ts 找不到 pumpApprovals')
-  const open = src.indexOf('for (const w of items)', start)
-  const body = src.slice(open, src.indexOf('if (last > approvalSeq)', open))
-  return [...new Set([...body.matchAll(/\bw\.([A-Za-z_][\w]*)/g)].map((x) => x[1]))].sort()
-}
-
 function keyParity(name, emitted, read) {
   const unread = read.filter((k) => !emitted.includes(k))
   const unreadByHost = emitted.filter((k) => !read.includes(k))
@@ -168,20 +150,15 @@ test('事件条目键：encodeEvent 各分支 ⇄ routeInstallEvent 各 case 逐
   }
 })
 
-test('审批条目键：宿主 mapOf ⇄ pumpApprovals 读集对账', () => {
-  keyParity('审批', ktApprovalKeys(KT), tsApprovalReads(TS))
-})
-
-test('信封键：first/last/events/requests 两侧齐全（JS 只认这四个）', () => {
+test('信封键：first/last/events 两侧齐全（JS 只认这三个）', () => {
   const ktEnvelope = [...new Set([...KT.matchAll(/"([A-Za-z_][\w]*)"?\s+to\s/g)].map((x) => x[1]))]
-  for (const k of ['first', 'last', 'events', 'requests']) {
+  for (const k of ['first', 'last', 'events']) {
     assert.ok(ktEnvelope.includes(k), `宿主回包缺信封键 ${k}`)
   }
   const jsReads = tsReadKeysByCase(TS).size > 0 ? ['first', 'last'] : []
   assert.ok(jsReads.length > 0, '解析失灵')
   // drainBatchOf 读 first/last + 动态 key；keys 字面量在 pump 调用处
-  assert.ok(TS.includes("drainBatchOf(payload, 'events')"), 'JS 少了 events 信封')
-  assert.ok(TS.includes("drainBatchOf(payload, 'requests')"), 'JS 少了 requests 信封')
+  assert.ok(TS.includes("drainBatchOf(payload)"), 'JS 少了 events 信封')
 })
 
 test('解析有牙：逐分支键数与 UNREAD 只有 seq', () => {
@@ -202,10 +179,6 @@ test('warning kind：kindWire ⇄ WARNING_KINDS 双向相等（feedWarning 的�
   bothWays('kind', ktWhenWire(KT, 'kindWire'), tsArrayWire(TS, 'WARNING_KINDS'))
 })
 
-test('approval action：actionWire ⇄ APPROVAL_ACTIONS 双向相等', () => {
-  bothWays('action', ktWhenWire(KT, 'actionWire'), tsArrayWire(TS, 'APPROVAL_ACTIONS'))
-})
-
 test('事件 type：encodeEvent 发出的 type ⇄ routeInstallEvent 的 case 双向相等', () => {
   bothWays('type', ktEventTypes(KT), tsRouteCases(TS))
 })
@@ -213,11 +186,9 @@ test('事件 type：encodeEvent 发出的 type ⇄ routeInstallEvent 的 case �
 test('解析有牙：钉住数量与 post-check 本字（小写折叠变体必须不在）', () => {
   const phases = ktWhenWire(KT, 'phaseWire')
   const kinds = ktWhenWire(KT, 'kindWire')
-  const actions = ktWhenWire(KT, 'actionWire')
   const types = ktEventTypes(KT)
   assert.equal(phases.length, 6, `phase 应 6 个，解析到 ${phases.length}`)
   assert.equal(kinds.length, 5, `kind 应 5 个，解析到 ${kinds.length}`)
-  assert.equal(actions.length, 3, `action 应 3 个，解析到 ${actions.length}`)
   assert.deepStrictEqual(types, ['finished', 'progress', 'warning'])
   assert.ok(phases.includes('post-check'), '缺 post-check——连字符写法漂了')
   assert.ok(!phases.includes('post_check'), '出现 post_check=.name.lowercase() 回潮')

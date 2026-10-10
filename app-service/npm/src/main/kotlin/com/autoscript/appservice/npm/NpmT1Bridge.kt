@@ -58,7 +58,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * - **本桥不是安全边界**：shim 在脚本进程里，已获批的脚本能 `delete require.cache` 绕过它
  *   直接 require 未打补丁的 `child_process` —— 而设备上那个模块本来就不工作，绕过去只是
- *   回到"起不来"。真判据是审批（§10.5-2）与「宿主只跑它认得的那条命令」。
+ *   回到"起不来"。真判据是解析层白名单与「宿主只跑它认得的那条命令」。
  * - **不隔离**：本版起的进程与 App 同 UID（没有可用的隔离手段，见 §10.3 T1 的
  *   "最小 CapabilityMask"讨论）。**这一条是 T1 的已知欠账**，登记在
  *   `design-decisions.md` 与本批的流水里，不在这里假装。

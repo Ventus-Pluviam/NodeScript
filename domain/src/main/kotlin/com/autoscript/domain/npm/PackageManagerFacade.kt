@@ -8,10 +8,9 @@ package com.autoscript.domain.npm
  * 路由到全局唯一安装会话（§10.6 轻/重拆分 + 全局互斥 + per-project 串行）。
  *
  * 信任分级（§10.5）：
- * - [requestApprove] 是脚本/内部唯一入口——只入队，永不执行；
- * - [resolveApproval] 仅 UI 审批卡回调可携人工决定调用（人机分离）；
- * - [runScript]/[exec]（P1）在执行前由实现侧校验 ledger 中存在 APPROVED 记录，
- *   版本升级（versionHash 变化）必须重新审批。
+ * - [runScript]/[exec]（P1）**不需要审批**：控制台与依赖面板都是**宿主自己的界面**，
+ *   敲下这一行的人就是用户本人（2026-10-10 裁定，原「人机分离」审批面已删 —— 见
+ *   `docs/design-decisions.md`）。判据仍在解析层：纯 JS bin 白名单、路径不许逃出包目录。
  */
 
 /** 包规格（install 入参）。 */
@@ -84,29 +83,6 @@ data class AuditReport(
     enum class Severity { NONE, LOW, MODERATE, HIGH, CRITICAL }
 }
 
-/** 审批请求（人机分离 §10.5）：记录绑定 pkg+版本+脚本内容哈希；版本升级必须重新审批。 */
-data class ApprovalRequest(
-    val id: String,
-    val projectId: String,
-    val pkg: String,
-    val versionHash: String,
-    val action: ApprovalAction,
-    val requestedAtMillis: Long,
-)
-
-enum class ApprovalAction { INSTALL_SCRIPT, RUN_SCRIPT, EXEC }
-
-enum class ApprovalDecision { APPROVE, REJECT }
-
-/** 审批票（查询/审计用）。 */
-data class ApprovalTicket(
-    val requestId: String,
-    val status: ApprovalStatus,
-    val decidedAtMillis: Long? = null,
-)
-
-enum class ApprovalStatus { PENDING, APPROVED, REJECTED, EXPIRED }
-
 /** 安装进度事件（progress 流）。 */
 sealed interface InstallEvent {
     val projectId: String
@@ -151,16 +127,6 @@ data class InstallEventBatch(
 
 /** 带序号的安装事件（`seq` 上桥，脚本拿它当下一次 `sinceSeq`）。 */
 data class SequencedInstallEvent(val seq: Long, val event: InstallEvent)
-
-/** 审批入队事件的一批（对偶 [InstallEventBatch]，游标各自独立）。 */
-data class ApprovalBatch(
-    val firstSeq: Long,
-    val lastSeq: Long,
-    val requests: List<SequencedApproval>,
-)
-
-/** 带序号的审批请求。 */
-data class SequencedApproval(val seq: Long, val request: ApprovalRequest)
 
 /** node_modules 体积统计（storage() 轻操作，Kotlin 目录遍历算尺寸）。 */
 data class NodeModulesStats(
@@ -513,32 +479,21 @@ interface PackageManagerFacade {
     suspend fun recordConsoleHistory(projectId: String, line: String) {}
 
     /**
-     * 依赖面板读数（§10.9.1）：一次现取**全部项目**的已装清单 + 离线缺口 + 尺寸配额，
-     * 外加**全局**待审队列。
+     * 依赖面板读数（§10.9.1）：一次现取**全部项目**的已装清单 + 离线缺口 + 尺寸配额。
      *
      * 与上面几条轻操作的关系是「合成」不是「替代」：它内部就是 `list + offlineGap +
-     * storage + ledger`，存在只为让呈现层少一次拼装、少一套失败语义分叉，
+     * storage`，存在只为让呈现层少一次拼装、少一套失败语义分叉，
      * 也避免"按项目问四次 = 四次 IO + 四份可以互相矛盾的结论"。
      */
     suspend fun snapshot(): NpmPanelSnapshot
 
-    // —— 审批（人机分离 §10.5）——
-    /** 脚本/内部唯一入口：只入队，返回票；永不在此执行。 */
-    suspend fun requestApprove(projectId: String, pkg: String, versionHash: String, action: ApprovalAction): ApprovalTicket
-
-    /** UI 审批卡回调专用：携人工决定落账（ledger）。 */
-    suspend fun resolveApproval(requestId: String, decision: ApprovalDecision): ApprovalTicket
-
-    suspend fun pendingApprovals(projectId: String): List<ApprovalRequest>
-
-    // —— P1：仅人工确认后放行，纯 JS bin 白名单（§10.3 T1）——
+    // —— P1：纯 JS bin 白名单（§10.3 T1）；不需要审批，见类 KDoc ——
     suspend fun runScript(projectId: String, name: String, args: List<String> = emptyList()): InstallHandle
     suspend fun exec(projectId: String, bin: String, args: List<String> = emptyList()): InstallHandle
 
     // —— 事件流 ——
     /** :main 侧订阅用（Flow，无重放：没在收就错过）。脚本侧走 [drainEvents]。 */
     fun progress(projectId: String): kotlinx.coroutines.flow.Flow<InstallEvent>
-    fun approvals(projectId: String): kotlinx.coroutines.flow.Flow<ApprovalRequest>
 
     /**
      * 拉取式安装事件（脚本侧 `onProgress`/`onWarning`/`onFinished` 的取数口）。
@@ -547,9 +502,6 @@ interface PackageManagerFacade {
      * 这类必须被看见的警告）；语义与形状见 [InstallEventBatch]。
      */
     suspend fun drainEvents(projectId: String, sinceSeq: Long, batch: Int = 32): InstallEventBatch
-
-    /** 拉取式审批入队事件（脚本侧 `onApproval` 的取数口；与 [drainEvents] 游标独立）。 */
-    suspend fun drainApprovals(projectId: String, sinceSeq: Long, batch: Int = 32): ApprovalBatch
 
     // —— 快照（高信任通道）——
     suspend fun exportSnapshot(projectId: String, uri: String): SnapshotRef
@@ -564,7 +516,7 @@ interface PackageManagerFacade {
      * 无关）。把后者塞进前者，等于每刷一次依赖面板就把全部历史重读一遍，而依赖面板根本
      * 不显示它。
      *
-     * **无参**：与 [pendingApprovals] 同一取舍 —— 全量 + 呈现层筛，不按项目问。按项目问
+     * **无参**：与 `snapshot()` 同一取舍 —— 全量 + 呈现层筛，不按项目问。按项目问
      * 会让「全局变更」（[InstallHistoryOp.REGISTRY]，其 `projectId` 是空串）从任何一次
      * 筛选里掉出去，而那条恰恰是审计最该看见的。
      *
@@ -636,23 +588,31 @@ object InstallHistoryOp {
      */
     const val CACHE_RECLAIM = "cache_reclaim"
 
-    /** T1 门禁的三种动作（`ApprovalAction.name.lowercase()` 的产物）。 */
+    /** T1 脚本执行动作（审计条目的 action 段）。 */
     const val RUN_SCRIPT = "run_script"
     const val EXEC = "exec"
+
+    /**
+     * 安装脚本（`postinstall` 那一类）。
+     *
+     * **今天零生产写入方**（2026-10-10 删审批面、2026-10-11 拆审批时留下的）：
+     * 保留是因为审计页要能**读**旧账
+     * —— 已落盘的 `install-history.jsonl` 里可能有这个 op，删掉常量只会让那些行在界面上
+     * 退回原样显示。不是"以后要用"，是"历史里有"。
+     */
     const val INSTALL_SCRIPT = "install_script"
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 呈现面只读快照（`:ui` 依赖面板 / 审批卡；2026-10-09 批 81）
+// 呈现面只读快照（`:ui` 依赖面板；2026-10-09 批 81）
 //
 // 为什么住 `:domain` 而不是让 `:ui` 直接读 facade：`:ui` 只依赖 `:domain`，
 // 而 `PackageManagerFacade` 的实现住 `:app-service:npm` —— 呈现层够不到实现类。
 // 与 `HostSummary` 的其余读口同一条分工：快照 DTO 住中间层，两侧各只认它。
 //
-// 为什么这些是**读口**而不是桥面方法：桥面（§12.2 的 npm 命名空间）是**脚本侧**的面，
-// 受 §10.5 人机分离约束；IDE 的依赖面板是**宿主自己的界面**，不是脚本。
-// 两者共用同一个 `InstallCoordinator`，但入口不同、可达性判据也不同
-// （`resolveApproval` 只能从 UI 回调进来，这正是「人机分离」那句话的落点）。
+// 为什么这些是**读口**而不是桥面方法：桥面（§12.2 的 npm 命名空间）是**脚本侧**的面；
+// IDE 的依赖面板是**宿主自己的界面**，不是脚本。两者共用同一个 `InstallCoordinator`，
+// 但入口不同 —— 呈现面走进程内接口调用，不经桥。
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -661,16 +621,13 @@ object InstallHistoryOp {
  *
  * 为什么是"全量"而不是"按项目问一次"：依赖面板要能回答"我到底有哪些项目、
  * 各自装了什么"，只列一个项目会让人以为其余项目不存在（与 §9.5 能力中心
- * "列全量能力"同一条理由）。审批队列同理是**全局**的 —— 按项目筛会让用户
- * 漏掉别的项目上等着的那张卡。
+ * "列全量能力"同一条理由）。
  *
  * @property projects 按项目号排序（顺序稳定，界面不用再排）；**空 = 一个项目都没有**
  *   （还没部署过任何项目），与「没读到」是两句不同的话，后者由调用方抛异常表达。
- * @property pendingApprovals 待人工决定的审批票（跨项目；`ApprovalStatus.PENDING`）。
  */
 data class NpmPanelSnapshot(
     val projects: List<NpmProjectSnapshot>,
-    val pendingApprovals: List<ApprovalRequest>,
 )
 
 /**

@@ -2,7 +2,6 @@ package com.autoscript.domain.host
 
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.editor.SyntaxHighlighter
-import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
@@ -210,17 +209,6 @@ interface HostSummary {
      */
     suspend fun npmSnapshot(): NpmPanelSnapshot
 
-    /**
-     * 人工审批决定（§10.5-2 **人机分离**的唯一落点）。
-     *
-     * 为什么在 [HostSummary] 而不是桥面：桥面是**脚本侧**的面，而审批的全部意义就是
-     * 「人的动作」—— 脚本只能发请求（`auto.npm.requestApprove` 只入队），决定必须由
-     * UI 回调带进来。本口就是那个回调面；`PackageManagerFacade.resolveApproval` 在
-     * 全仓**只该有这一个生产调用方**。
-     *
-     * 幂等：已决票再调返回原票（不翻案）。票不存在**抛**（原文给 UI）。
-     */
-    suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket
 
     /**
      * 脚本环境变量（§8.1；管理面板 → 环境变量）。**全局一份**，不是按项目的配置。
@@ -272,7 +260,7 @@ interface HostSummary {
     /**
      * 在控制台执行一行 npm 命令（§10.9 第 3 条「npm 终端视图」；管理面板 → 控制台）。
      *
-     * 与依赖面板/审批卡/镜像源同一条分工：**宿主自己的界面入口，不经桥** —— 桥面是
+     * 与依赖面板/镜像源同一条分工：**宿主自己的界面入口，不经桥** —— 桥面是
      * 脚本侧的面，而控制台是人在宿主界面上敲命令的地方。
      *
      * 契约（判据的唯一一份在 `:domain` 的 `NpmConsoleKeys`，本口不另判一遍）：
@@ -325,7 +313,7 @@ interface HostSummary {
     /**
      * 安装审计史读数（§10.5-2；管理面板 → 依赖管理 → 审计页）。
      *
-     * 与依赖面板/审批卡/镜像源/控制台同一条分工：**宿主自己的界面读口，不经桥**。
+     * 与依赖面板/镜像源/控制台同一条分工：**宿主自己的界面读口，不经桥**。
      *
      * **无参**（与 [npmSnapshot] 里的待审队列同一取舍）：全量 + 呈现层筛 —— 按项目筛会让
      * 「全局变更」（registry 改动，`projectId` 是空串）从任何一次筛选里掉出去。
@@ -344,7 +332,7 @@ interface HostSummary {
     /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条「包大小管理页」的 cache clean 按钮）。
      *
-     * 与依赖面板/审批卡/镜像源/审计同一条分工：**宿主自己的界面入口，不经桥** ——
+     * 与依赖面板/镜像源/审计同一条分工：**宿主自己的界面入口，不经桥** ——
      * 桥面是脚本侧的面，而这个按钮改的是**磁盘占用**，只有人在界面上按得下去。
      *
      * 语义不是 `npm cache clean`：删的是「没有任何项目 lock 需要的那些」，见

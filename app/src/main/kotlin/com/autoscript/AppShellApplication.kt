@@ -10,8 +10,6 @@ import com.autoscript.domain.host.HostSummary
 import com.autoscript.shell.asShellOpExecutor
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.host.ShellConsoleResult
-import com.autoscript.domain.npm.ApprovalDecision
-import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.InstallHistoryEntry
@@ -751,21 +749,6 @@ class AppShellApplication : Application(), HostSummary {
         return facade.snapshot()
     }
 
-    /**
-     * 人工审批决定（§10.5-2 人机分离的**唯一**生产落点）。
-     *
-     * 脚本侧只能 `auto.npm.requestApprove` 入队（桥面没有 resolve），决定必须由 UI 回调
-     * 带进来 —— 本方法就是那个回调面。`PackageManagerFacade.resolveApproval` 在全仓
-     * 只该有这一个生产调用方。
-     */
-    override suspend fun resolveNpmApproval(requestId: String, approve: Boolean): ApprovalTicket {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：审批决定无处落账" }
-        val facade = checkNotNull(built.npmFacade) { "npm 未接线：审批决定无处落账" }
-        return facade.resolveApproval(
-            requestId,
-            if (approve) ApprovalDecision.APPROVE else ApprovalDecision.REJECT,
-        )
-    }
 
     /**
      * 全局镜像源读数（§10.9 第 8 条，[HostSummary] 的生产实现）。

@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit
  * | 事务 | stageDir + journal + 原子落位 | **没有事务**（`TrackedOp.journaled = false`） |
  * | 工作目录 | `stageDir` 旁的 `npmwork-<nonce>` | **项目根**（脚本就该在项目里跑） |
  * | spawn 门禁 | `npm-spawn-gate.cjs`（**一律拒**） | `npm-t1-bridge.cjs`（**经桥放行**） |
+ * | 放行判据 | 无（重操作即脚本的判据） | 解析层白名单（脚本可跑性，无人工审批） |
  * | 输出 | 落控制台环 + `outputTail` | 只回摘要（脚本的输出经桥回到 npm 自己，再由 npm 决定怎么显示） |
  *
  * **两条 shim 是互斥的**，不是叠加：安装会话要的是"零 spawn"，T1 会话要的恰恰是
@@ -83,7 +84,7 @@ class NpmScriptExecutor(
                     "npm ${op.npmArgs.joinToString(" ")} 退出码 ${outcome.exitCode}：${outcome.tail.ifBlank { "（无输出）" }}",
                 )
             }
-            "npm ${op.action.name.lowercase()} ${op.what} 完成（退出码 0）"
+            "npm ${op.action.replace('_', ' ')} ${op.what} 完成（退出码 0）"
         } finally {
             // 会话关断 = 收掉本次起的全部子进程（TERM → KILL）。放在 finally：异常/超时
             // 取消两条路都必须走到 —— 漏掉的那次留下的是一棵还在跑的进程树。

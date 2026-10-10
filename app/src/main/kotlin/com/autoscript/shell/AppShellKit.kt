@@ -370,7 +370,7 @@ object AppShellKit {
                 shellExecutor = shellExecutor,
                 consoleShellTimeoutMillis = consoleShellTimeoutMillis,
                 // T1 脚本执行体（2026-10-10 批 91）：素材 + 宿主 + 桥 shim 三条齐才有值，
-                // 缺一条保持 `Unavailable`（有审批票也如实 ERR_NOT_IMPLEMENTED）。
+                // 缺一条保持 `Unavailable`（如实 ERR_NOT_IMPLEMENTED）。
                 scriptExecutor = npmWiring!!.scriptExecutor,
             )
         } else {
@@ -529,7 +529,7 @@ object AppShellKit {
      *
      * 两条前置：**桥 shim 落位** + **socket 绑得上**。缺任一条回
      * [ScriptOpExecutor.Unavailable] —— 与安装链同一条 fail-closed 口径：桥没接上时
-     * "有审批票也跑不起来"要如实报 `ERR_NOT_IMPLEMENTED`，不许假装跑过。
+     * 缺装配件要如实报 `ERR_NOT_IMPLEMENTED`，不许假装跑过。
      *
      * 为什么 socket 在**装配期**就要试绑一次：绑不上（名字被抢/平台不支持）是**装配缺口**
      * 而不是运行时故障，装配期发现就能如实记账；等到用户批完脚本才发现，那时他看到的

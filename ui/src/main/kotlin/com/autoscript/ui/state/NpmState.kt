@@ -1,7 +1,5 @@
 package com.autoscript.ui.state
 
-import com.autoscript.domain.npm.ApprovalAction
-import com.autoscript.domain.npm.ApprovalRequest
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.InstallEvent
@@ -13,14 +11,10 @@ import com.autoscript.domain.npm.NodeModulesStats
  *
  * 与 [TaskLogState]/[ConsoleState] 同一条纪律，另加这一屏特有的两条：
  *
- * - **两件事共用一个读口**（依赖面板 + 审批卡）：它们同属一份宿主快照，拆成两个读口就会
- *   各自现取一次、两次结果可以互相矛盾（且审批票的现取会与依赖清单的现取错位）。一次现取、一份状态。
- *   注意待审队列挂在快照**顶层**（[NpmPanelSnapshot.pendingApprovals]）而非项目上 ——
- *   它是全局的，`resolveApproval` 也不带项目维度。
  * - **尺寸没量到 ≠ 尺寸是 0**：[NpmProjectSnapshot.quotaFraction] 为 null 时
  *   进度条画成"未量到"，不画 0% —— 0% 是在说"这个项目不占地方"（见 [quotaLabel]）。
  *
- * 操作面（批准/拒绝）与读取分开记账：审批失败**不清依赖清单**（清单没变），
+ * 操作面（安装/维护/缓存回收）与读取分开记账：操作失败**不清依赖清单**（清单没变），
  * 与项目页 `opError` 同一条纪律。
  */
 data class NpmState(
@@ -28,14 +22,12 @@ data class NpmState(
     /** 面板上正在看的那个项目（null = 一个项目都没有 / 还没读到）。 */
     val selectedProjectId: String? = null,
     val snapshot: NpmPanelSnapshot? = null,
-    /** 上一次审批操作的失败原文（≠ 读失败：两条账分开）。 */
+    /** 上一次操作的失败原文（≠ 读失败：两条账分开）。 */
     val opError: String? = null,
-    /** 上一次审批操作的结论回执（现取即清，不缓存）。 */
+    /** 上一次操作的结论回执（现取即清，不缓存）。 */
     val opNotice: String? = null,
-    /** 有审批决定在挂起中 —— 按钮禁用防连点（决定本身幂等，连点无害但回执会抖）。 */
-    val deciding: Boolean = false,
     /**
-     * 有维护动作在挂起中（null = 没有）—— 与 [deciding] 同一条防连点理由，
+     * 有维护动作在挂起中（null = 没有）—— 防连点，
      * 但**要记住是哪一个**：三颗按钮同时禁用，其中被按下的那颗显示「进行中」，
      * 不记的话界面只能说"有件事在跑"，用户不知道是哪件。
      */
@@ -60,7 +52,7 @@ data class NpmState(
      * 用一个词把两件事混成一件。
      */
     val installOffline: Boolean = false,
-    /** 有安装/卸载命令在途（防连点；与 [deciding]/[maintenance] 同一条理由）。 */
+    /** 有安装/卸载命令在途（防连点；与 [maintenance] 同一条理由）。 */
     val installing: Boolean = false,
     /**
      * 本次安装的阶段进度（§10.9 第 1 条；`null` = 这次没在跑安装会话）。
@@ -83,10 +75,6 @@ data class NpmState(
         get() = snapshot?.projects?.firstOrNull { it.projectId == selectedProjectId }
 
     val installed: List<NpmRowState> get() = project?.installed.orEmpty().map { NpmRowState.of(it) }
-
-    /** 待审队列是**全局**的（不属于某个项目），故直接取快照，不经过 [project]。 */
-    val pending: List<ApprovalRowState>
-        get() = snapshot?.pendingApprovals.orEmpty().map { ApprovalRowState.of(it) }
 
     /**
      * 配额一行（"已用 / 配额"）。
@@ -118,7 +106,7 @@ data class NpmState(
     /** 输入行与旗标是否可提交（没有项目 / 已有动作在跑 / 没读到 → 不可）。 */
     val canInstall: Boolean
         get() = load.isLoaded && project != null && !installing && maintenance == null &&
-            !reclaimingCache && !deciding
+            !reclaimingCache
 
     companion object {
         val NOT_LOADED = NpmState(LoadState.NotLoaded)
@@ -197,44 +185,6 @@ data class NpmRowState(
                 val mb = "%.1f".format(java.util.Locale.ROOT, n / 1024.0 / 1024.0)
                 "${mb.removeSuffix(".0")} MB"
             }
-        }
-    }
-}
-
-/**
- * 一张待审票的呈现行。
- *
- * [actionLabel] 与 [riskNote] 是本层的两句话：前者把 `ApprovalAction` 翻成人话，
- * 后者说明"批准 = 让这段代码在你设备上跑"（§10.5-2：卡片要能展开风险说明）。
- * **不写"已批准"之类的前缀** —— 这个列表里全是 PENDING，写前缀就是重复。
- */
-data class ApprovalRowState(
-    val requestId: String,
-    val projectId: String,
-    val pkg: String,
-    val actionLabel: String,
-    val versionHashShort: String,
-) {
-    /** 卡片上那行风险说明（§10.9.2「可展开『脚本=任意代码』风险说明」的正文）。 */
-    val riskNote: String =
-        "批准 = 允许这个包的脚本在你的设备上运行（与你的脚本同权）。" +
-            "版本或脚本内容一变，这张批准就失效、需要重新批。"
-
-    companion object {
-        fun of(req: ApprovalRequest) = ApprovalRowState(
-            requestId = req.id,
-            projectId = req.projectId,
-            pkg = req.pkg,
-            actionLabel = actionLabel(req.action),
-            // 哈希是 sha512 的长串：卡片上只给前 12 位（点开详情才需要全串），
-            // 给全串会把包名挤掉 —— 而包名才是用户判断的对象。
-            versionHashShort = req.versionHash.take(12).ifEmpty { "（无版本哈希）" },
-        )
-
-        fun actionLabel(a: ApprovalAction): String = when (a) {
-            ApprovalAction.INSTALL_SCRIPT -> "安装脚本"
-            ApprovalAction.RUN_SCRIPT -> "npm run"
-            ApprovalAction.EXEC -> "npm exec"
         }
     }
 }

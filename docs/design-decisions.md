@@ -12,6 +12,52 @@
 
 ---
 
+
+## 62. 控制台 `npm run` / `npx` 拆除人工审批；env 携带 NUL 前缀的实测缺陷（2026-10-11，批 93）
+
+**背景**：批 91 把 T1 spawn 桥接上之后，控制台 `npm run` / `npx` 的完整链路第一次在真机上
+跑通到**门禁前**（批 92 修掉 `Path.of` 与 binder 断链后，壳装配干净、控制台命令通道
+45–49ms 延迟、回显正常）。用户在产品使用中**否定了这个门**：「审批不是这样用的，改一下。
+依赖面板是方便用户直接安装和管理依赖的地方。你把审批去掉吧。」—— 原 §10.5-2「人机分离
+（脚本不可自批）」的生效范围原本覆盖 `npm run` / `npx`，本决策将其**从控制台/依赖面板这条
+宿主自己的命令行上撤除**（§10.5-2 明文仍保留给**脚本自发起**的路径 —— 而桥面根本没有
+`runScript` / `exec` 这两个方法，脚本到不了这里，见 [NpmBridgeHandler.methods]）。
+
+**① 拆什么（逐面列出，别留暗角）**。`ApprovalLedger` / `ApprovalLedgerStore` 及测试整体
+删除；桥面 `requestApprove` / `approvals` 两个 method 及其 JS facade 侧对应（`requestApprove` /
+`onApproval` 回调族 / `approvals` 拉取口）删除；`:domain` 的 `ApprovalAction` /
+`ApprovalDecision` / `ApprovalRequest` / `ApprovalStatus` / `ApprovalTicket` /
+`ApprovalBatch` / `SequencedApproval` 类型删除；`PackageManagerFacade` 的
+`requestApprove` / `resolveApproval` / `pendingApprovals` / `drainApprovals` 删除
+（`approvalLedgerSnapshot` **保留且只读**：审计页要能读旧账，见 facade KDoc「今天零生产
+写入方」那条）；`HostSummary.resolveNpmApproval` 生产实现删除；UI 的审批卡（`NpmScreen`
+审批段 / `NpmState` 审批状态）删除，依赖面板回到**纯安装/管理**。`runScript` / `exec` 的
+放行判据改为**解析层白名单**（`NpmScriptResolver` 的纯 JS bin 白名单、路径不许逃出包目录、
+同名 bin 多包声明即拒）—— 那几条是「这条命令能不能跑」的真判据，与「谁点的」无关；
+`versionHash` 仍随 `ScriptOp` 走到审计条目（「我当时跑的是哪一份脚本」有据可查），但**不再
+是放行判据**。审批历史（`installHistory` 里的 `approve_items`、`pendingApprovals` 字段）保留
+只读。
+
+**② 真机上暴露的 env-NUL 缺陷（与审批无关，但同批修掉）**。批 92 验证后用户重敲
+`npm run hello`，控制台报 `失败： Invalid environment variable value:
+"com.autoscript.t1.xxxx"`。根因链：`AndroidT1SocketBinder.connectTarget` 是
+`"\0" + name`（abstract 名前缀）→ 经 `NpmScriptExecutor.runNpm` 的
+`NpmT1Bridge.applyEnv` 进 `AUTOSCRIPT_T1_SOCKET` → JVM `ProcessBuilder.start()` 见 env 值
+带 NUL 就抛 `IllegalArgumentException`（execve 的 envp 以 NUL 结尾，值里带 NUL 无意义）。
+**桌面全绿**：`NpmT1Bridge.fileSystemBinder().connectTarget` 是纯文件系统路径，无 NUL ——
+又是「pure-JVM 门看不见 API 级差异」那一类（同 `Path.of` / `UnixDomainSocketAddress`）。
+
+**③ 修法：NUL 前缀的职责从宿主移交 shim**。env 里给的是**裸 abstract 名**（NUL-free）；
+`npm-t1-bridge.cjs` 的 `ensureConn` 用**与 main.cpp 同源的判别式**（'/' 前导 = 文件系统
+路径，原样直连；否则 = abstract 名，shim 自己拼 `'\0' + path`）。两个形态因此互斥且
+自洽：桌面路径型 `connectTarget` 依旧不改、原样直连，设备侧 shim 拿到裸名补前缀。
+`T1BridgeNodeTest`/`T1BridgeE2ETest`（桌面路径型）继续原样绿，正好钉死「不加前缀直连」
+那个分支；abstract 分支的判别式是纯字符串函数，桌面单测能覆盖判别逻辑（借用 main.cpp 已
+有的一套语义），真机分支由用户自测。
+
+**这种「env 里不出现 NUL」的形态以后就用它**（不止本桥）：凡是要把 socket 名交给对端进程
+的，值一律裸名，特殊前缀由**消费方**自己补 —— env 是 execve 的协议，不是字节容器。
+
 ## 61. T1 spawn 桥：进程怎么起、凭据怎么给、杀树为什么不走负 pgid（2026-10-10，批 91）
 
 **背景**：§10.3 T1 从立项起就写着「批准后脚本要 spawn」，而设备上没有可用的

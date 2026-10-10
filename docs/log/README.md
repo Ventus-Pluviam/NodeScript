@@ -1,6 +1,18 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-11，批 93）
+
+- [2026-10-11 · 批 93：控制台 `npm run` / `npx` 拆除人工审批 + env-NUL 缺陷修复（真机实证）](2026-10-11.md)：
+  用户裁定「审批不是这样用的……你把审批去掉吧」—— **拆掉整个审批面**（账本两类/桥面两个
+  method/`:domain` 七个类型/facade 四个方法/UI 审批卡），依赖面板回到纯安装/管理；放行判据
+  改解析层白名单，`versionHash` 只进审计不作判据。同批修真机暴露的 **env-NUL** 缺陷：
+  `AndroidT1SocketBinder.connectTarget` 的 `"\0"` 前缀经 env 进 `ProcessBuilder` 必抛
+  `Invalid environment variable value`（env 是 execve 协议不是字节容器）—— 改为 env 给裸名、
+  **shim 侧按 '/' 判别补 `'\0'` 前缀**（与 main.cpp 判别同源），桌面路径型直连原样。
+  `T1BridgeNodeTest` + `T1BridgeE2ETest` 继续绿 = 「路径直连」分支被钉死。
+
 ## 最新追记（2026-10-10，批 91）
+
 
 - [2026-10-10 · 批 91：T1 spawn 桥本体（`npm run` / `npx` 第一次真跑起来）](2026-10-10.md)：
   批 88/89 的审批卡、批 90 的流式输出到这一步之前全断在同一处（`scriptExecutor` 是

@@ -98,7 +98,7 @@ class AppShellKitTest {
     @Test
     fun `装配落位目录约定并挂上四个命名空间`() {
         kit().use { assembled ->
-            assertTrue(Files.isDirectory(files.resolve(".autojs")), "§10.2：.autojs 是意图日志/档案/审批账本的家")
+            assertTrue(Files.isDirectory(files.resolve(".autojs")), "§10.2：.autojs 是意图日志/档案/历史账本的家")
             assertTrue(Files.isDirectory(files.resolve("scripts")), "§10.2：项目根 = files/scripts")
             assertNotNull(assembled.npmHandler, "npm 命名空间由配方自建并挂上")
         }
