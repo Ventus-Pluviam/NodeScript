@@ -168,6 +168,20 @@ object AppShellKit {
          */
         npmGateDeploy: (Path) -> NpmSpawnGate.Deploy = { NpmSpawnGate.deploy(it) },
         /**
+         * T1 桥 socket 的绑定缝（§10.3 T1，2026-10-10 批 91）。**刻意不给缺省值**。
+         *
+         * 缺省在这里不是"省事"而是"陷阱"：[NpmT1Bridge.fileSystemBinder] 是 JDK 的
+         * unix domain socket，而它在 Android 上**必炸**（`java.net.UnixDomainSocketAddress`
+         * 不在 android.jar 里 → `NoClassDefFoundError`，是 Error 不是 Exception，任何
+         * `catch (e: Exception)` 都拦不住它，会一路掀翻整个壳的装配 —— 2026-10-10 真机
+         * 实测就是这条：`Path.of` 先炸，修完 `Path.of` 紧接着就是它）。
+         *
+         * 故判据做成**编译期**的：设备装配必须显式传 [AndroidT1SocketBinder]（或它将来的
+         * 替代品），JVM 装配显式传 `NpmT1Bridge.fileSystemBinder()`。忘了传 = 编不过，
+         * 而不是"上线后壳装不起来"。
+         */
+        npmT1Binder: NpmT1Bridge.SocketBinder,
+        /**
          * 控制台 shell 面的执行缝（2026-10-09）。**只有 `:app` 能造它** ——
          * `:app-service:npm` 的 ArchitectureTest 禁 `com.autoscript.platform..`，
          * 故真实现（`PlatformWiring.ConsoleShellExecutor`）在这里被转成 `:domain` 的缝。
@@ -336,7 +350,11 @@ object AppShellKit {
         // 自建 npm 的两步（素材落位 + 执行体注入）外迁成 [wireNpmExecutor]：本方法已经
         // 是三十几个参数的装配根，把这段判断留在里面只会让"怎么装"淹没在嵌套里。
         val npmWiring: NpmWiring? = if (npmHandler == null) {
-            wireNpmExecutor(filesDir, cacheDir, npmCliSource, npmNodeBin, npmGateDeploy)
+            wireNpmExecutor(
+                filesDir, cacheDir, npmCliSource, npmNodeBin, npmGateDeploy,
+                // 具名传：第 6 个位置参数是 `t1ShimDeploy`（落位缝），别串到 binder 上。
+                t1Binder = npmT1Binder,
+            )
         } else {
             null   // 调用方自带 handler：本配方不碰素材（见上方 KDoc），四个报告字段保持 null
         }
@@ -352,7 +370,7 @@ object AppShellKit {
                 shellExecutor = shellExecutor,
                 consoleShellTimeoutMillis = consoleShellTimeoutMillis,
                 // T1 脚本执行体（2026-10-10 批 91）：素材 + 宿主 + 桥 shim 三条齐才有值，
-                // 缺一条保持 `Unavailable`（有审批票也如实 ERR_NOT_IMPLEMENTED）。
+                // 缺一条保持 `Unavailable`（如实 ERR_NOT_IMPLEMENTED）。
                 scriptExecutor = npmWiring!!.scriptExecutor,
             )
         } else {
@@ -446,8 +464,8 @@ object AppShellKit {
         gateDeploy: (Path) -> NpmSpawnGate.Deploy,
         /** T1 桥 shim 的落位缝（与 [gateDeploy] 同形；测试注入失败验 fail closed）。 */
         t1ShimDeploy: (Path) -> NpmSpawnGate.Deploy = { NpmT1Bridge.deployShim(it) },
-        /** T1 桥的 socket 绑定缝；缺省 = JDK unix domain socket（设备侧由装配层换 abstract）。 */
-        t1Binder: NpmT1Bridge.SocketBinder = NpmT1Bridge.fileSystemBinder(),
+        /** T1 桥的 socket 绑定缝（平台相关，见 [assemble] 的 `npmT1Binder`：**故意无缺省**）。 */
+        t1Binder: NpmT1Bridge.SocketBinder,
     ): NpmWiring {
         if (source == null) {
             return NpmWiring(HeavyOpExecutor.Unavailable, null, "无素材来源（assets/npm 未随包）", null)
@@ -511,7 +529,7 @@ object AppShellKit {
      *
      * 两条前置：**桥 shim 落位** + **socket 绑得上**。缺任一条回
      * [ScriptOpExecutor.Unavailable] —— 与安装链同一条 fail-closed 口径：桥没接上时
-     * "有审批票也跑不起来"要如实报 `ERR_NOT_IMPLEMENTED`，不许假装跑过。
+     * 缺装配件要如实报 `ERR_NOT_IMPLEMENTED`，不许假装跑过。
      *
      * 为什么 socket 在**装配期**就要试绑一次：绑不上（名字被抢/平台不支持）是**装配缺口**
      * 而不是运行时故障，装配期发现就能如实记账；等到用户批完脚本才发现，那时他看到的

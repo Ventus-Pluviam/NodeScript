@@ -119,6 +119,8 @@ class BridgeSocketListenerTest {
     }
 
     private fun kit(): AssembledShell = AppShellKit.assemble(
+        // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
+        npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
         filesDir = dir.resolve("files"),
         cacheDir = dir.resolve("cache"),
         intentStore = InMemoryIntentStore(),
@@ -277,6 +279,8 @@ class BridgeSocketListenerTest {
         var issuer: com.autoscript.domain.engine.RunIdentityIssuer? = null
         assertThrows(IllegalStateException::class.java) {
             AppShellKit.assemble(
+                // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
+                npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
                 filesDir = dir.resolve("failed-files"),
                 cacheDir = dir.resolve("failed-cache"),
                 intentStore = InMemoryIntentStore(),

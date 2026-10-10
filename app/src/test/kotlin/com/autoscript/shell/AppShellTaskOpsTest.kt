@@ -60,6 +60,8 @@ class AppShellTaskOpsTest {
         provider: SchedulerProvider = RecordingProvider(),
         screenGate: ScreenGate = ScreenGate.AllowAll,
     ): AssembledShell = AppShellKit.assemble(
+        // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
+        npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
         filesDir = files,
         cacheDir = cache,
         schedulerProvider = provider,
@@ -192,6 +194,8 @@ class AppShellTaskOpsTest {
     fun `stopRun 按 runId 精确停 —— 在途 true 结算后 false`() = runBlocking {
         val engines = mutableListOf<FakeEngineForDispatcher>()
         val k = AppShellKit.assemble(
+            // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
+            npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
             filesDir = files,
             cacheDir = cache,
             schedulerProvider = RecordingProvider(),

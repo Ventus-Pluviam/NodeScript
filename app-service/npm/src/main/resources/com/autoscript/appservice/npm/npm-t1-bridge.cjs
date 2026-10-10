@@ -4,13 +4,13 @@
  *
  * 与同目录的 `npm-spawn-gate.cjs` 是**两件东西、两个用途**，别混：
  * - 门禁（T0，批 80）：安装会话里**一律拒** spawn —— 装包不需要起进程，起了一定是漂移；
- * - 本件（T1）：`npm run` / `npm exec` 的**批准后脚本**本来就要起进程，而设备上没有
- *   可用的 `child_process`（Node-on-Android 不带它）。故本件把 spawn **接到宿主**：
- *   经 unix socket 把 `{cmd,args,opts}` 报给 `:main`，由宿主决定跑不跑、并在宿主侧
- *   真起进程，stdio 经同一条 socket 以**假管道**回填。
+ * - 本件（T1）：`npm run` / `npm exec` 的脚本本来就要起进程（2026-10-10 起无审批，
+ *   见 `docs/design-decisions.md`），而设备上没有可用的 `child_process`（Node-on-Android
+ *   不带它）。故本件把 spawn **接到宿主**：经 unix socket 把 `{cmd,args,opts}` 报给
+ *   `:main`，由宿主决定跑不跑、并在宿主侧真起进程，stdio 经同一条 socket 以**假管道**回填。
  *
- * 为什么必须绕一圈而不是让 npm 自己 `sh -c`：本平台的承诺是「批准后脚本以**最小能力**
- * 运行、可被宿主按进程树回收、输出可审计」（§10.5-4）。让 npm 自己在 app 进程里起 `sh`
+ * 为什么必须绕一圈而不是让 npm 自己 `sh -c`：本平台的承诺是「脚本以**最小能力**运行、
+ * 可被宿主按进程树回收、输出可审计」（§10.5-4）。让 npm 自己在 app 进程里起 `sh`
  * 等于把这三条全丢了 —— 那是"能跑"，不是"受控地跑"。
  *
  * **谁被替换**：七个入口里只放行**异步**的三个（`spawn`/`exec`/`execFile`）——
@@ -205,7 +205,12 @@ function ensureConn() {
     failAll(deny(CODE_NOT_IMPLEMENTED, 'T1 桥未接线：缺 ' + ENV_SOCKET + '/' + ENV_TOKEN + '（宿主未注入）'))
     return
   }
-  conn = net.connect({ path: path })
+  // 桌面（宿主注入文件系统路径）vs Android abstract 名：环境里**不会有** NUL
+  // （execve 的 envp 根本送不进来，JVM 在 ProcessBuilder.start() 就抛）。
+  // 判别式与 main.cpp 同源：'/' 前导 = 文件系统路径（原样直连）；否则 = Android
+  // abstract 名，NUL 前缀的职责在 shim 这侧（env 里不可能带 NUL，见 Binder KDoc）。
+  const abstractName = !path.startsWith('/')
+  conn = abstractName ? net.connect({ path: '\u0000' + path }) : net.connect({ path: path })
   // 起步即 unref：连上但还没有子进程时，这条连接不该保活（见 refWhileBusy 的 KDoc）。
   conn.unref()
   conn.on('connect', () => {
@@ -359,7 +364,7 @@ cp.spawn = function spawn(file, args, opts) {
     throw deny(
       CODE_DENIED,
       'child_process.spawn 的 detached:true 被拒（§10.3 T1）：脱离进程组的子进程回收不到。' +
-        '去掉 detached，或把要跑的东西做成项目里的一个 npm script（审批后经 npm run 走宿主）。',
+        '去掉 detached，或把要跑的东西做成项目里的一个 npm script（经控制台 npm run 走宿主）。',
     )
   }
   return bridgedSpawn(file, args || [], opts)

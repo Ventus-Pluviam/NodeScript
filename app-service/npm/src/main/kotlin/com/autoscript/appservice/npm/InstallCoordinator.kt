@@ -2,16 +2,9 @@ package com.autoscript.appservice.npm
 
 import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.ShellConsoleMode
-import com.autoscript.domain.npm.ApprovalAction
-import com.autoscript.domain.npm.ApprovalDecision
-import com.autoscript.domain.npm.ApprovalRequest
-import com.autoscript.domain.npm.ApprovalStatus
-import com.autoscript.domain.npm.ApprovalTicket
 import com.autoscript.domain.npm.AuditReport
-import com.autoscript.domain.npm.ApprovalBatch
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.InstallEventBatch
-import com.autoscript.domain.npm.SequencedApproval
 import com.autoscript.domain.npm.SequencedInstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.InstallHandle
@@ -56,7 +49,7 @@ import java.util.concurrent.atomic.AtomicLong
  * 安装协调器（docs §10.2 InstallCoordinator）：全局唯一安装调度器。
  *
  * P0 边界（诚实口径）：
- * - **门禁/队列/事务/journal/轻操作/审批** 全部落地且 JVM 可测；
+ * - **门禁/队列/事务/journal/轻操作** 全部落地且 JVM 可测（审批 2026-10-11 拆除）；
  * - **重操作执行**（vendored npm CLI 进安装会话）依赖引擎进程存在：本实现把执行体抽象为
  *   [HeavyOpExecutor] 接缝——真引擎未接前默认实现走「门禁 + journal + staging 编排 +
  *   ERR_NOT_IMPLEMENTED 如实失败」，绝不假装装上了（§1 诚实原则）。
@@ -69,7 +62,7 @@ class InstallCoordinator(
     private val executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
     /**
      * T1 lifecycle 脚本执行体（§10.3 T1 下半段：spawn 桥 → 临时引擎）。
-     * 缺省 [ScriptOpExecutor.Unavailable] = 装配缺口 → 有审批票也如实 ERR_NOT_IMPLEMENTED。
+     * 缺省 [ScriptOpExecutor.Unavailable] = 装配缺口 → 如实 ERR_NOT_IMPLEMENTED。
      */
     private val scriptExecutor: ScriptOpExecutor = ScriptOpExecutor.Unavailable,
     /**
@@ -126,7 +119,6 @@ class InstallCoordinator(
     private val layout: NpmProjectLayout = services.layout
     private val journal: InstallJournal = services.journal
     private val staging: InstallStaging = services.staging
-    private val ledger: ApprovalLedger = services.ledger
     private val history: InstallHistory? = services.history
     private val lockSigner: LockSigner? = services.lockSigner
     private val snapshots: NpmSnapshot? = services.snapshots
@@ -182,11 +174,9 @@ class InstallCoordinator(
         val users = java.util.concurrent.atomic.AtomicInteger(0)
     }
     private val events = MutableSharedFlow<InstallEvent>(extraBufferCapacity = 256)
-    private val approvalFlow = MutableSharedFlow<ApprovalRequest>(extraBufferCapacity = 64)
-    // 脚本侧拉取口的宿主缓冲（[progress]/[approvals] 那两条 Flow 无重放、只服务 :main；
-    // 桥没有主动推面，脚本只能带游标来取 —— 两个环与两条 Flow 在同一批投递点一起写）。
+    // 脚本侧拉取口的宿主缓冲（[progress] 那条 Flow 无重放、只服务 :main；
+    // 桥没有主动推面，脚本只能带游标来取 —— 环与 Flow 在同一批投递点一起写）。
     private val installEventRing = SeqRing<InstallEvent>(capacity = RING_CAPACITY)
-    private val approvalRing = SeqRing<ApprovalRequest>(capacity = RING_CAPACITY)
     /**
      * 控制台输出环（§10.9 第 3 条，2026-10-09 批 84）。
      *
@@ -520,11 +510,7 @@ class InstallCoordinator(
     }
 
     /**
-     * 依赖面板读数（§10.9.1）：全部项目的已装清单 + 离线缺口 + 目录尺寸 + **全局**待审队列。
-     *
-     * 待审取 `ledger.all()` 里仍是 PENDING 的那些（**跨项目**）：审批卡是全局队列，
-     * 按项目筛会让用户漏掉别的项目上等着的那张。`pending(projectId)` 那条口子服务的是
-     * 脚本侧 `drainApprovals`（脚本只看自己项目），两者语义不同，不要互相替换。
+     * 依赖面板读数（§10.9.1）：全部项目的已装清单 + 离线缺口 + 目录尺寸。
      *
      * 项目列表 = `storage()` 的键（= 项目根下的目录），**不是** lockfile 的键：
      * 「装了依赖但还没落 lock」的项目也要出现在面板上（它有一棵 node_modules 要管），
@@ -532,9 +518,6 @@ class InstallCoordinator(
      */
     override suspend fun snapshot(): NpmPanelSnapshot {
         val stats = storage()
-        val pending = ledger.all()
-            .filter { it.second.status == ApprovalStatus.PENDING }
-            .map { it.first }
         // 缓存体积**全机一份**，故在循环外量一次（循环里量就是同一个数字抄 N 遍，
         // 而每遍都是一次全目录遍历 —— 见 cacheStorage 的 KDoc）。
         val cache = cacheStorage()
@@ -549,7 +532,7 @@ class InstallCoordinator(
                 cache = cache,
             )
         }
-        return NpmPanelSnapshot(projects = projects, pendingApprovals = pending)
+        return NpmPanelSnapshot(projects = projects)
     }
 
     /**
@@ -867,51 +850,7 @@ class InstallCoordinator(
         return shellRunner.run(projectId, command, mode, timeoutMillis)
     }
 
-    // ══════════ 审批（人机分离 §10.5） ══════════
-
-    override suspend fun requestApprove(
-        projectId: String, pkg: String, versionHash: String, action: ApprovalAction,
-    ): ApprovalTicket {
-        val ticket = ledger.submit(projectId, pkg, versionHash, action)
-        ledger.pending(projectId).firstOrNull { it.id == ticket.requestId }?.let {
-            approvalRing.push(it.projectId, it)
-            approvalFlow.tryEmit(it)
-        }
-        return ticket
-    }
-
-    override suspend fun resolveApproval(requestId: String, decision: ApprovalDecision): ApprovalTicket =
-        ledger.resolve(requestId, decision)
-
-    override suspend fun pendingApprovals(projectId: String): List<ApprovalRequest> = ledger.pending(projectId)
-
     // ══════════ P1 T1 lifecycle 脚本（§18 第 7 项口径：安装时让用户自己选） ══════════
-
-    /**
-     * 未获批时的**自请**（§18 第 7 项：装包时让用户自己选，故选择面必须自己浮出来）。
-     *
-     * 键为什么由门禁自己算、而不是复用桥面 [requestApprove] 提交的那份：门禁的判据是
-     * 「**盘上此刻**的那份脚本/bin」，哈希由宿主从 manifest 重算（[NpmScriptResolver]），
-     * 而脚本既不知道这个哈希、也不该有资格编一个（带自选哈希来审批、落账键与盘上现状
-     * 无关，改完脚本照样命中 —— 那正是这一层要防的事）。所以 run/exec 的 APPROVED 票
-     * **只能**由这条自请路径产生，且它与放行判据用的是同一处重算，两边天然对得上。
-     *
-     * 桥面 [requestApprove] 仍在（服务 `INSTALL_SCRIPT`：审的是**依赖包**的安装脚本，
-     * 宿主无从从自己项目的 manifest 算出那个包的内容哈希），两条路投进同一个账本、
-     * 同一条 approvals 流、同一张 UI 审批卡。
-     *
-     * [ApprovalLedger.submit] 对同 `projectId+pkg+versionHash+action` 的 PENDING 请求幂等复用，
-     * 故脚本反复调 runScript 不会刷出一排重复卡片。
-     */
-    private suspend fun requestGateApproval(
-        projectId: String, subject: String, versionHash: String, action: ApprovalAction,
-    ) {
-        val ticket = ledger.submit(projectId, subject, versionHash, action)
-        ledger.pending(projectId).firstOrNull { it.id == ticket.requestId }?.let {
-            approvalRing.push(it.projectId, it)
-            approvalFlow.tryEmit(it)
-        }
-    }
 
     override suspend fun runScript(projectId: String, name: String, args: List<String>): InstallHandle {
         val root = layout.projectRoot(projectId)   // projectId 合法性先过（防路径逃逸）
@@ -929,7 +868,7 @@ class InstallCoordinator(
         // npm 的分隔符在**参数之前**（`npm run build -- --watch`）：少了它，脚本名后的
         // `--watch` 会被 npm 自己吃掉而不是传给脚本，等于静默丢用户显式给的参数。
         val npmArgs = if (args.isEmpty()) listOf("run", name) else listOf("run", name, "--") + args
-        return runScriptOps(projectId, ApprovalAction.RUN_SCRIPT, name, args, s.pkg, s.versionHash, npmArgs)
+        return runScriptOps(projectId, InstallHistoryOp.RUN_SCRIPT, name, args, s.pkg, s.versionHash, npmArgs)
     }
 
     override suspend fun exec(projectId: String, bin: String, args: List<String>): InstallHandle {
@@ -946,51 +885,38 @@ class InstallCoordinator(
         )
         // 同上：`npm exec <args> -- <bin>`，分隔符必须在 bin 名之前，否则 bin 会被当 args 的一员。
         val npmArgs = if (args.isEmpty()) listOf("exec", "--", bin) else listOf("exec") + args + listOf("--", bin)
-        return runScriptOps(projectId, ApprovalAction.EXEC, bin, args, b.pkg, b.versionHash, npmArgs)
+        return runScriptOps(projectId, InstallHistoryOp.EXEC, bin, args, b.pkg, b.versionHash, npmArgs)
     }
 
     /**
-     * T1 的**放行门禁 + 执行**（§10.3 T1）。
+     * T1 的**执行**（§10.3 T1）。
      *
-     * 放行判据：[ApprovalLedger.isApproved] 按 `projectId + "<pkg>|<name>" + versionHash + action`
-     * 命中 APPROVED 票。versionHash 是**盘上此刻**的重算值（[NpmScriptResolver]），
-     * 不是调用方给的 —— 用户批过的是他当时看到的那份脚本，脚本一改哈希就变、票失配、
-     * 重新弹卡。这与「版本升级必须重新审批」是同一条纪律。
+     * **没有审批**（2026-10-10 裁定，原「人机分离」门禁已删 —— 见
+     * `docs/design-decisions.md`）。判据在**解析层**：`NpmScriptResolver` 的纯 JS bin
+     * 白名单、路径不许逃出包目录、同名 bin 多包声明即拒 —— 那几条是「这条命令能不能跑」
+     * 的真判据，与「谁点的」无关。控制台与依赖面板都是**宿主自己的界面**，敲下这一行的
+     * 人就是用户本人；要拦的是**脚本自己发起**的路径，而桥面根本没有 `runScript`/`exec`
+     * 这两个方法（见 [NpmBridgeHandler.methods]），脚本到不了这里。
+     *
+     * [versionHash] 仍然带上，但**不再是放行判据**：它随 [ScriptOp] 走到审计条目，
+     * 让「我当时跑的是哪一份脚本」有据可查（脚本改了哈希就变）。
      *
      * 执行体是 [scriptExecutor] 而不是 [executor]：npm CLI 走重操作通道（事务/staging/落位），
      * 而 lifecycle 脚本**不改依赖树**（跑一次 postinstall 只做它该做的事）—— 走事务链
      * 会为一个不改 node_modules 的操作凭空造出 stageDir + commit 记录，journal 里全是
      * 没有产物的假事务。两条通道共用 TTL/取消/事件，差异只在「产物要不要落位」。
      *
-     * ⚠ **批准之后要重敲那一行**（2026-10-09 批 84 如实登记）：本层只**入队**请求就抛，
-     * 不替用户把命令排下去 —— 于是控制台里「已入队」与「真的跑了」是两次动作。
-     * 这样做是因为排队会让「批准」这个动作**顺带执行一段任意代码**，而人机分离的
-     * 全部意义就是让人在按下批准之前看清楚他要放行的是什么。重敲一行的代价，
-     * 换的是「批准 ≠ 执行」这条边界不模糊。
-     *
      * ⚠ 这一层是**接缝**：[ScriptOpExecutor.Unavailable] 是缺省 → ERR_NOT_IMPLEMENTED。
-     * spawn 桥（child_process shim → 临时引擎，§10.3 T1 下半段）未接之前，
-     * 有审批票也跑不起来 —— 门禁是诚实的，失败点被如实标出来而不是假装跑过。
      */
     private suspend fun runScriptOps(
         projectId: String,
-        action: ApprovalAction,
+        action: String,
         what: String,
         args: List<String>,
         pkg: String,
         versionHash: String,
         npmArgs: List<String>,
     ): InstallHandle {
-        val subject = "$pkg|$what"
-        if (!ledger.isApproved(projectId, subject, versionHash, action)) {
-            requestGateApproval(projectId, subject, versionHash, action)
-            history?.record(action.name.lowercase(), projectId, false, "未获批放行: $subject")
-            throw AutojsException(
-                ErrorCode.ERR_PERMISSION_DENIED,
-                (if (action == ApprovalAction.EXEC) "npm exec $what" else "npm run $what") +
-                    " 未获人工批准（§10.5）：请求已入队，请到管理面板 → 依赖管理的审批卡确认后重试",
-            )
-        }
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
         val op = ScriptOp(
             handleId = handle.id,
@@ -1026,7 +952,7 @@ class InstallCoordinator(
                             throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "脚本执行已取消（执行体已收尾，结果不采纳）")
                         }
                         tracked.finish()
-                        history?.record(action.name.lowercase(), projectId, true, summary)
+                        history?.record(action, projectId, true, summary)
                         emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
                     } catch (e: CancellationException) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
@@ -1037,11 +963,11 @@ class InstallCoordinator(
                         val firstTerminal = !tracked.done
                         tracked.finish()
                         if (firstTerminal) {
-                            history?.record(action.name.lowercase(), projectId, false, e.message)
+                            history?.record(action, projectId, false, e.message)
                             emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
                         } else {
                             // 终态已发过：只把这次失败入史（审计要看到），不再重复发事件。
-                            history?.record(action.name.lowercase(), projectId, false, "取消后收尾失败: ${e.message}")
+                            history?.record(action, projectId, false, "取消后收尾失败: ${e.message}")
                         }
                         throw e
                     }
@@ -1058,18 +984,12 @@ class InstallCoordinator(
 
     override fun progress(projectId: String): Flow<InstallEvent> = events.filter { it.projectId == projectId }
 
-    override fun approvals(projectId: String): Flow<ApprovalRequest> =
-        approvalFlow.filter { it.projectId == projectId }
-
     override suspend fun drainEvents(projectId: String, sinceSeq: Long, batch: Int): InstallEventBatch {
         val (first, last, picked) = installEventRing.drain(projectId, sinceSeq, batch)
         return InstallEventBatch(first, last, picked.map { SequencedInstallEvent(it.first, it.second) })
     }
 
-    override suspend fun drainApprovals(projectId: String, sinceSeq: Long, batch: Int): ApprovalBatch {
-        val (first, last, picked) = approvalRing.drain(projectId, sinceSeq, batch)
-        return ApprovalBatch(first, last, picked.map { SequencedApproval(it.first, it.second) })
-    }
+
 
     // ══════════ 快照 ══════════
 

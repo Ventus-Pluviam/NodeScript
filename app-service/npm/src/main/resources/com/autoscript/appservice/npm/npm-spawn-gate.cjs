@@ -14,7 +14,8 @@
  *
  * **边界（如实写死，别当它是沙箱）**：本文件是**不变量守卫**，不是安全边界 ——
  * 已获批的脚本仍可绕过（`delete require.cache[require.resolve('child_process')]`
- * 后重新 require 会拿到未打补丁的原模块）。真正的对抗面是审批（§10.5-2 人机分离）
+ * 后重新 require 会拿到未打补丁的原模块）。真正的对抗面是 §10.5-2 人机分离
+ * （脚本自发起路径；控制台直接跑、不过这道门，2026-10-11）
  * 与 T1 会话的最小 CapabilityMask（§10.5-4），本 shim 只负责「npm 与依赖没在背地里
  * spawn 而无人知晓」这一条可证伪的不变量。
  *
@@ -70,7 +71,7 @@ function makeDenier(name) {
       throw deny(
         CODE_DETACHED,
         'child_process.' + name + ' 的 detached:true 被拒（§10.3 T1）：脱离进程组的子进程回收不到。' +
-          '去掉 detached，或把要跑的东西做成项目里的一个 npm script（审批后经 npm run 走宿主）。',
+          '去掉 detached，或把要跑的东西做成项目里的一个 npm script（经控制台 npm run 走宿主）。',
       )
     }
     if (name === 'fork') {
@@ -82,7 +83,7 @@ function makeDenier(name) {
     throw deny(
       CODE_BLOCKED,
       '非批准 spawn 被拦截：child_process.' + name + '（§10.3 T0 零 spawn 主路径）。' +
-        '安装会话内不允许起子进程；要跑项目脚本请走 npm run（需人工审批，§10.5-2）。',
+        '安装会话内不允许起子进程；要跑项目脚本请去控制台敲 npm run。',
     )
   }
 }

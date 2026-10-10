@@ -73,7 +73,7 @@ object DomainJson {
      * 可选字符串数组（缺省/显式 `null` → 空表）。
      *
      * 为什么不是「丢了就当没有」：宿主不认的字段会被静默丢弃，而调用方已经显式声明过它
-     * （如 `requestApprove` 的 `scripts`）——静默丢比报错更糟。故数组形态不对即抛。
+     * ——静默丢比报错更糟。故数组形态不对即抛。
      */
     fun optStrList(o: Map<String, Value>, key: String): List<String> = when (val v = o[key]) {
         null, is Value.Null -> emptyList()

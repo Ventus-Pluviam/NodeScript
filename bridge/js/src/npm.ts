@@ -1,14 +1,17 @@
 /**
  * npm 依赖管理命名空间（docs §10.8 / §12.3 auto.npm）。
  * P0：install/remove/ci/list/prune/dedupe/offlineGap/audit、registry 配置、离线导入、
- * approval 只提交请求（人机分离：绝不脚本直调 approve）、progress/approval/warning/finished
- * 事件流。宿主没有主动推给脚本的通道（§7.5 入站面只有按 requestId 结算的 ok/err），
- * 所以事件面是**带游标的拉取轮询**（§10.7 `drainEvents`/`drainApprovals`），
+ * progress/warning/finished 事件流。宿主没有主动推给脚本的通道（§7.5 入站面只有按
+ * requestId 结算的 ok/err），所以事件面是**带游标的拉取轮询**（§10.7 `drainEvents`），
  * 不是推送：首订开定时器，退订干净自停。
+ *
+ * **脚本没有「跑脚本」这条口**（`runScript`/`exec` 不在本 facade，也不在桥面）：
+ * 控制台与依赖面板是宿主自己的界面，跑脚本由用户在那里发起（2026-10-10 裁定，
+ * 原「审批后人机分离放行」面已删 —— 见 `docs/design-decisions.md`）。
  *
  * 全部操作跨进程路由到全局安装会话（:app-service:packager InstallCoordinator），TTL 绑定，
  * 绝不阻塞脚本事件循环；脚本内不直接 require('child_process')。
- * 事件不靠宿主推：脚本侧带游标拉 `events`/`approvals`（文件末 pumpInstallEvents/pumpApprovals），
+ * 事件不靠宿主推：脚本侧带游标拉 `events`（文件末 pumpInstallEvents），
  * 回包仍经 bootstrap 注入的 handleResponse 按 requestId 结算（见 runtime.ts 注释）。
  */
 
@@ -83,23 +86,6 @@ export interface AuditReport {
 }
 
 /**
- * 审批请求（脚本侧经 `onApproval` 收到 —— 底下是 approvals 拉取口的轮询投递，不是宿主推送；人工在 UI 卡确认）。
- *
- * 与 :domain `ApprovalRequest` 逐字段对齐：`{id, projectId, pkg, versionHash, action,
- * requestedAtMillis}`。刻意**没有** `scripts` —— 那是 §10.8 示例里 `requestApprove`
- * 的**入参**（脚本自己声明的），不是宿主审批流的字段；两边都写会让人以为宿主会回显它。
- * 入参侧的 scripts 由 `requestApprove` 的回包显式回显（见该方法注释）。
- */
-export interface ApprovalRequest {
-  readonly id: string
-  readonly projectId: string
-  readonly pkg: string
-  readonly versionHash: string
-  readonly action: 'install_script' | 'run_script' | 'exec'
-  readonly requestedAtMillis: number
-}
-
-/**
  * 安装事件（progress 数据面，可丢包/背压，语义与 §7.3 tsf_data 对齐）。
  *
  * [phase] 与 :domain `InstallEvent.Phase` 六个枚举值逐字对齐（同 [InstallWarning] 的
@@ -121,15 +107,6 @@ export interface InstallFailure {
   readonly handleId: string
   readonly success: boolean
   readonly detail?: string | null
-}
-
-/** 审批票（宿主 `requestApprove` 的回包）。resolve 刻意不在桥面（§10.5 人机分离）。 */
-export interface ApprovalTicket {
-  readonly requestId: string
-  /** `pending` 是脚本侧唯一能拿到的状态：APPROVED/REJECTED 只在 UI 审批卡回调后产生。 */
-  readonly status: 'pending' | 'approved' | 'rejected' | 'expired'
-  /** 入参 scripts 的回显（宿主校验过数组形态）。空表 = 调用方没声明脚本。 */
-  readonly scripts: readonly string[]
 }
 
 /**
@@ -173,7 +150,6 @@ class EventHub<T> {
 }
 
 const progress = new EventHub<InstallEvent>()
-const approvals = new EventHub<ApprovalRequest>()
 const warnings = new EventHub<InstallWarning>()
 const finished = new EventHub<InstallFailure>()
 
@@ -234,38 +210,10 @@ export const npm = {
     await runtimeBridge.invoke('npm', 'importTarball', { path }, { ttl: opts.timeout ?? 120_000 })
   },
 
-  /**
-   * 审批：只提交请求，绝不脚本直调（人机分离，UI 人工确认）。
-   *
-   * 回包 `{requestId, status, scripts}`：前两个是宿主票号与状态（`pending`），
-   * [ApprovalRequest.scripts] 是**入参回显** —— 宿主校验了数组形态并原样带回，
-   * 让脚本能确认「我声明的脚本清单宿主收到了」。不回显的话，宿主与脚本各持一份
-   * scripts，改了哪一侧都看不出来（与 setRegistry 的 scope 同一条纪律）。
-   *
-   * 若宿主拒绝提交，会抛 ERR_PERMISSION_DENIED/ERR_NPM_* —— 如实上抛。
-   */
-  async requestApprove(
-    pkg: string,
-    opts: { scripts?: readonly string[]; versionHash?: string; timeout?: number } = {},
-  ): Promise<ApprovalTicket> {
-    return (await runtimeBridge.invoke(
-      'npm',
-      'requestApprove',
-      { pkg, scripts: opts.scripts ?? [], versionHash: opts.versionHash ?? null },
-      { ttl: opts.timeout ?? 10_000 },
-    )) as ApprovalTicket
-  },
-
   /** 进度事件（数据面，可丢包）。返回退订函数；首订即开拉取轮询。 */
   onProgress(listener: (e: InstallEvent) => void): () => void {
     ensureEventTimer()
     return progress.on(listener)
-  },
-
-  /** 审批请求事件（宿主 approvals 拉取口；自己的轮询与安装事件互不牵连）。 */
-  onApproval(listener: (req: ApprovalRequest) => void): () => void {
-    ensureApprovalTimer()
-    return approvals.on(listener)
   },
 
   /** 警告（此类不可恢复的静默漂移变响亮错误）。 */
@@ -331,22 +279,15 @@ const PHASES: ReadonlyArray<InstallEvent['phase']> = [
   'done',
 ]
 
-/** 已知审批动作（与 :domain `ApprovalAction` 对齐；`lowercase()` 会把 RUN_SCRIPT 折成 run_script 恰好撞上，纯属巧合）。 */
-const APPROVAL_ACTIONS: ReadonlyArray<ApprovalRequest['action']> = ['install_script', 'run_script', 'exec']
-
 /** 一轮拉多少（宿主侧环有界 512，32 足够一拍装完）。 */
 const EVENT_BATCH = 32
 
 /** 事件游标（已拉过的最大 seq，下次 `sinceSeq`）。只前进：退订再订不回退，漏掉的在环里还捞得到。 */
 let eventSeq = 0
-let approvalSeq = 0
 
 let eventPollPeriodMillis = 250
-let approvalPollPeriodMillis = 250
 let eventTimer: ReturnType<typeof setInterval> | null = null
-let approvalTimer: ReturnType<typeof setInterval> | null = null
 let eventPumping = false
-let approvalPumping = false
 
 function checkPeriod(millis: number, what: string): void {
   if (!Number.isFinite(millis) || millis <= 0) throw new Error(`${what} 必须 > 0: ${millis}`)
@@ -358,21 +299,15 @@ export function installEventPollPeriod(millis: number): void {
   eventPollPeriodMillis = millis
 }
 
-/** 审批轮询周期注入缝（独立于事件轮询：审批要等人，不必跟进度同拍）。 */
-export function installApprovalPollPeriod(millis: number): void {
-  checkPeriod(millis, 'approvalPollPeriodMillis')
-  approvalPollPeriodMillis = millis
-}
-
-/** 宿主 `events`/`approvals` 拉取回包（{first,last,items}；空增量 first=last=sinceSeq）。 */
+/** 宿主 `events` 拉取回包（{first,last,items}；空增量 first=last=sinceSeq）。 */
 interface DrainBatch<T> {
   readonly first: number
   readonly last: number
   readonly events?: readonly T[]
-  readonly requests?: readonly T[]
 }
 
-function drainBatchOf(payload: unknown, key: 'events' | 'requests'): { first: number; last: number; items: readonly Record<string, unknown>[] } {
+function drainBatchOf(payload: unknown): { first: number; last: number; items: readonly Record<string, unknown>[] } {
+  const key = 'events' as const
   const b = payload as DrainBatch<Record<string, unknown>> | null
   if (!b || !Array.isArray(b[key]) || typeof b.first !== 'number' || typeof b.last !== 'number') {
     // 形状对不上 = 两侧契约漂移（宿主改了回包而这里没同步）。响亮炸：静默吞掉
@@ -404,44 +339,11 @@ export async function pumpInstallEvents(): Promise<void> {
       if (isNotImplemented(e)) throw e
       return
     }
-    const { last, items } = drainBatchOf(payload, 'events')
+    const { last, items } = drainBatchOf(payload)
     for (const w of items) routeInstallEvent(w)
     if (last > eventSeq) eventSeq = last
   } finally {
     eventPumping = false
-  }
-}
-
-/** 拉一轮审批请求（独立游标：审批不必等安装事件那一拍）。 */
-export async function pumpApprovals(): Promise<void> {
-  if (approvalPumping) return
-  approvalPumping = true
-  try {
-    let payload: unknown
-    try {
-      payload = await runtimeBridge.invoke('npm', 'approvals', { sinceSeq: approvalSeq, batch: EVENT_BATCH }, { ttl: 5_000 })
-    } catch (e) {
-      if (isNotImplemented(e)) throw e
-      return
-    }
-    const { last, items } = drainBatchOf(payload, 'requests')
-    for (const w of items) {
-      const action = w.action
-      if (!APPROVAL_ACTIONS.includes(action as ApprovalRequest['action'])) {
-        throw new Error(`未知审批动作: ${String(action)}（:domain ApprovalAction 新增值时须同步 bridge/js/src/npm.ts）`)
-      }
-      approvals.emit({
-        id: String(w.id),
-        projectId: String(w.projectId),
-        pkg: String(w.pkg),
-        versionHash: String(w.versionHash),
-        action: action as ApprovalRequest['action'],
-        requestedAtMillis: Number(w.requestedAtMillis),
-      })
-    }
-    if (last > approvalSeq) approvalSeq = last
-  } finally {
-    approvalPumping = false
   }
 }
 
@@ -512,11 +414,6 @@ function stopEventTimer(): void {
   eventTimer = null
 }
 
-function stopApprovalTimer(): void {
-  if (approvalTimer) clearInterval(approvalTimer)
-  approvalTimer = null
-}
-
 function ensureEventTimer(): void {
   if (!eventTimer) {
     eventTimer = setInterval(() => {
@@ -531,18 +428,4 @@ function ensureEventTimer(): void {
   // 每次订阅都立拉一轮（不只定时器首建时）：退订到重订之间定时器可能还活着
   // 但一拍没到，只在首建时拉会让人以为「订了不响」。并发由 eventPumping 挡。
   loud(pumpInstallEvents())
-}
-
-function ensureApprovalTimer(): void {
-  if (!approvalTimer) {
-    approvalTimer = setInterval(() => {
-      if (approvals.size === 0) {
-        stopApprovalTimer()
-        return
-      }
-      loud(pumpApprovals())
-    }, approvalPollPeriodMillis)
-    unref(approvalTimer)
-  }
-  loud(pumpApprovals())
 }

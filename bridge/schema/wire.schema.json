@@ -118,7 +118,6 @@
     "npm": {
       "facade": "npm.ts",
       "methods": [
-        "approvals",
         "audit",
         "ci",
         "dedupe",
@@ -130,7 +129,6 @@
         "offlineGap",
         "prune",
         "remove",
-        "requestApprove",
         "setRegistry"
       ]
     },

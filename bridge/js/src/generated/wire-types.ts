@@ -16,7 +16,7 @@ export const WIRE = {
   "floatingWindow": { facade: 'extras.ts', methods: ['close', 'create'] },
   "images": { facade: 'images.ts', methods: ['crop', 'decode', 'findColor', 'findFeature', 'findImage', 'matchTemplate', 'release', 'resize', 'rotate', 'toGrayscale'] },
   "notification": { facade: 'notification.ts', methods: ['canPost', 'cancel', 'post'] },
-  "npm": { facade: 'npm.ts', methods: ['approvals', 'audit', 'ci', 'dedupe', 'events', 'importOfflineBundle', 'importTarball', 'install', 'list', 'offlineGap', 'prune', 'remove', 'requestApprove', 'setRegistry'] },
+  "npm": { facade: 'npm.ts', methods: ['audit', 'ci', 'dedupe', 'events', 'importOfflineBundle', 'importTarball', 'install', 'list', 'offlineGap', 'prune', 'remove', 'setRegistry'] },
   "power_manager": { facade: 'power.ts', methods: ['acquire', 'release', 'status'] },
   "screen": { facade: 'images.ts', methods: ['capture', 'closeSession', 'nextFrame', 'recycle', 'startCapturer', 'startRecording', 'stopRecording'] },
   "sensors": { facade: 'sensors.ts', methods: ['drain', 'isSupported', 'register', 'unregister', 'unregisterAll'] },

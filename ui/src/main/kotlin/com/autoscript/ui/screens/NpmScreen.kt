@@ -32,7 +32,6 @@ import com.autoscript.ui.components.Separator
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.rememberRefreshAction
-import com.autoscript.ui.state.ApprovalRowState
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.InstallProgressState
@@ -43,13 +42,12 @@ import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
 /**
- * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板 + §10.9.2 审批卡）。
+ * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
- * 两个分段：**已装依赖**（`npm ls` 直读 lockfile 的权威清单 + 尺寸/配额）与
- * **待审批**（全局队列）。
+ * 分段：**已装依赖**（`npm ls` 直读 lockfile 的权威清单 + 尺寸/配额）。
  *
  * 顶栏那颗「审计」进 [AuditScreen]（§10.5-2）：它记的就是**本页这些操作**发生过什么
- * （安装 / 卸载 / 镜像源变更 / 审批放行…），所以从本页进而不是从管理面板当第五项 ——
+ * （安装 / 卸载 / 镜像源变更…），所以从本页进而不是从管理面板当第五项 ——
  * 从面板直进会让人以为它与依赖管理是并列的另一件事。
  *
  * 这一屏刻意**不做**的几件事（做了就是撒谎）：
@@ -81,7 +79,6 @@ import com.autoscript.ui.theme.ThemeColors
 fun NpmScreen(
     state: NpmState,
     onRefresh: suspend () -> Unit,
-    onDecide: (requestId: String, approve: Boolean) -> Unit,
     onSelectProject: (String) -> Unit,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
     onReclaimCache: () -> Unit,
@@ -164,14 +161,6 @@ fun NpmScreen(
                 )
             }
             item { MaintenanceCard(state, onMaintenance, onReclaimCache) }
-            item { SectionTitle("待审批（${state.pending.size}）") }
-            if (state.load.isLoaded && state.pending.isEmpty()) {
-                item { EmptyHint("没有等待人工决定的审批") }
-            }
-            items(state.pending, key = { it.requestId }) { row ->
-                ApprovalCard(row, enabled = !state.deciding, onDecide = onDecide)
-                Separator()
-            }
             item { SectionTitle("已装依赖（${state.installed.size}）") }
             if (state.load.isLoaded && state.installed.isEmpty()) {
                 item { EmptyHint("读到了，这个项目还没有依赖（先装点什么）") }
@@ -471,29 +460,6 @@ private fun MaintenanceButton(
         enabled = enabled,
         onClick = { onClick(action) },
     )
-}
-
-/**
- * 一张审批卡（§10.9.2）：包名 + 动作 + 风险说明 + 批准/拒绝。
- *
- * **不做「全局禁止脚本」那颗开关**：出厂默认已经是禁止（硬编码 `--ignore-scripts`
- * 是主控，§11.3 第 8 条），再放一颗"禁止"开关要么是重复、要么会被读成"现在允许"。
- * 真要做的是"白名单放行"那条反向通道，那是 T1 落地之后的事。
- */
-@Composable
-private fun ApprovalCard(row: ApprovalRowState, enabled: Boolean, onDecide: (String, Boolean) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Text(row.pkg, style = MaterialTheme.typography.titleMedium, color = ThemeColors.text)
-        ToneText("${row.projectId} · ${row.actionLabel} · ${row.versionHashShort}", StatusTone.MUTED)
-        ToneText(row.riskNote, StatusTone.ATTENTION, style = MaterialTheme.typography.bodySmall)
-        Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            PillButton("批准", selected = false, enabled = enabled, onClick = { onDecide(row.requestId, true) })
-            PillButton("拒绝", selected = false, enabled = enabled, onClick = { onDecide(row.requestId, false) })
-        }
-    }
 }
 
 /**

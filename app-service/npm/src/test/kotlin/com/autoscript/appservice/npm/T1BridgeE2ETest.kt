@@ -1,7 +1,6 @@
 package com.autoscript.appservice.npm
 
 import com.autoscript.domain.core.AutojsException
-import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.testkit.HostNpm
 import kotlinx.coroutines.runBlocking
@@ -85,7 +84,7 @@ class T1BridgeE2ETest {
     private fun op(projectId: String, root: Path, what: String, timeoutMillis: Long = 60_000L) = ScriptOp(
         handleId = "h1",
         projectId = projectId,
-        action = ApprovalAction.RUN_SCRIPT,
+        action = com.autoscript.domain.npm.InstallHistoryOp.RUN_SCRIPT,
         pkg = projectId,
         what = what,
         args = emptyList(),

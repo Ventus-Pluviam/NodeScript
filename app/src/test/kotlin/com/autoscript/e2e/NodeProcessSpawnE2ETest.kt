@@ -166,6 +166,8 @@ class NodeProcessSpawnE2ETest {
 
         val intentStore = InMemoryIntentStore()
         val assembled = AppShellKit.assemble(
+            // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
+            npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
             filesDir = files,
             cacheDir = cache,
             schedulerProvider = RecordingProvider(),
@@ -296,6 +298,8 @@ class NodeProcessSpawnE2ETest {
         """.trimIndent().toByteArray())
         val assembled = AppShellKit.assemble(
             files, cache, RecordingProvider(), intentStore = InMemoryIntentStore(), poolCapacity = 2,
+            // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
+            npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
             engineFactory = { id, issuer -> NodeProcessEngine(
                 id, NodeEngineConfig(files, Path.of("node"), hostSocketName = socketPath), identityIssuer = issuer,
             ) },

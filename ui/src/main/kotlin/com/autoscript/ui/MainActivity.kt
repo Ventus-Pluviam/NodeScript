@@ -190,8 +190,8 @@ class MainActivity : ComponentActivity() {
     private var taskLogState: TaskLogState by mutableStateOf(TaskLogState.NOT_LOADED)
 
     /**
-     * 依赖管理页状态（依赖面板 + 审批卡共用一个读口：两件事在数据上同源，
-     * 拆两个读口就会各自现取一次、两次结果可以互相矛盾）。
+     * 依赖管理页状态（依赖面板一个读口：现取一次算一份状态，拆多个读口就会
+     * 各自取一次、两次结果可以互相矛盾）。
      */
     private var npmState: NpmState by mutableStateOf(NpmState.NOT_LOADED)
 
@@ -596,7 +596,7 @@ class MainActivity : ComponentActivity() {
      *
      * 三份读数（[consoleState]/[npmState]/[taskLogState]）是 Activity 的字段，直接读；
      * 关闭回调与重操作要用的 [scope] 才走参数（**scope 必须由外壳传**：在这里
-     * `rememberCoroutineScope()` 会让正在跑的审批/停止操作随子页离开组合而被取消）。
+     * `rememberCoroutineScope()` 会让正在跑的安装/停止操作随子页离开组合而被取消）。
      */
     @Composable
     private fun ManagementSubPageHost(
@@ -648,7 +648,6 @@ class MainActivity : ComponentActivity() {
             ManagementPage.NPM -> NpmScreen(
                 state = npmState,
                 onRefresh = { reloadNpm() },
-                onDecide = { id, approve -> scope.launch { decideApprovalOp(id, approve) } },
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
                 onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
@@ -865,36 +864,6 @@ class MainActivity : ComponentActivity() {
         } catch (t: Exception) {
             NpmState.failed(t, previous)
         }
-    }
-
-    /**
-     * 人工审批决定（§10.5-2 人机分离的落点：脚本只能入队，决定由这里带下去）。
-     *
-     * 与 [performTaskOp] 同一条纪律的三落点：未接线 → opError；抛（票不存在等）
-     * → opError 原文、**不清依赖清单**；成功 → opNotice 回执 + 现取一次
-     * （票从待审队列消失是宿主的账，界面不许自己先把它抹掉 —— 那会在宿主拒绝时
-     * 出现"卡片没了但什么都没发生"）。
-     */
-    private suspend fun decideApprovalOp(requestId: String, approve: Boolean) {
-        val host = hostSummary()
-        if (host == null) {
-            npmState = npmState.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）")
-            return
-        }
-        npmState = npmState.copy(deciding = true, opError = null, opNotice = null)
-        try {
-            host.resolveNpmApproval(requestId, approve)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (t: Exception) {
-            npmState = npmState.copy(deciding = false, opError = t.message ?: t.javaClass.simpleName)
-            return
-        }
-        reloadNpm()
-        npmState = npmState.copy(
-            deciding = false,
-            opNotice = if (approve) "已批准：这张票现在放行对应的脚本" else "已拒绝",
-        )
     }
 
     /**

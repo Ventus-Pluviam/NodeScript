@@ -34,13 +34,13 @@ class NpmMaintenanceOpsTest {
     )
 
     private fun loaded(vararg projects: NpmProjectSnapshot) =
-        NpmState.of(NpmPanelSnapshot(projects.toList(), emptyList()))
+        NpmState.of(NpmPanelSnapshot(projects.toList()))
 
     /** 记录被调过的 (projectId, action)，并可按需失败。 */
     private class MaintenanceHost(
         private val fail: Throwable? = null,
         private val report: NpmCacheReclaimReport = NpmCacheReclaimReport(3, 3L * 1024 * 1024, 7, 9L * 1024 * 1024, 7, false),
-        private val snapshot: () -> NpmPanelSnapshot = { NpmPanelSnapshot(listOf(), emptyList()) },
+        private val snapshot: () -> NpmPanelSnapshot = { NpmPanelSnapshot(listOf()) },
     ) : FakeHost() {
         val calls = mutableListOf<Pair<String, NpmMaintenanceAction>>()
         var reclaims = 0
@@ -101,7 +101,7 @@ class NpmMaintenanceOpsTest {
     @Test
     fun `没选项目 → 如实说没有项目，不假装跑过`() = runBlocking {
         val host = MaintenanceHost()
-        val next = runNpmMaintenanceOp(host, NpmState.of(NpmPanelSnapshot(emptyList(), emptyList())), NpmMaintenanceAction.DEDUPE)
+        val next = runNpmMaintenanceOp(host, NpmState.of(NpmPanelSnapshot(emptyList())), NpmMaintenanceAction.DEDUPE)
         assertTrue(host.calls.isEmpty(), "没有项目就不该调宿主")
         assertTrue(next.opError!!.contains("没有选中的项目"), "实为 ${next.opError}")
     }
@@ -116,7 +116,7 @@ class NpmMaintenanceOpsTest {
     @Test
     fun `动作成功后清单按宿主现取（界面不自己先抹）`() = runBlocking {
         // 宿主说 prune 完只剩 1MB：界面必须显示 1MB，而不是沿用操作前的 10MB
-        val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 1L * 1024 * 1024)), emptyList()) })
+        val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 1L * 1024 * 1024))) })
         val next = runNpmMaintenanceOp(host, loaded(project("demo", 10L * 1024 * 1024)), NpmMaintenanceAction.PRUNE)
         assertEquals("1 MB / 512 MB", next.quotaLabel, "回读的才是现状")
     }
@@ -163,7 +163,7 @@ class NpmMaintenanceOpsTest {
 
     @Test
     fun `回收后必须回读快照（否则配额条还是旧值，看着像没生效）`() = runBlocking {
-        val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 2L * 1024 * 1024)), emptyList()) })
+        val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 2L * 1024 * 1024))) })
         val next = reclaimNpmCacheOp(host, loaded(project("demo", 10L * 1024 * 1024)))
         assertEquals("2 MB / 512 MB", next.quotaLabel)
     }
@@ -171,7 +171,7 @@ class NpmMaintenanceOpsTest {
     @Test
     fun `回收不需要选中项目（缓存是全局的，不挂在某个项目下）`() = runBlocking {
         val host = MaintenanceHost()
-        val empty = NpmState.of(NpmPanelSnapshot(emptyList(), emptyList()))
+        val empty = NpmState.of(NpmPanelSnapshot(emptyList()))
         val next = reclaimNpmCacheOp(host, empty)
         assertEquals(1, host.reclaims, "一个项目都没有时也该能回收缓存")
         assertNull(next.opError)

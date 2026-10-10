@@ -3,7 +3,6 @@ package com.autoscript.appservice.npm
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.core.ErrorCode
-import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.PackageSpec
@@ -18,14 +17,14 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * npm 事件**拉取口**单测（§10.7 `drainEvents`/`drainApprovals` + §9.1 游标口径）。
+ * npm 事件**拉取口**单测（§10.7 `drainEvents` + §9.1 游标口径）。
  *
  * 立这条口的原因：桥的入站面只有「按 requestId 结算的 ok/err」（§7.5），宿主没有
- * 主动推给脚本的通道 —— 于是 JS 的 `onProgress`/`onWarning`/`onApproval` 在本测试之前
+ * 主动推给脚本的通道 —— 于是 JS 的 `onProgress`/`onWarning`/`onFinished` 在本测试之前
  * **没有生产投递方**（订阅了但永远不响，正是 npm.ts 自己 KDoc 说的「比没有这个 API 更糟」）。
  * 钉死三件事：
  * 1. 环：有界丢最旧、seq 空洞可见、按项目过滤、batch 截断、空增量以游标为准；
- * 2. 装配：安装链发出的事件落环（`emit` 是唯一投递点），审批入队同理；
+ * 2. 装配：安装链发出的事件落环（`emit` 是唯一投递点）；
  * 3. wire：phase/kind/action 逐字映射到 JS 联合（`post-check` 不是 `post_check`）。
  */
 class NpmEventDrainTest {
@@ -45,7 +44,6 @@ class NpmEventDrainTest {
             layout = layout,
             journal = InstallJournal(dir.resolve(".autojs")),
             staging = InstallStaging(layout),
-            ledger = ApprovalLedger(),
             cacheIndex = CacheIndex { false },
         ),
         executor = OkExecutor(),
@@ -73,7 +71,6 @@ class NpmEventDrainTest {
                 layout = layout,
                 journal = InstallJournal(dir.resolve(".autojs")),
                 staging = InstallStaging(layout),
-                ledger = ApprovalLedger(),
                 cacheIndex = CacheIndex { false },
             ),
             executor = object : HeavyOpExecutor {
@@ -180,19 +177,6 @@ class NpmEventDrainTest {
         assertTrue(other.events.isEmpty(), "按项目过滤：别的项目看不到 main 的事件")
     }
 
-    @Test
-    fun `requestApprove 落审批环，approvals 拉取口拿得到`() = runBlocking {
-        val c = coordinator()
-        c.requestApprove("main", "esbuild", "hash-1", ApprovalAction.RUN_SCRIPT)
-        val got = c.drainApprovals("main", 0L, 8)
-        assertEquals(1, got.requests.size)
-        val r = got.requests.single()
-        assertEquals("esbuild", r.request.pkg)
-        assertEquals(ApprovalAction.RUN_SCRIPT, r.request.action)
-        assertTrue(r.seq > 0L, "序号必须随批带上（脚本拿它当下一次 sinceSeq）")
-        assertTrue(c.drainApprovals("main", r.seq, 8).requests.isEmpty(), "取过即空增量")
-    }
-
     // ═══ wire 映射（JS 联合的逐字对偶） ═══
 
     @Test
@@ -214,10 +198,6 @@ class NpmEventDrainTest {
         assertEquals(
             listOf("scripts-skipped", "trust-downgraded", "low-memory", "registry-fallback", "disk-quota"),
             InstallEvent.Kind.entries.map { h.kindWire(it) },
-        )
-        assertEquals(
-            listOf("install_script", "run_script", "exec"),
-            ApprovalAction.entries.map { h.actionWire(it) },
         )
     }
 
@@ -269,15 +249,5 @@ class NpmEventDrainTest {
             assertTrue(r is BridgeResponse.Err, "batch<=0 必须拒：$r")
             assertEquals(ErrorCode.ERR_INVALID_PARAM.code, (r as BridgeResponse.Err).errorCode)
         }
-    }
-
-    @Test
-    fun `approvals 上桥带 action 的 wire 名`() = runBlocking {
-        val c = coordinator()
-        c.requestApprove("main", "esbuild", "h", ApprovalAction.INSTALL_SCRIPT)
-        val payload = (handler(c).handle(req("approvals", json("sinceSeq" to 0))) as BridgeResponse.Ok).payload!!
-        assertTrue(payload.contains("\"requests\":["), payload)
-        assertTrue(payload.contains("\"action\":\"install_script\""), "wire 名与 JS ApprovalRequest.action 对齐：$payload")
-        assertTrue(payload.contains("\"seq\":"), payload)
     }
 }

@@ -47,7 +47,6 @@ class NpmBridgeHandlerTest {
                 layout = layout,
                 journal = InstallJournal(dir.resolve(".autojs")),
                 staging = InstallStaging(layout),
-                ledger = ApprovalLedger(),
                 cacheIndex = CacheIndex { false },
             ),
             executor = executor,
@@ -186,23 +185,6 @@ class NpmBridgeHandlerTest {
     }
 
     @Test
-    fun `requestApprove 只入队（脚本无 resolve 权）`() = runBlocking {
-        val h = handler()
-        val r = h.handle(req("requestApprove", json("projectId" to "p1", "pkg" to "esbuild", "versionHash" to "sha512-a")))
-        val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
-        assertTrue(payload.contains("\"status\":\"pending\""), payload)
-        // scripts 回显：调用方没声明 → 空表（不是 null/缺键，JS 侧 scripts: readonly string[]）
-        assertTrue(payload.contains("\"scripts\":[]"), "未声明 scripts 须回显空表：$payload")
-        // 方法表里根本没有 resolve：未知方法 → ERR_NOT_IMPLEMENTED（人机分离铁律）
-        val resolveTry = h.handle(req("resolveApproval", json("requestId" to "x")))
-        assertEquals(
-            ErrorCode.ERR_NOT_IMPLEMENTED.code,
-            (resolveTry as com.autoscript.domain.bridge.BridgeResponse.Err).errorCode,
-            "resolveApproval 不得从桥面可达",
-        )
-    }
-
-    @Test
     fun `未知方法 ERR_NOT_IMPLEMENTED`() = runBlocking {
         val r = handler().handle(req("explode", json()))
         assertEquals(
@@ -217,29 +199,6 @@ class NpmBridgeHandlerTest {
         assertEquals(
             ErrorCode.ERR_NOT_SUPPORTED.code,
             (r as com.autoscript.domain.bridge.BridgeResponse.Err).errorCode,
-        )
-    }
-
-    @Test
-    fun `requestApprove 回显 scripts 并校验形态（不静默丢弃用户声明）`() = runBlocking {
-        val h = handler()
-        val r = h.handle(
-            req(
-                "requestApprove",
-                json("projectId" to "p1", "pkg" to "esbuild", "versionHash" to "sha512-a", "scripts" to listOf("postinstall")),
-            ),
-        )
-        val payload = (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload!!
-        assertTrue(payload.contains("\"requestId\":\"apr-1\""), payload)
-        assertTrue(payload.contains("\"scripts\":[\"postinstall\"]"), "声明过的脚本须原样回显：$payload")
-
-        // 形态不对即 ERR_INVALID_PARAM —— 与 setRegistry 的 scope 同一条纪律：
-        // 宿主不认的字段被静默丢弃，比报错更糟。
-        val bad = h.handle(req("requestApprove", json("projectId" to "p1", "pkg" to "esbuild", "scripts" to "postinstall")))
-        assertEquals(
-            ErrorCode.ERR_INVALID_PARAM.code,
-            (bad as com.autoscript.domain.bridge.BridgeResponse.Err).errorCode,
-            "scripts 必须是数组（字符串不是）",
         )
     }
 

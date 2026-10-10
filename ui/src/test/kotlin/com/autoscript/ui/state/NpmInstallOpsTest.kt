@@ -38,7 +38,7 @@ class NpmInstallOpsTest {
     )
 
     private fun loaded(vararg projects: NpmProjectSnapshot) =
-        NpmState.of(NpmPanelSnapshot(projects.toList(), emptyList()))
+        NpmState.of(NpmPanelSnapshot(projects.toList()))
 
     /** 记录被提交的那一行，并可按需失败 / 按需回一批事件。 */
     private class PanelHost(
@@ -49,7 +49,7 @@ class NpmInstallOpsTest {
         var polls = 0
         var lastSince = -1L
 
-        override suspend fun npmSnapshot(): NpmPanelSnapshot = NpmPanelSnapshot(emptyList(), emptyList())
+        override suspend fun npmSnapshot(): NpmPanelSnapshot = NpmPanelSnapshot(emptyList())
 
         override suspend fun runNpmPanelCommand(projectId: String, line: String): NpmConsoleHandle {
             lines += line
@@ -278,7 +278,7 @@ class NpmInstallOpsTest {
             installSeq = 3L,
         )
         val refreshed = NpmState.of(
-            NpmPanelSnapshot(listOf(project("demo")), emptyList()),
+            NpmPanelSnapshot(listOf(project("demo"))),
             previous,
         )
         assertEquals("axios", refreshed.installDraft)

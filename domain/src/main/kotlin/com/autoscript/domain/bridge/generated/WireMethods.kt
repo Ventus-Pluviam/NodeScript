@@ -54,9 +54,8 @@ object WireMethods {
             "canPost", "cancel", "post",
         ),
         "npm" to setOf(
-            "approvals", "audit", "ci", "dedupe", "events", "importOfflineBundle",
-            "importTarball", "install", "list", "offlineGap", "prune", "remove",
-            "requestApprove", "setRegistry",
+            "audit", "ci", "dedupe", "events", "importOfflineBundle", "importTarball",
+            "install", "list", "offlineGap", "prune", "remove", "setRegistry",
         ),
         "power_manager" to setOf(
             "acquire", "release", "status",

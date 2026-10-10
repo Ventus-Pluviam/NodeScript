@@ -105,10 +105,10 @@ class AssembledShell internal constructor(
      */
     val npmSpawnGate: java.nio.file.Path? = null,
     /**
-     * npm 门面本体（呈现面读口用：依赖面板 / 审批卡，§10.9.1）。
+     * npm 门面本体（呈现面读口用：依赖面板，§10.9.1 —— 审批卡已拆，2026-10-11）。
      *
      * 为什么单列一个字段而不是让 `:app` 从 [npmHandler] 里再挖：呈现层要的是
-     * `snapshot()`/`resolveApproval` 这两条**不经桥**的口，而 [npmHandler] 是
+     * `snapshot()` 这条**不经桥**的口，而 [npmHandler] 是
      * 桥面那层壳。null = 本次没挂 npm（调用方自带 handler 时本配方不参与，或压根没装），
      * 呈现层据此如实显示「npm 未接线」而不是画一个空面板。
      */

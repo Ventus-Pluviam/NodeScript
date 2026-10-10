@@ -3,7 +3,6 @@ package com.autoscript.appservice.npm
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.host.ShellConsoleResult
-import com.autoscript.domain.npm.ApprovalAction
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.InstallEvent
 import java.nio.file.Path
@@ -152,25 +151,26 @@ fun interface ScriptOpExecutor {
         override suspend fun execute(op: ScriptOp, sink: ProgressSink): String {
             throw AutojsException(
                 ErrorCode.ERR_NOT_IMPLEMENTED,
-                "T1 spawn 桥未接入：已获批的 ${op.what}（${op.action.name}）未执行。" +
-                    "放行门禁与审批账本已就位，缺的是 child_process shim → 临时引擎这一段（§10.3 T1）",
+                "T1 spawn 桥未接入：${op.what}（${op.action}）未执行。" +
+                    "解析与门禁已就位，缺的是 child_process shim → 临时引擎这一段（§10.3 T1）",
             )
         }
     }
 }
 
 /**
- * 一次已放行 lifecycle 执行的上下文。
+ * 一次 lifecycle 执行的上下文。
  *
  * [what] 是脚本名或 bin 名（审计与错误信息的抓手）；[npmArgs] 是 npm CLI 口径参数；
  * [versionHash] 带上是为了让执行体可复述「我跑的是哪一份」——审计条目只记摘要不够，
- * 用户问「我批的那份脚本现在还在不在」时要有据可查。
+ * 用户问「我跑的那份脚本现在还在不在」时要有据可查（脚本一改哈希就变）。
  */
 data class ScriptOp(
     val handleId: String,
     val projectId: String,
-    val action: ApprovalAction,
-    /** 审批主体 = 归属包名（run 侧是项目自身包名，exec 侧是提供该 bin 的包名）。 */
+    /** 审计条目的 action 段（[com.autoscript.domain.npm.InstallHistory.Op] 的常量）。 */
+    val action: String,
+    /** 归属包名（run 侧是项目自身包名，exec 侧是提供该 bin 的包名）。 */
     val pkg: String,
     /** 脚本名或 bin 名。 */
     val what: String,
@@ -180,7 +180,7 @@ data class ScriptOp(
     val versionHash: String,
     val timeoutMillis: Long,
 ) {
-    /** 审批键的主体段（`"<pkg>|<what>"`）—— 账本键与审计条目同款，不再各拼各的。 */
+    /** 主体段（`"<pkg>|<what>"`）—— 审计条目与错误话术同款，不再各拼各的。 */
     val subject: String get() = "$pkg|$what"
 }
 

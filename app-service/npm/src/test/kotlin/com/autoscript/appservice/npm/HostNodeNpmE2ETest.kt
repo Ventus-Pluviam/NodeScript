@@ -44,7 +44,6 @@ class HostNodeNpmE2ETest {
                 layout = layout,
                 journal = InstallJournal(root.resolve(".autojs")),
                 staging = InstallStaging(layout),
-                ledger = ApprovalLedger(),
                 cacheIndex = CacheIndex { false },
             ),
             executor = HostNodeExecutor(npmCli!!, cacheDir),

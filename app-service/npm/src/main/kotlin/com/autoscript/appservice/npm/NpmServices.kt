@@ -4,7 +4,7 @@ package com.autoscript.appservice.npm
  * [InstallCoordinator] 的协作者束（§10.2 装配面）。
  *
  * 为什么收拢：协调器的构造参数一度膨胀到 15 个——其中**全部**是「外部协作者」
- * （layout/journal/staging/ledger/...）。分组不是为了好看：参数超过 ~6 个之后，
+ * （layout/journal/staging/...）。分组不是为了好看：参数超过 ~6 个之后，
  * 「测试要覆盖某个组合」就得逐个对名字传参，命名参数写的顺序漂一格就静默串位
  * （类型相同的情况下编译器不报）；而真装配层（AppShell/Application）构造时
  * 一眼能看出「这些是同生共死的一组」。
@@ -26,7 +26,6 @@ data class NpmServices(
     val layout: NpmProjectLayout,
     val journal: InstallJournal,
     val staging: InstallStaging,
-    val ledger: ApprovalLedger,
     val history: InstallHistory? = null,
     val lockSigner: LockSigner? = null,
     val snapshots: NpmSnapshot? = null,

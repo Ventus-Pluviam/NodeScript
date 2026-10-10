@@ -42,16 +42,12 @@ import com.autoscript.domain.json.DomainJson
  * - `events`：`{sinceSeq?,batch?}` → `{first,last,events:[{seq,type,…}]}`（**拉取式**，§9.1 同形；
  *   见 [com.autoscript.domain.npm.InstallEventBatch]）。`type` ∈ `progress`/`warning`/`finished`——
  *   三种分别喂 JS 的 `onProgress`/`onWarning`/`onFinished`；空增量回 `{first=last=sinceSeq, events:[]}`。
- * - `approvals`：`{sinceSeq?,batch?}` → `{first,last,requests:[{seq,…}]}`（`onApproval` 的取数口）。
- * - `requestApprove`：`{pkg,versionHash?,action?,scripts?}` → `{requestId,status,scripts}`
- *   （**只入队**；脚本绝无 resolve 权。`scripts` 回显：JS facade 一直带着这个字段，
- *   宿主不校验也不回就是静默丢用户显式声明——与 `setRegistry` 的 scope 同一类问题）。
  */
 class NpmBridgeHandler(
     /**
      * 门面本体。**public 是给装配层用的，不是给脚本用的**：桥面只有 [handle] 那条路，
-     * 门面上的人机分离方法（`resolveApproval`）不因此变得可从脚本到达 —— 装配层拿它
-     * 喂 `HostSummary` 的呈现面读口（依赖面板 / 审批卡，§10.9.1），那条路走的是
+     * 门面上的执行方法（`runScript`/`exec`）**不在桥面**（见 [methods]）—— 装配层拿它
+     * 喂 `HostSummary` 的呈现面读口（依赖面板，§10.9.1），那条路走的是
      * Android 进程内的接口调用，不经过桥。
      */
     val facade: com.autoscript.domain.npm.PackageManagerFacade,
@@ -171,50 +167,6 @@ class NpmBridgeHandler(
                     ),
                 )
             }
-            "approvals" -> {
-                val sinceSeq = DomainJson.optLong(f, "sinceSeq") ?: 0L
-                val batch = (DomainJson.optLong(f, "batch") ?: 32L).toInt()
-                if (batch <= 0) throw IllegalArgumentException("batch 必须 > 0")
-                val got = facade.drainApprovals(projectId, sinceSeq, batch)
-                DomainJson.encode(
-                    mapOf(
-                        "first" to got.firstSeq,
-                        "last" to got.lastSeq,
-                        "requests" to got.requests.map { r ->
-                            mapOf(
-                                "seq" to r.seq,
-                                "id" to r.request.id,
-                                "projectId" to r.request.projectId,
-                                "pkg" to r.request.pkg,
-                                "versionHash" to r.request.versionHash,
-                                "action" to actionWire(r.request.action),
-                                "requestedAtMillis" to r.request.requestedAtMillis,
-                            )
-                        },
-                    ),
-                )
-            }
-            "requestApprove" -> {
-                val pkg = DomainJson.reqStr(f, "pkg")
-                val versionHash = DomainJson.optStr(f, "versionHash") ?: ""
-                // scripts：JS facade 的 requestApprove(pkg, {scripts}) 一直带着它（§10.8）。
-                // 宿主既不校验也不回 = 静默丢弃用户显式声明，与 setRegistry 的 scope 同罪；
-                // 形态不对就 ERR_INVALID_PARAM（响亮失败），对得上才回显「宿主收到了」。
-                val scripts = DomainJson.optStrList(f, "scripts")
-                val action = when (DomainJson.optStr(f, "action")?.lowercase()) {
-                    "run_script", "runscript" -> com.autoscript.domain.npm.ApprovalAction.RUN_SCRIPT
-                    "exec" -> com.autoscript.domain.npm.ApprovalAction.EXEC
-                    else -> com.autoscript.domain.npm.ApprovalAction.INSTALL_SCRIPT
-                }
-                val t = facade.requestApprove(projectId, pkg, versionHash, action)
-                DomainJson.encode(
-                    mapOf(
-                        "requestId" to t.requestId,
-                        "status" to t.status.name.lowercase(),
-                        "scripts" to scripts,
-                    ),
-                )
-            }
             else -> throw com.autoscript.domain.core.AutojsException(
                 ErrorCode.ERR_NOT_IMPLEMENTED,
                 "未知 npm 方法: ${request.method}",
@@ -267,12 +219,7 @@ class NpmBridgeHandler(
         com.autoscript.domain.npm.InstallEvent.Kind.DISK_QUOTA -> "disk-quota"
     }
 
-    /** 与 JS `ApprovalRequest['action']` 联合逐字对齐。 */
-    internal fun actionWire(a: com.autoscript.domain.npm.ApprovalAction): String = when (a) {
-        com.autoscript.domain.npm.ApprovalAction.INSTALL_SCRIPT -> "install_script"
-        com.autoscript.domain.npm.ApprovalAction.RUN_SCRIPT -> "run_script"
-        com.autoscript.domain.npm.ApprovalAction.EXEC -> "exec"
-    }
+
 
     private fun requirePayload(request: BridgeRequest): String =
         request.payload ?: throw IllegalArgumentException("npm.${request.method} 缺 payload")

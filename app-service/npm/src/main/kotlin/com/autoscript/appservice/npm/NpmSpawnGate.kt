@@ -32,7 +32,7 @@ import java.nio.file.StandardCopyOption
  *
  * **边界**：本 shim 是**不变量守卫**，不是安全边界（shim 自己 KDoc 里写死同一条）——
  * 已获批的脚本可以 `delete require.cache` 后重新 require 拿到未打补丁的模块。真正的
- * 对抗面是审批（§10.5-2）与 T1 会话的最小 CapabilityMask（§10.5-4）。
+ * 对抗面是 §10.5-2 人机分离的脚本自发起路径（`requestApprove` 已拆，2026-10-11）。
  */
 object NpmSpawnGate {
 
