@@ -43,6 +43,8 @@ class AppShellTaskCenterTest {
     }
 
     private fun kit(): AssembledShell = AppShellKit.assemble(
+        // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
+        npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
         filesDir = files,
         cacheDir = cache,
         intentStore = InMemoryIntentStore(),

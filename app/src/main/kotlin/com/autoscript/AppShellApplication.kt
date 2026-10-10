@@ -42,6 +42,7 @@ import com.autoscript.shell.HostLog
 import com.autoscript.shell.LockKeyStore
 import com.autoscript.shell.AndroidAlarmPort
 import com.autoscript.shell.AndroidBridgeBinder
+import com.autoscript.shell.AndroidT1SocketBinder
 import com.autoscript.shell.AndroidForegroundOps
 import com.autoscript.shell.AndroidPermissionGates
 import com.autoscript.shell.AndroidScreenGate
@@ -352,6 +353,12 @@ class AppShellApplication : Application(), HostSummary {
                 // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
                 // 本类只递 Keystore 那条缝 —— 与 npmCliSource/npmNodeBin 同一分工。
                 npmLockKeys = LockKeyStore.AndroidKeystore,
+                // T1 桥 socket（§10.3 T1，2026-10-10 批 91）：**设备侧必须显式给这条**。
+                // 缺省那条（`NpmT1Bridge.fileSystemBinder`）是 JDK unix domain socket，
+                // 而 `java.net.UnixDomainSocketAddress` 根本不在 android.jar 里 ——
+                // 在设备上它不是"降级"而是 NoClassDefFoundError（Error 拦不住），
+                // 会把整个壳的装配掀翻。故 `assemble` 把它做成**必填参数**，忘传 = 编不过。
+                npmT1Binder = AndroidT1SocketBinder,
                 // 能力面生产装配（§12.2）：shell 装配包的 PlatformWiring 拿
                 // SystemSpis + CapabilityNamespaces 拼成注入束 —— 本类（根包）只调它，
                 // 不 import 任何 com.autoscript.platform..（ArchitectureTest 看住）。
