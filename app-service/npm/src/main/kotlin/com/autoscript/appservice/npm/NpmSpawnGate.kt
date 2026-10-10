@@ -62,23 +62,36 @@ object NpmSpawnGate {
      * 写入走临时文件 + 同目录原子 rename（半截 `.cjs` 被 `--require` 到是 SyntaxError，
      * 比缺文件难查得多 —— 与 [NpmCliDeployer] / `BridgeAddonDeploy` 同一手法）。
      */
-    fun deploy(filesDir: Path): Deploy {
-        val bytes = try {
-            NpmSpawnGate::class.java.getResourceAsStream(RESOURCE_PATH)?.use { it.readBytes() }
-        } catch (t: Throwable) {
-            return Deploy.Failed("child_process 拦截 shim 资源读取失败（$RESOURCE_PATH）：${t.message}")
-        } ?: return Deploy.Failed("child_process 拦截 shim 资源缺失（$RESOURCE_PATH 不在 classpath 上）")
-        // 空字节不落盘：0 字节 .cjs 被 --require 是 SyntaxError，把「没落上」变成「Node 起不来」。
-        if (bytes.isEmpty()) return Deploy.Failed("child_process 拦截 shim 资源为空（$RESOURCE_PATH）")
+    fun deploy(filesDir: Path): Deploy =
+        deployResource(RESOURCE_PATH, gateFile(filesDir), "child_process 拦截 shim")
 
-        val target = gateFile(filesDir)
+    /**
+     * classpath 上的 `.cjs` 资源 → 落盘（**两个 shim 共用**：本门禁与 T1 桥，
+     * 2026-10-10 批 91 自 [deploy] 提出）。
+     *
+     * 提出来的理由不是"少写几行"：两份 shim 的落位要求**逐字相同**（原子写、字节一致不动盘、
+     * 空文件拒收、失败给原文），而其中任何一条漏在第二份上，症状都是「平时没事、某次更新后
+     * Node 起不来」—— `--require` 到一个半截 `.cjs` 是 SyntaxError，比缺文件难查得多。
+     * 两份各写一遍就迟早只改一份。
+     *
+     * @param what 失败原因里的人话主语（"child_process 拦截 shim" / "T1 桥 shim"）。
+     */
+    internal fun deployResource(resourcePath: String, target: Path, what: String): Deploy {
+        val bytes = try {
+            NpmSpawnGate::class.java.getResourceAsStream(resourcePath)?.use { it.readBytes() }
+        } catch (t: Throwable) {
+            return Deploy.Failed("$what 资源读取失败（$resourcePath）：${t.message}")
+        } ?: return Deploy.Failed("$what 资源缺失（$resourcePath 不在 classpath 上）")
+        // 空字节不落盘：0 字节 .cjs 被 --require 是 SyntaxError，把「没落上」变成「Node 起不来」。
+        if (bytes.isEmpty()) return Deploy.Failed("$what 资源为空（$resourcePath）")
+
         return try {
             if (!Files.isRegularFile(target) || !Files.readAllBytes(target).contentEquals(bytes)) {
                 writeAtomic(target, bytes)
             }
             Deploy.Ready(target)
         } catch (t: Throwable) {
-            Deploy.Failed("child_process 拦截 shim 落盘失败（$target）：${t.message}")
+            Deploy.Failed("$what 落盘失败（$target）：${t.message}")
         }
     }
 
