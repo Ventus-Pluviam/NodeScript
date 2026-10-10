@@ -12,6 +12,53 @@
 
 ---
 
+## 59. Shizuku 反射面与 R8 keep 规则必须机械化对齐，且「门必须先自己红一次」（2026-10-10，批 89）
+
+**背景**：2026-10-09 那次真机 bug 的形态是「**保错的那条规则正好掩盖了跑错的那条**」——
+`proguard-rules.pro` 保的是 `rikka.shizuku.ShizukuRemoteProcess.waitForTimeout(long, TimeUnit)`，
+而真跑的路径反射的是 `moe.shizuku.server.IRemoteProcess.waitForTimeout(long, String)`。
+两条规则分居两个模块（反射面在 `:platform:capabilities` 的 `ShizukuInput`，keep 在 `:app`），
+中间**没有任何机械联系** —— 谁都不知道对方改了没有。外审据此提了「加守卫 test」。
+
+**六裁定**：
+
+1. **做门，且判据是「集合相等」不是「包含」**。三条：类名集合相等 / 方法
+   `(名字, 参数表)` 集合相等 / keep 的每条签名在真类上 `getMethod` 真解析一遍。
+   **双向都红**：只在 keep = 死规则（保了不再反射的类，2026-10-09 那条正是此形态），
+   只在源 = 反射了没保（release 上静默失效，而 **debug 不过 R8，本机全绿**）。
+
+2. **参数表是判据的一部分，不能只比名字**。2026-10-09 那个 bug 的名字是对的、签名是错的 ——
+   只比名字的守卫在它面前**照样绿**。同理，判据 1/2 只证明两边**彼此一致**，不证明它们**对**，
+   所以还要判据 3 在真类上真解析一遍（AIDL 接口在 JVM 单测类路径上真能加载，
+   `dev.rikka.shizuku:aidl` 是传递依赖 —— 实测三件 `Class.forName` 全 OK）。
+
+3. **否决「把三个 AIDL 接口 `{ *; }` 化」**（外审原提议的一半）。`{ *; }` 会让判据 2 退化成
+   **恒真**，而那张显式方法表本身就是「本应用反射了哪几个方法」的**唯一文档**。
+   保住表、用门让它自维护，比删掉表换一个恒真的门强。常量池扫描也否决：这里要的是
+   `(名字, 参数表)`，参数表在字节里只剩描述符，与 keep 规则的源码语法对不上。
+
+4. **解析 proguard 文件前必须剥注释行**。本文件里有一段注释**逐字引用**了 2026-10-09 删掉的
+   那条 `ShizukuRemoteProcess` 规则 —— 不剥就会被当成活规则。门第一次跑出来的就是这条**假红**
+   （报「保了不再反射的类」）。**注释里逐字引用的历史规则是一条会骗过解析器的活规则**。
+
+5. **读文件的测试必须把那个文件声明成 Gradle 任务输入**。Gradle 看不见测试代码里那次
+   `Files.readAllBytes`：不声明则改完 keep 规则 `:app:testDebugUnitTest` 照样 `UP-TO-DATE`、
+   门**静默不跑**（2026-10-10 实测复现）。**一道永远绿的假门比没有门更坏** —— 这条与
+   `check-doc-links.sh` 的「扫到 0 条也红」、nightly 的 `check-e2e-ran.sh` 是同一条纪律，
+   只是这次漏在了 Gradle 的增量判定上。
+
+6. **门必须先自己红一次才算立住**。本批反证三条（各自命中，改回即绿）：签名改 `TimeUnit` /
+   整条删 `IRemoteProcess` 的 keep / 源集加一处新反射不保。这与 2026-10-09 那条
+   `ArchitectureTest` 常量池门的教训同形（当时只找斜杠形态，新抄一份 `Class.forName` 照样绿）。
+
+**边界（明写，不当已办）**：本门只覆盖 `ShizukuInput` ↔ `proguard-rules.pro` 这一对。
+另两处反射不在门里 —— `:app` 的 `Class.forName(component.className)`（保的是本仓自己的
+`MainActivity`）与 `:engine:node-process` 的 `Process::class.java.getMethod("pid")`
+（保的是 `java.lang.Process`，平台类不参与收缩）。要一并机械化得先有「反射点 → 期望 keep」
+的共享清单，当前三处形态各异，硬凑一张表只会多一处会漂的事实来源。
+
+---
+
 ## 58. 控制台 shell 面：必须显式进模式，且 `adb` 档 = Shizuku（2026-10-09，批 88）
 
 **背景（用户口径，逐字）**：「也需要让控制台能执行 shell」+「root 执行二进制需要输入 `su` 进入
@@ -1616,6 +1663,8 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
 
 | 原口径 | 出处 | 处置 | 日期 |
 |---|---|---|---|
+| 「外审第 1 条（Shizuku 阻塞调用跑在 `Dispatchers.Main`）与『首次 `input tap` 挂 30s』是**两件各自独立**的事，后者只有冷置后的第 1 条挂」 | `docs/design-status.md` 2026-10-09 流水段 + `PlatformWiring.kt` 注释（`92e2461`） | **两条都推翻**（2026-10-10 真机对照实验）：打进**应用自己的窗口**时**每一条都挂**（连续 6 条 32.4 / 32.5 / 33.8 / 32.4 / 32.4 / 32.4 s，全部 `超时 30000ms`），且机理**就是**外审第 1 条那件事 —— `input` 默认 `INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH`，事件投进哪个窗口就要等那个窗口处理完；主线程正卡在 `IRemoteProcess.waitForTimeout` 上收不了 → 陪等到 30s。目标窗口**不属于本进程**时不受影响（`input tap 5 5` 打状态栏实测 2.6 s）。证据 = `ANR … Input dispatching timed out (Waited 5005ms for KeyEvent … ENTER(66))` + `/data/anr/anr_2026-10-10-07-13-35-268` 的 main 线程栈与那条链逐帧吻合。注释已改正（`c59600f`），台账按只追加纪律原地保留原文 | 2026-10-10 |
+| 「`input tap` 的延迟是 2.4–2.5 s」 | 2026-10-10 会话中报出的测量值 | **是测量工具的成本，不是 tap 的成本**：那圈循环每次跑 `uiautomator dump`，光它自己就 ~2.2 s（`adb exec-out screencap` ~1.5 s 同理）。改设备侧自带时间戳（`awk` 算 epoch 差，不经过 adb 轮询）后：打应用窗口 0.042–0.046 s、打状态栏 0.038–0.043 s、经 Shizuku 控制台跑同样一条 0.053–0.081 s；回车 → 命令真的开跑 0.08 s。**与「绝对 ms 不是常量」同一条教训的第二次现形**：带探针的测量必须先扣掉探针自己的成本 | 2026-10-10 |
 | `TM_CCORR_NORMED` | §7.7 表 + `:domain` KDoc | 改 `TM_CCOEFF_NORMED`（CCORR 在「画面里没有模板」时 max 仍 +0.955，阈值 0.9 直接误判命中） | 2026-09-25 |
 | APK ≤ 40MB | §15 表 | 实测推翻：jniLibs 三件套未压缩 ≈92MB（ICU `zh,en` 后；此前 ≈81MB）；OpenCV 面仅 7.0 MiB、不是超支原因。三条出路见本文件「仍待拍板」第 7 项旁的 §15 记账。**2026-10-07 重定：预算改 `≤ 150MB release`，见本文件第 41 项**（原行不删，只就地标注） | 2026-09-25 |
 | 「屏幕帧→native 0 拷贝」链路可走 | §7.7 表 | 两缝帧不通用，脚本当前走不通；数字是「链路通了之后」的口径。出路已拍板 (b) 两缝共用帧表 | 2026-09-25 |

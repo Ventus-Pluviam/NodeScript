@@ -1,5 +1,23 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-10 追记（批 89：外审「守卫 test」那条已做 —— 就地销账）
+
+- **外审第 2 条（Issue Two）「`RemoteProcessApi` 的反射方法与 `proguard-rules.pro` 的
+  `-keep` 对齐，当前靠人工同步」—— 已做，本条销账**。落点是 `:app` 的
+  `ShizukuKeepRuleTest`（三条判据双向比，见 [`log/2026-10-10.md`](log/2026-10-10.md)），
+  不是原提议的「跨模块读 `:app` 的文件 + 把三个 AIDL 接口 `{ *; }` 化 / 常量池扫描」——
+  **`{ *; }` 化被否**：那样「方法集合相等」这条判据退化成恒真，而那张显式方法表本身就是
+  「本应用反射了哪几个方法」的唯一文档；保住表、用门让它自维护，比删掉表换一个恒真的门强。
+  常量池扫描也**没用**：这里要的是 `(名字, 参数表)`，参数表在字节里只剩描述符，与 keep
+  规则的源码语法对不上，得先反解一遍，比直接读源码脆（同模块那条 Shizuku 门读字节是因为
+  它只要「提到过 Shizuku」这一个布尔）。
+- **守卫的覆盖边界（仍靠人工的两处，风险面已判为更小）**：`:app` 的
+  `Class.forName(component.className)`（launcher Activity）与 `:engine:node-process` 的
+  `Process::class.java.getMethod("pid")` 不在本门里 —— 前者保的是 `com.autoscript.ui.MainActivity`
+  （本仓自己的类，`-keep` 与源码同仓可见），后者保的是 `java.lang.Process`（平台类不参与
+  收缩，名字不会变）。真要一并机械化，得先有一份「反射点 → 期望 keep」的共享清单，
+  那是另一件事（当前三处形态各异，硬凑一张表只会多一处会漂的事实来源）。
+
 - **外审建议（2026-10-09，未做，登记）**：`IShizukuService`/`IRemoteProcess` 其实**就在
   编译类路径上**（`dev.rikka.shizuku:aidl` 是 `api` 的传递依赖，`implementation` 收得到，
   实测 `:platform:capabilities:dependencies --configuration debugCompileClasspath` 可见）。

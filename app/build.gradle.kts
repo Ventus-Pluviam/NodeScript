@@ -122,6 +122,14 @@ android {
         unitTests {
             all {
                 it.useJUnitPlatform()
+                // ShizukuKeepRuleTest 读 `app/proguard-rules.pro`（反射面 ↔ R8 keep 的对齐门）。
+                // **必须声明成输入**：Gradle 看不见测试代码里那次 `Files.readAllBytes`，
+                // 不声明的话改完 keep 规则该任务照样 UP-TO-DATE、门静默不跑 ——
+                // 一道永远绿的假门比没有门更坏（2026-10-10 实测：改 keep 后任务
+                // UP-TO-DATE，测试压根没执行）。
+                it.inputs.file(layout.projectDirectory.file("proguard-rules.pro"))
+                    .withPropertyName("proguardRulesForKeepAlignmentTest")
+                    .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
                 // P0 回环（P0LoopbackTest）拉真 npm 进程：CI 走 -PskipNpmE2E 排除
                 // （与 :app-service:npm 的 HostNodeNpmE2ETest 同一条纪律；
                 // 本机闭环不带该 flag 即跑）。
