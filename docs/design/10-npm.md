@@ -102,8 +102,39 @@
    订阅方无从裁决那次到底成没成。执行侧收尾复查 `cancelled`，已取消则**不采纳**结果；
    catch 分支只在还没发过终态时补发。
 
-**仍未落**：spawn 桥本体（stdio 假管道、pgrp 杀树、node-shim PIE 与 PATH 注入）——
-上面第 3 段是它的**接缝**，不是它的实现。
+~~**仍未落**：spawn 桥本体（stdio 假管道、pgrp 杀树、node-shim PIE 与 PATH 注入）——
+上面第 3 段是它的**接缝**，不是它的实现。~~ **桥本体已落（2026-10-10，批 91）**，
+逐件对照见下方「已落（2026-10-10，T1 下半段）」；**仍未落**的是 node-shim PIE 与 PATH
+注入（属 §10.3 表里 T2 那条，本批未动）。
+
+**已落（2026-10-10，T1 下半段）**：**spawn 桥本体**（上表 T1 那行的实现）。
+链：npm 会话进程经 `NODE_OPTIONS=--require=<files/.autojs/npm-t1-bridge.cjs>` 注入桥 shim →
+`npm run <script>` / `npm exec <bin>` 发出的 `child_process.spawn("sh", ["-c", body])` 被 shim
+接住 → 经 unix domain socket 把 `{cmd,args,opts}` 报给 `:main` → 宿主起真进程 →
+stdout/stderr/退出码经同一条 socket 以**假管道**回填（`BridgedChild` 是宿主侧真进程在脚本
+进程里的本地投影：`stdout`/`stderr` 可读流、`stdin` 可写、`pid`/`exitCode`/`kill()` 齐全）。
+**七件落地物**：`npm-t1-bridge.cjs`（classpath 资源，与门禁 shim 同处 `files/.autojs/`）/
+`NpmT1Bridge`（socket 绑定 + 握手 + 逐帧派发 + 会话关断收尸）/ `T1Process.kt`（一个已放行的
+子进程）/ `NpmScriptExecutor`（一次 `npm run` = 一条 npm 会话进程；`scriptExecutor` 缝从此有值）/
+`:app` 的 `AndroidT1SocketBinder`（设备侧 `android.net.LocalServerSocket` + abstract 名）。
+**与本文上表 T1 行逐条对照，四处偏离**（口径见
+[`../design-decisions.md`](../design-decisions.md) 第 61 项，不在这里重述）：
+① 杀树用 `ProcessHandle.descendants()` 而非 `kill -- -<pgid>`（负 pgid 要求子进程没有自己的
+进程组，而 `sh -c` 之后是否另起进程组由 shell 与 ROM 决定）；**代价是孙子被 reparent 后链断**。
+② **不用引擎池**：本版起的是 `node <npm-cli.js> run <name>`，不是「沿 EnginePool 同路径拉
+临时引擎」—— 引擎池那条路要求「让引擎执行一段 JS」，而这里要执行的是 npm 自己。
+③ **不做最小 CapabilityMask**（§10.5-4）：脚本进程与 App **同 UID**；设备上没有可用的隔离
+手段（沙箱已裁），「最小能力」现在只能靠「宿主只跑它认得的那条命令」近似。
+④ **不做输出流式**（脚本 stdout 由 npm 自己捕获，宿主只拿摘要）、**stdin 转发不做背压**、
+**`signal` 恒 null**（Java 的 `Process` 不给信号号）。
+**两条 shim 互斥**：安装会话（T0）注门禁 shim（零 spawn），T1 会话**只注桥那一份** ——
+把门禁也注进去，T1 的每一次 spawn 都会先撞门禁，那不是更安全，是把刚接上的路又堵死。
+**同步三兄弟**（`spawnSync`/`execSync`/`execFileSync`）与 `fork` 如实 `ERR_NOT_IMPLEMENTED`
+（同步入口要阻塞事件循环等一次 socket 往返）；`detached:true` 在 shim 与宿主**各拒一次**
+（shim 不是安全边界，绕过之后那条判据不能跟着消失）。
+**守卫**：`T1BridgeNodeTest` 7 例（真 node，不经 npm）/ `T1BridgeE2ETest` 4 例（真 npm 全链）/
+`T1ProcessTest` 5 例（替身）。**边界**：真机行为未验（`AndroidT1SocketBinder` 的 abstract 名
+与 Node 的 `net.connect({path:"\0name"})` 是否真能对上，本机验不到）。
 
 **已落（2026-10-09，T0 面）**：**强制注入的 child_process 拦截 shim**（上表 T0 末行 /
 §10.12 末行那条「零 spawn 不变量漂移」）—— `NpmSpawnGate` 把 `npm-spawn-gate.cjs`
@@ -398,6 +429,9 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
      `ERR_NOT_IMPLEMENTED`。两条都如实，且都在 ECHO 行之后抛出 —— 用户看得见自己敲的那行。
      **审批 ≠ 执行**：门禁只入队不排队命令，批完要**重敲那一行**（这条写进了 `runScriptOps` 的 KDoc
      与界面回执，别让用户以为批完就会自己跑）。
+     ~~**获批但 T1 spawn 桥未接** → `ERR_NOT_IMPLEMENTED`~~ **该分支自 2026-10-10（批 91）起
+     不再命中**：桥本体已落（见 §10.3「已落（2026-10-10，T1 下半段）」），获批的那条命令
+     现在真跑。**未获批那条不变**（`ERR_PERMISSION_DENIED` + 请求入队）。
    - **门禁强度不取决于入口**：控制台敲 `npm install axios` 与依赖面板装同一个包，走的是**同一套**
      装前多镜像交叉校验（§10.5-1）、磁盘预检/配额/项目锁/全局安装会话。入史那一栏只记**子命令**
      而不是完整 argv —— 审计表要长期留存，而用户手敲的 argv 可能夹着凭据形态的参数
@@ -425,10 +459,15 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
      跑完、子页在前台时一直跟 —— 原先每个读口都是"进页面 / 手动刷新时取一次"，而宿主是
      入队即返回的，两者合起来就是"敲完什么都不动"。**刻意不用**宿主的 `progress` SharedFlow：
      它没有重放，晚到的订阅者永久丢那一批，而"切进来时命令已经跑了一半"正是常态。
-   - **未落**：shell 引号解析、`npm config`/`publish` 一类子命令（白名单外）、T1 spawn 桥本体
-     （`scriptExecutor` 仍缺，§11.2 T2）、命令的**取消**（`NpmConsoleHandle` 与 `InstallHandle`
-     刻意分开，故没有 `cancel()`）、`HistoryRow` 的**上下键翻历史**（本批只做了点选 ——
-     触屏上没有"上下键"，真要做的是长按/滑动，那是另一件事）。
+   - ~~**未落**：shell 引号解析、`npm config`/`publish` 一类子命令（白名单外）、T1 spawn 桥本体
+     （`scriptExecutor` 仍缺，§11.2 T2）~~ **T1 spawn 桥本体已落（2026-10-10，批 91）** ——
+     上一条的「获批但桥未接」分支随之作废。**仍未落**：shell 引号解析、
+     `npm config`/`publish` 一类子命令（白名单外）、命令的**取消**（`NpmConsoleHandle` 与
+     `InstallHandle` 刻意分开，故没有 `cancel()`；桥那侧 `BridgedChild.kill()` 目前只置位、
+     不发 kill 帧，单条子进程的取消靠会话关断时的 `reap()` 兜底）、T1 脚本输出的**流式**
+     （脚本 stdout 由 npm 自己捕获，控制台只看得到摘要 —— 批 90 的流式覆盖的是宿主自己起的
+     npm 会话）、`HistoryRow` 的**上下键翻历史**（本批只做了点选 —— 触屏上没有"上下键"，
+     真要做的是长按/滑动，那是另一件事）。
 4. **离线包导入**：SAF 选择（tarball / lock+cacache bundle / 快照 node_modules.zip）→ 验签 → 队列安装；另提供「从内置精选缓存离线装 axios/dayjs/…」。`node_modules.zip` 导入**仅限高信任项目**，签名锚定 `HMAC(应用密钥, lock.sig + zip.sha256)`；市场脚本一律拒绝该格式（走 reify 产出 integrity）。
    **体积上限（2026-10-06，backlog B12）**：cacache bundle 解包前先卡**整包** 512 MiB（判据是文件系统上的字节数，不是 zip 声明的数），解包中逐条目卡 64 MiB —— 单条目读到顶即停、不入缓存。上限**整包拒收**（不截断、不返回部分结果）并回 `ERR_INVALID_PARAM`（「选错了文件」是可诊断的参数问题，不是 `ERR_FILE_NOT_FOUND`）。理由：这条路径收的是用户从 SAF 递进来的外部文件，**用户可能只是选错了**（视频、系统镜像、整个 Downloads 打成的一个包），而解包器在读到顶之前没有任何自然的停止点。
 5. **包大小管理页**：per-project `node_modules` + `npm-cache` 尺寸（Kotlin 遍历）+ 配额条（80%黄/100%拦）→ 一键 prune/dedupe/ci 重装/cache clean；明确标注 node_modules 计入系统「App 数据」。
@@ -474,7 +513,9 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 
 - **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警 + 审批卡 UI（仅请求）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；
   依赖面板 + `auto.npm` 核心 API；打包向导 node_modules 入包。
-- **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ **lifecycle 脚本真实执行**（§18 第 7 项 2026-09-26 口径：安装时让用户自己选跑不跑，不设出厂卡口，也**不是**"审批通过才跑"的流）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；~~npm 终端视图~~ **已落地（2026-10-09 批 84；2026-10-10 批 90 补齐"活着"三件）**：控制台改做命令面，白名单子命令 + `npm run`/`npx` 照实接线到 T1 门禁；输出粒度 = **真流式 stdout（批 90 已落）** + npm 输出尾部（摘要面，两条并存且流报过就不补尾部）+ 事件流；批 90 同批补上常驻进度推送与命令历史落盘 —— 见 §10.9 第 3 条；
+- **P1**：~~spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）~~ **桥本体已落
+  （2026-10-10，批 91；四处偏离见 §10.3「已落（2026-10-10，T1 下半段）」—— 引擎池那条路、
+  最小 CapabilityMask、输出流式、负 pgid 杀树仍缺）** + **lifecycle 脚本真实执行**（§18 第 7 项 2026-09-26 口径：安装时让用户自己选跑不跑，不设出厂卡口，也**不是**"审批通过才跑"的流）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；~~npm 终端视图~~ **已落地（2026-10-09 批 84；2026-10-10 批 90 补齐"活着"三件）**：控制台改做命令面，白名单子命令 + `npm run`/`npx` 照实接线到 T1 门禁；输出粒度 = **真流式 stdout（批 90 已落）** + npm 输出尾部（摘要面，两条并存且流报过就不补尾部）+ 事件流；批 90 同批补上常驻进度推送与命令历史落盘 —— 见 §10.9 第 3 条；
   在线 audit + audit signatures + OSV 离线；`offlineGap` + 种子金标准测试。（原「QuickJS 白名单库独立 vendored」随第 1 项裁掉。）
 - **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；native 依赖 **wasm 方案**（2026-09 拍板）：
   优先取上游 wasm 构建（`esbuild-wasm`、`argon2-wasm`、sql.js 等——Node 内置 `WebAssembly`，无 ABI/无 dlopen、一份全平台、随 bundle 离线送达），无 wasm 产物的回落纯 JS 替代/

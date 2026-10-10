@@ -1,5 +1,45 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-10 追记（批 91：T1 spawn 桥本体落地 —— npm P1 剩余件换了一批）
+
+- **`scriptExecutor`（T1 spawn 桥本体）已落，本条销账**。落点：`npm-t1-bridge.cjs` +
+  `NpmT1Bridge` + `T1Process` + `NpmScriptExecutor` + `:app` 的 `AndroidT1SocketBinder`，
+  口径见 [`design-decisions.md`](design-decisions.md) 第 61 项，流水见
+  [`log/2026-10-10.md`](log/2026-10-10.md)。**批 84 那条「获批但 T1 spawn 桥未接 →
+  `ERR_NOT_IMPLEMENTED`」的如实接线，从今天起不再命中**（未获批那条不变，仍
+  `ERR_PERMISSION_DENIED` + 请求入队）。
+- **销账时把「批 80 记的那条为何验不到」一并订正**：当时记的理由是「`:app` 的 JVM 单测里
+  没有脚本引擎，且 `main.cpp` 把 node argv 写死（`node [-e BOOTSTRAP --] <script> <args>`），
+  Kotlin 侧注入不了 `--require`，要真做先得让 T1 会话进程有可注入的 argv 面 + 一个能在 JVM
+  测试里跑的假引擎」。**实测不成立**：T1 会话进程**不是** `NodeProcessEngine` 起的那个引擎
+  进程，而是 `NpmScriptExecutor` 自己 `ProcessBuilder` 起的 `node <npm-cli.js> run <name>`
+  —— 它的 argv 与 env 全在本模块手里，`--require` 直接经 `NODE_OPTIONS` 注入即可，
+  **不需要动 `main.cpp`、也不需要假引擎**。当时那条推论把「T1 会话进程」与「脚本引擎进程」
+  当成了同一个东西（§10.3 T1 原文「沿 EnginePool 同路径拉临时引擎」正是那个混淆的来源 ——
+  见决策第 61 项 ⑧）。
+- **npm P1 剩余件换了一批**（原「只剩 `scriptExecutor` 一件」不再成立）：
+  1. **引擎池那条路**（§10.3 T1 原文的形状）：本版起的是 npm 自己而非引擎，
+     TTL / 看门狗 / 槽位账由协调器与执行体各自承担 —— 统一到引擎池是后续件。
+  2. **最小 CapabilityMask**（§10.5-4）：脚本进程现与 App **同 UID**，设备上无可用隔离手段
+     （QuickJS 沙箱已裁）。这条是 T1 承诺面里**唯一还完全没兑现**的一条。
+  3. **T1 输出的流式**：脚本 stdout 由 npm 自己捕获，宿主只拿摘要 —— 控制台看不到脚本的
+     逐行输出（批 90 的流式只覆盖宿主自己起的 npm 会话）。
+  4. **命令的取消**：`NpmConsoleHandle` 与 `InstallHandle` 刻意分开，故无 `cancel()`；
+     桥这一侧 `BridgedChild.kill()` 目前只置 `killed` 位、**不发 kill 帧**（宿主侧真杀由会话
+     关断时的 `reap()` 兜底）—— 单条子进程的取消是后续件。
+  5. **`signal` 恒 null**：Java 的 `Process` 不给信号号（`exitValue()` 对信号终止给的是
+     128+n 那个约定值），脚本侧拿到的 `signalCode` 因此恒为 null —— 与真 `child_process`
+     在「被信号杀死」这一档上不同。要真做得上 `/proc` 或 JNI。
+  6. **杀树的洞**：用 `ProcessHandle.descendants()` 而非 `kill -- -<pgid>`，孙子进程被
+     reparent 给 init 后链就断（决策第 61 项 ⑤）。补法要么上负 pgid（依赖「子进程没有自己的
+     进程组」这个不可靠前提），要么会话关断时按 `/proc` 同 UID+PPID 链二次收割（§10.3 原文
+     提过的那条）—— 后者更实，未排期。
+  7. **stdin 转发不做背压**、**同步三入口（`spawnSync`/`execSync`/`execFileSync`）不支持**
+     （要阻塞事件循环等一次 socket 往返）。
+- **真机验证**：T1 桥全链（含 `AndroidT1SocketBinder` 的 abstract 名与 Node 的
+  `net.connect({path:"\\0name"})` 是否真能对上）**本机验不到**，归入「真机验证积压」，
+  不单列条目号。
+
 ## 2026-10-10 追记（批 89：外审「守卫 test」那条已做 —— 就地销账）
 
 - **外审第 2 条（Issue Two）「`RemoteProcessApi` 的反射方法与 `proguard-rules.pro` 的

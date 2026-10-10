@@ -1,5 +1,25 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-10，批 91）
+
+- [2026-10-10 · 批 91：T1 spawn 桥本体（`npm run` / `npx` 第一次真跑起来）](2026-10-10.md)：
+  批 88/89 的审批卡、批 90 的流式输出到这一步之前全断在同一处（`scriptExecutor` 是
+  `Unavailable`，获批后仍得 `ERR_NOT_IMPLEMENTED`）—— **npm P1 里唯一还挡着用户动作的一条**。
+  链：npm 会话进程 `--require` 桥 shim → `npm run` 发 `spawn("sh",["-c",body])` → shim 经
+  unix socket 报给宿主 → 宿主起真进程 → stdio/退出码以**假管道**回填。只放行异步三兄弟
+  （同步三兄弟与 `fork` 如实 `ERR_NOT_IMPLEMENTED`），`detached:true` 当场拒。
+  **两条 shim 互斥**：安装会话注门禁（零 spawn），T1 会话**只注桥那一份**。
+  **本批最贵的一课**：`Channels.newInputStream/newOutputStream` **共用 `blockingLock()`**，
+  读线程抱着锁阻塞 → 写线程永远拿不到锁，**双向协议被自己的流包装锁成单向**，症状是两类
+  测试双双挂死而 `jstack` 里只有 `BLOCKED`、报错面只有「超时」；改用直读 `SocketChannel`
+  （自带分开的读/写锁）即全绿。同批修两处同源静默挂死：握手帧不能走 `send`（会排队等
+  `ready`，而 `ready` 等 `helloAck` —— 死锁）、会话 socket 无在途子进程时必须 `unref`
+  （常驻 socket 吊住事件循环，npm 永不退）而有在途时必须 `ref`（`refWhileBusy()`）。
+  守卫 16 例（真 node 7 / 真 npm 4 / 替身 5）；T1 两类**不设 `assumeTrue`**（E2E 那条是
+  全仓唯一证明「npm 真走桥」的用例，跳过 = 静默丢覆盖）。**欠账如实记**：不用引擎池、
+  不做最小 CapabilityMask（同 UID）、不做输出流式、`signal` 恒 null、孙子被 reparent 后
+  杀树链断。**边界**：真机未验。
+
 ## 最新追记（2026-10-10，批 90）
 
 - [2026-10-10 · 批 90：控制台「活着」三件（真流式 stdout + 常驻进度推送 + 命令历史落盘）](2026-10-10.md)：
@@ -245,8 +265,9 @@
 **一条一行、只留摘要与指针**：完整叙事在切片文件里，这里不复述。
 （本表与切片文件的 `###` 标题一一对应，条数写在每个日期的小标题里。）
 
-### [2026-10-10](2026-10-10.md)（2 条，最新在最上）
+### [2026-10-10](2026-10-10.md)（3 条，最新在最上）
 
+- 批 91：T1 spawn 桥本体 —— `npm run`/`npx` 第一次真跑起来（shim 经 unix socket 把 spawn 报给宿主、宿主起真进程、stdio 假管道回填；只放行异步三兄弟，`detached` 当场拒；两条 shim 互斥）。最贵的一课：`Channels.newInputStream/newOutputStream` 共用 `blockingLock()` → 双向协议被流包装锁成单向（挂死且报错面只有「超时」），改直读 `SocketChannel` 即绿；同批修握手死锁与 socket 保活（`refWhileBusy`）。守卫 16 例；欠账如实记（不用引擎池 / 无最小掩码 / 无输出流式 / 杀树有洞）
 - 批 90：控制台「活着」三件 —— 真流式 stdout（读流线程 + `OutputSink` 缝；流真报过就不补 `outputTail` 行；空行跳过）+ 常驻进度推送（`:ui` `LivePoll.pollWhile`，提交后跟到跑完 / 子页在前台时一直跟；刻意不用无重放的 `progress` SharedFlow；有界 + 只依据宿主给的事实 + 每轮同一读口）+ 命令历史落盘（`ConsoleHistory`，与审计史纪律相反、按项目分开、凭据形态的行整条不记、写口在 `:ui` 派发点）；同批修「`events.tryEmit` 没经 `emit`」—— 执行体独有的 `DOWNLOAD`/`REIFY` 从未进事件环（探针测出，反证会红）
 - 批 89：Shizuku 反射面 ↔ R8 keep 对齐门（`ShizukuKeepRuleTest`，三条判据双向比；先剥 proguard 注释行、`proguard-rules.pro` 声明成测试输入 —— 不声明则门静默不跑，实测复现；反证三条各自命中）+ 「`input tap` 挂 30s」成因订正（真机对照实验推翻「两者各自独立 / 只有冷置第 1 条挂」：打进应用自己窗口时每一条都挂，6 条 32.4–33.8 s；机理同一件事）+ 测量口径订正（延迟 2.4–2.5 s 是 `uiautomator dump` 的成本，设备侧 tap 本身 0.038–0.081 s）
 
