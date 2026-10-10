@@ -12,6 +12,107 @@
 
 ---
 
+## 61. T1 spawn 桥：进程怎么起、凭据怎么给、杀树为什么不走负 pgid（2026-10-10，批 91）
+
+**背景**：§10.3 T1 从立项起就写着「批准后脚本要 spawn」，而设备上没有可用的
+`child_process`（Node-on-Android 不带它）。§10.3 给的形状是「`--require` 注入 shim →
+桥 → `:main` 起进程 → stdio 假管道」，本批把它落了。落地时冒出一批**形状里没写、
+但必须当场拍**的问题，逐条记在这里。
+
+**① 桥住 `:app-service:npm`，不住 `:bridge:java`**。两者**长得像**（都是 unix socket +
+newline 帧 + `hello`/token），但服务的是两件事：`:bridge:java` 是**脚本 ↔ 宿主**
+（`BridgeRouter`/`RequestRegistry`/TSF，服务 `auto.*` 命名空间调用），本条是
+**npm 会话 ↔ 宿主**（把一条 spawn 变成一次宿主进程）。生命周期也不共用：这条随**安装
+会话**生灭，那条随 **run** 生灭。更硬的理由是依赖方向 —— `:app-service:npm` 的
+`ArchitectureTest` 禁 `com.autoscript.bridge..`，把 npm 的 T1 塞进 `:bridge:java` 会让
+「桥模块知道 npm 的 T1」成为事实。**握手帧的形状仍与 `BridgeHandshake` 刻意逐字同形**
+（`{"t":"hello","v":1,"token":"<64hex>"}` / `helloAck` / `helloErr`）：两份实现各自独立，
+但读的人一眼认得出是同一族协议，将来若要合并不必改线上格式。
+
+**② 凭据与 socket 名在「起 npm 会话之前」定，会话对象分两段（bind → start）**。
+两个值要经 env 交给 shim，而 shim 是 npm 会话起来那一刻就 `require` 的 —— 合成一步
+（`open()` 就阻塞接客）会让 `open()` 等一个可能永远不来的连接。故 `T1SessionHandle`
+是「先 bind、后 start」。
+
+**③ socket 的「对端该连的串」由绑定方给（`BoundSocket.connectTarget`），不由调用方拼**。
+桌面绑的是**文件系统路径**（`$TMPDIR/autoscript-t1-<name>.sock`），Android 绑的是
+**abstract 名**（`LocalServerSocket` + `"\0" + name`）。让调用方按「名字」拼一次，
+桌面侧就会拼出一条不存在的相对路径 —— **实测症状是 `connect ENOENT com.autoscript.t1.xxxx`，
+而报错里那个串看起来完全正常**。
+
+**④ 设备侧必须走 `android.net.LocalServerSocket`**：JDK 17 的
+`UnixDomainSocketAddress.of(Path)` **拒 NUL 前缀**（`InvalidPathException: Nul character
+not allowed`，本机实测），故它绑不了 abstract namespace；而 app 私有目录下的**路径型**
+socket 在 Android 上不可靠（`sun_path` 108 字节上限、残留文件、厂商 ROM 的挂载方式）。
+`:app` 的脚本桥（`AndroidBridgeBinder`）早就这么选，本件是同一个决定的第二处落点。
+代价是桥的抽象停在**流对**（`AcceptedT1Connection`）而不是 `SocketChannel` ——
+`LocalSocket` 不是 `SocketChannel`，若抽象成后者，设备侧就只能靠一层假 channel 去凑。
+
+**⑤ 杀树用 `ProcessHandle.descendants()`，不用 `kill -- -<pgid>`**（与 §10.3 T1 原文
+不同，**这是一次口径偏离，如实记**）。理由是可靠性而非省事：负 pgid 那条路要求子进程
+**没有**自己的进程组，而 `sh -c` 之后的东西是否另起进程组由 shell 与 ROM 决定
+（`setsid`/job control 在部分 ROM 上默认开）—— 一条「大多数情况下对」的杀树，漏掉的那次
+留下的正是最难查的孤儿。`descendants()` 走 `/proc` 的父子链，与「谁把谁生出来」这个事实
+同源。**它也有自己的洞**：孙子进程若被 reparent 给 init（父先死），链就断了 ——
+那正是负 pgid 想兜的那一类，**本版没兜住**，登记为欠账。
+
+**⑥ 两条 shim 互斥，`NODE_OPTIONS` 在 T1 会话里只注桥那一份**。安装会话（T0）要的是
+「零 spawn」（`npm-spawn-gate.cjs` 一律拒），T1 会话要的恰恰是「spawn 走桥」。两份都注的
+话，T1 的每一次 spawn 都会先撞门禁 —— 那不是更安全，是把刚接上的路又堵死。两份 shim 的
+**落位要求逐字相同**（原子写、字节一致不动盘、空文件拒收、失败给原文），故共用
+`NpmSpawnGate.deployResource`；两份各写一遍迟早只改一份，而漏掉的那条的 symptom 是
+「平时没事、某次更新后 Node 起不来」。
+
+**⑦ `detached:true` 双侧各拒一次（shim 一次、宿主一次），是刻意的**。shim 自己
+KDoc 里写着「本件不是安全边界」（已获批脚本可 `delete require.cache` 绕过），
+绕过之后那条判据不能跟着消失。
+
+**⑧ 本版**不**用引擎池**（§10.3 T1 原文写「沿 EnginePool 同路径拉临时引擎」）。
+引擎池那条路要求「让引擎去执行一段 JS」，而这里要执行的是 **npm 自己**（它要 require
+整棵 arborist 树），两者的 spawn 面不同。用引擎池的收益是统一的 TTL / 看门狗 / 槽位账 ——
+那些本版由协调器的 `withTimeoutOrNull` + 执行体的 `destroyForcibly` 承担。
+**这是一条真实的架构欠账**，不在这里假装。
+
+**⑨ 本版不做最小 CapabilityMask**（§10.5-4 明写「T1 脚本执行会话一律独立最小
+CapabilityMask」）。脚本进程与 App **同 UID** —— 设备上没有可用的隔离手段（QuickJS 沙箱
+已裁，见 `:engine:sandbox` 的摘除记录），故「最小能力」这一条现在只能靠**「宿主只跑它
+认得的那条命令」**来近似。同样如实记，不假装。
+
+**⑩ `Channels.newInputStream/newOutputStream` 不能用来包同一条 `SocketChannel`**
+（本批最贵的一课，探针测出来的）。两者**共用同一把锁**（`ch.blockingLock()`），而
+`ChannelInputStream.read` 是**抱着那把锁阻塞**的 —— 读线程一进 `readLine()` 等下一帧，
+写线程（子进程输出泵）就永远拿不到锁，一条**双向**协议被自己的流包装锁成了单向。
+症状是两类测试双双挂死（探针与 JVM 都停在各自的 `read` 上），`jstack` 里只有
+`BLOCKED (on object monitor)`，**没有一条报错指向锁**，报错面只有「超时」。
+`SocketChannel` 自己**本来就有分开的读/写锁**，直读它才是 JDK 那份包装想当然但没做到的事。
+
+**⑪ 会话 socket 的保活判据是「有没有在途子进程」**（`refWhileBusy()`）。一条常驻 socket
+是**活跃 handle**，会把 Node 事件循环吊住：npm 跑完脚本、打印完摘要，却因为这条连接还开着
+而**永远不退**（实测症状是 `npm run` 挂满 60s TTL 被强杀，而它其实早就干完了活）。但也不能
+一路 `unref`：退出码是**经这条 socket 回来**的，子进程还活着时 socket 不保活，事件循环会
+先一步排空、输出与退出码全丢。故**起了就 ref、全退完就 unref**。**这条不是优化，是正确性。**
+
+**⑫ 握手帧不走 `send`**。`send` 在 `!ready` 时排队，而 `ready` 恰恰要等宿主回
+`helloAck` —— 那条 Ack 永远不会来。实测症状是整条会话挂死，表现为 `npm run` 卡满 TTL 被
+强杀，**报错里一个字都看不出是握手没发出去**。
+
+**⑬ 同步三兄弟（`spawnSync`/`execSync`/`execFileSync`）与 `fork` 如实
+`ERR_NOT_IMPLEMENTED`**。同步入口要**阻塞事件循环**等一次 socket 往返，本版桥做不到 ——
+如实报不支持而不是假装跑过（§1 诚实原则）。`fork` 是 §10.3「明确不可行」那条，照旧拒。
+
+**⑭ 握手看门狗：`accept` 接到的可能是任何连上来的东西**，一个只连不发（或发半截）的对端
+会让读线程**永久**卡在 `read` 上，而这条会话占着 socket、占着一次执行。`T1Session` 自己
+设不了读超时（抽象停在 `InputStream`，设备侧 `LocalSocket` 与桌面 `SocketChannel` 设超时的
+手法不同），故由**持有连接的那一方关连接**来解除阻塞 —— 关连接是两种实现都认的唯一一种
+「叫醒它」。期限可注入，否则「连上不发 hello 会被收掉」这条用例要等 10 秒，
+而一条没人愿意等的用例迟早被关掉，那等于没有守卫。
+
+**⑮ `T1BridgeE2ETest` 不设 `assumeTrue`**（本仓 E2E 的通行做法是「环境不齐就诚实跳过」）。
+理由是**这一条不能是可跳过的**：它是全仓**唯一**证明「npm 真把 spawn 走到桥上」的用例
+（`T1BridgeNodeTest` 只证明桥自己是对的），而它既不在 `TestGuard.ENV_GATED` 里、也不在
+`check-e2e-ran.sh` 的验尸名单里 —— 于是 `assumeTrue` 一旦触发就是**静默丢掉这层覆盖**
+（Gradle 报 skipped，守卫那侧只有登记过的类才免红）。缺环境时红，才是如实。
+
 ## 60. 控制台「活着」三件：拉不推、流与尾部并存、历史与审计史纪律相反（2026-10-10，批 90）
 
 **背景**：用户口径是一句体验描述 ——「控制台从『现取一次』变成『活着』」。这句话底下是

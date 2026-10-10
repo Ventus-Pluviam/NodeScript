@@ -11,6 +11,10 @@ import com.autoscript.appservice.npm.NpmBridgeHandler
 import com.autoscript.appservice.npm.NpmShellKit
 import com.autoscript.appservice.npm.ShellOpExecutor
 import com.autoscript.appservice.npm.NpmSpawnGate
+import com.autoscript.appservice.npm.NpmT1Bridge
+import com.autoscript.appservice.npm.NpmScriptExecutor
+import com.autoscript.appservice.npm.ScriptOpExecutor
+import com.autoscript.appservice.npm.SocketT1Sessions
 import com.autoscript.appservice.runtime.EngineWatchdog
 import com.autoscript.appservice.runtime.ProcessMonitor
 import com.autoscript.appservice.runtime.UnavailableEngine
@@ -347,6 +351,9 @@ object AppShellKit {
                 lockKey = lockKey,
                 shellExecutor = shellExecutor,
                 consoleShellTimeoutMillis = consoleShellTimeoutMillis,
+                // T1 脚本执行体（2026-10-10 批 91）：素材 + 宿主 + 桥 shim 三条齐才有值，
+                // 缺一条保持 `Unavailable`（有审批票也如实 ERR_NOT_IMPLEMENTED）。
+                scriptExecutor = npmWiring!!.scriptExecutor,
             )
         } else {
             null   // 调用方自带 handler：本配方不参与，呈现面读口随之缺席（如实 null）
@@ -410,6 +417,13 @@ object AppShellKit {
         val cli: NpmCliDeployer.Outcome?,
         val cliFailure: String?,
         val gate: Path?,
+        /**
+         * T1 脚本执行体（2026-10-10 批 91）。缺省 [ScriptOpExecutor.Unavailable] ——
+         * **与 [executor] 独立**：安装会话与 T1 会话是两条链，一条接上不等于另一条接上
+         * （实测过的组合：CLI 在盘、宿主在、门禁 shim 落位失败 → 安装链 fail closed，
+         * 而 T1 链本来就不该用门禁 shim）。
+         */
+        val scriptExecutor: ScriptOpExecutor = ScriptOpExecutor.Unavailable,
     )
 
     /**
@@ -430,6 +444,10 @@ object AppShellKit {
         source: NpmCliDeployer.CliSource?,
         host: String?,
         gateDeploy: (Path) -> NpmSpawnGate.Deploy,
+        /** T1 桥 shim 的落位缝（与 [gateDeploy] 同形；测试注入失败验 fail closed）。 */
+        t1ShimDeploy: (Path) -> NpmSpawnGate.Deploy = { NpmT1Bridge.deployShim(it) },
+        /** T1 桥的 socket 绑定缝；缺省 = JDK unix domain socket（设备侧由装配层换 abstract）。 */
+        t1Binder: NpmT1Bridge.SocketBinder = NpmT1Bridge.fileSystemBinder(),
     ): NpmWiring {
         if (source == null) {
             return NpmWiring(HeavyOpExecutor.Unavailable, null, "无素材来源（assets/npm 未随包）", null)
@@ -450,6 +468,10 @@ object AppShellKit {
                 null,
             )
         }
+        // T1 脚本执行体（2026-10-10 批 91）：**与安装链并列、条件不同**。
+        // 安装链要门禁 shim（零 spawn），T1 链要桥 shim（spawn 走桥）—— 两者互斥，
+        // 故不共用"三条齐"那条判据，也不因门禁 shim 落位失败而一起缺席。
+        val t1 = wireT1Executor(filesDir, deployed.cliJs, host, t1ShimDeploy, t1Binder)
         // child_process 拦截 shim（§10.11 P0 承诺面 / §10.12 末行「零 spawn 不变量漂移」）：
         // **只有真要去起 CLI 时才落**（没宿主 = 本来就没有安装会话可守，落一个没人 require
         // 的 .cjs 是噪声）。落位失败 → **不注入执行体**：静默降级成「装是能装、守卫没了」
@@ -473,14 +495,50 @@ object AppShellKit {
                     // 与 InstallCoordinator.resolveRegistry 的两层链同源。
                     userConfig = filesDir.resolve(NpmGlobalConfig.FILE_NAME),
                 ),
-                deployed, null, gate,
+                deployed, null, gate, t1,
             )
         } catch (e: Exception) {
             NpmWiring(
                 HeavyOpExecutor.Unavailable, deployed,
                 "CLI 已落位（${deployed.cliJs}），但执行体构造失败：${e.message} → 不注入",
-                null,
+                null, t1,
             )
         }
+    }
+
+    /**
+     * T1 脚本执行体（§10.3 T1 下半段，2026-10-10 批 91）。
+     *
+     * 两条前置：**桥 shim 落位** + **socket 绑得上**。缺任一条回
+     * [ScriptOpExecutor.Unavailable] —— 与安装链同一条 fail-closed 口径：桥没接上时
+     * "有审批票也跑不起来"要如实报 `ERR_NOT_IMPLEMENTED`，不许假装跑过。
+     *
+     * 为什么 socket 在**装配期**就要试绑一次：绑不上（名字被抢/平台不支持）是**装配缺口**
+     * 而不是运行时故障，装配期发现就能如实记账；等到用户批完脚本才发现，那时他看到的
+     * 是一条"执行失败"，与"这台设备根本跑不了脚本"是两回事。试绑的那条立即关掉
+     * （真正的会话由执行体每次执行现开一条，见 [SocketT1Sessions]）。
+     */
+    internal fun wireT1Executor(
+        filesDir: Path,
+        cliJs: Path,
+        host: String,
+        t1ShimDeploy: (Path) -> NpmSpawnGate.Deploy,
+        t1Binder: NpmT1Bridge.SocketBinder,
+    ): ScriptOpExecutor {
+        val shim = when (val d = t1ShimDeploy(filesDir)) {
+            is NpmSpawnGate.Deploy.Ready -> d.file
+            is NpmSpawnGate.Deploy.Failed -> return ScriptOpExecutor.Unavailable
+        }
+        val probeName = NpmT1Bridge.socketName()
+        val probe = t1Binder.bind(probeName) ?: return ScriptOpExecutor.Unavailable
+        probe.close()
+        return NpmScriptExecutor(
+            npmCliJs = cliJs,
+            nodeBin = host,
+            shimFile = shim,
+            sessionFactory = SocketT1Sessions(t1Binder),
+            baseEnv = emptyMap(),
+            userConfig = filesDir.resolve(NpmGlobalConfig.FILE_NAME),
+        )
     }
 }
