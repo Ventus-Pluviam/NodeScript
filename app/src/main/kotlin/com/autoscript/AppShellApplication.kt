@@ -887,6 +887,35 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 控制台命令历史读数（§10.9 第 3 条，[HostSummary] 的生产实现，2026-10-10 批 90）。
+     *
+     * 与 [consoleOutput] 同一条纪律：读的是**装配产物里那个 facade** —— 历史是那个
+     * 协调器在派发时写下的（`services.consoleHistory`），换一个实例读到的就是另一本账
+     * （甚至一本空账，而界面会把它画成"你没敲过命令"）。
+     *
+     * 未接线**抛**（与 [consoleOutput] 同）：空表是"读成功且真的一条都没有"的样子。
+     */
+    override suspend fun consoleHistory(projectId: String): List<String> {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：命令历史暂不可读" }
+        val facade = checkNotNull(built.npmFacade) { "npm 未接线：命令历史无处读取" }
+        return facade.consoleHistory(projectId)
+    }
+
+    /**
+     * 记一条控制台命令历史（写口，2026-10-10 批 90）。
+     *
+     * 与 [consoleHistory] 同一个 facade（写进去的和读出来的是同一本账）。
+     *
+     * **这里不抛**（与那两个读口刻意相反）：读不到历史只是少一格补全，而记不上
+     * 历史更不该让用户那条本来能跑的命令失败。壳没装好 = 静默不记 —— 这种情形下
+     * 命令本身也跑不起来，用户看到的是那条命令的错，不是历史的。
+     */
+    override suspend fun recordConsoleHistory(projectId: String, line: String) {
+        val facade = assembled?.npmFacade ?: return
+        facade.recordConsoleHistory(projectId, line)
+    }
+
+    /**
      * 依赖面板的变更半边（§10.9 第 1 条，[HostSummary] 的生产实现，2026-10-09 批 87）。
      *
      * **与 [runNpmCommand] 是同一个口**（依赖面板的输入行与控制台敲的是同一种东西，

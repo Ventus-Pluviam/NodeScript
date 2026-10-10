@@ -179,6 +179,8 @@ interface PackageManager {
   suspend fun setGlobalRegistry(raw: String?)                  // 设/清全局镜像源；null 或空白 = 恢复出厂官方；校验不过抛原文
   suspend fun runConsoleCommand(projectId, line): NpmConsoleHandle  // 控制台命令面（2026-10-09 批 84）：解析→回显→派发；解析不过抛原文
   suspend fun consoleOutput(projectId, sinceSeq, maxLines=256): NpmConsoleSnapshot  // 控制台输出读数（seq 游标拉取，同 drainEvents 的形）
+  suspend fun consoleHistory(projectId): List<String>              // 控制台命令历史读数（2026-10-10 批 90）：**按项目**、最近在最前、已去重
+  suspend fun recordConsoleHistory(projectId, line)                // 同上写口：由 :ui 在**派发点**调（那里才有用户敲的原文，见下）
   fun progress(projectId): Flow<InstallEvent>              // :main 订阅用（Flow 无重放）
   fun approvals(projectId): Flow<ApprovalRequest>
   suspend fun drainEvents(projectId, sinceSeq, batch=32): InstallEventBatch   // 脚本侧拉取口（§7.5 桥无宿主→脚本推送面）
@@ -223,6 +225,22 @@ JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
 的账 —— 一行 `npm run build` 走 T1 通道（无事务），一行 `npm ls` 甚至不起进程，塞进同一个句柄类型
 会让 `cancel()`/journal 的语义含糊。输出环是 `InstallCoordinator` 里**另一个** `SeqRing`（有界 512），
 与 `InstallEvent` 那条环互不干扰（前者给界面看，后者给脚本拉）。
+
+**控制台命令历史读写口（2026-10-10 批 90，§10.9 第 3 条）**：与 `consoleOutput` 的分工是
+**环 vs 盘** —— 输出环（`SeqRing<NpmConsoleLine>`，有界 512）随进程消失，而"关掉控制台再进来
+还能翻回上次敲的那条"要靠落盘（`files/.autojs/console-history.jsonl`）。三条口径：
+**按项目分开读**（与 `history()` 的无参全量**刻意相反**：控制台的命令跑在某个项目上，
+在 A 项目敲的 `npm install axios` 翻到 B 项目去点，落的是 B 的 `node_modules`，而按钮上那行字
+一模一样。两问不同 —— 那边问"这个宿主发生过什么"（审计），这边问"我在这个项目里敲过什么"）；
+**与 `InstallHistory` 纪律相反**（那个只追加永不清理，这个允许修剪 —— 它是便利缓存，
+丢掉的只是"很久以前敲过的一条命令"，没有任何事实随之消失）；**带凭据形态的行整条不记**
+（`_auth`/`_password`/`--otp`/`npm_token`；`npm install --//registry.example.com/:_authToken=…`
+是**能敲进控制台的**，而这份历史落盘跨重启还在。**不打码后记录** —— 打码后的历史看起来是
+一条能跑的命令，点它填进输入框得到「认证失败」，那是历史自己造出来的假故障）。
+**写口在调用方（`:ui` 的派发点）而不在执行入口**：历史要记的是**用户敲的那行原文**，
+而执行入口拿到的是已定形的东西（shell 面那条只收得到剥掉入口词的正文，`su id` 变成 `id`，
+记下来再点一次就会在默认模式里被当成 npm bin 解析）。副作用是「拒收的行与进/退模式不进历史」
+成了**自然结果**而不是特判。
 
 **缓存体积读口（2026-10-09 批 87，§10.9 第 5 条「per-project `node_modules` + `npm-cache` 尺寸」的后半截）**：
 `cacheStorage()` 与 `storage()` **分开而不是并进去** —— 两者的键空间不同：`storage()` 是「每个项目各占
@@ -390,11 +408,27 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
      `drain(projectId, sinceSeq, batch)` 非破坏拉取），空洞判据（`first > sinceSeq + 1`）由**呈现层**
      用发请求前的游标判 —— 与 `ConsoleSnapshot` 把 `droppedTotal`/`pageFull` 原样带上、由呈现层下结论同一条分工。
      `NpmConsoleSnapshot.running` 的判据是**句柄账**（不是「有没有新行」）：正在排队的重操作也算在跑。
-   - **未落**：真流式 stdout（`OUTPUT` 行是 npm 退出后的尾部，不是逐行推送）、shell 引号解析、
-     命令历史持久化（`NpmConsoleHandle` 只回 `handleId`/`projectId`/`line`/`enqueuedAtMillis`，
-     不落盘、不跨进程重启保留）、`npm config`/`publish` 一类子命令（白名单外）、T1 spawn 桥本体
+   - **真流式 stdout 已落（2026-10-10 批 90）**：执行体**边读边报**（`HostNodeExecutor`
+     专门的读流线程），经 `OutputSink` 缝（`:app-service:npm` `InstallSeams.kt`）逐行落控制台环。
+     与 `ProgressSink` **刻意分开**：那条装的是 `InstallEvent`（**脚本侧的契约形状**，
+     `bridge/js` 的 `onProgress` 逐字对齐），这条装 npm 自己吐的原文 —— 把后者塞进事件契约
+     等于为一个宿主界面去改脚本侧的面。与 `HeavyOpOutcome.outputTail` 的分工是**过程面 vs
+     摘要面**：尾部是"跑完之后"的有界截断（谁都要得到，进审计与终态行），流是"跑的当中"
+     逐行报（尽力而为，拿不到也不该让安装失败）。**流真报过时不再补 `outputTail` 行**
+     （否则同一段文本显示两遍，用户以为 npm 跑了两回）；空行**不报**（真实 npm 输出以空行
+     结尾，`takeLast(8000)` 取到的正是那些空行）。
+   - **命令历史持久化已落（2026-10-10 批 90）**：`ConsoleHistory`（`files/.autojs/console-history.jsonl`）
+     + `PackageManagerFacade.consoleHistory`/`recordConsoleHistory` → `HostSummary` 同两口 →
+     `:ui` 输入行上方的 `HistoryRow`（横向滚动，点一下**填进输入框而不直接执行** ——
+     历史里那条多半要改一改再跑）。口径见上面那一段与 `design-decisions.md` 第 60 项。
+   - **输出"活着"已落（2026-10-10 批 90）**：`:ui` 新增 `LivePoll.pollWhile`，提交之后跟到
+     跑完、子页在前台时一直跟 —— 原先每个读口都是"进页面 / 手动刷新时取一次"，而宿主是
+     入队即返回的，两者合起来就是"敲完什么都不动"。**刻意不用**宿主的 `progress` SharedFlow：
+     它没有重放，晚到的订阅者永久丢那一批，而"切进来时命令已经跑了一半"正是常态。
+   - **未落**：shell 引号解析、`npm config`/`publish` 一类子命令（白名单外）、T1 spawn 桥本体
      （`scriptExecutor` 仍缺，§11.2 T2）、命令的**取消**（`NpmConsoleHandle` 与 `InstallHandle`
-     刻意分开，故没有 `cancel()`）。
+     刻意分开，故没有 `cancel()`）、`HistoryRow` 的**上下键翻历史**（本批只做了点选 ——
+     触屏上没有"上下键"，真要做的是长按/滑动，那是另一件事）。
 4. **离线包导入**：SAF 选择（tarball / lock+cacache bundle / 快照 node_modules.zip）→ 验签 → 队列安装；另提供「从内置精选缓存离线装 axios/dayjs/…」。`node_modules.zip` 导入**仅限高信任项目**，签名锚定 `HMAC(应用密钥, lock.sig + zip.sha256)`；市场脚本一律拒绝该格式（走 reify 产出 integrity）。
    **体积上限（2026-10-06，backlog B12）**：cacache bundle 解包前先卡**整包** 512 MiB（判据是文件系统上的字节数，不是 zip 声明的数），解包中逐条目卡 64 MiB —— 单条目读到顶即停、不入缓存。上限**整包拒收**（不截断、不返回部分结果）并回 `ERR_INVALID_PARAM`（「选错了文件」是可诊断的参数问题，不是 `ERR_FILE_NOT_FOUND`）。理由：这条路径收的是用户从 SAF 递进来的外部文件，**用户可能只是选错了**（视频、系统镜像、整个 Downloads 打成的一个包），而解包器在读到顶之前没有任何自然的停止点。
 5. **包大小管理页**：per-project `node_modules` + `npm-cache` 尺寸（Kotlin 遍历）+ 配额条（80%黄/100%拦）→ 一键 prune/dedupe/ci 重装/cache clean；明确标注 node_modules 计入系统「App 数据」。
@@ -440,7 +474,7 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
 
 - **P0**：vendored npm CLI + 专用安装会话进程；零 spawn 主路径（install/ci/ls/uninstall/prune/dedupe）；T0 拦截 shim 硬失败；精选缓存种子 + 离线首装 + `--prefer-offline`；镜像/代理三路径 + replace-registry-host；事务化安装 + journal 自愈；磁盘/配额预检；hasInstallScript 前置告警 + 审批卡 UI（仅请求）；lock v3 + `npm ci` 强制 + 带外信任锚 + 多镜像交叉校验；
   依赖面板 + `auto.npm` 核心 API；打包向导 node_modules 入包。
-- **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ **lifecycle 脚本真实执行**（§18 第 7 项 2026-09-26 口径：安装时让用户自己选跑不跑，不设出厂卡口，也**不是**"审批通过才跑"的流）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；~~npm 终端视图~~ **已落地（2026-10-09 批 84）**：控制台改做命令面，白名单子命令 + `npm run`/`npx` 照实接线到 T1 门禁，输出粒度 = 事件流 + npm 输出尾部（真流式 stdout **未落**）—— 见 §10.9 第 3 条；
+- **P1**：spawn 桥完整 polyfill（stdio 假管道 + pgrp 杀树 + detached 拒绝）+ **lifecycle 脚本真实执行**（§18 第 7 项 2026-09-26 口径：安装时让用户自己选跑不跑，不设出厂卡口，也**不是**"审批通过才跑"的流）+ `npm run/exec`（纯 JS bin 白名单）；node-shim PIE + PATH 注入（2–3 台 ROM 红测）；~~npm 终端视图~~ **已落地（2026-10-09 批 84；2026-10-10 批 90 补齐"活着"三件）**：控制台改做命令面，白名单子命令 + `npm run`/`npx` 照实接线到 T1 门禁；输出粒度 = **真流式 stdout（批 90 已落）** + npm 输出尾部（摘要面，两条并存且流报过就不补尾部）+ 事件流；批 90 同批补上常驻进度推送与命令历史落盘 —— 见 §10.9 第 3 条；
   在线 audit + audit signatures + OSV 离线；`offlineGap` + 种子金标准测试。（原「QuickJS 白名单库独立 vendored」随第 1 项裁掉。）
 - **P2**：离线 bundle 打包器（desktop `npm ci` 物化 + cacache 复制体交付）+ 增量更新 + 导入 UX；「完全离线变体」打磨；native 依赖 **wasm 方案**（2026-09 拍板）：
   优先取上游 wasm 构建（`esbuild-wasm`、`argon2-wasm`、sql.js 等——Node 内置 `WebAssembly`，无 ABI/无 dlopen、一份全平台、随 bundle 离线送达），无 wasm 产物的回落纯 JS 替代/

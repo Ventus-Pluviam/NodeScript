@@ -93,6 +93,8 @@ import com.autoscript.ui.state.filterAudit
 import com.autoscript.ui.state.loadAudit
 import com.autoscript.ui.state.reclaimNpmCacheOp
 import com.autoscript.ui.state.pollInstallEvents
+import com.autoscript.ui.state.pollInstallWhileRunning
+import com.autoscript.ui.state.pollConsoleWhileRunning
 import com.autoscript.ui.state.removeInstalled
 import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
@@ -608,6 +610,29 @@ class MainActivity : ComponentActivity() {
         onCloseLogManagement: () -> Unit,
         scope: CoroutineScope,
     ) {
+        // 「盯着这一页时它自己动」（2026-10-10 批 90）：`runConsoleCmdOp`/`submitInstall`
+        // 已经会在**提交之后**跟到跑完，但那条链只覆盖"是我按下去的那一次"——
+        // 用户切走再切回来、或进页面时命令已经在跑，就没人拉了。这里补上：
+        // 只要**这一页在前台**且**宿主说在跑**，就一直拉到它停。
+        //
+        // 键里带 `running`/`installing`：停下来的那一刻 key 变化，效应被取消并重启一次，
+        // 而重启后的第一件事就是发现 `shouldContinue` 为 false、立刻返回 —— 不会自激。
+        // 页不在前台（`page` 变了）时效应随之取消：**不在看的页面不该一直问宿主**。
+        LaunchedEffect(page, consoleCmdState.running) {
+            if (page == ManagementPage.CONSOLE && consoleCmdState.running) {
+                consoleCmdState = pollConsoleWhileRunning(hostSummary(), consoleCmdState)
+            }
+        }
+        LaunchedEffect(page, npmState.installing) {
+            val projectId = npmState.selectedProjectId
+            val host = hostSummary()
+            // 四个条件拧在一个 `if` 里过不了 detekt 的 `ComplexCondition` 线，
+            // 而拆开读起来也更接近它的意思：「不在这一页 / 没在装 / 不知道装哪个 / 宿主没接线」
+            // 四件事各自是"不轮询"的理由，不是一句合起来的判断。
+            if (page != ManagementPage.NPM || !npmState.installing) return@LaunchedEffect
+            if (projectId == null || host == null) return@LaunchedEffect
+            npmState = pollInstallWhileRunning(host, npmState, projectId)
+        }
         when (page) {
             ManagementPage.CONSOLE -> ConsoleScreen(
                 state = consoleCmdState,
@@ -618,6 +643,7 @@ class MainActivity : ComponentActivity() {
                 onRun = { scope.launch { runConsoleCmdOp() } },
                 onBack = onCloseConsole,
                 modifier = Modifier,
+                history = consoleCmdState.history,
             )
             ManagementPage.NPM -> NpmScreen(
                 state = npmState,

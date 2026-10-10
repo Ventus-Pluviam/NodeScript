@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -36,7 +37,7 @@ class NpmEventDrainTest {
 
     /** 重操作假体：只回摘要，不碰网络/磁盘（安装编排照走真路径）。 */
     private class OkExecutor : HeavyOpExecutor {
-        override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome = HeavyOpOutcome("ok")
+        override suspend fun execute(op: HeavyOp, sink: ProgressSink, output: OutputSink): HeavyOpOutcome = HeavyOpOutcome("ok")
     }
 
     private fun coordinator(): InstallCoordinator = InstallCoordinator(
@@ -52,6 +53,67 @@ class NpmEventDrainTest {
     )
 
     private fun handler(c: InstallCoordinator) = NpmBridgeHandler(c)
+
+    /**
+     * 执行体经 [ProgressSink] 报的阶段**必须进环**（2026-10-10 批 90 修的真错）。
+     *
+     * 批 90 之前这里是 `events.tryEmit(ev)`：只喂了那条 `SharedFlow`，而
+     * [InstallCoordinator.drainEvents] 读的是 `installEventRing`、控制台读的是
+     * `consoleRing` —— 两个环**只在 `emit` 里写**。后果是执行体独有的
+     * `DOWNLOAD`/`REIFY` 两格**生产里从来没亮过**（脚本侧 `onProgress` 收不到，
+     * 阶段条停在 `RESOLVE`），而 `emit` 自己的 KDoc 写的是"全部阶段都经这里"。
+     * 记账与实现对不上，不是设计。
+     *
+     * 这条用例钉的是"投递点唯一"：环里有执行体报的那两格。
+     */
+    @Test
+    fun `执行体经 ProgressSink 报的阶段进环（不是只喂 Flow）`() = runBlocking {
+        val c = InstallCoordinator(
+            services = NpmServices(
+                layout = layout,
+                journal = InstallJournal(dir.resolve(".autojs")),
+                staging = InstallStaging(layout),
+                ledger = ApprovalLedger(),
+                cacheIndex = CacheIndex { false },
+            ),
+            executor = object : HeavyOpExecutor {
+                override suspend fun execute(
+                    op: HeavyOp,
+                    sink: ProgressSink,
+                    output: OutputSink,
+                ): HeavyOpOutcome {
+                    sink.emit(InstallEvent.Progress(op.projectId, op.nonce, InstallEvent.Phase.DOWNLOAD))
+                    sink.emit(InstallEvent.Progress(op.projectId, op.nonce, InstallEvent.Phase.REIFY))
+                    output.line("streamed-line")
+                    return HeavyOpOutcome("ok")
+                }
+            },
+            freeSpaceProbe = { 10L * 1024 * 1024 * 1024 },
+        )
+        Files.createDirectories(layout.projectRoot("p1"))
+        Files.write(
+            layout.projectRoot("p1").resolve("package.json"),
+            """{"name":"p1","version":"1.0.0"}""".toByteArray(),
+        )
+        c.install("p1", emptyList())
+
+        val phases = c.drainEvents("p1", 0, 64).events.map { it.event }
+            .filterIsInstance<InstallEvent.Progress>().map { it.phase }
+        assertTrue(
+            InstallEvent.Phase.DOWNLOAD in phases && InstallEvent.Phase.REIFY in phases,
+            "执行体报的阶段必须进事件环（脚本侧 onProgress 与阶段条都读它）：实为 $phases",
+        )
+        val consoleTexts = c.consoleOutput("p1", 0, 64).lines.map { it.line.text }
+        assertTrue(
+            "streamed-line" in consoleTexts,
+            "执行体报的输出行必须进控制台环：实为 $consoleTexts",
+        )
+        // 报了流就不再补 outputTail 那一行（`ok` 是摘要，不该被当成"npm 说的输出"混进来）。
+        assertTrue(
+            consoleTexts.none { it.contains("没有捕获到命令输出") },
+            "报了流就不该再说「没捕获到」：实为 $consoleTexts",
+        )
+    }
 
     private fun req(method: String, payload: String?) =
         BridgeRequest(id = 1, namespace = "npm", method = method, payload = payload, ttlMillis = 10_000)

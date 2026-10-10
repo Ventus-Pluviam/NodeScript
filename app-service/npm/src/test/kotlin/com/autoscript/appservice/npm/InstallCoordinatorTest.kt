@@ -59,7 +59,7 @@ class InstallCoordinatorTest {
         val block: suspend (HeavyOp) -> Unit = {},
     ) : HeavyOpExecutor {
         val calls = mutableListOf<HeavyOp>()
-        override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
+        override suspend fun execute(op: HeavyOp, sink: ProgressSink, output: OutputSink): HeavyOpOutcome {
             calls += op
             block(op)
             // 带上 outputTail：控制台那条链（§10.9 第 3 条）要它，返回 null 会让
@@ -75,7 +75,7 @@ class InstallCoordinatorTest {
      */
     private fun harvesting(vararg deps: Pair<String, String>): HeavyOpExecutor =
         object : HeavyOpExecutor {
-            override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
+            override suspend fun execute(op: HeavyOp, sink: ProgressSink, output: OutputSink): HeavyOpOutcome {
                 for ((name, version) in deps) {
                     val p = op.stageDir.resolve(name)
                     Files.createDirectories(p)
@@ -143,6 +143,8 @@ class InstallCoordinatorTest {
         globalConfig: NpmGlobalConfig? = null,
         /** 控制台 shell 面执行缝；null = 缺省 [ShellOpExecutor.Unavailable]（未接线）。 */
         shell: ShellOpExecutor? = null,
+        /** 控制台命令历史（2026-10-10 批 90）；null = 未接线（不记也不读，老用例零改动）。 */
+        consoleHistory: ConsoleHistory? = null,
     ) = InstallCoordinator(
         services = NpmServices(
             layout = layout,
@@ -155,6 +157,7 @@ class InstallCoordinatorTest {
             cacheIndex = cache,
             bundleImporter = bundleImporter,
             registryVerifier = registryVerifier,
+            consoleHistory = consoleHistory,
         ),
         executor = executor,
         now = now,
@@ -384,7 +387,7 @@ class InstallCoordinatorTest {
         val inflight = java.util.concurrent.atomic.AtomicInteger()
         val peak = java.util.concurrent.atomic.AtomicInteger()
         val exec = object : HeavyOpExecutor {
-            override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
+            override suspend fun execute(op: HeavyOp, sink: ProgressSink, output: OutputSink): HeavyOpOutcome {
                 val now = inflight.incrementAndGet()
                 peak.updateAndGet { maxOf(it, now) }
                 delay(50)
@@ -1532,6 +1535,66 @@ class InstallCoordinatorTest {
     }
 
     @Test
+    fun `控制台命令历史：真派发出去的那些才记，拒收与进模式不记`() = runBlocking {
+        val hist = ConsoleHistory(dir.resolve("hist"))
+        val c = coordinator(consoleHistory = hist, shell = ShellOpExecutor { _, _, _ ->
+            ShellConsoleResult(0, "ok", null)
+        })
+
+        // 派发点（`:ui` 的 `runConsoleCmd`）就是这么两步：**先记原文、再派发**。
+        c.recordConsoleHistory("p1", "npm ls"); c.runConsoleCommand("p1", "npm ls")
+        c.recordConsoleHistory("p1", "  npm audit  "); c.runConsoleCommand("p1", "  npm audit  ")
+        // 拒收的行与进/退模式在派发**之前**就返回了，故它们压根走不到写口 ——
+        // 这里把那件事钉住：连写口都不该被调到。
+        val before = hist.recent("p1")
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { c.runConsoleCommand("p1", "npm publish") }
+        }
+        // 进/退特权模式是**界面侧的会话状态**（宿主每次只收一条已定形的命令），
+        // 走到这里各自抛。它不是"敲过的命令"，不该占历史一格。
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { c.runConsoleCommand("p1", "su") }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { c.runConsoleCommand("p1", "exit") }
+        }
+        assertEquals(before, hist.recent("p1"), "拒收/进模式不经过派发点，历史里一格都不该多")
+
+        // shell 面走的是另一条宿主口（`runShellCommand`），它**不**记历史 ——
+        // 那条只收得到剥掉入口词的正文，而历史要的是用户敲的原文（写口在 `:ui`
+        // 的派发点）。这里把那件事钉住：
+        c.runShellCommand("p1", "id", ShellConsoleMode.ROOT)
+        c.recordConsoleHistory("p1", "su id")   // 派发点记的仍是原文
+
+        assertEquals(listOf("su id", "npm audit", "npm ls"), hist.recent("p1"), "最近的在最前；原文（trim 后）")
+        assertEquals(emptyList<String>(), hist.recent("p2"), "按项目分开：p1 敲的不进 p2")
+        assertEquals(listOf("su id", "npm audit", "npm ls"), c.consoleHistory("p1"), "读口 = 宿主那份（最近的在最前）")
+        assertEquals(emptyList<String>(), c.consoleHistory("p2"))
+    }
+
+    @Test
+    fun `控制台命令历史：shell 面执行入口自己不记（写口在派发点，那里才有原文）`() = runBlocking {
+        val hist = ConsoleHistory(dir.resolve("hist2"))
+        val c = coordinator(consoleHistory = hist, shell = ShellOpExecutor { _, _, _ ->
+            ShellConsoleResult(0, "ok", null)
+        })
+        c.runShellCommand("p1", "id", ShellConsoleMode.ROOT)
+        assertEquals(
+            emptyList<String>(),
+            hist.recent("p1"),
+            "执行入口拿到的是剥掉入口词的正文，记下来再点一次会被当成 npm bin",
+        )
+    }
+
+    @Test
+    fun `控制台命令历史：未接线时读口回空表（不是抛）`() = runBlocking {
+        val c = coordinator()
+        assertEquals(emptyList<String>(), c.consoleHistory("p1"), "没接历史 = 没有历史可补")
+        c.runConsoleCommand("p1", "npm ls")   // 不记也不该炸
+        assertEquals(emptyList<String>(), c.consoleHistory("p1"))
+    }
+
+    @Test
     fun `控制台 shell：默认模式拒收（没跑 ≠ 跑了但非零退出）`() = runBlocking {
         val seen = mutableListOf<String>()
         val c = coordinator(shell = ShellOpExecutor { cmd, _, _ ->
@@ -1718,7 +1781,7 @@ class InstallCoordinatorTest {
     @Test
     fun `执行体给不出输出时如实说，不拿摘要冒充输出`() = runBlocking {
         val exec = object : HeavyOpExecutor {
-            override suspend fun execute(op: HeavyOp, sink: ProgressSink) = HeavyOpOutcome("ok")
+            override suspend fun execute(op: HeavyOp, sink: ProgressSink, output: OutputSink) = HeavyOpOutcome("ok")
         }
         val c = coordinator(executor = exec)
         c.install("p1", listOf(PackageSpec("axios")))

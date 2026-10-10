@@ -3,6 +3,7 @@ package com.autoscript.appservice.npm
 import com.autoscript.domain.core.AutojsException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -79,7 +80,11 @@ class HostNodeExecutor(
         require(Files.isRegularFile(npmCliJs)) { "npm-cli.js 不存在: $npmCliJs" }
     }
 
-    override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome =
+    override suspend fun execute(
+        op: HeavyOp,
+        sink: ProgressSink,
+        output: OutputSink,
+    ): HeavyOpOutcome =
         withContext(Dispatchers.IO) {
             sink.emit(
                 com.autoscript.domain.npm.InstallEvent.Progress(
@@ -97,7 +102,7 @@ class HostNodeExecutor(
                         com.autoscript.domain.npm.InstallEvent.Phase.REIFY,
                     ),
                 )
-                val output = runNpm(op, workDir)
+                val captured = runNpm(op, workDir, output)
                 harvest(op, workDir)
                 sink.emit(
                     com.autoscript.domain.npm.InstallEvent.Progress(
@@ -109,7 +114,7 @@ class HostNodeExecutor(
                     summary = "npm ${op.args.first()} 完成",
                     // 尾部截断（见 [HeavyOpOutcome.outputTail] 的 KDoc）：控制台要的是
                     // 「npm 最后说了什么」，不是几万行安装日志。
-                    outputTail = output.trim().takeLast(OUTPUT_TAIL_CHARS).ifBlank { null },
+                    outputTail = captured.trim().takeLast(OUTPUT_TAIL_CHARS).ifBlank { null },
                 )
             } finally {
                 workDir.toFile().deleteRecursively()
@@ -171,7 +176,24 @@ class HostNodeExecutor(
         add("--loglevel"); add("error")
     }
 
-    private fun runNpm(op: HeavyOp, workDir: Path): String {
+    /**
+     * 跑 npm 并**边读边报**（2026-10-10 批 90：真流式）。
+     *
+     * 为什么读流必须是**另一条线程**（而不是原来的「先 `readBytes()` 再 `waitFor`」）：
+     * 那样写要等流到 EOF 才去看退出码，两者被串成一条线；而 stdout 管道写满会**反压**，
+     * 进程卡在写、我们卡在读 —— 谁也没错，谁也没动。原来那条路之所以没炸，只是因为
+     * 它把整条流读完才等到退出，顺序上避开了这个窗口；一旦要在读的过程里做别的事
+     * （这里就是报行给控制台），就必须拆成两条线程。
+     *
+     * 排空**不能省**（哪怕没人看）：管道没人读，npm 会卡在写。
+     *
+     * [OutputSink.line] 是**非挂起**且被 `runCatching` 包住的 —— 显示面出问题绝不能
+     * 把读流线程打死（打死了管道就没人排空，一次界面故障会升级成一次安装超时）。
+     *
+     * 返回值仍是**全量输出**（与批 84 之前逐字相同）：`failureOf` 要按门禁播报定位病因、
+     * `outputTail` 要取尾部 8000 字符。流是过程面，这个返回值是结果面，两条并存。
+     */
+    private fun runNpm(op: HeavyOp, workDir: Path, output: OutputSink): String {
         val pb = ProcessBuilder(npmArgv(op, workDir))
         pb.directory(workDir.toFile())
         pb.environment().putAll(env)
@@ -184,14 +206,42 @@ class HostNodeExecutor(
         }
         pb.redirectErrorStream(true)
         val proc = pb.start()
-        val output = proc.inputStream.readBytes().toString(StandardCharsets.UTF_8)
+        val collected = StringBuilder()
+        val reader = Thread(
+            {
+                try {
+                    proc.inputStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+                        lines.forEach { line ->
+                            synchronized(collected) { collected.append(line).append('\n') }
+                            // 空行**不报**：控制台是「一行一条、各自带时刻」的账，
+                            // 一条空行在那里不表示任何东西，只是白占一格环容量
+                            // （环是全局 512 格，见 InstallCoordinator.RING_CAPACITY）。
+                            // 原样文本不受影响：上面那行已经把空行收进 `collected`，
+                            // `outputTail` 仍是 npm 说的原话。
+                            if (line.isNotBlank()) runCatching { output.line(line) }
+                        }
+                    }
+                } catch (_: IOException) {
+                    // 进程被超时强杀时这条流会以 IOException 收尾 —— 那是**预期**的结束方式，
+                    // 不是病因。真病因（超时 / 退出码）由下面那条路给出，不在这里编一句。
+                }
+            },
+            "npm-output-reader",
+        )
+        reader.isDaemon = true
+        reader.start()
         val exited = proc.waitFor(op.timeoutMillis, TimeUnit.MILLISECONDS)
         if (!exited) {
             proc.destroyForcibly()
+            // 给读流线程一点时间收尾（进程已死，EOF 马上到）：拿不到完整的最后几行也认，
+            // 因为这条路本来就是异常收尾，输出只用于报错。
+            reader.join(READER_JOIN_MILLIS)
             throw RuntimeException("npm ${op.args.first()} 超时（${op.timeoutMillis}ms）")
         }
-        if (proc.exitValue() != 0) throw failureOf(op, output, proc.exitValue())
-        return output
+        reader.join(READER_JOIN_MILLIS)
+        val text = synchronized(collected) { collected.toString() }
+        if (proc.exitValue() != 0) throw failureOf(op, text, proc.exitValue())
+        return text
     }
 
     /**
@@ -249,3 +299,12 @@ class HostNodeExecutor(
 
 /** 控制台回显用的命令输出尾部长度上限（[HeavyOpOutcome.outputTail]）。 */
 private const val OUTPUT_TAIL_CHARS = 8_000
+
+/**
+ * 等读流线程收尾的上限（毫秒）。
+ *
+ * 进程已经退出（或已被强杀），管道那一端必然关闭，读线程只差把缓冲区里剩的几行吐完
+ * —— 正常情况下是微秒级。给 2 秒是**防呆**：真卡住时宁可丢掉最后几行输出，
+ * 也不能让一次已经超时的安装再挂在这里。
+ */
+private const val READER_JOIN_MILLIS = 2_000L

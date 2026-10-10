@@ -12,9 +12,10 @@
     <ID>FunctionNaming:Chrome.kt$@Composable fun TabBar( tabs: List&lt;TabItem&gt;, pagerState: PagerState, onSelect: (Int) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:Chrome.kt$@Composable fun TabBarBottomClearance(extra: Dp = 0.dp): Dp</ID>
     <ID>FunctionNaming:Chrome.kt$@Composable private fun TabBarItem( tab: TabItem, selected: Boolean, onClick: () -&gt; Unit, width: Dp, textSizeSp: Float, modifier: Modifier = Modifier, )</ID>
-    <ID>FunctionNaming:ConsoleScreen.kt$@Composable fun ConsoleScreen( state: ConsoleCmdState, projects: List&lt;String&gt;, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onDraft: (String) -&gt; Unit, onRun: () -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:ConsoleScreen.kt$@Composable fun ConsoleScreen( state: ConsoleCmdState, projects: List&lt;String&gt;, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onDraft: (String) -&gt; Unit, onRun: () -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, /** * 命令历史（最近的在最前，已去重）—— 由宿主读口给（`HostSummary.consoleHistory`）。 * * 缺省空表：没接线 / 还没读到就是"没有历史可补"，不是错误。 * 界面**不自己存**：历史要跨进程重启还在，那是落盘的事（`ConsoleHistory`）。 */ history: List&lt;String&gt; = emptyList(), )</ID>
     <ID>FunctionNaming:ConsoleScreen.kt$@Composable private fun CommandField( value: String, onChange: (String) -&gt; Unit, enabled: Boolean, onSubmit: () -&gt; Unit, modifier: Modifier, mode: ShellConsoleMode, )</ID>
-    <ID>FunctionNaming:ConsoleScreen.kt$@Composable private fun InputRow(state: ConsoleCmdState, onDraft: (String) -&gt; Unit, onRun: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:ConsoleScreen.kt$@Composable private fun HistoryRow(history: List&lt;String&gt;, onPick: (String) -&gt; Unit)</ID>
+    <ID>FunctionNaming:ConsoleScreen.kt$@Composable private fun InputRow( state: ConsoleCmdState, onDraft: (String) -&gt; Unit, onRun: () -&gt; Unit, history: List&lt;String&gt;, )</ID>
     <ID>FunctionNaming:ConsoleScreen.kt$@Composable private fun OutputList( state: ConsoleCmdState, listState: androidx.compose.foundation.lazy.LazyListState, onCopyLine: (ConsoleCmdLineState) -&gt; Unit, )</ID>
     <ID>FunctionNaming:DeletionParticles.kt$@Composable private fun BurstLayer(burst: Burst, onDone: () -&gt; Unit)</ID>
     <ID>FunctionNaming:DeletionParticles.kt$DeletionParticles$@Composable fun Overlay(modifier: Modifier = Modifier)</ID>

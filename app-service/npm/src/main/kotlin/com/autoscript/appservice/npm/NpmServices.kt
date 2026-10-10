@@ -30,6 +30,17 @@ data class NpmServices(
     val history: InstallHistory? = null,
     val lockSigner: LockSigner? = null,
     val snapshots: NpmSnapshot? = null,
+    /**
+     * 控制台**命令历史**（2026-10-10 批 90；`files/.autojs/console-history.jsonl`）。
+     *
+     * 收在这里而不是 [InstallCoordinator] 的构造参数上：那个构造面已经贴着 detekt
+     * `LongParameterList` 的构造阈值（12），而本类正是为「协作者太多」而生的那一层。
+     * 它与 [history] 并列也说得通 —— 两者是同一种东西的两面（见 [ConsoleHistory]
+     * 的类 KDoc：审计事实 vs 便利缓存）。
+     *
+     * null = 未接线（老替身/测试零改动）→ 不记也不读，控制台没有历史可补。
+     */
+    val consoleHistory: ConsoleHistory? = null,
     val cacheIndex: CacheIndex,
     val bundleImporter: NpmOfflineBundleImporter? = null,
     /** 多镜像交叉校验缝（§10.5-1）；null = 未接线，install 跳过该校验（不假装验过）。 */

@@ -59,6 +59,7 @@ internal suspend fun loadConsoleCmd(host: HostSummary?, previous: ConsoleCmdStat
                 selectedProjectId = null,
                 projects = emptyList(),
                 lines = emptyList(),
+                history = emptyList(),
                 nextSeq = 0L,
                 running = false,
                 gap = false,
@@ -69,6 +70,13 @@ internal suspend fun loadConsoleCmd(host: HostSummary?, previous: ConsoleCmdStat
         val base = ConsoleCmdState.withProject(previous, projectId)
         val sinceSeq = base.nextSeq
         val snapshot = host.consoleOutput(projectId, sinceSeq, CONSOLE_CMD_PAGE)
+        // 历史是**盘**、输出是**环**（见 ConsoleCmdState.history 的 KDoc），故它不走
+        // 累积那条路 —— 每次都取宿主那份完整投影。但也不是每轮都读：**宿主说还在跑**的
+        // 那几轮直接跳过。命令是派发时就记下的（`recordConsoleHistory`），跑动中那份
+        // 不会再变，而轮询是 400ms 一轮 —— 每轮读一次盘纯属白读。
+        // 判据取**这一轮的快照**（不是上一轮的 `previous`）：跑完那一轮的 `running`
+        // 已经是 false，于是终态那次必然读到刚敲的那条。
+        val wantHistory = !snapshot.running
         ConsoleCmdState.of(
             previous = base.copy(projects = projectIds),
             projectId = projectId,
@@ -76,13 +84,39 @@ internal suspend fun loadConsoleCmd(host: HostSummary?, previous: ConsoleCmdStat
             sinceSeq = sinceSeq,
             maxLines = CONSOLE_CMD_PAGE,
             nowMillis = System.currentTimeMillis(),
-        )
+        ).copy(history = if (wantHistory) host.consoleHistory(projectId) else previous.history)
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
         ConsoleCmdState.failed(t, previous)
     }
 }
+
+/**
+ * 命令跑着的时候**自己拉**（2026-10-10 批 90：真流式那条链的消费侧）。
+ *
+ * 为什么必须由界面来拉：宿主是**入队即返回**的，而 npm 的输出是边跑边产生的
+ * （`HostNodeExecutor` 读一行报一行）—— 没有这条循环，用户敲完 `npm install axios`
+ * 之后屏幕上什么都不会动，直到他手动点「刷新」，而那时命令多半已经跑完。
+ * 那不叫流式，叫事后倒带。
+ *
+ * 停的条件是**宿主给的** [ConsoleCmdState.running]（句柄账），不是界面猜的；
+ * 有界见 [pollWhile]。跑完那一轮**必然**多拉一次（`shouldContinue` 在循环体之前判，
+ * 而 `running` 变成 false 正是最后一轮拉回来的），故终态行不会漏。
+ */
+internal suspend fun pollConsoleWhileRunning(
+    host: HostSummary?,
+    state: ConsoleCmdState,
+    intervalMillis: Long = LIVE_POLL_INTERVAL_MILLIS,
+    maxTicks: Int = LIVE_POLL_MAX_TICKS,
+): ConsoleCmdState =
+    pollWhile(
+        initial = state,
+        intervalMillis = intervalMillis,
+        maxTicks = maxTicks,
+        tick = { current -> loadConsoleCmd(host, current) },
+        shouldContinue = { it.running },
+    )
 
 /** 换一个项目看（先清行归零，再拉一轮）。 */
 internal suspend fun selectConsoleProject(
@@ -106,7 +140,14 @@ internal suspend fun selectConsoleProject(
  * 那句里写清了缺的是哪一段。界面再译一遍就是第二份判据，而漂掉的那一份正好是用户看到的
  * 那一份（与 `RegistryScreen` 不自己判地址合法性同一条理由）。
  */
-internal suspend fun runConsoleCmd(host: HostSummary?, state: ConsoleCmdState): ConsoleCmdState {
+internal suspend fun runConsoleCmd(
+    host: HostSummary?,
+    state: ConsoleCmdState,
+    // 轮询的两个参数从这里穿到 [pollConsoleWhileRunning]：单测要验"跟到跑完"就得
+    // 让那条循环真的转几轮，用真实间隔（400ms）会把用例拖成秒级（见 [pollWhile]）。
+    intervalMillis: Long = LIVE_POLL_INTERVAL_MILLIS,
+    maxTicks: Int = LIVE_POLL_MAX_TICKS,
+): ConsoleCmdState {
     val projectId = state.project
         ?: return state.copy(
             opError = "还没有选中的项目：控制台命令跑在某个项目的 node_modules 上（先建一个项目）",
@@ -136,9 +177,22 @@ internal suspend fun runConsoleCmd(host: HostSummary?, state: ConsoleCmdState): 
         return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
     }
     return try {
+        // 记历史在**派发点**（2026-10-10 批 90）：这里手上有用户敲的原文，而执行入口
+        // 拿到的是已定形的东西（shell 面那条只收得到剥掉入口词的正文 —— `su id`
+        // 记成 `id`，再点一次就会在默认模式里被当成 npm bin 解析）。
+        // 拒收与进/退模式在上面各自 return 了，故"哪些进历史"是**自然结果**，不是特判。
+        host.recordConsoleHistory(projectId, state.draft)
         dispatch(host, projectId, parsed, state.draft)
-        loadConsoleCmd(host, state.copy(draft = "", opError = null, opNotice = null))
-            .copy(opNotice = noticeFor(parsed))
+        // 发出去之后**接着拉到它跑完**（批 90）：`dispatch` 对重操作是入队即返回，
+        // 只拉一次的话用户看到的是「排队中」然后一片静止 —— 而输出正在产生。
+        // 轻操作与 shell 面是同步现取，第一轮 `running` 就是 false，这条循环即刻返回。
+        val polled = pollConsoleWhileRunning(
+            host,
+            loadConsoleCmd(host, state.copy(draft = "", opError = null, opNotice = null)),
+            intervalMillis = intervalMillis,
+            maxTicks = maxTicks,
+        )
+        polled.copy(opNotice = noticeFor(parsed))
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {

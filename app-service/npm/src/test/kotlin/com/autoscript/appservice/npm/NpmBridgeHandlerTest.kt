@@ -28,7 +28,7 @@ class NpmBridgeHandlerTest {
     private val installed = mutableListOf<Pair<String, List<PackageSpec>>>()
 
     private class RecordingExecutor(val sink: (String, List<PackageSpec>) -> Unit) : HeavyOpExecutor {
-        override suspend fun execute(op: HeavyOp, sink2: ProgressSink): HeavyOpOutcome {
+        override suspend fun execute(op: HeavyOp, sink2: ProgressSink, output: OutputSink): HeavyOpOutcome {
             sink(op.projectId, op.args.drop(1).map { s -> parseLikeHandler(s) })
             return HeavyOpOutcome("ok")
         }

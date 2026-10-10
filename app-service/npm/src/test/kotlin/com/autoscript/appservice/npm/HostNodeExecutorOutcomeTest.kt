@@ -62,7 +62,7 @@ class HostNodeExecutorOutcomeTest {
     fun `执行体把 npm 的输出尾部原样带出（控制台要的是它说了什么，不是摘要）`() = runBlocking {
         val root = project("p1")
         val node = stubNode("""echo "added 1 package in 2s"; echo "found 0 vulnerabilities"""")
-        val outcome = executor(node).execute(op("p1", root)) {}
+        val outcome = executor(node).execute(op("p1", root), {}, OutputSink.None)
         assertEquals("npm install 完成", outcome.summary)
         assertEquals(
             "added 1 package in 2s\nfound 0 vulnerabilities",
@@ -74,7 +74,7 @@ class HostNodeExecutorOutcomeTest {
     @Test
     fun `输出为空时给 null 而不是空串——由控制台如实说「没有捕获到」`() = runBlocking {
         val root = project("p2")
-        val outcome = executor(stubNode("exit 0")).execute(op("p2", root)) {}
+        val outcome = executor(stubNode("exit 0")).execute(op("p2", root), {}, OutputSink.None)
         assertNull(outcome.outputTail, "空输出 = null：控制台据此显示「本次没有捕获到命令输出」")
     }
 
@@ -83,7 +83,7 @@ class HostNodeExecutorOutcomeTest {
         val root = project("p3")
         // 1000 行，每行 20 字符 ≈ 20000 字符 > 8000 上限
         val outcome = executor(stubNode("""i=0; while [ ${'$'}i -lt 1000 ]; do echo "line-${'$'}i-padding-pad"; i=${'$'}((i+1)); done"""))
-            .execute(op("p3", root)) {}
+            .execute(op("p3", root), {}, OutputSink.None)
         val tail = outcome.outputTail!!
         assertTrue(tail.length <= 8_000, "必须有界截断（实为 ${tail.length}）")
         assertTrue(tail.endsWith("line-999-padding-pad"), "留的是尾部：最旧的那些行才是可以丢的")

@@ -24,6 +24,9 @@ class PackageManagerFacadeContractTest {
             "globalRegistry", "setGlobalRegistry",
             // 控制台命令面（§10.9 第 3 条「npm 终端视图」；同样不经桥）
             "runConsoleCommand", "consoleOutput",
+            // 命令历史（§10.9 第 3 条；2026-10-10 批 90 —— 环 vs 盘：输出环随进程消失，
+            // 历史落盘，故是**另一个口**而不是 consoleOutput 的一个参数）
+            "consoleHistory", "recordConsoleHistory",
             // 控制台 shell 面（2026-10-09 用户口径：控制台要能执行 shell）
             "runShellCommand",
             // 审批（人机分离：requestApprove 仅入队 / resolveApproval 仅 UI 回调）

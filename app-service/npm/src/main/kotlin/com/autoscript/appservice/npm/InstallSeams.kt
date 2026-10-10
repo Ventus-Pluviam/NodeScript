@@ -53,16 +53,29 @@ fun interface HeavyOpExecutor {
      * 在已分配的事务上下文里执行重操作；args 为 npm CLI 参数（install/ci/…）。
      * 实现方负责进度事件（经 [ProgressSink]）。
      *
+     * [output] 是**命令自己的输出**（2026-10-10 批 90 新增，真流式）：实现方**边读边报**，
+     * 宿主把它逐行落进控制台环 —— 用户看到的是 npm 正在说什么，而不是跑完之后的一大坨。
+     * 不报就传 [OutputSink.None]（只回 [HeavyOpOutcome.outputTail] 的老路径）。
+     * 两条路并存是刻意的：`outputTail` 是**摘要面**（谁都要得到），流是**过程面**
+     * （拿不到也不该让安装失败）。
+     *
+     * **没有缺省值**：`fun interface` 的抽象方法不许带缺省值（Kotlin 明确禁止，
+     * 编译期就拦）—— 而这正好逼每个实现方显式表态「我报不报流」。
+     *
      * **TTL 契约（铁律 3）**：协调器已对本次调用套 [op.timeoutMillis]（withTimeoutOrNull），
      * 超时即取消并回 err 路径收尾（journal fail + 残骸清扫 + 锁释放）。故实现方必须
      * 合作式响应取消（阻塞 IO 拆成可中断段、子进程随取消销毁）——不响应取消的执行体
      * 会在超时后变成孤儿：项目锁虽已释放，但它仍可能与新会话争抢同一 stageDir。
      */
-    suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome
+    suspend fun execute(op: HeavyOp, sink: ProgressSink, output: OutputSink): HeavyOpOutcome
 
     /** 默认：无引擎可用 → 如实 ERR_NOT_IMPLEMENTED。 */
     object Unavailable : HeavyOpExecutor {
-        override suspend fun execute(op: HeavyOp, sink: ProgressSink): HeavyOpOutcome {
+        override suspend fun execute(
+            op: HeavyOp,
+            sink: ProgressSink,
+            output: OutputSink,
+        ): HeavyOpOutcome {
             throw AutojsException(
                 ErrorCode.ERR_NOT_IMPLEMENTED,
                 "安装会话引擎未接入：重操作 ${op.args.joinToString(" ")} 未执行（编排已完成：journal=${op.nonce}）",
@@ -84,6 +97,34 @@ data class HeavyOp(
 /** 进度事件回传缝（执行体 → 协调器事件流）。 */
 fun interface ProgressSink {
     suspend fun emit(event: InstallEvent)
+}
+
+/**
+ * 命令**输出**回传缝（执行体 → 控制台环，2026-10-10 批 90）。
+ *
+ * 与 [ProgressSink] 分开而不是合并：那条装的是 [InstallEvent]（**脚本侧的契约形状**，
+ * `bridge/js` 的 `onProgress` 逐字对齐），这条装的是 npm 自己吐的原文 ——
+ * 把后者塞进事件契约等于为一个宿主界面去改脚本侧的面。
+ *
+ * 与 [HeavyOpOutcome.outputTail] 的分工：`outputTail` 是**跑完之后**的尾部（有界、
+ * 谁都拿得到，进审计与终态行）；本缝是**跑的当中**逐行报，只喂控制台。
+ * 两条并存的理由很实际 —— 流是**尽力而为**的（实现方可以在没有订阅者时不报），
+ * 而 `outputTail` 是结果的一部分，缺了控制台就没东西可显示。
+ *
+ * **实现方不必为它失败**：调用方给的是不抛的实现（推环而已）。真抛了也**不该**
+ * 让安装失败 —— 那是宿主自己的显示面。
+ */
+fun interface OutputSink {
+    /**
+     * 报一行（**非挂起**：这是宿主自己的显示面，读流的那条线程不该为一个 push 让出）。
+     * 实现方必须**不抛** —— 抛了会打断读流循环，而"界面少显示一行"绝不该让安装失败。
+     */
+    fun line(text: String)
+
+    /** 缺省：不报（老执行体与只回尾部的替身零改动）。 */
+    object None : OutputSink {
+        override fun line(text: String) {}
+    }
 }
 
 /**

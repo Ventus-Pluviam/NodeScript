@@ -232,7 +232,9 @@ class NpmSpawnGateTest {
                         stageDir = dir.resolve("stage"),
                         timeoutMillis = 30_000,
                     ),
-                ) { }
+                    {},
+                    OutputSink.None,
+                )
             }
             throw AssertionError("探针 exit(1)，执行体必须如实失败")
         } catch (e: RuntimeException) {
@@ -265,7 +267,9 @@ class NpmSpawnGateTest {
             runBlocking {
                 executor.execute(
                     HeavyOp("n2", "proj2", listOf("install"), projectRoot, dir.resolve("stage2"), 30_000),
-                ) { }
+                    {},
+                    OutputSink.None,
+                )
             }
             throw AssertionError("探针 exit(1)，执行体必须如实失败")
         } catch (e: RuntimeException) {
