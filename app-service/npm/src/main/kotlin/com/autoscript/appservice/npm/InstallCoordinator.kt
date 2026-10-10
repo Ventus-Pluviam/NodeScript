@@ -702,8 +702,10 @@ class InstallCoordinator(
         val at = now()
         // 项目号判据与落盘侧同源（[NpmConsoleKeys.rejectProjectId] → `ScriptPaths.PROJECT_ID`）。
         NpmConsoleKeys.rejectProjectId(projectId)?.let { throw IllegalArgumentException(it) }
-        when (val cmd = NpmConsoleKeys.parse(line)) {
-            is NpmConsoleCommand.Rejected -> throw IllegalArgumentException(cmd.reason)
+        val cmd = NpmConsoleKeys.parse(line)
+        if (cmd is NpmConsoleCommand.Rejected) throw IllegalArgumentException(cmd.reason)
+        when (cmd) {
+            is NpmConsoleCommand.Rejected -> throw IllegalArgumentException(cmd.reason)   // 到不了这里（上面已拦），穷尽 when 而已
             is NpmConsoleCommand.Npm -> {
                 consoleLine(projectId, echoLine(line, at))
                 if (cmd.sub in NpmConsoleKeys.LIGHT_SUBCOMMANDS) {
@@ -764,6 +766,33 @@ class InstallCoordinator(
             lines = picked.map { SequencedConsoleLine(it.first, it.second) },
             running = handles.values.any { it.handle.projectId == projectId && !it.done },
         )
+    }
+
+    /**
+     * 命令历史读数（§10.9 第 3 条，2026-10-10 批 90）：[projectId] 下最近敲过的若干条。
+     *
+     * 与 [consoleOutput] 的差别不只是"另一份数据"：**那个是环、这个是盘** ——
+     * 环随进程消失，历史要跨重启还在（这正是它存在的理由）。
+     *
+     * 按项目分开（见 [ConsoleHistory.recent] 的 KDoc）：控制台的命令跑在某个项目上，
+     * 历史跟着同一个作用域走。
+     */
+    override suspend fun consoleHistory(projectId: String): List<String> =
+        services.consoleHistory?.recent(projectId) ?: emptyList()
+
+    /**
+     * 记一条命令历史（写口，2026-10-10 批 90）。
+     *
+     * **为什么写口在调用方（`:ui` 的派发点）而不在本类的执行入口**：历史要记的是
+     * **用户敲的那行原文**，而执行入口拿到的是**已经定形**的东西 —— shell 面那条
+     * 只收得到剥掉入口词的正文（`su id` 变成 `id`），记下来再点一次就会在默认模式里
+     * 被当成 npm bin 解析。派发点手上才有原文。
+     *
+     * 副作用是「拒收的行与进/退模式不进历史」变成了**自然结果**而不是一条特判：
+     * 那些分支在派发之前就返回了。
+     */
+    override suspend fun recordConsoleHistory(projectId: String, line: String) {
+        services.consoleHistory?.record(projectId, line, now())
     }
 
     /** 用户敲的那行（原文回显；`$ ` 前缀是控制台的读法，不是命令的一部分）。 */
@@ -984,7 +1013,8 @@ class InstallCoordinator(
                     try {
                         if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "脚本执行已取消")
                         val summary = withTimeoutOrNull(op.timeoutMillis) {
-                            scriptExecutor.execute(op) { ev -> events.tryEmit(ev) }
+                            // 同 runHeavy：经 `emit` 才进环（见那处的注释）。
+                            scriptExecutor.execute(op) { ev -> emit(ev) }
                         } ?: throw AutojsException(
                             ErrorCode.ERR_TIMEOUT,
                             "脚本执行超时（${op.timeoutMillis}ms）：${what}（执行体未在 TTL 内收尾）",
@@ -1170,10 +1200,29 @@ class InstallCoordinator(
             // 不会把外层协程的取消（用户取消/UI 销毁）吞成异常再往下传。
             // 无此时限的后果是具体故障而非理论风险：npm 会话卡死 → projectLock 与
             // globalSession 双双不释放 → 此后所有 npm 操作排队到天荒地老。
+            // 执行体有没有真的报过流（见下方「只在没报过流时才补 outputTail」）。
+            var streamed = false
             val outcome = withTimeoutOrNull(timeoutMillis) {
                 executor.execute(
                     HeavyOp(nonce, projectId, args, layout.projectRoot(projectId), stageDir, timeoutMillis),
-                ) { ev -> events.tryEmit(ev) }
+                    // 执行体报的阶段**必须经 `emit`**（2026-10-10 批 90 修）：
+                    // 原来这里是 `events.tryEmit(ev)` —— 只喂了那条 SharedFlow，
+                    // 而 `installEventRing`（`drainEvents` 读的就是它）与 `consoleRing`
+                    // 只在 `emit` 里写。后果是执行体独有的 DOWNLOAD/REIFY 两格
+                    // **生产里从来没亮过**：脚本侧 `onProgress` 收不到，控制台阶段条
+                    // 也停在 RESOLVE。这与 `emit` 自己的 KDoc（"全部阶段都经这里"）
+                    // 直接矛盾，是记账与实现对不上，不是设计。
+                    { ev -> emit(ev) },
+                    // 真流式（2026-10-10 批 90）：执行体边读边报，这里逐行落控制台环。
+                    // 与 `emit` 那条路分开 —— 那些是**事件**（脚本侧契约形状），
+                    // 这条是 npm 吐的原文（只喂控制台）。批 90 之前这条数据是被丢掉的：
+                    // 执行体经 ProgressSink 报的阶段**从来不进事件环**（环只由 emit 写），
+                    // 于是控制台的 DOWNLOAD/REIFY 两格在生产里永远不亮。
+                    { text ->
+                        streamed = true
+                        consoleLine(projectId, NpmConsoleLine(NpmConsoleLineKind.OUTPUT, text, now()))
+                    },
+                )
             } ?: throw AutojsException(
                 ErrorCode.ERR_TIMEOUT,
                 "安装会话超时（${timeoutMillis}ms）：npm ${args.joinToString(" ")}（执行体未在 TTL 内收尾）",
@@ -1201,14 +1250,25 @@ class InstallCoordinator(
             // 命令自己的输出尾部先进控制台环（§10.9 第 3 条，2026-10-09 批 84），再发终态：
             // 顺序反了会看到「完成」压在输出上面。执行体给不出（null）时**如实说**，
             // 不拿摘要冒充输出。
-            consoleLine(
-                projectId,
-                NpmConsoleLine(
-                    kind = NpmConsoleLineKind.OUTPUT,
-                    text = outcome.outputTail ?: "（本次没有捕获到命令输出）",
-                    atMillis = now(),
-                ),
-            )
+            //
+            // **报了流就不再补这一行**（2026-10-10 批 90）：`outputTail` 是「整条流的最后
+            // 8000 字符」，而流已经把它逐行报过了 —— 再补一遍就是同一段话在控制台里出现
+            // 两次，用户会以为 npm 跑了两遍。没报过流（老执行体 / [OutputSink.None] /
+            // 输出为空）时才走这条老路：那时它是**唯一**的输出来源。
+            //
+            // 代价如实记账：流是**尽力而为**的，环满会丢最旧 —— 极端情况下（一次几万行
+            // 的安装）用户可能只看到尾部，而这一行不再兜底。可接受，因为丢的正好是
+            // 最不重要的开头，而「跑没跑成」由紧随其后的 RESULT 行答。
+            if (!streamed) {
+                consoleLine(
+                    projectId,
+                    NpmConsoleLine(
+                        kind = NpmConsoleLineKind.OUTPUT,
+                        text = outcome.outputTail ?: "（本次没有捕获到命令输出）",
+                        atMillis = now(),
+                    ),
+                )
+            }
             history?.record(opName(args), projectId, true, outcome.summary)
             emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = outcome.summary))
         } catch (e: CancellationException) {

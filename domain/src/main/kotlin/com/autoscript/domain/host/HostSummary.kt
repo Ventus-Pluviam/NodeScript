@@ -399,6 +399,30 @@ interface HostSummary {
         NpmConsoleSnapshot(firstSeq = sinceSeq, lastSeq = sinceSeq, lines = emptyList(), running = false)
 
     /**
+     * 控制台**命令历史**读数（§10.9 第 3 条，2026-10-10 批 90）。
+     *
+     * 与 [consoleOutput] 的分工是**环 vs 盘**：输出环随进程消失，而"关掉控制台再进来
+     * 还能翻回上次敲的那条"要靠落盘。历史由宿主在命令派发时记下
+     * （`InstallCoordinator.runConsoleCommand`），本口只读。
+     *
+     * **按项目分开**（与 [npmHistory] 的无参全量刻意相反，理由见门面同口的 KDoc）。
+     *
+     * 缺省实现回空表（未接线 = 没有历史可补，如实）。
+     */
+    suspend fun consoleHistory(projectId: String): List<String> = emptyList()
+
+    /**
+     * 记一条控制台命令历史（写口，2026-10-10 批 90）。
+     *
+     * 由 `:ui` 在**派发点**调用（那里手上有用户敲的原文）；执行入口拿不到原文
+     * （shell 面那条只收得到剥掉入口词的正文）。理由见门面同口的 KDoc。
+     *
+     * 缺省实现是空操作（未接线 = 不记，也不抛 —— 历史是便利面，为它让一条本来
+     * 能跑的命令失败是本末倒置）。
+     */
+    suspend fun recordConsoleHistory(projectId: String, line: String) {}
+
+    /**
      * 依赖面板的**变更半边**入口：跑一行安装/卸载命令（§10.9 第 1 条，2026-10-09 批 87）。
      *
      * **为什么是「一行命令」而不是「一组 `PackageSpec`」**：门禁强度不该取决于用户从哪个

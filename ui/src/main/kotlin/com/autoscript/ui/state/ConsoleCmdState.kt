@@ -56,6 +56,18 @@ data class ConsoleCmdState(
     /** 输入框里正在敲的那行（**不规整化**：回显要与他敲的一致）。 */
     val draft: String = "",
     /**
+     * 命令历史（最近的在最前、已去重），来自宿主读口 `HostSummary.consoleHistory`。
+     *
+     * 与 [lines] 的差别是**环 vs 盘**：输出行活在宿主的环里（进程没了就没了），
+     * 历史活在盘上（关掉控制台再进来还翻得到）。故它**不参与累积**——每次都是
+     * 宿主那份的完整投影，不是"把新的接在旧的后面"。
+     *
+     * 换项目**清空**（[withProject] 不搬运它）：控制台的命令跑在某个项目上，
+     * 在 A 项目敲的 `npm install axios` 翻到 B 项目去点，落的是 B 的 `node_modules`，
+     * 而按钮上那行字一模一样。判据在宿主侧（历史按项目分开存），这里只是不保留旧值。
+     */
+    val history: List<String> = emptyList(),
+    /**
      * 控制台**此刻**的特权模式（2026-10-09）。
      *
      * 它只改一件事：**裸首词是什么意思** —— [ShellConsoleMode.DEFAULT] 下裸首词 = npm bin

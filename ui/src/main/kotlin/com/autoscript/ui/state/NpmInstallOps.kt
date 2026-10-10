@@ -115,7 +115,9 @@ private suspend fun runPanelCommand(
     )
     return try {
         host.runNpmPanelCommand(projectId, line)
-        val polled = pollInstallEvents(host, busy, projectId)
+        // 入队之后**跟着拉到它跑完**（2026-10-10 批 90）：宿主是入队即返回的，
+        // 而 DOWNLOAD/REIFY 发生在返回之后 —— 只拉一次的话阶段条永远停在 QUEUED。
+        val polled = pollInstallWhileRunning(host, busy, projectId)
         loadNpmSnapshot(host, polled).copy(
             installing = false,
             installDraft = if (clearDraft) "" else state.installDraft,
@@ -133,6 +135,35 @@ private suspend fun runPanelCommand(
         )
     }
 }
+
+/**
+ * 安装跑着的时候**自己拉**（2026-10-10 批 90：阶段条不再停在 `QUEUED`）。
+ *
+ * 停的条件是**宿主给的** [NpmState.installing]（句柄账 / 事件里的 `Finished`），
+ * 不是界面猜的；有界见 [pollWhile]。每一轮都同时取**事件**（阶段条）与**快照**
+ * （已装清单、尺寸）—— 一次安装的产物落在 node_modules 上，跑完那一下
+ * 清单必须跟着变，否则用户看到的是"阶段条走完了，依赖列表还是空的"。
+ *
+ * **与 [pollInstallEvents] 的分工**：那个是"拉一次"（刷新按钮、进页面），
+ * 这个是"拉到跑完"（提交之后）。两者共用同一个读口，不另开取数路径。
+ */
+internal suspend fun pollInstallWhileRunning(
+    host: HostSummary,
+    state: NpmState,
+    projectId: String,
+    intervalMillis: Long = LIVE_POLL_INTERVAL_MILLIS,
+    maxTicks: Int = LIVE_POLL_MAX_TICKS,
+): NpmState =
+    pollWhile(
+        initial = state,
+        intervalMillis = intervalMillis,
+        maxTicks = maxTicks,
+        tick = { current ->
+            val withEvents = pollInstallEvents(host, current, projectId)
+            if (withEvents.selectedProjectId == projectId) loadNpmSnapshot(host, withEvents) else withEvents
+        },
+        shouldContinue = { it.installing && it.selectedProjectId == projectId },
+    )
 
 /**
  * 拉一次安装事件（阶段进度条的数据源，§10.9 第 1 条）。
@@ -156,9 +187,16 @@ internal suspend fun pollInstallEvents(host: HostSummary, state: NpmState, proje
     val since = state.installSeq
     return try {
         val batch = host.npmInstallEvents(projectId, since, INSTALL_EVENT_PAGE)
+        val folded = foldProgress(state.installProgress, batch.events.map { it.event })
         state.copy(
             installSeq = batch.lastSeq,
-            installProgress = foldProgress(state.installProgress, batch.events.map { it.event }),
+            installProgress = folded,
+            // `Finished` 到了 = 这次安装**在宿主侧已经收尾**（句柄逐出）——
+            // 「在途」这个旗标跟着它落，而不是等调用方那一句 `copy(installing = false)`。
+            // 两者看着等价，差在**轮询**上：`pollInstallWhileRunning` 的停条件就是它，
+            // 靠调用方收尾的话那条循环要一直转到 maxTicks（600 × 400ms ≈ 4 分钟），
+            // 期间输入行一直是灰的 —— 明明早就装完了。
+            installing = if (folded?.done == true) false else state.installing,
         )
     } catch (e: CancellationException) {
         throw e

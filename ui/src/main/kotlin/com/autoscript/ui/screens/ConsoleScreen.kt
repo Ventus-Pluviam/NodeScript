@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -87,6 +89,13 @@ fun ConsoleScreen(
     onRun: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 命令历史（最近的在最前，已去重）—— 由宿主读口给（`HostSummary.consoleHistory`）。
+     *
+     * 缺省空表：没接线 / 还没读到就是"没有历史可补"，不是错误。
+     * 界面**不自己存**：历史要跨进程重启还在，那是落盘的事（`ConsoleHistory`）。
+     */
+    history: List<String> = emptyList(),
 ) {
     val status = Status.of(
         load = state.load,
@@ -152,7 +161,7 @@ fun ConsoleScreen(
                     .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
             )
         }
-        InputRow(state, onDraft, onRun)
+        InputRow(state, onDraft, onRun, history)
     }
 }
 
@@ -223,8 +232,19 @@ private fun OutputList(
  * 灰按钮说明「现在不能敲」，按下去没反应什么都说明不了。
  */
 @Composable
-private fun InputRow(state: ConsoleCmdState, onDraft: (String) -> Unit, onRun: () -> Unit) {
+private fun InputRow(
+    state: ConsoleCmdState,
+    onDraft: (String) -> Unit,
+    onRun: () -> Unit,
+    history: List<String>,
+) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        // 历史补全（2026-10-10 批 90）：**草稿为空时**才画 —— 已经在敲字的时候把
+        // 历史顶上来，会把人正在写的那行挤走。点一下 = 把它填进输入框（不直接执行：
+        // 历史里那条多半要改一改再跑，直接执行等于替用户按了回车）。
+        if (history.isNotEmpty() && state.draft.isEmpty()) {
+            HistoryRow(history, onPick = onDraft)
+        }
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -263,6 +283,42 @@ private fun InputRow(state: ConsoleCmdState, onDraft: (String) -> Unit, onRun: (
         )
     }
 }
+
+/**
+ * 命令历史那一行（横向滚动，最近的在最左）。
+ *
+ * 只画前 [HISTORY_VISIBLE] 条：控制台是拿来敲命令的，历史条占掉半屏就本末倒置了。
+ * 全量仍在宿主侧（`HostSummary.consoleHistory` 给的是完整列表），这里只是"手边够得着"。
+ */
+@Composable
+private fun HistoryRow(history: List<String>, onPick: (String) -> Unit) {
+    Row(
+        // **横向滚动**而不是换行：一条 `npm install @scope/pkg@1.2.3 -D` 能占掉大半屏，
+        // 换行会让这一行长成三行、把输出区挤小。滚动条的语义也更对 —— 它是"手边那一排"，
+        // 不是"全部历史"。
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ToneText(
+            text = "历史",
+            tone = StatusTone.MUTED,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        history.take(HISTORY_VISIBLE).forEach { cmd ->
+            PillButton(historyLabel(cmd), selected = false, onClick = { onPick(cmd) })
+        }
+    }
+}
+
+/** 历史行最多画几条（见 [HistoryRow]：够手边用即可，全量在宿主侧）。 */
+private const val HISTORY_VISIBLE = 6
+
+/** 历史条上的短标签：太长就截断（填进输入框的仍是**原文**，截的只是那颗按钮的字）。 */
+private fun historyLabel(cmd: String): String =
+    if (cmd.length <= HISTORY_LABEL_MAX) cmd else cmd.take(HISTORY_LABEL_MAX - 1) + "…"
+
+private const val HISTORY_LABEL_MAX = 24
 
 @Composable
 private fun CommandField(

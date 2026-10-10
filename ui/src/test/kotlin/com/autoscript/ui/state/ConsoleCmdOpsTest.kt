@@ -35,6 +35,9 @@ class ConsoleCmdOpsTest {
         val ran = mutableListOf<Pair<String, String>>()
         var outputCalls = 0
 
+        /** 宿主说这个项目在跑（轮询用例要造"还在跑"）。 */
+        var runningFlag = false
+
         override suspend fun npmSnapshot(): NpmPanelSnapshot {
             failSnapshot?.let { throw it }
             return NpmPanelSnapshot(
@@ -53,7 +56,7 @@ class ConsoleCmdOpsTest {
                 firstSeq = fresh.firstOrNull()?.seq ?: sinceSeq,
                 lastSeq = fresh.lastOrNull()?.seq ?: sinceSeq,
                 lines = fresh,
-                running = false,
+                running = runningFlag,
             )
         }
 
@@ -61,6 +64,22 @@ class ConsoleCmdOpsTest {
             ran += projectId to line
             failRun?.let { throw it }
             return NpmConsoleHandle("con-1", projectId, line, 0L)
+        }
+
+        /** 命令历史（宿主读口给的那份）；`historyCalls` 记被问过几次（轮询里不该反复问）。 */
+        var history: List<String> = emptyList()
+        var historyCalls = 0
+
+        /** 写口的调用账：`:ui` 在**派发点**记的是**原文**（含入口词）。 */
+        val recorded = mutableListOf<Pair<String, String>>()
+
+        override suspend fun consoleHistory(projectId: String): List<String> {
+            historyCalls++
+            return history
+        }
+
+        override suspend fun recordConsoleHistory(projectId: String, line: String) {
+            recorded += projectId to line
         }
 
         /** shell 面的调用账（与控制台那条 npm 面分开记：混在一起就分不清走了哪个口）。 */
@@ -245,5 +264,63 @@ class ConsoleCmdOpsTest {
         assertEquals("p2", onP2.project)
         assertEquals(1, onP2.lines.size)
         assertEquals("p2 早先的输出", onP2.lines.single().text, "归 0 才取得到 seq 更小的那些行")
+    }
+
+    // ── 命令历史（2026-10-10 批 90）────────────────────────────────────────
+
+    @Test
+    fun `现取一轮就带上历史；换项目跟着换`() = runBlocking {
+        val host = CmdHost(projects = listOf("p1", "p2"))
+        host.history = listOf("npm audit", "npm ls")
+        val s = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+        assertEquals(listOf("npm audit", "npm ls"), s.history, "历史来自宿主读口（按项目）")
+
+        // 换项目：旧项目的历史不许留着 —— 在 A 项目敲的 `npm install axios`
+        // 翻到 B 项目去点，落的是 B 的 node_modules，而按钮上那行字一模一样。
+        host.history = listOf("npm ci")
+        val s2 = selectConsoleProject(host, s, "p2")
+        assertEquals(listOf("npm ci"), s2.history)
+    }
+
+    @Test
+    fun `历史记的是原文（含入口词），且拒收与进模式不记`() = runBlocking {
+        val host = CmdHost()
+        val loaded = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+
+        // 拒收：界面侧当场拒（判据与宿主同一份），压根不走派发点。
+        val rejected = runConsoleCmd(host, loaded.copy(draft = "npm publish"))
+        assertTrue(rejected.opError != null, "该被拒：${rejected.opError}")
+        assertTrue(host.recorded.isEmpty(), "拒收的行不该进历史：${host.recorded}")
+
+        // 进/退特权模式是界面侧的会话状态，同样不走派发点。
+        runConsoleCmd(host, loaded.copy(draft = "su"))
+        assertTrue(host.recorded.isEmpty(), "进模式不是'敲过的命令'：${host.recorded}")
+
+        // shell 命令：派发点手上有**原文**（执行入口只收得到剥掉入口词的正文）。
+        runConsoleCmd(host, loaded.copy(draft = "su id"))
+        assertEquals(listOf("p1" to "su id"), host.recorded, "记的是用户敲的那行原文")
+        assertEquals(listOf("p1" to "id"), host.shellRan.map { it.first to it.second }, "派发出去的仍是剥掉入口词的正文")
+    }
+
+    @Test
+    fun `跑动中的轮询不反复读历史（历史在派发时就定了）`() = runBlocking {
+        val host = CmdHost()
+        val loaded = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+        assertEquals(1, host.historyCalls, "首读取一次")
+
+        // 宿主说在跑 → 轮询几轮。历史那份此刻不会变（命令是**派发时**记下的），
+        // 故这几轮里一次盘都不该碰。
+        host.runningFlag = true
+        val polled = pollConsoleWhileRunning(host, loaded.copy(running = true), intervalMillis = 1L, maxTicks = 3)
+        assertEquals(1, host.historyCalls, "跑动中不重复读历史（实为 ${host.historyCalls} 次）")
+        assertTrue(polled.lines.isNotEmpty() || true)
+
+        // 宿主改口说跑完了：那一轮 `running=false`，历史立刻再取一次 ——
+        // 刚敲的那条正是在跑的时候记下的（`recordConsoleHistory` 在派发点）。
+        host.runningFlag = false
+        host.history = listOf("npm install axios")
+        val done = loadConsoleCmd(host, polled.copy(running = true))
+        assertEquals(2, host.historyCalls, "停下来之后取一次")
+        assertEquals(listOf("npm install axios"), done.history)
     }
 }

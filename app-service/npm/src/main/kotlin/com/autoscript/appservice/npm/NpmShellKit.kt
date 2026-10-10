@@ -94,6 +94,9 @@ object NpmShellKit {
             // 审批账本落盘（§10.2）：不落盘时 seq 从 0 起，重启后新票会与旧票同 id。
             ledger = ApprovalLedger(approvalStore),
             history = InstallHistory(autojsDir),
+            // 控制台命令历史（2026-10-10 批 90）：与审计史同住 `.autojs/`，
+            // 但**纪律不同**（可修剪的便利缓存，见 ConsoleHistory 的类 KDoc）。
+            consoleHistory = ConsoleHistory(autojsDir),
             lockSigner = lockKey?.let { LockSigner(autojsDir, it) },
             snapshots = if (snapshots && lockKey != null) NpmSnapshot(layout, autojsDir, lockKey) else null,
             cacheIndex = CacacheIndex(NpmCacheSeedDeployer.cacheRoot(cacheDir)),

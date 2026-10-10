@@ -484,6 +484,35 @@ interface PackageManagerFacade {
         NpmConsoleSnapshot(firstSeq = sinceSeq, lastSeq = sinceSeq, lines = emptyList(), running = false)
 
     /**
+     * 控制台**命令历史**读数（§10.9 第 3 条，2026-10-10 批 90）：[projectId] 下最近敲过的
+     * 若干条，最近的在最前、已按整行去重。
+     *
+     * 与 [consoleOutput] 是两件事：**那个是环、这个是盘**。环随进程消失，而"关掉控制台
+     * 再进来还能翻回上次敲的那条"正是这个读口存在的唯一理由。
+     *
+     * **按项目分开**（与 [history] 的无参全量刻意相反）：控制台的命令跑在某个项目上
+     * （顶部先选项目），历史跟着同一个作用域走 —— 在 A 项目敲的 `npm install axios`
+     * 翻到 B 项目去点，落的是 B 的 `node_modules`，而按钮上那行字一模一样。
+     * [history] 问的是"这个宿主发生过什么"（审计），本口问的是"我在这个项目里敲过什么"。
+     *
+     * 缺省实现回空表：未接线的替身零改动即可编译。空表 = "没有历史可补"，
+     * 与"读不到"在界面上长得一样 —— 这是**刻意**的：历史是便利面，
+     * 为它单独造一条失败态只会让输入行旁边多一行红字。
+     */
+    suspend fun consoleHistory(projectId: String): List<String> = emptyList()
+
+    /**
+     * 记一条控制台命令历史（写口，2026-10-10 批 90）。
+     *
+     * **写口在调用方而不是执行入口**：历史要记的是**用户敲的那行原文**，而执行入口
+     * 拿到的是已定形的东西（shell 面那条只收得到剥掉入口词的正文）。详见
+     * `InstallCoordinator.recordConsoleHistory` 的 KDoc。
+     *
+     * 缺省实现是空操作：未接线的替身零改动即可编译，也不落任何账。
+     */
+    suspend fun recordConsoleHistory(projectId: String, line: String) {}
+
+    /**
      * 依赖面板读数（§10.9.1）：一次现取**全部项目**的已装清单 + 离线缺口 + 尺寸配额，
      * 外加**全局**待审队列。
      *
