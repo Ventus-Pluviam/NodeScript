@@ -70,6 +70,9 @@ class AppShellNpmCliTest {
         npmNodeBin = nodeBin,
         npmLockKeys = lockKeys,
         npmGateDeploy = gateDeploy,
+        // T1 桥的 socket 缝：`assemble` 里是必填（见那条 KDoc）。桌面单测用 JDK unix
+        // domain socket —— 它**只能**出现在这里，设备装配传的是 AndroidT1SocketBinder。
+        npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
     )
 
     /**
@@ -202,6 +205,8 @@ class AppShellNpmCliTest {
     fun `装配出的执行体：有 userconfig、没有钉死的 registry`() {
         val src = MemSource(listOf("bin/npm-cli.js", "bin/npx-cli.js"))
         val wiring = AppShellKit.wireNpmExecutor(
+            // T1 桥 socket 缝（桌面 = JDK unix domain socket）
+            t1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
             filesDir = files,
             cacheDir = cache,
             source = src,
@@ -249,6 +254,8 @@ class AppShellNpmCliTest {
         Files.write(projectRoot.resolve(".npmrc"), listOf("registry=https://project.example.com"))
         val src = MemSource(listOf("bin/npm-cli.js", "bin/npx-cli.js"))
         val wiring = AppShellKit.wireNpmExecutor(
+            // T1 桥 socket 缝（桌面 = JDK unix domain socket）
+            t1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
             filesDir = files,
             cacheDir = cache,
             source = src,
