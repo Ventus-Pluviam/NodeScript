@@ -241,7 +241,8 @@ sealed interface NpmConsoleCommand {
  * - [DEFAULT]：**未进特权模式**。shell 命令在这里一律拒（如实说「需要 root 或 Shizuku」），
  *   裸首词按 npm bin 解析。
  * - [ROOT]：`su -c`，root uid。
- * - [ADB]：Shizuku（`newProcess`），**shell uid**（不是「设备侧已在 adb shell 内」那层
+ * - [ADB]：Shizuku（`newProcess`），身份**由 Shizuku 服务进程决定**（服务以 adb 启动 =
+ *   shell uid，以 root 启动 = root —— 故这里不写死某一个）。不是「设备侧已在 adb shell 内」那层
  *   —— 那是 `:platform:system` 的 `ShellMode.ADB` 语义，本枚举刻意不复用那个类型：
  *   `:domain` 看不到 `:platform:*`，而且两者的语义确实不同，同名会让人以为是一条路）。
  */
