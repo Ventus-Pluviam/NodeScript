@@ -122,6 +122,34 @@ class FileTaskStoreTest {
         }
     }
 
+    /**
+     * 外审 B3 半（2026-10-11）：半行不能只"在内存里丢"，**盘上也得清掉**。
+     *
+     * 原实现的洞：replay 遇到无换行的尾行就 `break`（内存里干净了），但**盘上那半截还在**，
+     * 紧接着的 append 会把它与下一条记录粘成一行 —— 此后每次重启 replay 都在这一行上抛
+     * `IOException`，构造即失败 = 调度注册表再也打不开。这条用例走完整闭环：
+     * 崩溃留半行 → 重开 → **再写一条** → 再重开仍读得出来。
+     */
+    @Test
+    fun `半行截断后新写入不被粘连：重开仍可读（外审 B3 半）`() {
+        FileTaskStore(dir).use { store -> store.put(once("t1")) }
+        Files.write(
+            dir.resolve("tasks.jsonl"),
+            """{"op":"put","id":"t-half"""".toByteArray(),
+            java.nio.file.StandardOpenOption.APPEND,
+        )
+        FileTaskStore(dir).use { reopened ->
+            assertEquals(listOf("t1"), reopened.loadAll().map { it.id })
+            reopened.put(once("t2"))       // 关键：往半行后面接着写
+        }
+        FileTaskStore(dir).use { again ->
+            assertEquals(
+                listOf("t1", "t2"), again.loadAll().map { it.id },
+                "半行必须已在打开时截掉：否则新行与残片粘成一行，重放直接抛 IOException",
+            )
+        }
+    }
+
     @Test
     fun `disabled 任务同样持久：恢复后留名由 rearm 决定续不续排`() {
         FileTaskStore(dir).use { store ->

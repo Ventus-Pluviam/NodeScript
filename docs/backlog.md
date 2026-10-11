@@ -1,5 +1,34 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 96：外审整改第一刀 —— 排队不挡急停 / jsonl 半行清盘 / 桥 TTL 截断）
+
+- **维护者转来外部评审报告，本月做四件（本批落账）**。完整报告已按月度归档在下方
+  「外审登记」条（2026-10-11）+ 附录：本批的四个守卫先红后绿，修前实测见各条。
+  1. **排队中的 start 不挡 stop/killAll/看门狗（外审 B1 高）—— 已做**：`RuntimeController.start`
+     等证出 `guard`（满池排队可挂 60–120s），只记账时取锁 + 急停代次对表；`FixedEnginePool`
+     自扛并发（`killAll` 推进 stopEpoch，`acquire` 在夺槽前与 execute 后两处对表，代次变了
+     即作废回收）。守卫 `RuntimeControllerQueuedStartTest` 新建 3 例：修前 `stop(A)` 耗时
+     **2927ms**（= B 的排队超时），修后 ≈0。口径见决策第 65 项。
+  2. **jsonl 半行既丢又清盘（外审 B3）—— 已做**：`FileTaskStore`/`FileRunArchive` 打开时截到
+     「最后一个完整行」（原只内存丢、盘上留着 → 新行与残片粘连，之后每次重启构造即抛
+     `IOException`）。守卫各 +1，走完「重开 → 再写 → 再重开」闭环（修前第三步抛
+     `IOException: journal 行损坏`）。
+  3. **桥请求 TTL 溢出显式截断（外审 B4 半）—— 已做**：`RequestRegistry` 的 `now + ttl`
+     对极端正数溢出成负数 = 立即超时，截到 `MAX_TTL_MILLIS`（24h）。守卫 +1。
+  4. **「三万英尺」既有的三件路径校验（外审 Medium「No path validation at the edges」）——
+     **逐条复核后登记不排期**：`ScriptPaths` 有 `PROJECT_ID` 正则（2026 批 84 已钉，判据里
+     **没有 `.`**）与 `DeployPath.resolveIn` 的二次校验（含 startsWith(root)）；调度侧
+     `isSafeRelPath` 门也已在（`ScriptDeployRecovery`）。评审建议的「`TrustTierResolver`
+     上线后 projectId='builtin' 会跑 `../x`」在**当前所有项目都解析为 UNKNOWN** 的前提下
+     不成立，但那条评本身的语义（`scriptFile` KDoc 说「越界只读不到」**与 NodeProcessEngine
+     实际会执行它矛盾**）已登记，待 `TrustTierResolver` 排期时一起收。
+- **仍在挂（登记，不假装做完）**：`BridgeRouter`（L104）把一切未知异常折成
+  `ERR_INVALID_PARAM` 并回显 `e.message` —— 与 `RpcNamespaceHandler` KDoc「未知异常不接、
+  照旧穿出」矛盾，还让内部 bug 看起来像参数错、路径可能泄露（随 `ScheduledTask`/脚本路径）。
+  `SqliteKvOps.onUpgrade` 版本升级即 DROP（脚本数据全没、无 onDowngrade）。两者都是**单条
+  语义改动 + 守卫**，留给下一刀；`readAllBytes` 全量读、进程池记账重构、三 docs 面一并登记在
+  下方外审登记条。**验证**：完整 CI JVM 门同源待跑。
+
 ## 2026-10-11 追记（批 95：T1 杀树换 /proc 实现 —— 批 91 那版在真机上是静默空转）
 
 - **批 91 清单的第 5、6 条做了，本条销账**（原文在下方 2026-10-10 追记里逐字保留）：
@@ -578,3 +607,44 @@
 
 **下一批**：从上面 A–E 各表里**没划掉**的行里挑（那才是待办），一次一批、
 每批跑完整 CI 同源门（见 [`../CLAUDE.md`](../CLAUDE.md) 构建节）。
+
+---
+
+## 外审登记（按月归档）
+
+### 2026-10-11 —— 外部评审报告（维护者转来），批 96 做了其中 4 件
+
+**逐条核实纪律**：外审条目先在本仓 grep/复现再动手（前三轮外审约半数条目在树上不成立）。
+下表的「核实」列写的就是**本仓实测结论**，不是转述。
+
+#### 高
+
+| # | 外审条目 | 核实结论 | 状态 |
+|---|---|---|---|
+| **B1** | 排队中的 start 持锁跨挂起，堵住 stop/killAll/watchdog | **成立**（实测 `stop(A)` 2927ms = 排队超时） | ✅ 批 96 已修 |
+| **B2** | 池记账竞态：release 的代次检查与 quiesce 非原子、`PoolSlot.state` 非 volatile、`stop()` 抛异常致槽位停在 QUIESCING 而许可已还、``stop` 在 `guard` 外 release 与 `killAll` 在内 release 可双重归还 | **部分成立**：`state` 非 volatile（`stats()` 无锁读）属实；`release` 的代次检查在 stateLock 内但 `quiesce()` 在锁外（外审称「stale handle 能停掉新占用者」——`occupy()` 每次夺槽推进代次，故 stale 句柄在检查处即被拒，**未复现**拆新占用者）；`quiesce()` 抛异常则槽位停在 QUIESCING（状态机未复位）属实 | 🔶 登记：与批 96 的急停代次同族，**彻底解是外审建议 (b) 通道化重构**（约 300 行 + 测试重写），未排期 |
+| **B3** | jsonl 半行只在内存丢弃、盘上不截断，后续 append 粘连，下次启动 `IOException`；无压缩、全量 `readAllBytes` | **完全成立**（守卫修前抛 `IOException: journal 行损坏`） | ✅ 半行清盘已修（批 96）；**压缩/流式读未做** 🔶 |
+
+#### 中
+
+| # | 外审条目 | 核实结论 | 状态 |
+|---|---|---|---|
+| **M1** | 路径未校验（`engines.exec` / `workManager.create` 只判空；`scriptPath` 越界会被执行；`cwd` 来自未校验 `projectId`） | **半成立**：`ScriptPaths.isValidProjectId`（无 `.`）/`DeployPath.resolveIn`（startsWith(root)）/`ScriptDeployRecovery.isSafeRelPath` **都已在**；外审设想的 `projectId="builtin"` 提权场景在「全部项目解析为 UNKNOWN」下**不成立**。**真问题**是 `ScriptPaths.scriptFile` 的 KDoc 说「越界只读不到」而 `NodeProcessEngine:148` **会执行它** —— KDoc 与实现矛盾 | 🔶 登记：随 `TrustTierResolver` 排期收口；先补 KDoc 事实 |
+| **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | 🔶 字节加权信号量 + 每连接上限 + `limitedParallelism` 未做 |
+| **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | 🔶 登记（瞬时错误应 `continue` + 计数，不当关断信号） |
+| **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | 🔶 登记：需新增 `ERR_INTERNAL` + 契约卷同步（§7.6 错误表），下一刀 |
+| **M5** | pid 绑定在 Android 8–12 失效（`Process.pid()` 需 API 33，minSdk 26；`spawn.pid` 为 null 时跳过防劫持检查） | **成立且已知**（`ProcessLauncher` 两级反射只取 `pid()` 方法，**无私有字段那级**——批 95 的 `ProcOps.pidOf` 已补上那一级，可复用） | 🔶 登记：把 `ProcOps.pidOf` 提到共享工具后接线 |
+| **M6** | shell 执行器：`destroyForcibly()` 只杀 `sh`/`su` 不杀其子；孙进程持管道时线程/fd 泄漏；stdin 从不关闭（`cat` 挂到超时）；命令串进错误与日志 | **部分成立**：孙进程持写端的宽限已有（`DRAIN_GRACE_MILLIS`），但**杀树没做**、**stdin 未关**属实；命令串进日志是**有意**的（`warnIfTruncated` KDoc 已论证「没它定位不到是谁」） | 🔶 登记：复用批 95 的 `ProcOps`；stdin 关闭与命令串脱敏属行为变更 |
+| **M7** | zip：`Files.walk` 抛 `UncheckedIOException` 被 `catch (IOException)` 漏过（`.tmp` 残留 + 错误码错）；打进源目录会自含 `.tmp`；无条目数上限（零字节文件绕过字节上限）；包含性纯词法 | **成立**（`JdkZipArchiver.compress`） | 🔶 登记 |
+| **M8** | `SqliteKvOps.onUpgrade` 版本升级即 DROP 表、无 `onDowngrade` | **成立** | 🔶 登记：单条语义改动 + 守卫，可与 M4 同批 |
+| **M9** | `LockSigner`：一份 `lock.sig` 服务所有项目（签 B 废 A）；验签在入队时而 `npm ci` 在队列里更晚跑；null signer 静默跳过验签 | **半成立**：KDoc 已明写「同一把签名覆盖所有项目」（签的是 `projectId\|lock 内容`）——**单签名文件是设计而非 bug**，但「签 B 使 A 验不过」确是可用性代价；`ci` 的验签与 `enqueueHeavy` **相邻同函数**（无 TOCTOU 窗口） | 🔶 登记：per-project 签名文件属存储格式变更，要拍板 |
+
+#### 设计 / 结构 / 文档（外审建议，非缺陷）
+
+- **typed ids**（`ProjectId` / `RelPath` 值类，编译期强制，约 15 文件机械改动）🔶 未排期
+- **池记账单一真源**（`Channel<PoolSlot>` 空闲表 + `Lease` 幂等归还）= B2 的彻底解 🔶
+- **单一 actor 持有控制器状态**（外审推荐的最干净形态，但会把每个方法变成消息）🔶
+- **jsonl 三份手写格式 → SQLite**（`FileTaskStore`/`FileRunArchive` + 意图日志；已有 `SqliteIntentStore` 可参照）🔶 含一次性导入器
+- **KDoc 与实现矛盾 7 处**（`DeployPath.resolveIn` 声称防符号链接实为词法；`scriptFile` 声称越界只读不到；`RpcNamespaceHandler` 声称未知异常穿出；`AndroidShellExecutor` 声称无孤儿进程；`FixedEnginePool` 声称 stale release 不拆新占用者；`FileTaskStore` 声称重放收敛；`LockSigner` 声称防跨项目搬锁）—— 批 96 已修其中 3 处隐含面（半行清盘让「重放收敛」真成立），**KDoc 文字本身未改** 🔶
+- **文档面**：1.4 MB markdown、约 520 KB 流水、全中文（对外贡献门槛）、`docs/` 按受众重排（= **D13**）、威胁模型逐行映射到测试、并发契约块与时序图 —— 与 **D13** 合并考虑 🔶
+- **无 `ERR_INTERNAL`**：错误表 22 个码里没有「内部错误」这一档，M4 的根因就在这 🔶 与 M4 同批

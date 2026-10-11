@@ -1,6 +1,20 @@
 # 流水切片（按日期）
 
-## 最新追记（2026-10-11，批 95）
+## 最新追记（2026-10-11，批 96）
+
+- [2026-10-11 · 批 96：外审整改第一刀 —— 「排队不挡急停」/jsonl 半行清盘/TTL 截断](2026-10-11.md)：
+  维护者转来外部评审报告，本批做其中四件（纯工程、本机可验证）。**① 排队中的 start 不再挡
+  stop/killAll/看门狗（B1 高）**：`RuntimeController.start` 等证不再整段持 `guard`（满池排队
+  可达 60–120s），只记账时取锁 + 急停代次对表；`FixedEnginePool` 自扛并发（killAll 推进
+  stopEpoch，抢槽路径两处对表，代次变了即作废回收）。守卫新建 3 例，修前实测 `stop(A)`
+  耗时 2927ms（= 排队超时），修后 ≈0。**② jsonl 半行清盘（B3）**：`FileTaskStore`/
+  `FileRunArchive` 打开时截到最后一个完整行（原只丢内存、盘上留着 → 下一条 append 与残片
+  粘连，之后每次重启构造即 IOException）。守卫各 +1 走完「重开→再写→再重开」闭环。**③ 桥
+  请求 TTL 溢出截断（B4 半）**：`now + ttl` 对极端正数翻负 = 立即超时，显式截到 24h 上限。
+  守卫 +1。另登记未改：`BridgeRouter` 未知异常吞成 `ERR_INVALID_PARAM` 的语义缝、`readAllBytes`
+  全量读、进程池重构（两处记账真源）、`SqliteKvOps.onUpgrade` 丢表。完整 CI JVM 门同源待跑。
+
+
 
 - [2026-10-11 · 批 95：T1 杀树换 /proc 实现 —— 修掉批 91 在真机上的静默空转 + 无人点名的 signal](2026-10-11.md)：
   **实情挖出比记账严重**：`java.lang.ProcessHandle` **整类不在 android.jar**（api-versions.xml

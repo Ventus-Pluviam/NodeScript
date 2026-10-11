@@ -34,6 +34,20 @@ class RequestRegistryTest {
     }
 
     @Test
+    fun `ttl 溢出被截断：now+ttl 不翻负（外审 B4）`() {
+        val clock = FakeClock(now = Long.MAX_VALUE / 2)
+        val r = RequestRegistry(clock)
+        // 极大 ttl：若不截断，Long.MAX_VALUE/2 + ttl 溢出成负数 → 到期即被收割（等于"立即超时"）。
+        val ticket = requireNotNull(r.register(1, reg(1_000).copy(ttlMillis = Long.MAX_VALUE / 2)) {})
+        val deadline = ticket.deadline
+        assertTrue(deadline > clock.nowMillis(), "ttl 必须被截到『仍在未来』：未截断则溢出成负数" + deadline)
+        assertTrue(
+            deadline - clock.nowMillis() <= RequestRegistry.MAX_TTL_MILLIS,
+            "截断后期限不超过上限",
+        )
+    }
+
+    @Test
     fun `expireDue completes with ERR_TIMEOUT`() {
         val clock = FakeClock(now = 10_000)
         val r = RequestRegistry(clock)

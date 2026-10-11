@@ -1,4 +1,17 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 96（外审整改第一刀：排队不挡急停 / jsonl 半行清盘 / 桥 TTL 截断）**：
+> 维护者转来外部评审报告，本批做其中四件（纯工程、本机可验证）。**① 排队的 start 不挡
+> stop/killAll/看门狗（B1 高）**：`start` 等证不再整段持 `guard`（满池排队可挂 60–120s），
+> 只记账时取锁 + 急停代次对表（`killAll`/`forceStopAll` 推进）；池自扛并发（夺槽前与
+> execute 后两处对表，代次变即作废回收，绝不夺被急停强释的槽、绝不把账外野进程留在设备上）。
+> 守卫新建 3 例，修前实测 `stop(A)` 2927ms（= 排队超时）→ 修后 ≈0。**② jsonl 半行清盘（B3）**：
+> `FileTaskStore`/`FileRunArchive` 打开时截到最后一个完整行（原只内存丢、盘上留着 → 新行与
+> 残片粘连，之后每次重启构造即 IOException）；守卫各 +1 走通「重开→再写→再重开」闭环。
+> **③ 桥 TTL 溢出截断（B4 半）**：`RequestRegistry` 截到 24h 上限（`now+ttl` 翻负 = 立即超时）。
+> 守卫 +1。**登记未改**：`BridgeRouter` 未知异常吞成 `ERR_INVALID_PARAM`（教训与 KDoc 矛盾）、
+> `readAllBytes` 全量读/无压缩、进程池两处记账真源、`SqliteKvOps.onUpgrade` 丢表。完整 CI JVM
+> 门同源待跑。细节见 [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 95（T1 杀树换 /proc 实现 —— 修掉批 91 在真机上的静默空转 + 无人点名的 signal）**：
 > 挖出比记账更严重的实情：`java.lang.ProcessHandle` **整类不在 android.jar 里**（api-versions.xml
 > 无条目、jar 无 class、`Process` 桩面无 `toHandle()`/`pid()`，javap 逐方法核过）—— 批 91 的
@@ -511,6 +524,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 4 | 批 96：外审整改第一刀 —— 「排队不挡急停」（start 等证出 guard + 急停代次对表，修前 stop(A) 2927ms → 修后 ≈0，守卫 3 例先红后绿）/ jsonl 半行清盘（FileTaskStore/FileRunArchive 打开时截到最后一个完整行，守卫走通「重开→再写→再重开」）/ 桥请求 TTL 溢出截断（显式 24h 上限）。守卫全模块绿；登记未改：BridgeRouter 未知异常吞成 ERR_INVALID_PARAM、readAllBytes 全量读、进程池重构、SqliteKvOps.onUpgrade 丢表 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 3 | 批 95：T1 杀树换 /proc 实现 —— ProcessHandle 整类不在 android.jar（批 91 杀树在真机静默空转）；ProcOps/ProcTreeOps：/proc ppid 图 + kill 二进制 + 扫在杀之前 + 二次收割 + pid 反射两级阶梯；无人点名 signal 按 128+n 惯例反查信号名表。守卫 ProcOpsTest 7 例 + T1ProcessTest +5（真进程树用例抓到 readStat 读目录的真 bug）。**边界**：真机自测 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 2 | 批 94：T1 欠账两件 —— 脚本输出真流式（`ScriptOpExecutor` 补 `OutputSink` 缝，T1 会话进程 stdout 边读边落控制台环）+ 命令可取消（桥侧 `kill` 帧 SIGTERM/SIGKILL、`waitFor` 切片轮询查 `ScriptOp.cancelSignal`、facade/`HostSummary` `cancelConsoleCommand`、UI 停止按钮）；覆盖面如实：T1 真杀、重操作仍弃结果（TTL 兜底）。守卫五测试类 +11 例 + detekt baseline 重生成 + lintDebug 全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 1 | 批 93：控制台 `npm run`/`npx` 拆除人工审批 + env-NUL 修复 —— 用户裁定「审批不是这样用的……依赖面板是方便用户直接安装和管理依赖的地方。你把审批去掉吧」，**整面拆**：账本两类/桥面 `requestApprove`+`approvals`/`:domain` 七个审批类型/facade 四个方法/UI 审批卡（`approvalLedgerSnapshot` 保留只读）；放行判据改解析层白名单，`versionHash` 只进审计。同批修真机暴露 env-NUL：`connectTarget` 的 `"\0"` 前缀经 env 进 `ProcessBuilder` 必抛 `Invalid environment variable value` —— 改 env 给裸名、shim 按 `main.cpp` 同源 '/' 判别补前缀；桌面路径型原样，`T1BridgeNodeTest`+`T1BridgeE2ETest` 继续绿 = 直连分支钉死。守卫：完整 CI JVM 门 14 任务全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |

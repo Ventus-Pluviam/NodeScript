@@ -26,7 +26,10 @@ class RequestRegistry(private val clock: Clock = SystemClock) {
     fun register(connectionId: Long, request: BridgeRequest, completer: (BridgeResponse) -> Unit): Ticket? = synchronized(lock) {
         val key = Key(connectionId, request.id)
         if (closed || pending.containsKey(key)) return null
-        val ttl = request.ttlMillis.takeIf { it > 0 } ?: DEFAULT_TTL_MILLIS
+        // 上游只挡了 <=0，正数但极大的 ttl 会在这里 `now + ttl` 溢出成负数 —— 过期即
+        // 到期，语义上是"立即超时"，不是"一段很长的时间"（外审 B4：now+ttl 溢出）。
+        // 显式截到上限：宁可提前收割，不让溢出把「立即超时」伪装成别的意思。
+        val ttl = (request.ttlMillis.takeIf { it > 0 } ?: DEFAULT_TTL_MILLIS).coerceAtMost(MAX_TTL_MILLIS)
         Ticket(key, clock.nowMillis() + ttl, completer).also { pending[key] = it }
     }
 
@@ -61,5 +64,8 @@ class RequestRegistry(private val clock: Clock = SystemClock) {
 
     companion object {
         const val DEFAULT_TTL_MILLIS: Long = 5_000
+
+        /** 单请求 TTL 上限（外审 B4）：防 `now + ttl` 溢出成负数 = 到期即超时。 */
+        const val MAX_TTL_MILLIS: Long = 24L * 60 * 60 * 1000
     }
 }

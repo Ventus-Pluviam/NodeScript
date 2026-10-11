@@ -62,13 +62,34 @@ class FileTaskStore(dir: Path) : TaskStore {
         if (!Files.exists(file)) return
         val bytes = Files.readAllBytes(file)
         var pos = 0
+        var lastFullLineEnd = 0                        // 最后一个完整行的行尾偏移（含换行）
         while (pos < bytes.size) {
             val nl = findNewline(bytes, pos)
-            if (nl < 0) break                        // 最后半行：丢弃（崩溃截断）
+            if (nl < 0) break                        // 最后半行：**以下一并截掉**（崩溃截断）
             val line = String(bytes, pos, nl - pos, StandardCharsets.UTF_8)
             pos = nl + 1
+            lastFullLineEnd = minOf(pos, bytes.size)
             if (line.isBlank()) continue
             Codec.apply(line, tasks)
+        }
+        truncateTail(lastFullLineEnd)
+    }
+
+    /**
+     * 截掉文件尾的任何残片（崩溃/断电写到一半的那条 json 行）。
+     *
+     * 为什么必须截：原实现只在内存里丢弃半行、盘上留着 —— 那半截字节与下一条记录
+     * 随即粘成一行，之后每次重启 replay 都在这一行上抛 `IOException`，`tasks.jsonl`
+     * **再也打不开**（构造即失败）。打开时把「已知的最后完整行」之后的字节清掉，
+     * 崩溃持久纪律的两个性质才真正成立：重放收敛 + 新 append 不与残片粘连。
+     */
+    private fun truncateTail(offset: Int) {
+        if (offset <= 0) { Files.deleteIfExists(file); return }   // 全残：从空文件重来
+        try {
+            FileChannel.open(file, StandardOpenOption.WRITE).use { ch -> ch.truncate(offset.toLong()) }
+        } catch (_: java.io.IOException) {
+            // 打不开/截不动（只读 fs、权限回卷）：残片会在下一次 append 时粘坏 ——
+            // 这是可观察的故障，但截不动不该让本构造直接炸（读取侧照常、写入侧会红）。
         }
     }
 
