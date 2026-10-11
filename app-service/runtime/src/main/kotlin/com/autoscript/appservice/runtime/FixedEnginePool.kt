@@ -7,26 +7,46 @@ import com.autoscript.domain.engine.EngineRunRequest
 import com.autoscript.domain.engine.KillCause
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.engine.StopResult
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 定容引擎进程池（docs §8.2 进程池决议）：
- * - 并发上限 = 容量（公平 Semaphore）；超载挂起等待，绝不静默丢任务（§8.6）；
- * - acquire 中引擎启动失败自动收回槽位 + 还许可证（不占槽）；
- * - release 走 [PoolSlot.quiesce]，TimedOut → kill 兜底；
- * - killAll 强杀全部非 FREE 槽位并回许可证。
+ * 定容引擎进程池（docs §8.2 进程池决议）。
  *
- * 并发约定（2026-10-11 批 96 修订）：killAll 与 acquire/release **不再要求调用方整段串行化** ——
- * 排队等证（[acquire] 的 `permits.acquire`）可能挂到 `waitTimeoutMillis`（调度链路 60–120s），
- * 把它圈进调用方的锁里会让 stop/killAll/看门狗取锚一起停摆（外审 B1 实测：容量 1 时
- * 「A 在跑、B 排队」→ `stop(A)` 耗时 ≈ B 的排队超时）。现在本类自己扛并发，靠两件：
- * 1. **急停代次**（[stopEpoch]）：[killAll] 推进一步；抢槽路径在「等完证夺槽前」与
- *    「execute 返回后」两处对表，代次变了即视为本条已被急停作废 —— 绝不夺槽、绝不
- *    `markRunning`（那会在已被 forceFree 的槽上抛非法转移，并把刚起的进程留在账外）；
- * 2. **夺槽仍原子**：许可证 → 槽位一一对应依旧在 stateLock 临界区内一次完成。
- * 槽位代次（§7.4 generation 纪律）在 stateLock 临界区内读写，过期句柄 release 不拆新占用者。
+ * ## 唯一真源：**空闲槽位队列**（2026-10-12 批 103 P2 重构；外审 B2 的彻底解）
+ *
+ * 原实现有两套靠手拿同步的记账 —— `Semaphore permits`（计**数**）与 `PoolSlot.state`
+ * （计**状态**）。两套的一致性全靠「取/还都要记得另一半」，于是四种失真全是「忘了还
+ * 另一半」的产物：
+ * - 有证无 FREE 槽 → [acquire] 拿不到槽却占着许可（池永久卡死一半容量）；
+ * - 槽 FREE 但无证可领 → 「引擎再不接活」（现场症状，极难查）；
+ * - 双重归还 → 超发一证、两个占用者并存（**同一引擎进程跑两个脚本**，违反 §8.2）；
+ * - 归还了但槽仍在用 → 收尾与下一次启动重叠。
+ *
+ * 现在**空闲队列就是全部**（[idle]）：队列里就是可用的，出队就是被占。一个槽位
+ * **要么在队列里、要么在某一份 [PoolLease] 手里** —— 这两条互斥，而「归还是否发生过」由
+ * lease 的 CAS 保证，于是上面前三种失真在**结构上**不再可能（第四种由「先 quiesce 后归还」
+ * 保证，见 [PoolLease.release]）。
+ *
+ * ## 并发约定（批 96 定，本批未改）
+ *
+ * 排队等槽可能挂到 `waitTimeoutMillis`（调度链路 60–120s），所以**不得**把它圈进调用方
+ * （`RuntimeController`）的锁里 —— 那是外审 B1 的病灶（实测 `stop(A)` 挡 2927ms）。
+ * 队列化之后本类自己扛并发，靠两件：
+ * 1. **[stopEpoch]**（急停代次）：[killAll] 推进一步；抢槽路径在「等完槽夺槽前」与
+ *    「execute 返回后」两处对表 —— 它量的是**「急停跨过了排队窗口」**，与槽位真源正交，
+ *    队列化**删不掉**它。
+ * 2. **队列操作本身是原子的**：`Channel` 的收发即临界区，取代原 `stateLock`。
+ *
+ * ## 与 §7.4 generation 纪律的关系
+ *
+ * 原实现靠 `slot.generation` 判「这是不是过期句柄」（旧句柄 release 不得拆新占用者）。
+ * 队列化之后**过期句柄在物理上不可能** —— 旧持有者手里是一份**已归还**的 lease，它的
+ * [PoolLease.returnOnce] 恒为 no-op，压根到不了槽位。`generation` 只剩诊断价值
+ * （[recycle] 与归还时推进），不再承担正确性。
  */
 class FixedEnginePool(
     engineFactory: (EngineId) -> ScriptEngine,
@@ -40,51 +60,59 @@ class FixedEnginePool(
 
     private val slots: List<PoolSlot> =
         List(capacity) { PoolSlot(it, engineFactory(EngineId(it)), clock) }
-    // kotlinx-coroutines Semaphore 无 fair 参数（fair 是 JUC API），默认即 FIFO 公平队
-    private val permits = Semaphore(capacity)
-    private val stateLock = Any()   // 非挂起记账临界区：夺槽/recycle/release 的许可证↔槽位对应在此原子完成
 
     /**
-     * 急停代次（[killAll] 推进；读写均在 stateLock 临界区内）。
+     * **唯一真源**：空闲槽位队列。初始装满（全部空闲）；[acquire] 从这里取，
+     * [PoolLease] 归还时往这里放。
      *
-     * 为什么要它：调用方不再整段串行化 acquire 与 killAll（见类 KDoc），于是「排队等证」
-     * 与「execute 启动中」两个窗口里都可能发生急停。两个窗口各自对表一次，代次变了就把
-     * 本条 acquire 判为作废 —— 这是「killAll 返回之后不存在账外执行体」这条不变式的落点。
+     * `Channel(capacity)` 而非 `UNLIMITED`：有界队列让「重复归还」（记账 bug）表现为
+     * `trySend` 失败（可观测），而 `UNLIMITED` 下它会**静默地把队列撑大** ——
+     * 那正是本次要消灭的那类失真。
      */
+    private val idle = Channel<PoolSlot>(capacity).also { ch -> slots.forEach { ch.trySend(it) } }
+
+    /**
+     * 在途占用数（[stats] 的读面）。
+     *
+     * **它不是记账的第二真源** —— 记账的真源只有 [idle]；这个数是「有多少 lease 未归还」，
+     * 由 lease 归还那一侧减、由夺槽那一侧加，两处都在同一条 lease 生命周期内
+     * （归还幂等 ⇒ 减也幂等）。它存在的理由：[Channel] 没有「不消费地窥视长度」的手段，
+     * 而 `stats()` 是 UI 的读面（池统计卡片），不能为了读它去做一次收发。
+     */
+    private val inUse = AtomicInteger(0)
+
+    /** 槽 → 当前未归还的 lease（[recycle] 要经它归还；池自己产的，出 lease 时登记）。 */
+    private val leases = ConcurrentHashMap<PoolSlot, PoolLease>()
+
+    /** 急停代次（[killAll] 推进；读在 [acquire] 的两处对表点）。 */
+    @Volatile
     private var stopEpoch: Long = 0L
 
     override suspend fun acquire(request: PoolAcquireRequest): PoolAcquireOutcome {
-        // 等证前先记代次：这一步可能挂到 waitTimeoutMillis（调度链路 60–120s），
-        // 期间完全可能与 killAll 并发 —— 等完再对表。
-        val epochAtEntry = synchronized(stateLock) { stopEpoch }
+        // 等槽前先记代次：这一步可能挂到 waitTimeoutMillis，期间完全可能与 killAll 并发。
+        val epochAtEntry = stopEpoch
 
-        val gotPermit = if (request.waitTimeoutMillis == null) {
-            permits.acquire()
-            true
+        val slot: PoolSlot = if (request.waitTimeoutMillis == null) {
+            idle.receive()
         } else {
-            withTimeoutOrNull(request.waitTimeoutMillis) { permits.acquire() } != null
+            withTimeoutOrNull(request.waitTimeoutMillis) { idle.receive() }
+                ?: return PoolAcquireOutcome.TimedOut
         }
-        if (!gotPermit) return PoolAcquireOutcome.TimedOut
 
-        // 夺槽必须原子且**先于** execute：许可证 → 槽位一一对应（stateLock 临界区内 markBusy + 代次前进）。
-        // 若把 markBusy 放到 execute 之后，execute 的真实启动耗时就是窗口期 ——
-        // 并发 acquire 会同时选中同一 FREE 槽，同一引擎进程跑两个脚本（违反 §8.2 每脚本一进程）。
-        val slot: PoolSlot
-        synchronized(stateLock) {
-            if (stopEpoch != epochAtEntry) {
-                permits.release()       // 等证期间急停：本条作废，立刻还证（不夺槽、不起进程）
-                return PoolAcquireOutcome.Failed(ABORTED_BY_STOP)
-            }
-            val free = slots.firstOrNull { it.state == SlotState.FREE }
-            if (free == null) {
-                permits.release()       // 有证无槽 = 记账失真，绝不吞证转死锁
-                return PoolAcquireOutcome.Failed("池记账失真：持有许可证但无 FREE 槽")
-            }
-            free.markBusy(clock.nowMillis())
-            free.occupy()
-            slot = free
+        // 等槽期间急停：本条作废，立刻还槽（不占槽、不起进程）。
+        if (stopEpoch != epochAtEntry) {
+            slot.markFree()
+            idle.trySend(slot)
+            return PoolAcquireOutcome.Failed(ABORTED_BY_STOP)
         }
-        val generation = slot.generation
+
+        // 夺槽必须在 execute **之前**完成：否则 execute 的真实启动耗时就是窗口期 ——
+        // 并发 acquire 会同时选中同一 FREE 槽，同一引擎进程跑两个脚本（违反 §8.2 每脚本一进程）。
+        // 队列化后这一步只有一个出队动作，**不再有「取到了却没占上」的中间态**。
+        slot.markBusy(clock.nowMillis())
+        slot.occupy()
+        val lease = newLease(slot)
+        inUse.incrementAndGet()
 
         return try {
             val receipt = slot.engine.execute(
@@ -98,28 +126,44 @@ class FixedEnginePool(
                     authorization = request.authorization,
                 )
             )
-            if (!stillOurs(slot, generation)) {
-                // 启动期间被 killAll 强释（槽位已 FREE / 代次已推进）：这条执行体已不属于任何人 ——
-                // 当场收掉，**绝不 markRunning**（那会在 IDLE 上抛非法状态转移，且把一条账外野进程
-                // 留在设备上）。急停广播路径本就在池内置 kill，这里同一条纪律。
+            if (stopEpoch != epochAtEntry) {
+                // 启动期间被 killAll 强释：这条执行体已不属于任何人 —— 当场收掉，
+                // **绝不 markRunning**（那会在 IDLE 上抛非法状态转移，且把一条账外野进程
+                // 留在设备上）。归还走 lease（幂等）：槽回队列，执行体另收。
                 killQuietly(slot)
+                lease.forceReturn(KillCause.ENGINE_REQUEST)   // BOOTING → CRASHED → IDLE → 回队
                 PoolAcquireOutcome.Failed(ABORTED_BY_STOP)
             } else {
                 slot.markRunning()           // execute 返回 = 进程已拉起：BOOTING → RUNNING（§8.3）
-                PoolAcquireOutcome.Granted(PoolHandle(request, slot, receipt))
+                PoolAcquireOutcome.Granted(PoolHandle(request, lease, receipt))
             }
         } catch (e: CancellationException) {
-            recycle(slot)               // 调用方取消：槽位复位 + 还证必须成对，否则池缩水
-            throw e                     // 取消语义照常向上传播
+            // 取消也是异常收场：BOOTING → CRASHED → IDLE → 回队
+            lease.forceReturn(KillCause.ENGINE_REQUEST)
+            throw e                               // 取消语义照常向上传播
         } catch (e: Exception) {
-            recycle(slot)               // 引擎启动失败：槽位收回（Failed 契约）
+            // 启动失败：状态机仍在 BOOTING（execute 没返回 → 没有 markRunning）——
+            // 归还前必须先走 [reuse] 把它落到 CRASHED→IDLE，否则 [PoolSlot.markFree] 的
+            // 「归还时状态机必在 STOPPED/CRASHED」断言会响亮失败（那条断言是有意的：
+            // 它正是「归还路径漏了 quiesce/reuse」的探测器）。
+            lease.forceReturn(KillCause.ENGINE_REQUEST)   // 启动失败：BOOTING → CRASHED → IDLE → 回队
             PoolAcquireOutcome.Failed(e.message ?: (e::class.simpleName ?: "engine start failed"))
         }
     }
 
-    /** 本槽位是否仍是这次 acquire 的（未被 killAll 强释）：stateLock 临界区内的对表。 */
-    private fun stillOurs(slot: PoolSlot, generation: Long): Boolean = synchronized(stateLock) {
-        slot.state != SlotState.FREE && slot.generation == generation
+    /**
+     * 产一份 lease 并登记；它的回队回调是**唯一的槽位回队口**（[PoolLease] 只管「谁有权
+     * 归还」，具体怎么还由本类给 —— 与批 95/99 的 `T1TreeOps`/`TreeOps` 同一分工）。
+     */
+    private fun newLease(slot: PoolSlot): PoolLease {
+        val lease = PoolLease(slot) { returnedSlot ->
+            leases.remove(returnedSlot)
+            inUse.decrementAndGet()
+            returnedSlot.markFree()
+            idle.trySend(returnedSlot)
+        }
+        leases[slot] = lease
+        return lease
     }
 
     /** 收掉一条**没人认领**的执行体（见 [acquire] 的急停分支）；已经死了/收不动都不阻断归还路径。 */
@@ -133,65 +177,45 @@ class FixedEnginePool(
         }
     }
 
-    override suspend fun release(handle: PoolHandle): StopResult {
-        // killAll 已强释的槽位（FREE）重复 release：视为已净，绝不超发许可证
-        if (handle.slot.state == SlotState.FREE) return StopResult.Clean
-        // 过期句柄（槽位被 kill 回收后又重分配）：绝不拆新占用者（§7.4 generation 纪律）
-        synchronized(stateLock) {
-            if (handle.slotGeneration != handle.slot.generation) return StopResult.Clean
-        }
-        return try {
-            handle.slot.quiesce()
-        } finally {
-            permits.release()
-        }
-    }
+    override suspend fun release(handle: PoolHandle): StopResult = handle.lease.release()
 
     override suspend fun killAll(reason: KillCause) {
-        // 代次推进与强释同临界区：并发的 acquire 要么在夺槽前看到新代次（直接作废），
-        // 要么在 execute 返回后看到槽位已 FREE（走 killQuietly 那条），不存在第三种。
-        synchronized(stateLock) { stopEpoch += 1 }
-        slots.forEach { slot ->
-            if (slot.state != SlotState.FREE) {
-                slot.engine.kill()
-                slot.forceFree(reason)
-                permits.release()
-            }
+        // 代次推进先于强释：并发的 acquire 要么在夺槽前看到新代次（直接作废并还槽），
+        // 要么在 execute 返回后看到代次变了（走 killQuietly 那条），不存在第三种。
+        stopEpoch += 1
+        // 队列里的都是空闲槽（不必杀、也不改变容量）；在途的槽逐个强杀并**强制归还**
+        // （lease 幂等 ⇒ 持有者随后的迟到 release 是 no-op，不会双重归还）。
+        // 快照 keys：循环体里会 remove 元素，直接遍历 ConcurrentHashMap 弱一致但难推理。
+        leases.keys.toList().forEach { slot ->
+            val lease = leases[slot] ?: return@forEach
+            slot.engine.kill()
+            // 强释走 lease：状态机复位 + 回队一次；持有者随后的 release 是 no-op。
+            // **不等 quiesce** —— 强释要的就是「立刻不再用」，等收尾反而让急停卡住。
+            lease.forceReturn(reason)
         }
     }
 
     override fun stats(): PoolStats {
-        val free = slots.count { it.state == SlotState.FREE }
-        return PoolStats(capacity = capacity, free = free, busy = capacity - free)
+        val busy = inUse.get().coerceIn(0, capacity)
+        return PoolStats(capacity = capacity, free = capacity - busy, busy = busy)
     }
 
     /**
-     * 看门狗 kill 后的槽位收归（§8.4 kill → 重分配）：
-     * 槽位复位 + 许可证归还必须原子（同一把 stateLock 内），
-     * 否则「槽位 FREE 但许可证已超发/未还」都会让池记账失真：
-     * - 未还证 → free=1 但无证可领，池容量永久缩水；
-     * - release（旧句柄）补还 → 超发一证，两个占用者并存。
-     * 收归同时推进占位代次：旧句柄在此之后一律过期，放不进 [release]。
+     * 看门狗 kill 后的槽位收归（§8.4 kill → 重分配）：走 lease 归还，**幂等**
+     * （重复收归是 no-op，不超发也不漏发 —— 这正是队列化要消灭的那类失真）。
      *
      * @param cause 收归原因（§8.3 状态机归类）：watchdog/OOM 原因 → CRASHED；null 或
      *   [KillCause.REQUESTED] 在 RUNNING/QUIESCING 收归 → STOPPED，BOOTING（启动失败
      *   走本方法收口）→ CRASHED —— 没跑起来的「主动收」不伪造干净停。
-     *   调用方不关心终态归因时可省。
      */
     override fun recycle(slot: PoolSlot, cause: KillCause?) {
-        synchronized(stateLock) {
-            if (slot.state != SlotState.FREE) {
-                slot.reuse(cause ?: KillCause.REQUESTED)   // RUNNING→STOPPED；BOOTING 启动失败→CRASHED
-                slot.occupy()          // 收归也推进代次：旧句柄此后一律过期
-                permits.release()
-            }
-            // 已 FREE：幂等收归，不超发许可证
-        }
+        val lease = leases[slot] ?: return   // 已归还/从未占用：幂等 no-op（不再手工还许可）
+        lease.forceReturn(cause ?: KillCause.REQUESTED)   // 状态机归类 + 复位 + 唯一回队口
     }
 
     companion object {
         /**
-         * 等证/启动期间撞上急停的如实回话（[acquire] → [PoolAcquireOutcome.Failed]）：
+         * 等槽/启动期间撞上急停的如实回话（[acquire] → [PoolAcquireOutcome.Failed]）：
          * 不是"引擎起不来"，而是"这条启动已被急停作废" —— 两者在诊断上必须分得开。
          */
         const val ABORTED_BY_STOP: String = "启动期间宿主急停（killAll/forceStopAll）：本次执行已作废"

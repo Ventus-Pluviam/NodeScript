@@ -17,16 +17,26 @@ interface EnginePool {
     /** 取空槽执行；满则排队至 [PoolAcquireRequest.waitTimeoutMillis]（null = 无限等待）。 */
     suspend fun acquire(request: PoolAcquireRequest): PoolAcquireOutcome
 
-    /** 放回槽位：四步 quiesce（[ScriptEngine.stop]），TimedOut 由池 kill 兜底。 */
+    /**
+     * 放回槽位：四步 quiesce（[ScriptEngine.stop]），TimedOut 由池 kill 兜底。
+     *
+     * **幂等**（批 103 P2）：经 [PoolHandle.lease] 归还，重复调用是 no-op（返回 Clean）——
+     * 原实现的「双重归还 → 超发一证 → 同一引擎跑两个脚本」那条路已消除。
+     */
     suspend fun release(handle: PoolHandle): StopResult
 
     /** 全部槽位强杀（kill 权威仅归 RuntimeController，§4.1）。 */
     suspend fun killAll(reason: KillCause)
 
     /**
-     * 看门狗 kill 后的槽位收归（kill 权威归 RuntimeController，§4.1；许可证记账归池）。
-     * 池侧原子完成「槽位复位 + 许可证归还」，保证杀槽不缩水池容量（free 与可领证恒一致）。
-     * 重复收归（槽位已 FREE）幂等，绝不超发许可证。
+     * 看门狗 kill 后的槽位收归（kill 权威归 RuntimeController，§4.1）。
+     *
+     * **生产路径不走这里**（2026-10-12 批 103 P2）：控制器改走 [PoolHandle.lease] 的
+     * [PoolLease.forceReturn] —— 因为「归还权」必须与 [release] 抢**同一个 CAS**，否则
+     * 「killRun 与迟到的 stop 同时到达」会双重归还。本方法保留给
+     * 「只拿到槽位、拿不到 lease」的诊断路径与直接测池记账的单测。
+     *
+     * 重复收归幂等（经 lease 的 claim）。
      */
     fun recycle(slot: PoolSlot, cause: KillCause? = null)
 
@@ -92,11 +102,19 @@ sealed interface PoolAcquireOutcome {
 /** 已获槽位的执行句柄（池内身份：请求 + 槽位 + 收据 + 代次；无跨层包装——会话面在桥两侧各一边：Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，JS 侧是 `EngineSessionImpl`/`EngineChannel`）。 */
 class PoolHandle internal constructor(
     val request: PoolAcquireRequest,
-    val slot: PoolSlot,
+    /**
+     * 本次占用的**归还凭证**（2026-10-12 批 103 P2）：release / recycle 都经它，
+     * 而**不是**外部直接碰 [slot]。归还**恰好一次**由 [PoolLease] 的 CAS 保证。
+     */
+    val lease: PoolLease,
     val receipt: EngineRunReceipt,
-    /** 获取时的槽位代次（§7.4 generation 纪律）：release 时对不上即过期句柄。 */
-    internal val slotGeneration: Long = slot.generation,
-)
+) {
+    /** 本次占用的槽位（宿主状态查询与诊断摘要仍经它；**生命周期**不由外部驱动）。 */
+    val slot: PoolSlot get() = lease.slot
+
+    /** 该占用是否已被归还（读面；归还之后持有者不得再动槽的生命周期）。 */
+    val leaseReturned: Boolean get() = lease.isReturned
+}
 
 data class PoolStats(
     val capacity: Int,

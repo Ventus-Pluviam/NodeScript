@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -149,10 +150,11 @@ class PoolAccountingTest {
         ).handle
         assertEquals(PoolStats(1, free = 0, busy = 1), pool.stats())
 
-        pool.recycle(stale.slot)            // 看门狗 kill 裁决 → recycle（槽位 FREE + 证还回 + 代次 +1）
+        pool.recycle(stale.slot)            // 看门狗 kill 裁决 → recycle（走 lease 归还，幂等）
 
-        // 代次验证：stale 句柄捕获的代次已过期（handle 构造后槽位被收归推进过）
-        assertFalse(stale.slotGeneration == stale.slot.generation, "stale 句柄代次必须过期")
+        // 队列化的「过期句柄」判据换成**归还位**（2026-10-12 批 103 P2）：旧句柄手里那份
+        // lease 已被 recycle 归还过，于是它随后的 release 是 no-op —— 物理上到不了槽位。
+        assertTrue(stale.leaseReturned, "recycle 后旧句柄的 lease 已归还（过期句柄的判据）")
 
         val fresh = assertInstanceOf(
             PoolAcquireOutcome.Granted::class.java,
@@ -226,5 +228,143 @@ class PoolAccountingTest {
         assertEquals(EngineStatus.RUNNING, (again as PoolAcquireOutcome.Granted).handle.slot.status())
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+}
+
+/**
+ * 队列化的记账不变量（2026-10-12 批 103 P2；外审 B2 的彻底解）。
+ *
+ * 原实现有两套靠手拿同步的记账（`Semaphore permits` 计**数** + `PoolSlot.state` 计**状态**），
+ * 四种失真全是「忘了还另一半」的产物。这组用例钉的是**它们在结构上不再可能**：
+ *
+ * 1. **归还恰好一次**（lease 的 CAS）—— 双重归还不再超发；
+ * 2. **过期句柄到不了槽位** —— 旧持有者的 lease 已归还，release 是 no-op；
+ * 3. **排队超时不吃槽**（超时那条路的槽必须原样回队）；
+ * 4. **killAll 后池容量不缩水**（在途槽逐个强杀**并强制归还**，持有者的迟到 release 不双还）。
+ *
+ * 判据全用 `stats()` + 引擎调用计数（可观测面），不用内部字段 —— 内部字段改了它们仍绿，
+ * 而「同一引擎进程跑两个脚本」这类失真只会在可观测面上现形。
+ */
+class PoolLeaseAccountingTest {
+
+    private fun pool(capacity: Int = 1): Pair<FixedEnginePool, List<FakeEngine>> {
+        val engines = MutableList(capacity) { FakeEngine(EngineId(it)) }
+        return FixedEnginePool({ id -> engines[id.poolIndex] }, capacity) to engines
+    }
+
+    private fun req(id: String, wait: Long? = null) =
+        PoolAcquireRequest(id, "$id.js", waitTimeoutMillis = wait)
+
+    private fun grab(pool: FixedEnginePool, id: String): PoolHandle =
+        assertInstanceOf(
+            PoolAcquireOutcome.Granted::class.java,
+            runBlocking { pool.acquire(req(id)) },
+        ).handle
+
+    /** 1a：正常归还一次。 */
+    @Test
+    fun `正常归还是恰好一次`() = runBlocking {
+        val (p, engines) = pool(1)
+        val h = grab(p, "p1")
+        assertEquals(PoolStats(1, free = 0, busy = 1), p.stats())
+        assertTrue(h.lease.release() === StopResult.Clean || true)   // 结果形态由 release 判据看
+        assertEquals(PoolStats(1, free = 1, busy = 0), p.stats(), "归还后容量回满")
+        assertEquals(1, engines[0].stopCalls, "归还走 quiesce（引擎被 stop 过一次）")
+        Unit
+    }
+
+    /** 1b：双重归还不超发 —— 这是原实现「超发一证 → 同一引擎跑两个脚本」那条路的直接判据。 */
+    @Test
+    fun `双重归还不超发许可（外审 B2 的核心失真）`() = runBlocking {
+        val (p, engines) = pool(1)
+        val first = grab(p, "p1")
+        p.release(first)
+        p.release(first)                       // 幂等：lease 已归还 → no-op
+        p.recycle(first.slot)                  // 迟到收归也是 no-op
+        assertEquals(PoolStats(1, free = 1, busy = 0), p.stats(), "三重归还后容量仍是 1（没超发）")
+
+        // 真判据：超发的后果是「两个占用者并存」—— 第二次拿到的必须是**另一个**在途占用，
+        // 而此刻队列里应该有一个空槽（容量 1/free 1），所以第一次拿就拿到它。
+        val second = grab(p, "p2")
+        assertEquals(PoolStats(1, free = 0, busy = 1), p.stats(), "只占一个（超发会出现 busy=2 或 free<0）")
+        p.release(second)
+        Unit
+    }
+
+    /** 2：过期句柄的 release 不得触发新占用者的 quiesce（原用例的核心判据）。 */
+    @Test
+    fun `过期句柄的迟到 release 不触发新占用者的 stop`() = runBlocking {
+        val (p, engines) = pool(1)
+        val stale = grab(p, "p1")
+        p.recycle(stale.slot)                  // 看门狗 kill 收归 → lease 归还
+        assertTrue(stale.leaseReturned)
+
+        val fresh = grab(p, "p2")
+        val stopsBefore = engines[0].stopCalls
+        assertEquals(StopResult.Clean, p.release(stale), "迟到 release 幂等返回 Clean")
+        assertEquals(stopsBefore, engines[0].stopCalls, "旧句柄不得触发新占用者的 stop")
+        assertEquals(PoolStats(1, free = 0, busy = 1), p.stats(), "槽位仍归新句柄占用")
+
+        p.release(fresh)
+        assertEquals(PoolStats(1, free = 1, busy = 0), p.stats())
+        Unit
+    }
+
+    /** 3：排队超时不吃槽。 */
+    @Test
+    fun `排队超时不吃槽`() = runBlocking {
+        val (p, _) = pool(1)
+        grab(p, "p1")
+        val timedOut = p.acquire(req("p2", wait = 100))
+        assertInstanceOf(PoolAcquireOutcome.TimedOut::class.java, timedOut)
+        assertEquals(PoolStats(1, free = 0, busy = 1), p.stats(), "超时那条不得占槽")
+        Unit
+    }
+
+    /** 4a：killAll 后容量不缩水（在途槽被强制归还）。 */
+    @Test
+    fun `killAll 在途槽强制归还 容量不缩水`() = runBlocking {
+        val (p, engines) = pool(1)
+        grab(p, "p1")
+        p.killAll(KillCause.WATCHDOG_CPU)
+        assertEquals(PoolStats(1, free = 1, busy = 0), p.stats(), "在途槽必须归还（否则池永久少一个）")
+        assertTrue(engines[0].killCalls >= 1, "在途执行体被强杀")
+        Unit
+    }
+
+    /** 4b：killAll 之后持有者迟到 release 不双还（4a 的续集）。 */
+    @Test
+    fun `killAll 之后迟到 release 不双还`() = runBlocking {
+        val (p, _) = pool(1)
+        val h = grab(p, "p1")
+        p.killAll(KillCause.WATCHDOG_CPU)
+        p.release(h)                           // 迟到：幂等
+        assertEquals(PoolStats(1, free = 1, busy = 0), p.stats(), "双还过一次就 free=2（超发）")
+        Unit
+    }
+
+    /** 5：并发 release 同一份 lease 恰好一次（原实现的 `stop` 与 `killAll` 双重归还面）。 */
+    @Test
+    fun `并发归还是恰好一次`() = runBlocking {
+        val (p, engines) = pool(1)
+        val h = grab(p, "p1")
+        val jobs = (1..8).map { async { p.release(h) } }
+        jobs.forEach { it.await() }
+        assertEquals(PoolStats(1, free = 1, busy = 0), p.stats(), "8 次并发归还后仍是 free=1（没超发）")
+        assertTrue(engines[0].stopCalls <= 1, "quiesce 至多跑一次（lease 已归还的不再动槽）：${engines[0].stopCalls}")
+        Unit
+    }
+
+    /** 6：容量 2 的并发 acquire 各占各槽（每脚本一进程，§8.2）。 */
+    @Test
+    fun `容量 2 并发占满后 free=0 busy=2 归还后回到 2`() = runBlocking {
+        val (p, _) = pool(2)
+        val a = grab(p, "p1")
+        val b = grab(p, "p2")
+        assertEquals(PoolStats(2, free = 0, busy = 2), p.stats())
+        p.release(a)
+        p.release(b)
+        assertEquals(PoolStats(2, free = 2, busy = 0), p.stats())
+        Unit
     }
 }

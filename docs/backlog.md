@@ -1,5 +1,23 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-12 追记（批 103：P2 池记账重构 —— 拍板项做掉第二个）
+
+- **P2 已做**（口径见决策第 72 项），三阶段：① **空闲队列 = 唯一真源** + `PoolLease`
+  （幂等归还凭证）—— 消除 `Semaphore` + `slot.state` 两套手拿同步的记账，四种失真改为
+  **结构上不可能**；② **并发交错守卫**（闩控替身）逼出归还顺序的最终形态：
+  **CAS 独占 → quiesce → 回队**（另两种各错一样，见流水表）；③ `Controller.killRun` 改走
+  `lease.forceReturn`（归还权必须与 release 抢同一个 CAS）。
+- **两条既有纪律的去留**：`stopEpoch`（批 96 垫片）**删不掉**（量的是「急停跨过排队
+  窗口」，与槽位真源正交）；§7.4 `generation` **彻底退场**（过期句柄物理上到不了槽位）。
+- **外审 B2 那行改为 ✅**（下方登记表）：原记「彻底解是通道化重构（约 300 行 + 测试重写）」，
+  实际形态与预估同量级但**不是 Channel 空闲表 + Lease 的字面照抄** —— 用
+  `Channel<PoolSlot>` + lease 内的 CAS 独占，两者合成「一个槽位要么在队列里、要么在
+  lease 手里」这条结构不变量。
+- **仍挂**：第三份 jsonl（`FileScriptEnvStore`）、保留期/清理（A13）、`BridgeRouter`
+  未知异常语义缝的另一半、外审 M2 另两半（每连接配额 / `limitedParallelism`）、M1 的
+  `scriptFile` KDoc 矛盾、M9（裁定不做）、结构性项（typed ids / actor 化 / D13）。
+- **验证**：CI 逐字同源 14 测试任务全绿零跳过；detekt 全模块绿；守卫新增 8 + 3 例。
+
 ## 2026-10-12 追记（批 102：P4 jsonl → SQLite 落地 —— 拍板项做掉一个）
 
 - **P4 已做**（口径见决策第 71 项），四阶段各一次提交、每阶段跑完整 CI 同源门：
@@ -746,7 +764,7 @@
 | # | 外审条目 | 核实结论 | 状态 |
 |---|---|---|---|
 | **B1** | 排队中的 start 持锁跨挂起，堵住 stop/killAll/watchdog | **成立**（实测 `stop(A)` 2927ms = 排队超时） | ✅ 批 96 已修 |
-| **B2** | 池记账竞态：release 的代次检查与 quiesce 非原子、`PoolSlot.state` 非 volatile、`stop()` 抛异常致槽位停在 QUIESCING 而许可已还、``stop` 在 `guard` 外 release 与 `killAll` 在内 release 可双重归还 | **部分成立**：`state` 非 volatile（`stats()` 无锁读）属实；`release` 的代次检查在 stateLock 内但 `quiesce()` 在锁外（外审称「stale handle 能停掉新占用者」——`occupy()` 每次夺槽推进代次，故 stale 句柄在检查处即被拒，**未复现**拆新占用者）；`quiesce()` 抛异常则槽位停在 QUIESCING（状态机未复位）属实 | 🔶 登记：与批 96 的急停代次同族，**彻底解是外审建议 (b) 通道化重构**（约 300 行 + 测试重写），未排期 |
+| **B2** | 池记账两处手拿同步（`Semaphore` 计��数 + `slot.state` 计状态）：双重归还可超发一证 → 同一引擎跑两个脚本；`stop`/`killAll` 可双重归还 | **成立**（`quiesce()` 在锁外、代次检查与它之间槽可被重分配） | ✅ 批 103 已做（空闲队列为唯一真源 + `PoolLease` 独占归还权；原「通道化重构」的预估量级相近但形态不同，见决策第 72 项） |
 | **B3** | jsonl 半行只在内存丢弃、盘上不截断，后续 append 粘连，下次启动 `IOException`；无压缩、全量 `readAllBytes` | **完全成立**（守卫修前抛 `IOException: journal 行损坏`） | ✅ 半行清盘已修（批 96）；**压缩/流式读未做** 🔶 |
 
 #### 中

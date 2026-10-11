@@ -1,4 +1,23 @@
 # AutoScript 落地状态台账
+> **2026-10-12 · 批 103（P2 池记账重构 —— 外审 B2 的彻底解，三阶段落地）**：
+> 批 96 修的是**症状**（`stopEpoch` 垫片让调用方不必整段持锁），本批换**根**：
+> `Semaphore permits`（计数）+ `PoolSlot.state`（状态）两套靠手拿同步的记账 →
+> **空闲队列 = 唯一真源** + `PoolLease`（幂等归还凭证）。一个槽位**要么在队列里、要么在
+> 某份 lease 手里**，归还权由 CAS 独占 ⇒ 四种失真（有证无 FREE 槽 / 槽 FREE 但无证可领 /
+> **双重归还超发一证 → 同一引擎跑两个脚本** / 归还了但槽仍在用）在**结构上**不可能。
+> **阶段二最值钱**：现有测试的替身 `stop()` 不挂起 + 单线程 `runBlocking` **结构上暴露不了
+> 交错**，换闩控替身后逼出**三种归还顺序各错一样** —— 最终形态 **CAS 独占 → quiesce →
+> 回队**（另两种分别错在「把别人的槽塞回队列」与「下一个持有者拿到仍在跑上一个脚本的引擎」）；
+> 另加 `forceReturn` 给 killAll（**不等 quiesce**，强释要的就是「立刻不再用」）。阶段三：
+> `Controller.killRun` 改走 lease（归还权必须与 release 抢同一个 CAS）。
+> **两条既有纪律的去留**：`stopEpoch` **删不掉**（量的是「急停跨过排队窗口」，与槽位真源正交）；
+> §7.4 `generation` **彻底退场**（旧持有者的 claim 恒 no-op，过期句柄物理上到不了槽位）。
+> **两处自写断言当场抓到真缺陷**：① `markFree` 的严格检查抓到**启动失败路径漏 `reuse`**；
+> ② 交错测试抓到 `stop` 挂起期间 `killAll` 进来会让转移撞 `IDLE → STOPPED`。断言中途一度
+> 放宽成「容忍非终态」，结果在合法强释路径上误报 —— **探测器变成噪声就等于没有探测器**，
+> 回退成严格断言。CI 14 任务零跳过绿；detekt 绿；守卫新增 8 + 3 例。细节见
+> [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-12 · 批 102（P4：jsonl → SQLite，三份手写格式并两份，四阶段落地）**：
 > **阶段 A SPI 搬迁**（纯机械，语义零变化）：`SqliteTaskStore` 必须住 `:platform:system`
 > （`android.database.sqlite` 是 Android 面），依赖铁律 `:platform:* → :domain` 逼出这次搬迁 ——
@@ -620,6 +639,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-12 | 10 | 批 103（P2）：池记账换「空闲队列 = 唯一真源」+ `PoolLease` 幂等归还凭证（消除 `Semaphore`+`slot.state` 两套手拿同步；四种失真改为结构上不可能，含最坏的「双重归还超发一证 → 同一引擎跑两个脚本」）。阶段二的闩控交错守卫逼出归还顺序：**CAS 独占 → quiesce → 回队**（另两种各错一样）；`forceReturn` 给 killAll 不等 quiesce。阶段三 Controller.killRun 改走 lease。`stopEpoch` 删不掉（量「急停跨过排队窗口」）；`generation` 彻底退场（过期句柄物理上到不了槽位）。两处自写断言抓到真缺陷（启动失败路径漏 reuse / quiesce 撞 IDLE→STOPPED），断言一度放宽又回退（探测器变噪声即无探测器）。守卫 8+3 例 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 9 | 批 102（P4）：jsonl → SQLite 三份并两份，四阶段 —— **A** SPI 搬迁（`TaskStore`/`ScheduledTask`/`TimedSchedule`/`ScreenGuarantee`/`CronTab` → `:domain`，依赖铁律所迫，47 文件语义零变化；baseline 的 CronTab 9 条抑制跟着搬）**B** `SqliteRunArchive`（终态由 SQL 条件 UPDATE 挡；`run_nonce` 无唯一索引 —— 档案不是幂等锚点）+ 契约套件**切两套**（第一版塞跳过撞 test-guard，「skipped≠绿」这道门是对的）**C** `SqliteTaskStore`（`task_id` 用户给的 TEXT 主键、排期三列非 JSON 列、重新登记=复活）+ 两份存储迁移接线（三份一套纪律：导+归档/可重入/失败响亮/无回落），`File*` 保留为契约第二实现。测试抓到两 bug：登记误自增发号、墓碑 null 使撤销任务复活。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 9 | 批 101（维护者拍案，F1/F2）：**契约同步** —— §7.6 补 `ERR_INTERNAL` 进错误目录 + 写「折叠两档、中间隔一档内部错误」为契约（AutojsException 原码透传 / IllegalArgumentException → ERR_INVALID_PARAM / 其余 → ERR_INTERNAL），同时对齐 `RpcNamespaceHandler` 基类 KDoc 与路由层实际行为（批 97 之前两处矛盾）；§10.3 把 `/proc` 扫描 + `kill` 二进制 + 扫在杀之前三档写进契约正文，并把**降级档（pid 探不到 → 只杀主进程）写成契约的一部分**（不留在 KDoc 私货里）。P2（池记账重构）/ P4（jsonl→SQLite）已拍板，各占其后一批。bridge/js 三面对账门 201 pass | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 8 | 批 100：外审整改第五刀 —— 桥在途**字节**闸（`maxBytesInFlight`=16 MiB）。原口径只有条数闸 256，而 `maxFrameBytes`(8 MiB)×256 = **2 GiB 堆**（两个已生效默认值相乘）→ 设备 OOM 且看不出是哪条面。条数与字节正交（与批 99 zip `MAX_ENTRIES` 同纪律），故加第三档：CAS 取闸 / 单条超上限直接拒不部分接纳 / 拒这一条不拒整条连接（回 `ERR_PERMISSION_DENIED` 且话术点名「字节」，不静默丢）。同条另两半（每连接配额 / `limitedParallelism`）如实登记不排期。守卫先红后绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
