@@ -1,5 +1,42 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-12 追记（批 106：B3 压实那半 + 三处「已裁定却仍列为仍挂」的矛盾订正）
+
+### 做掉的那半：jsonl 压实
+
+外审 B3 三件（半行清盘 / 全量 `readAllBytes` / 无压缩）里的第三件。
+[`FileScriptEnvStore`](../app-service/script-repo/src/main/kotlin/com/autoscript/appservice/scriptrepo/core/FileScriptEnvStore.kt)
+写后按 `Files.size` 判一次，超过 **256 KiB** 就把**收敛视图**（最后状态，不是历史）
+经 tmp + 同目录 `ATOMIC_MOVE` 重写回去。
+
+**为什么这一份可以无损压实，而旁边几份不可以** —— 这是本批唯一的判断，其余全是机械：
+读口 `ScriptEnvStore.all()` 要的是**现状**，append-only 只增不减，同一个键改一百次就是
+一百行、删掉的键各留一行墓碑；压实掉的每一行都是**已被后一行覆盖**的历史。而
+`install-history.jsonl` 的读口是 `history()` 全量 + 呈现层筛（外审批 85 那条「按项目筛会让
+全局 `Op.REGISTRY` 从任何一次筛选里掉出去」），它要的是**发生过什么** —— 同一手法搬过去
+就是删审计。
+
+同理也没顺手做 `install.journal` 与 `.deploy.journal`（两者读口都只问 `unfinished()` /
+nonce 集，理论上同样可压），它们**不是没被想到，是没被排期**：那两处的 append 由
+**事务状态机**驱动（`AtomicDeployer.recover` 靠 `journal.all()` 的 nonce 集识别孤儿
+stage 目录），压实要连「哪些 nonce 曾经存在过」一起答，那是另一份记账，不是压缩能给的。
+
+### 订正的三处矛盾（照着旧追记排期会做无用功）
+
+列完待办逐条 grep 才发现的：**台账里三处写着「仍挂」的东西，其实早已裁定或已做**。
+只追加纪律下不改旧条目正文，改为在此说明**旧追记块的「仍挂」清单按本块为准**：
+
+| 旧追记块的「仍挂」 | 实际 | 出处 |
+|---|---|---|
+| `BridgeRouter` 未知异常语义缝的「另一半」 | **M4 已 ✅**（批 97：新增 `ERR_INTERNAL` + 折叠两档 + §7.6 契约同步）。`BridgeRouter` 现在四档齐全（`AutojsException` / `IllegalArgumentException` / 其余 → `ERR_INTERNAL`），`RpcNamespaceHandler` 的 KDoc 当批一并对齐。「另一半」这个词从批 97 起就没有对应物了 | 外审登记表 M4 行 = ✅ |
+| A13 保留期/清理 | **已裁定不再跟进**（意图日志清理会动 §8.5 的幂等锚点 —— 丢了老 nonce，重投就会重放副作用） | 决策第 73 项；正文里那一段已带删除线 |
+| `TrustTierResolver` 读侧判据 | **前提可能已不成立**：A5 已裁定「来源分级不做」，理由是它**不产生防护**（同 UID 同权下脚本可绕开桥直接读写宿主私有目录，掩码收窄只挡老实脚本）。`TrustTierResolver` 因此被降级成**记账词汇**、不接真元数据、不产生授权差异 —— 「给它补读侧判据」要先回答「还要不要它」。**这不是工程判断，是维护者判断**，故未自行裁定 | 决策第 45 项 |
+
+**这条纪律的由来**：上一轮（批 103 收官 + 续）刚把划掉的 31 行**删掉**，理由是
+「划线在待办池里等于塞一条永远不会被领走的假待办」。本轮证明同一个病还有第二种形态 ——
+**结论已经定了，但「仍挂」的字样留在别处的追记块里**。清池只清了表，没清追记。
+
+
 ## 2026-10-12 追记（批 105：两份 ProcOps 合并成 `:platform:process`）
 
 - **重复已消**：批 95（npm T1 杀树）与批 99（shell 收尸）那两份「手法逐字同款、代码两份」
@@ -757,7 +794,7 @@ npm scope 归属）等你拍板，不算可自行开工的批次。
 |---|---|---|---|
 | **B1** | 排队中的 start 持锁跨挂起，堵住 stop/killAll/watchdog | **成立**（实测 `stop(A)` 2927ms = 排队超时） | ✅ 批 96 已修 |
 | **B2** | 池记账两处手拿同步（`Semaphore` 计��数 + `slot.state` 计状态）：双重归还可超发一证 → 同一引擎跑两个脚本；`stop`/`killAll` 可双重归还 | **成立**（`quiesce()` 在锁外、代次检查与它之间槽可被重分配） | ✅ 批 103 已做（空闲队列为唯一真源 + `PoolLease` 独占归还权；原「通道化重构」的预估量级相近但形态不同，见决策第 72 项） |
-| **B3** | jsonl 半行只在内存丢弃、盘上不截断，后续 append 粘连，下次启动 `IOException`；无压缩、全量 `readAllBytes` | **完全成立**（守卫修前抛 `IOException: journal 行损坏`） | ✅ 半行清盘（批 96）+ **流式读**（批 104，改逐字节扫：append-only 长度只增不减，冷启动全量读会把整段历史拉进堆）；**压缩未做** 🔶 |
+| **B3** | jsonl 半行只在内存丢弃、盘上不截断，后续 append 粘连，下次启动 `IOException`；无压缩、全量 `readAllBytes` | **完全成立**（守卫修前抛 `IOException: journal 行损坏`） | ✅ 三件全做完：半行清盘（批 96）+ **流式读**（批 104，改逐字节扫：append-only 长度只增不减，冷启动全量读会把整段历史拉进堆）+ **压实**（批 106，`FileScriptEnvStore` 写后按 `Files.size` 判、超 256 KiB 就把收敛视图 tmp+`ATOMIC_MOVE` 重写）。**压实只对「读口要现状」的那份成立**，`install-history.jsonl` 是审计事实，同一手法搬过去就是删审计 —— 见下方追记 |
 
 #### 中
 
