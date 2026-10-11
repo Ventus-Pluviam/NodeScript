@@ -11,7 +11,9 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -139,7 +141,7 @@ class NewlineFrameServerTest {
     @Test
     fun `oversize frame closes connection`() = runBlocking {
         val errors = mutableListOf<String>()
-        val server = NewlineFrameServer(router(), identities, maxFrameBytes = 16) { errors += it }
+        val server = NewlineFrameServer(router(), identities, maxFrameBytes = 16, onProtocolError = { errors += it })
         val requests = frame(ByteArray(64) { 'x'.code.toByte() })
         val output = ByteArrayOutputStream()
         withTimeout(5_000) { server.serveConnection(authenticated(requests), output).join() }
@@ -297,6 +299,68 @@ class NewlineFrameServerTest {
                 "新连接不该继承上一个连接的通道，也不该凭空有个缺省：$b",
             )
         } finally {
+            server.close()
+        }
+    }
+}
+
+/**
+ * 外审 M3（2026-10-11 批 98）：**accept 遇瞬时故障不得收掉整条桥**。
+ *
+ * 与 `app` 侧 `BridgeSocketListenerAcceptRetryTest` 同一纪律的两个实现面（设备 LocalServerSocket
+ * 与本机 TCP）—— 各钉一次，因为它们是**两份独立实现**，修一份不修另一份同样静默死亡。
+ *
+ * 判据用可观测行为：抛过一次瞬时错之后**照样能完成握手**（helloAck）。
+ */
+class NewlineFrameServerAcceptRetryTest {
+
+    private val identities = RunIdentityRegistry()
+    private val ids = java.util.concurrent.atomic.AtomicLong(1)
+
+    @org.junit.jupiter.api.AfterEach
+    fun closeIdentities() = identities.close()
+
+    private fun hello(): ByteArray = BridgeHandshake.hello(
+        identities.issue(
+            EngineId(0), ids.getAndIncrement(), "retry-probe",
+            ScriptAuthorizationSnapshot(mask = CapabilityMask.ALL),
+        ).also { it.confirmSpawn(null) { true } }.token,
+    )
+
+    @Test
+    fun `瞬时 SocketException 之后桥照样握手（外审 M3）`() {
+        val acceptErrors = CopyOnWriteArrayList<String>()
+        val server = NewlineFrameServer(
+            BridgeRouter(RequestRegistry()), identities,
+            onAcceptError = { acceptErrors.add(it) },
+        )
+        // 覆写 accept 的 ServerSocket：第一次抛瞬时错，之后照常委托给真 socket。
+        val real = ServerSocket(0)
+        var remainingFailures = 1
+        val flaky = object : ServerSocket() {
+            override fun accept(): Socket {
+                if (remainingFailures-- > 0) throw SocketException("Too many open files (simulated EMFILE)")
+                return real.accept()
+            }
+        }
+        try {
+            server.acceptLoop(flaky)
+            val deadline = System.currentTimeMillis() + 5_000
+            while (System.currentTimeMillis() < deadline && acceptErrors.isEmpty()) Thread.sleep(10)
+            assertEquals(1, acceptErrors.size, "瞬时错应留下诊断回执：$acceptErrors")
+
+            Socket("127.0.0.1", real.localPort).use { sock ->
+                sock.soTimeout = 5_000
+                sock.getOutputStream().apply { write(hello()); flush() }
+                val line = sock.getInputStream().bufferedReader(StandardCharsets.UTF_8).readLine()
+                assertTrue(
+                    line != null && line.contains("helloAck"),
+                    "退避后桥仍能完成握手 —— 这就是「桥还活着」的可观测判据（实际：$line）",
+                )
+            }
+        } finally {
+            flaky.close()
+            real.close()
             server.close()
         }
     }

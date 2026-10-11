@@ -10,6 +10,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +44,14 @@ class NewlineFrameServer(
     private val handshakeMillis: Long = BridgeHandshake.TIMEOUT_MILLIS,
     private val drainMillis: Long = 5_000,
     private val onProtocolError: (reason: String) -> Unit = {},
+    /**
+     * accept 瞬时故障的诊断回执（外审 M3，批 98）。
+     *
+     * 与 [onProtocolError] 分开：协议错误是**对端**的问题（要能追到某个脚本），accept
+     * 瞬时故障是**本机**的问题（fd 表满、系统压力）—— 混进同一条回执里，两者都定位不到来源。
+     * 缺省 no-op。
+     */
+    private val onAcceptError: (reason: String) -> Unit = {},
 ) : AutoCloseable {
     private val lock = Any()
     private val connections = HashSet<Connection>()
@@ -82,14 +91,50 @@ class NewlineFrameServer(
 
     init { require(maxFrameBytes > 0 && maxInFlight > 0 && handshakeMillis > 0 && drainMillis > 0) }
 
+    /**
+     * accept 循环（外审 M3，2026-10-11 批 98 修订，与 [BridgeSocketListener] 同一纪律）。
+     *
+     * **原口径**：任何异常都 `break`。`EMFILE`/`ENFILE`/`ECONNABORTED` 都是**瞬时**的，
+     * 一次就把整条桥收掉（对所有未来脚本静默死亡，无日志无重启）。
+     *
+     * **现口径**：[SocketException] 且本端未关断 → 计数 + 退避重试；连续
+     * [ACCEPT_MAX_CONSECUTIVE_FAILURES] 次才收循环（那已经不是瞬时的了）；其余异常照旧
+     * 收（那是代码 bug，不该被重试掩盖）。关断（[close]）时 listener 被移除并 close，
+     * accept 随之抛 —— 那一路由 `closed` 判据接住，走「该停」而不是「故障」。
+     *
+     * 用 [SocketException] 而非 [IOException] 是有意的：前者只从 accept 这一个调用点抛出，
+     * 语义精确；后者会把「已关断」与「系统压力」混在一起（本机 unix socket 上两者
+     * 抛出的类型确实不同，但类型判据比字符串判据稳）。
+     */
     fun acceptLoop(serverSocket: ServerSocket): Job {
         synchronized(lock) {
             if (closed) serverSocket.close() else listeners.add(serverSocket)
         }
         return scope.launch {
+            var consecutiveFailures = 0
             try {
                 while (isActive) {
-                    val socket = try { serverSocket.accept() } catch (_: Exception) { break }
+                    val socket: Socket = try {
+                        serverSocket.accept()
+                    } catch (e: SocketException) {
+                        val shut = synchronized(lock) { closed || !listeners.contains(serverSocket) }
+                        if (shut) break                       // 本端关断：该停，不是故障
+                        consecutiveFailures++
+                        if (consecutiveFailures >= ACCEPT_MAX_CONSECUTIVE_FAILURES) {
+                            onAcceptError(
+                                "accept 连续 ${consecutiveFailures} 次 SocketException（非瞬时），收桥：${e.message}",
+                            )
+                            break
+                        }
+                        onAcceptError(
+                            "accept 第 $consecutiveFailures 次 SocketException（瞬时，退避后重试）：${e.message}",
+                        )
+                        delay(ACCEPT_RETRY_BACKOFF_MILLIS)
+                        continue
+                    } catch (_: Exception) {
+                        break                              // 非 socket 类异常 = 代码 bug，不重试
+                    }
+                    consecutiveFailures = 0                 // 成功一次即清账
                     serveConnection(socket)
                 }
             } finally {
@@ -347,6 +392,12 @@ class NewlineFrameServer(
     companion object {
         const val DEFAULT_MAX_FRAME_BYTES = 8 * 1024 * 1024
         const val DEFAULT_MAX_IN_FLIGHT = 256
+
+        /** accept 瞬时故障后的退避（毫秒），与 `BridgeSocketListener` 同一取值口径。 */
+        const val ACCEPT_RETRY_BACKOFF_MILLIS: Long = 1_000L
+
+        /** 连续 accept 失败多少次才认定「不是瞬时的」而收桥（`BridgeSocketListener` 同名常量同值）。 */
+        const val ACCEPT_MAX_CONSECUTIVE_FAILURES: Int = 20
         private val connectionIds = AtomicLong(1)
         private val LF = byteArrayOf(10)
     }
