@@ -12,6 +12,44 @@
 
 ---
 
+## 65. 排队中的 start 不挡 stop / jsonl 半行清盘 / 桥 TTL 截断（2026-10-11，批 96，外审整改）
+
+**背景**：外部评审报告（按月归档在 backlog「外审登记」条）把「Queued starts block everything」
+列为 High，其余相关件中本批处理三条。四件都是「实现 + 测试」双实处。
+
+### 65.1 排队等证的锁形态（B1）
+
+原口径：`RuntimeController.start` 整段持 `guard`，`pool.acquire` 的「等证」必须与
+`killAll`/`release` 串行（FixedEnginePool 类 KDoc 的并发约定、`killAll 与 start/stop 串行，防
+许可证超发`）。**被推翻**：`acquire` 在满池时可挂到 `waitTimeoutMillis`（调度链路 60–120s），
+把它圈进调用方锁里 → 「A 在跑、B 排队」时 A 的 stop/killAll 与看门狗取锚全部停摆（实测
+`stop(A)` 2927ms；现场 = 「脚本停不下来、急停按不动」）。新口径：
+- Controller：等证出 `guard`（授权决策是纯计算），只在记账那一刻取锁；急停代次
+  `stopEpoch` 由 `killAll`/`forceStopAll` 推进，`start` 对表不匹配即 `StartFailed`、不进在途表。
+- 池：自己扛并发 —— `killAll` 在同一临界区推进代次并强释；`acquire` 在「等完证、夺槽前」
+  与「execute 返回后」两处对表，代次变即还证/收割作废（绝不夺被急停强释的槽、绝不
+  `markRunning` 把账外野进程留在设备上）。
+- 求偿：绝不在持锁状态下挂起（lock-held-across-suspension），急停语义一律由代次表达。
+
+### 65.2 jsonl 半行既丢又清盘（B3）
+
+原口径：replay 对无换行尾行 `break`（内存丢弃），盘上字节留着。**被推翻（把原「崩溃后重放
+收敛」的 KDoc 承诺推翻了）**：残片与下一条 append 粘成一行，之后每次重启 replay 抛
+`IOException`、`tasks.jsonl`/`run-archive.jsonl` 构造即失败。新口径：打开时截到「最后一个
+完整行」的偏移（`truncateTail`）；截不动（只读 fs/权限回卷）不炸构造，但那半截会在下一次
+append 时粘坏 —— 属可观察故障，先红为敬。
+
+### 65.3 桥请求 TTL（B4 半）
+
+原口径：`ttl = request.ttlMillis.takeIf { it > 0 } ?: DEFAULT`，无上限。**被推翻**：极端正数
+在 `now + ttl` 溢出成负数 → 到期即被收割，对调用方是「立即超时」，与「一段很长的时间」
+语义相反。新口径：显式截到 `MAX_TTL_MILLIS`（24h）—— 宁可提前收割，不让溢出说谎。
+
+**本批没做（登记）**：`BridgeRouter` 未知异常统一吞成 `ERR_INVALID_PARAM` 并回显
+`e.message` 的语义缝（与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」矛盾）、
+`readAllBytes` 全量读、进程池记账重构（急停代次是垫片，评审建议的 safer 形态见批 96 流水）、
+`SqliteKvOps.onUpgrade` 丢表（SQLiteOpenHelper 无 onDowngrade、版本升级即 DROP）。
+
 ## 64. T1 杀树换 /proc 实现；无人点名的 signal 按 128+n 惯例反查（2026-10-11，批 95）
 
 **背景**：批 94 后 T1 七件欠账剩五件，本批做掉「杀树断链」与「signal 恒 null」两件。做的

@@ -1,5 +1,34 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 96：外审整改第一刀 —— 排队不挡急停 / jsonl 半行清盘 / 桥 TTL 截断）
+
+- **维护者转来外部评审报告，本月做四件（本批落账）**。完整报告已按月度归档在下方
+  「外审登记」条（2026-10-11）+ 附录：本批的四个守卫先红后绿，修前实测见各条。
+  1. **排队中的 start 不挡 stop/killAll/看门狗（外审 B1 高）—— 已做**：`RuntimeController.start`
+     等证出 `guard`（满池排队可挂 60–120s），只记账时取锁 + 急停代次对表；`FixedEnginePool`
+     自扛并发（`killAll` 推进 stopEpoch，`acquire` 在夺槽前与 execute 后两处对表，代次变了
+     即作废回收）。守卫 `RuntimeControllerQueuedStartTest` 新建 3 例：修前 `stop(A)` 耗时
+     **2927ms**（= B 的排队超时），修后 ≈0。口径见决策第 65 项。
+  2. **jsonl 半行既丢又清盘（外审 B3）—— 已做**：`FileTaskStore`/`FileRunArchive` 打开时截到
+     「最后一个完整行」（原只内存丢、盘上留着 → 新行与残片粘连，之后每次重启构造即抛
+     `IOException`）。守卫各 +1，走完「重开 → 再写 → 再重开」闭环（修前第三步抛
+     `IOException: journal 行损坏`）。
+  3. **桥请求 TTL 溢出显式截断（外审 B4 半）—— 已做**：`RequestRegistry` 的 `now + ttl`
+     对极端正数溢出成负数 = 立即超时，截到 `MAX_TTL_MILLIS`（24h）。守卫 +1。
+  4. **「三万英尺」既有的三件路径校验（外审 Medium「No path validation at the edges」）——
+     **逐条复核后登记不排期**：`ScriptPaths` 有 `PROJECT_ID` 正则（2026 批 84 已钉，判据里
+     **没有 `.`**）与 `DeployPath.resolveIn` 的二次校验（含 startsWith(root)）；调度侧
+     `isSafeRelPath` 门也已在（`ScriptDeployRecovery`）。评审建议的「`TrustTierResolver`
+     上线后 projectId='builtin' 会跑 `../x`」在**当前所有项目都解析为 UNKNOWN** 的前提下
+     不成立，但那条评本身的语义（`scriptFile` KDoc 说「越界只读不到」**与 NodeProcessEngine
+     实际会执行它矛盾**）已登记，待 `TrustTierResolver` 排期时一起收。
+- **仍在挂（登记，不假装做完）**：`BridgeRouter`（L104）把一切未知异常折成
+  `ERR_INVALID_PARAM` 并回显 `e.message` —— 与 `RpcNamespaceHandler` KDoc「未知异常不接、
+  照旧穿出」矛盾，还让内部 bug 看起来像参数错、路径可能泄露（随 `ScheduledTask`/脚本路径）。
+  `SqliteKvOps.onUpgrade` 版本升级即 DROP（脚本数据全没、无 onDowngrade）。两者都是**单条
+  语义改动 + 守卫**，留给下一刀；`readAllBytes` 全量读、进程池记账重构、三 docs 面一并登记在
+  下方外审登记条。**验证**：完整 CI JVM 门同源待跑。
+
 ## 2026-10-11 追记（批 95：T1 杀树换 /proc 实现 —— 批 91 那版在真机上是静默空转）
 
 - **批 91 清单的第 5、6 条做了，本条销账**（原文在下方 2026-10-10 追记里逐字保留）：
