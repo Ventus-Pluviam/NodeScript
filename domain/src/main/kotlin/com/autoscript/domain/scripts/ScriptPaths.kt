@@ -57,7 +57,23 @@ object ScriptPaths {
      * 引擎宿主拿到的必须是绝对路径：引擎进程有自己的 cwd（native 侧由 `:engine:node-process`
      * 决定），相对路径会解析到别处。这里只做拼接，**不做逃逸校验** —— 调度侧早已把
      * `projectId`/`scriptPath` 当不透明字符串透传（见 `ScheduledTask`），
-     * 要防逃逸的是**写入**侧（`DeployPath.resolveIn`），读取侧越界只会读不到文件。
+     * 要防逃逸的是**写入**侧（`DeployPath.resolveIn`）。
+     *
+     * **「读取侧越界只会读不到文件」这句话曾经写在这里，它不成立**（2026-10-12 订正，
+     * 外审 M1 的真问题 —— 同一批把外审设想的提权场景否掉了，剩下的是这一句 KDoc）：
+     * 本方法对 `scriptPath` **一个字都不校验**，`scriptFile(d, "p", "../../databases/app.db")`
+     * 返回的就是那条真实路径，**读得到**。`Path.resolve` 不做词法收敛（那是
+     * `normalize()` 的活），所以越界不是「读不到」而是「读到别的文件」。
+     *
+     * **当下是否可利用**：`scriptPath` 的来源是 `ScheduledTask.scriptPath`（用户/项目自持）
+     * 与桥侧 `engines.exec`，即**本 App 自己**；跨 uid 越权读需要先写进任务库，而写任务库
+     * 的入口都过了 `isValidProjectId` / `isSafeRelPath`。所以这是**本函数缺一道读侧判据**，
+     * 不是**可被脚本触发的越权**。与 [isValidProjectId] 的分工照旧：那是判据，本方法只是拼接。
+     *
+     * 补法：读侧真要收口，在本方法里加 `normalize()` 后的 `startsWith(projectRoot)` 判据
+     * （或把校验提到调用方），并把 `startWith` 前缀比较换成**绝对路径相等**比较 ——
+     * 源目录名可能是另一个目录名的前缀（`/a/scripts` vs `/a/scripts-evil`），
+     * 前缀比较那种坑 zip 硬化时已经踩过一次（批 99）。
      */
     fun scriptFile(filesDir: Path, projectId: String, scriptPath: String): Path =
         projectRoot(filesDir, projectId).resolve(scriptPath)

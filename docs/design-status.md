@@ -1,4 +1,11 @@
 # AutoScript 落地状态台账
+> **2026-10-12 · KDoc 与实现矛盾七处订正（零行为变更）** —— 外审点名的七处 KDoc
+> 「承诺的比实现做的多」全部订正（`DeployPath.resolveIn` 的防符号链接、`scriptFile` 的
+> 「越界只读不到」、`RpcNamespaceHandler` 的未知异常穿出、`PoolSlot.generation` 的过期
+> 句柄判定、`FileTaskStore` 的重放收敛、`LockSigner` 的防跨项目搬锁、
+> `AndroidShellExecutor` 的不留孤儿进程）。**代码零变更，只改注释**；三处同时在 KDoc
+> 里记了「为什么不补真解」与补法代价。叙事见 [`本日流水`](log/2026-10-11.md)。
+>
 > **2026-10-12 · 批 103 收官：待办池清池** —— [`backlog.md`](backlog.md) A–E 各表**未划掉**
 > 的六行（B3 / B4 / B14 / D13 / E3 / A13）已按**不再跟进**划掉（原文逐字保留；**不是
 > 「已完成」**）。外审登记表里的半成品（B3 压缩/流式读、M1 的 KDoc 矛盾、M2 每连接配额与
@@ -645,6 +652,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-12 | 12 | KDoc 与实现矛盾七处订正（**零行为变更**）—— 逐条只改注释：`resolveIn` 纯词法不防符号链接、`scriptFile` 不做读侧校验（越界**读得到**）、`RpcNamespaceHandler` 的穿出在 Router 那档折成 `ERR_INTERNAL`、`generation` 只剩诊断价值（拿它判过期=假不变量）、`FileTaskStore` 收敛的只是崩溃半行（行内损坏响亮失败）、`LockSigner`「防搬锁」只对一半且单文件覆盖所有项目（行为不改，M9 裁定不做）、`AndroidShellExecutor` 准确口径是「尽力收整棵树、不保证」 | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 11 | 批 103 收官：**待办池清池** —— A–E 各表未划掉的六行（B3/B4/B14/D13/E3/A13）按「不再跟进」划掉（**非「已完成」**，原文逐字保留）；外审登记表里的半成品与结构性长线未动。见 [`backlog.md`](backlog.md) 同日追记块 | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 10 | 批 103（P2）：池记账换「空闲队列 = 唯一真源」+ `PoolLease` 幂等归还凭证（消除 `Semaphore`+`slot.state` 两套手拿同步；四种失真改为结构上不可能，含最坏的「双重归还超发一证 → 同一引擎跑两个脚本」）。阶段二的闩控交错守卫逼出归还顺序：**CAS 独占 → quiesce → 回队**（另两种各错一样）；`forceReturn` 给 killAll 不等 quiesce。阶段三 Controller.killRun 改走 lease。`stopEpoch` 删不掉（量「急停跨过排队窗口」）；`generation` 彻底退场（过期句柄物理上到不了槽位）。两处自写断言抓到真缺陷（启动失败路径漏 reuse / quiesce 撞 IDLE→STOPPED），断言一度放宽又回退（探测器变噪声即无探测器）。守卫 8+3 例 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 9 | 批 102（P4）：jsonl → SQLite 三份并两份，四阶段 —— **A** SPI 搬迁（`TaskStore`/`ScheduledTask`/`TimedSchedule`/`ScreenGuarantee`/`CronTab` → `:domain`，依赖铁律所迫，47 文件语义零变化；baseline 的 CronTab 9 条抑制跟着搬）**B** `SqliteRunArchive`（终态由 SQL 条件 UPDATE 挡；`run_nonce` 无唯一索引 —— 档案不是幂等锚点）+ 契约套件**切两套**（第一版塞跳过撞 test-guard，「skipped≠绿」这道门是对的）**C** `SqliteTaskStore`（`task_id` 用户给的 TEXT 主键、排期三列非 JSON 列、重新登记=复活）+ 两份存储迁移接线（三份一套纪律：导+归档/可重入/失败响亮/无回落），`File*` 保留为契约第二实现。测试抓到两 bug：登记误自增发号、墓碑 null 使撤销任务复活。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |

@@ -99,7 +99,10 @@ sealed interface PoolAcquireOutcome {
     data class Failed(val message: String) : PoolAcquireOutcome     // 引擎启动失败（槽位已收回）
 }
 
-/** 已获槽位的执行句柄（池内身份：请求 + 槽位 + 收据 + 代次；无跨层包装——会话面在桥两侧各一边：Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，JS 侧是 `EngineSessionImpl`/`EngineChannel`）。 */
+/** 已获槽位的执行句柄（池内身份：请求 + 归还凭证 + 收据；无跨层包装——会话面在桥两侧
+ * 各一边：Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，
+ * JS 侧是 `EngineSessionImpl`/`EngineChannel`）。**不再持代次** —— 批 103 P2 起过期判据是
+ * [PoolLease] 的 CAS，不是 `PoolSlot.generation`，见该字段 KDoc。 */
 class PoolHandle internal constructor(
     val request: PoolAcquireRequest,
     /**

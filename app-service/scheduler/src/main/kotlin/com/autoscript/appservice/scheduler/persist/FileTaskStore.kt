@@ -19,6 +19,14 @@ import java.time.ZoneId
  * - `{"op":"put",...全字段...}` —— schedule 直写（upsert，同 id 覆盖）
  * - `{"op":"del","id":"t1"}` —— cancel 落 tombstone（不删行：崩溃截断只丢最后半行，重放收敛）
  *
+ * **「重放收敛」的准确边界**（2026-10-12 订正，此处 KDoc 此前说得太满）：**收敛的是
+ * 「崩溃留下的最后半行」，不是「任何坏行」**。批 96 把半行从「只在内存丢弃」改成
+ * **落盘截断**（见 [truncateTail] 的 KDoc），自那以后重启确实收敛 —— 但**行内损坏**
+ * （JSON 非法 / `kind` 不认识 / `op` 不认识）走的是 [Codec.apply] 里的 `IOException`，
+ * 那是**响亮失败**：构造即炸，不静默跳过。「把注册表坏了」当成「少几条任务」，
+ * 用户的排期会静默消失而根因查不出来。同一条纪律的另一半在迁移侧
+ * （`TaskStoreImport.parse`，`:domain`）逐字同款。
+ *
  * 与已退役的 jsonl 意图存储（`JournalFileStore`，2026-10-08 删除）同纪律：每次写 `force(true)`、启动 replay 全量重建、
  * 容忍最后半行。字段全字符串化（`kind`/`a`/`b` 表调度计划：once→a=delaySeconds；
  * daily→a=hour,b=minute；cron→a=expr），参数列表展平为 `argsN` + `arg0…` ——
