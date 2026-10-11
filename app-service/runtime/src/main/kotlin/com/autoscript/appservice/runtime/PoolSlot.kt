@@ -55,10 +55,16 @@ class PoolSlot internal constructor(
 
     /** 四步 quiesce（§8.3）：stop 超时由池 kill 兜底，然后回 FREE。幂等：非 BUSY 视为已净。 */
     suspend fun quiesce(): StopResult {
+        // 非 BUSY 视为已净（幂等：并发 release 的输家、killAll 强释后的迟到 release
+        // 都走这里）。**这是槽位状态那一句，不是状态机那一句** —— 状态机可能还停在
+        // RUNNING（被强释时 quiesce 从未跑过），那归 [markFree] 处理。
         if (state != SlotState.BUSY) return StopResult.Clean
         statusMachine.onQuiesceStart()          // BOOTING|RUNNING → QUIESCING
         state = SlotState.QUIESCING
         val result = engine.stop()
+        // 归还是 claim 独占的（见 [PoolLease.release]）：quiesce 执行期间**没有别人能碰这个槽**
+        // ——并发 release 的输家在 claim 就被挡住，killAll 的强释同样走 claim。于是下面这两句
+        // 状态机转移面对的一定是 QUIESCING，不需要「停完再对表」那种事后补偿。
         if (result is StopResult.TimedOut) {
             engine.kill()
             statusMachine.onKill(KillCause.REQUESTED)   // QUIESCING 超时兜底 → STOPPED（quiesce 未干净完成，StopResult 已携 TimedOut）
@@ -97,13 +103,13 @@ class PoolSlot internal constructor(
         if (state == SlotState.FREE) return
         state = SlotState.FREE
         busySinceMillis = 0L
-        // 状态机此时必然已在 STOPPED 或 CRASHED（quiesce / forceFree / reuse 都走过）——
-        // 这里不再调 onRecycle：那会把 IDLE→BOOTING 之外的路径留在半路，而下一个持有者
-        // 夺槽时又会调 onExecuteRequested（要求当前是 IDLE）。故**要求**它在 STOPPED/CRASHED，
-        // 若不是（理论上不可达）就响亮失败而不是悄悄改状态。
+        // 归还时状态机必在 STOPPED/CRASHED：`release` 走 quiesce、其余走 forceFree，
+        // 两条都先把它落到终态。**这条断言是有意的探测器**（批 103 首跑就抓到「启动失败那条
+        // 归还路径漏了 reuse」）—— 若某天某条归还路径忘了，症状会是「下一个持有者拿到一个
+        // 状态机还悬着的槽」，而这里当场响亮。
         check(statusMachine.status == EngineStatus.STOPPED || statusMachine.status == EngineStatus.CRASHED) {
             "槽 $index 归还时状态机在 ${statusMachine.status}（应为 STOPPED/CRASHED）—— " +
-                "归还路径漏了 quiesce/forceFree/reuse 其中一步"
+                "归还路径漏了 quiesce/forceFree 其中一步"
         }
         statusMachine.onRecycle()
     }

@@ -131,35 +131,36 @@ class FixedEnginePool(
                 // **绝不 markRunning**（那会在 IDLE 上抛非法状态转移，且把一条账外野进程
                 // 留在设备上）。归还走 lease（幂等）：槽回队列，执行体另收。
                 killQuietly(slot)
-                slot.reuse(KillCause.ENGINE_REQUEST)   // 同上：BOOTING → CRASHED → IDLE
-                lease.returnOnce()
+                lease.forceReturn(KillCause.ENGINE_REQUEST)   // BOOTING → CRASHED → IDLE → 回队
                 PoolAcquireOutcome.Failed(ABORTED_BY_STOP)
             } else {
                 slot.markRunning()           // execute 返回 = 进程已拉起：BOOTING → RUNNING（§8.3）
                 PoolAcquireOutcome.Granted(PoolHandle(request, lease, receipt))
             }
         } catch (e: CancellationException) {
-            slot.reuse(KillCause.ENGINE_REQUEST)   // BOOTING → CRASHED → IDLE（取消也是异常收场）
-            lease.returnOnce()                     // 调用方取消：槽位归还必须成对，否则池缩水
+            // 取消也是异常收场：BOOTING → CRASHED → IDLE → 回队
+            lease.forceReturn(KillCause.ENGINE_REQUEST)
             throw e                               // 取消语义照常向上传播
         } catch (e: Exception) {
             // 启动失败：状态机仍在 BOOTING（execute 没返回 → 没有 markRunning）——
             // 归还前必须先走 [reuse] 把它落到 CRASHED→IDLE，否则 [PoolSlot.markFree] 的
             // 「归还时状态机必在 STOPPED/CRASHED」断言会响亮失败（那条断言是有意的：
             // 它正是「归还路径漏了 quiesce/reuse」的探测器）。
-            slot.reuse(KillCause.ENGINE_REQUEST)
-            lease.returnOnce()           // 引擎启动失败：槽位收回（Failed 契约）
+            lease.forceReturn(KillCause.ENGINE_REQUEST)   // 启动失败：BOOTING → CRASHED → IDLE → 回队
             PoolAcquireOutcome.Failed(e.message ?: (e::class.simpleName ?: "engine start failed"))
         }
     }
 
-    /** 产一份 lease 并登记（它的归还回调是**唯一的槽位回队口**）。 */
+    /**
+     * 产一份 lease 并登记；它的回队回调是**唯一的槽位回队口**（[PoolLease] 只管「谁有权
+     * 归还」，具体怎么还由本类给 —— 与批 95/99 的 `T1TreeOps`/`TreeOps` 同一分工）。
+     */
     private fun newLease(slot: PoolSlot): PoolLease {
-        val lease = PoolLease(slot) { returned ->
-            leases.remove(returned.slot)
+        val lease = PoolLease(slot) { returnedSlot ->
+            leases.remove(returnedSlot)
             inUse.decrementAndGet()
-            returned.slot.markFree()
-            idle.trySend(returned.slot)
+            returnedSlot.markFree()
+            idle.trySend(returnedSlot)
         }
         leases[slot] = lease
         return lease
@@ -188,8 +189,9 @@ class FixedEnginePool(
         leases.keys.toList().forEach { slot ->
             val lease = leases[slot] ?: return@forEach
             slot.engine.kill()
-            slot.forceFree(reason)        // 状态机按 cause 归类 + 复位（不碰许可/队列）
-            lease.returnOnce()            // 幂等归还：槽回队列，持有者之后 release 是 no-op
+            // 强释走 lease：状态机复位 + 回队一次；持有者随后的 release 是 no-op。
+            // **不等 quiesce** —— 强释要的就是「立刻不再用」，等收尾反而让急停卡住。
+            lease.forceReturn(reason)
         }
     }
 
@@ -208,9 +210,7 @@ class FixedEnginePool(
      */
     override fun recycle(slot: PoolSlot, cause: KillCause?) {
         val lease = leases[slot] ?: return   // 已归还/从未占用：幂等 no-op（不再手工还许可）
-        slot.reuse(cause ?: KillCause.REQUESTED)   // RUNNING→STOPPED；BOOTING 启动失败→CRASHED
-        slot.occupy()                                // 代次推进（诊断用，见类 KDoc）
-        lease.returnOnce()                          // 唯一回队口
+        lease.forceReturn(cause ?: KillCause.REQUESTED)   // 状态机归类 + 复位 + 唯一回队口
     }
 
     companion object {
