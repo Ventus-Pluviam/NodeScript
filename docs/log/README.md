@@ -1,5 +1,17 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-12，批 104：M1 + B3）
+
+- [2026-10-12 · 外审 M1 收口 + B3 流式读](2026-10-11.md)：
+  [`ScriptPaths.scriptFile`](../../domain/src/main/kotlin/com/autoscript/domain/scripts/ScriptPaths.kt)
+  **此前一个字都不校验**，而 `NodeProcessEngine` 拿它的返回值直接拼进 `node <路径>` 执行 ——
+  补上读侧词法闸（`projectId` 复用 `isValidProjectId`，`scriptPath` 拒绝对路径/`..`/`.`/
+  空段/反斜杠，归一后要求严格在项目根之下），非法路径折 `ERR_INVALID_PARAM` 而不是裸穿 IAE。
+  判据用**词法**不用 `toRealPath()`：后者要求目标已存在，会把「部署晚于调度」错报成参数错。
+  [`FileScriptEnvStore.replay`](../../app-service/script-repo/src/main/kotlin/com/autoscript/appservice/scriptrepo/core/FileScriptEnvStore.kt)
+  去 `readAllBytes` 改逐字节流式扫（append-only 长度只增不减）；不用 `readLine()` 是因为
+  末行无换行时它照样吐出来，而末行半行必须丢弃。守卫新增 7 + 1 + 1。
+
 ## 最新追记（2026-10-12，待办池清池续）
 
 - [2026-10-12 · 划掉的 31 行直接删掉（决策第 73 项）](2026-10-11.md)：

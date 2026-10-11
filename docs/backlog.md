@@ -738,13 +738,13 @@ npm scope 归属）等你拍板，不算可自行开工的批次。
 |---|---|---|---|
 | **B1** | 排队中的 start 持锁跨挂起，堵住 stop/killAll/watchdog | **成立**（实测 `stop(A)` 2927ms = 排队超时） | ✅ 批 96 已修 |
 | **B2** | 池记账两处手拿同步（`Semaphore` 计��数 + `slot.state` 计状态）：双重归还可超发一证 → 同一引擎跑两个脚本；`stop`/`killAll` 可双重归还 | **成立**（`quiesce()` 在锁外、代次检查与它之间槽可被重分配） | ✅ 批 103 已做（空闲队列为唯一真源 + `PoolLease` 独占归还权；原「通道化重构」的预估量级相近但形态不同，见决策第 72 项） |
-| **B3** | jsonl 半行只在内存丢弃、盘上不截断，后续 append 粘连，下次启动 `IOException`；无压缩、全量 `readAllBytes` | **完全成立**（守卫修前抛 `IOException: journal 行损坏`） | ✅ 半行清盘已修（批 96）；**压缩/流式读未做** 🔶 |
+| **B3** | jsonl 半行只在内存丢弃、盘上不截断，后续 append 粘连，下次启动 `IOException`；无压缩、全量 `readAllBytes` | **完全成立**（守卫修前抛 `IOException: journal 行损坏`） | ✅ 半行清盘（批 96）+ **流式读**（批 104，改逐字节扫：append-only 长度只增不减，冷启动全量读会把整段历史拉进堆）；**压缩未做** 🔶 |
 
 #### 中
 
 | # | 外审条目 | 核实结论 | 状态 |
 |---|---|---|---|
-| **M1** | 路径未校验（`engines.exec` / `workManager.create` 只判空；`scriptPath` 越界会被执行；`cwd` 来自未校验 `projectId`） | **半成立**：`ScriptPaths.isValidProjectId`（无 `.`）/`DeployPath.resolveIn`（startsWith(root)）/`ScriptDeployRecovery.isSafeRelPath` **都已在**；外审设想的 `projectId="builtin"` 提权场景在「全部项目解析为 UNKNOWN」下**不成立**。**真问题**是 `ScriptPaths.scriptFile` 的 KDoc 说「越界只读不到」而 `NodeProcessEngine:148` **会执行它** —— KDoc 与实现矛盾 | 🔶 登记：随 `TrustTierResolver` 排期收口；先补 KDoc 事实 |
+| **M1** | 路径未校验（`engines.exec` / `workManager.create` 只判空；`scriptPath` 越界会被执行；`cwd` 来自未校验 `projectId`） | **半成立**：`ScriptPaths.isValidProjectId`（无 `.`）/`DeployPath.resolveIn`（startsWith(root)）/`ScriptDeployRecovery.isSafeRelPath` **都已在**；外审设想的 `projectId="builtin"` 提权场景在「全部项目解析为 UNKNOWN」下**不成立**。**真问题**是 `ScriptPaths.scriptFile` 的 KDoc 说「越界只读不到」而 `NodeProcessEngine` **会执行它** —— KDoc 与实现矛盾 | ✅ **批 104 收口**：`scriptFile` 补读侧词法闸（projectId 过 `isValidProjectId`，scriptPath 拒绝对路径/`..`/`.`/空段/反斜杠，归一后要求严格在项目根之下），IAE 在引擎侧折 `ERR_INVALID_PARAM`；守卫 7 + 1（含「越界路径绝不进 argv」）。`TrustTierResolver` 是另一件事，不在 M1 内 |
 | **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | 🟡 批 100 做了字节加权信号量（`maxBytesInFlight`=16 MiB）；**每连接上限 + `limitedParallelism` 未做**（理由：前者要连同可见面一起设计，后者要先定每连接读线程配额；不做半套） |
 | **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | ✅ 批 98 已修（两处各退避重试 + 计数与回执，两条守卫先红后绿） |
 | **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | ✅ 批 97 已修（`ERR_INTERNAL` + 折叠两档，契约卷 §7.6 同步） |
