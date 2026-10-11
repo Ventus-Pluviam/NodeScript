@@ -14,14 +14,17 @@ import java.util.concurrent.TimeUnit
  * 判据（能不能跑、跑什么）全在协调器与解析层白名单那侧，本类不判 —— 它拿到的就是一条
  * 已经放行的命令。
  *
- * **回收顺序**（§10.3 T1「TERM→超时→SIGKILL 且 `kill -- -<pgid>` + `/proc` 二次收割」）：
- * 本版用 `ProcessHandle.descendants()` 收后代，不用 `kill -- -pgid`。理由是**可靠性**而不是
- * 省事：负 pgid 那条路要求子进程**没有**自己的进程组，而 `sh -c` 之后的东西是否另起
- * 进程组由 shell 与 ROM 决定（`setsid`/job control 在部分 ROM 上默认开）—— 一条"大多数
- * 情况下对"的杀树，漏掉的那次留下的正是最难查的孤儿。`descendants()` 走 `/proc` 的
- * 父子链，与"谁把谁生出来"这个事实同源，且 Java 9+ 的平台实现里本来就有。
- * **它也有自己的洞**（如实记账）：孙子进程若被 `reparent` 给 init（父先死），链就断了 ——
- * 那正是 §10.3 里 `kill -- -<pgid>` 想兜的那一类，**本版没兜住**。
+ * **回收顺序**（§10.3 T1「TERM→超时→SIGKILL + `/proc` 二次收割」，批 95 重写）：
+ * 扫后代（/proc ppid 图，**在杀之前** —— reparent 只断"死后回找"）→ TERM 主进程与全部
+ * 后代 → 宽限 → 还活着的 KILL → **二次收割**：从宽限后仍活着的第一轮成员再扫一轮
+ * （TERM 被忽略的那条在宽限期内新生的后代，父已死时被 reparent，从主进程已经走不到，
+ * 只有从活着的同辈才找得到）→ 还活着的一律 KILL。
+ *
+ * 批 91 那版用 `ProcessHandle.descendants()`，在**设备上从来没跑起来过**（`ProcessHandle`
+ * 整类不在 android.jar 里，`NoSuchMethodError` 被 `runCatching` 吞成空集 —— 静默退化成
+ * 只杀主进程）。为什么换、以及 /proc 版的判据，见 [ProcOps] 的类 KDoc；**不再用
+ * `kill -- -<pgid>`**：负 pgid 要求子进程没有自己的进程组，而 `sh -c` 之后是否另起
+ * 进程组由 shell 与 ROM 决定 —— /proc 父子链与"谁把谁生出来"这个事实同源。
  */
 class T1Child(
     private val id: Long,
@@ -34,6 +37,8 @@ class T1Child(
     private val runner: T1ProcessRunner,
     /** 往会话 socket 写一帧（由 [T1Session] 提供，已加锁）。 */
     private val emit: (Map<String, Any?>) -> Boolean,
+    /** 杀树的缝（批 95；生产 = [ProcTreeOps]，单测注入替身）。 */
+    private val treeOps: T1TreeOps = ProcTreeOps(),
 ) {
 
     @Volatile
@@ -78,17 +83,20 @@ class T1Child(
         pump(proc.inputStream, fd = 1)
         proc.waitFor()
         errPump.join(ERR_PUMP_JOIN_MILLIS)
-        // 被 kill 帧杀的那条：按**真 child_process 的口径**报 —— `code=null` +
-        // `signal=<我们发出去的那个信号名>`（信号名是确知的事实不是编造；signal 恒 null
-        // 那条记账管的是"没人点名、只看到 128+n"的情形，那条照旧 null）。
-        // 判据是 `exitValue >= 128`（信号终止的 128+n 约定值）：destroy 与自然退出可以
-        // 赛跑，先退成 0 的那次按自然退出报，不把"恰好要杀"写成"被杀"。
-        val sig = killSignal?.takeIf { proc.exitValue() >= 128 }
+        // exit 帧的 signal（批 95 收口「没人点名时恒 null」那半欠账）：
+        // - 被 kill 帧杀的：signal 报**我们发出去的**那个名字（确知的事实）；
+        // - 没人点名、但 `exitValue >= 128`：按 POSIX shell 惯例 `n = exit - 128` 反查
+        //   [signalName] —— 这不是编造，128+n 就是「被信号 n 杀死」的编码本身（真
+        //   child_process 在这一档报的也是同一个信号名；已知误报档见 [signalName] 的 KDoc）；
+        // - `exitValue < 128`：自然退出，signal=null、code 照给。
+        // code 的口径不变：有 signal 名时 code=null（真 child_process 同款）。
+        val exit = proc.exitValue()
+        val sig = killSignal?.takeIf { exit >= 128 } ?: if (exit >= 128) signalName(exit - 128) else null
         emit(
             mapOf(
                 "t" to "exit",
                 "id" to id,
-                "code" to if (sig == null) proc.exitValue() else null,
+                "code" to if (sig == null) exit else null,
                 "signal" to sig,
             ),
         )
@@ -140,22 +148,34 @@ class T1Child(
     }
 
     /**
-     * 收这条进程树：TERM → 宽限 → KILL（含后代）。幂等。
+     * 收这条进程树：扫 → TERM → 宽限 → KILL → **二次收割**（§10.3 T1）。幂等。
      *
-     * 后代那条链包在 `runCatching` 里：`Process.toHandle()` 对**非本机进程**（单测替身、
-     * 任何自定义 `Process` 实现）会抛 `UnsupportedOperationException`，而"收不到后代"
-     * 不该让"收掉主进程"这件事一起失败 —— 那是收尸，做一半比不做更糟。
+     * **扫在杀之前**（批 95）：reparent 只断"死后沿 ppid 往回找"，pid 集合在树还活着时
+     * 到手，之后谁被 reparent 都无所谓。[treeOps] 整条包在 `runCatching` 里：杀树的缝
+     * 在替身/坏环境下不该让"收掉主进程"这件事一起失败 —— 收尸做一半也比不做好。
      */
     fun reap() {
         val proc = process ?: return
         if (!proc.isAlive) return
-        val tree = runCatching { proc.toHandle().descendants().toList() }.getOrDefault(emptyList())
+        val firstWave = runCatching { treeOps.descendantsOf(proc) }.getOrDefault(emptySet())
         proc.destroy()
-        tree.forEach { runCatching { it.destroy() } }
+        runCatching { treeOps.kill(firstWave, force = false) }
+        // 主进程的这条 waitFor 就是第一波后代的宽限窗（TERM 与它是同时发出的）——
+        // 不为"主进程先退"再补睡一段：那只会让快的那次付两次时间。
         if (!proc.waitFor(REAP_GRACE_MILLIS, TimeUnit.MILLISECONDS)) {
             proc.destroyForcibly()
-            tree.forEach { runCatching { it.destroyForcibly() } }
         }
+        // 二次收割（§10.3）：从宽限后**仍活着**的第一轮成员再扫一轮 —— TERM 被忽略的那条
+        // 在宽限期内新生的后代，父已死时被 reparent，从主进程已经走不到，只有从活着的
+        // 同辈才找得到。这正是批 91 记「孙子被 reparent 后链断」那一档的补法。
+        // 迟到的一波**直接 KILL 不再 TERM**：宽限窗已经过去了，它们生在收尸过程中 ——
+        // 再给一轮 TERM 是把同一个告别仪式演两遍，而它们的父马上就要被 KILL。
+        // KILL 只打**还活着的** pid：对已死进程补一刀是无害的，但 pid 在极小窗口里可能
+        // 已被系统回收给无关进程 —— 没必要为一次空转的 kill 去碰那个窗口。
+        val stillAlive = firstWave.filter { pid -> runCatching { treeOps.alive(pid) }.getOrDefault(false) }
+        val late = runCatching { treeOps.descendantsOf(stillAlive.toSet()) }.getOrDefault(emptySet()) - firstWave
+        runCatching { treeOps.kill(stillAlive, force = true) }
+        runCatching { treeOps.kill(late, force = true) }
     }
 
     /** 一条失败帧（`err`）：脚本侧那个 ChildProcess 会把它发成 `error` 事件。 */
