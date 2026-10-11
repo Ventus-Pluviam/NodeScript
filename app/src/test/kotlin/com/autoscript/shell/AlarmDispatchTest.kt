@@ -6,9 +6,9 @@ import com.autoscript.appservice.scheduler.core.InMemoryIntentLog
 import com.autoscript.appservice.scheduler.core.RunDispatcher
 import com.autoscript.appservice.scheduler.core.RunOutcome
 import com.autoscript.appservice.scheduler.core.Scheduler
-import com.autoscript.appservice.scheduler.core.ScheduledTask
+import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.TimedSchedule
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import kotlinx.coroutines.runBlocking

@@ -1,9 +1,9 @@
 package com.autoscript.appservice.scheduler.persist
 
-import com.autoscript.appservice.scheduler.core.ScheduledTask
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
-import com.autoscript.appservice.scheduler.core.TaskStore
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.ScheduledTask
+import com.autoscript.domain.scripts.ScreenGuarantee
+import com.autoscript.domain.scripts.TaskStore
+import com.autoscript.domain.scripts.TimedSchedule
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets

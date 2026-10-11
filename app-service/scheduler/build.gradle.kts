@@ -7,4 +7,7 @@ plugins {
 dependencies {
     implementation(project(":domain"))
     implementation(libs.kotlinx.coroutines.core)
+    // `InMemoryTaskStore` 随 SPI 搬进 `:domain` testFixtures（批 102 P4）：
+    // 它与 `InMemoryIntentStore` 同一地位 —— 规格「今天确实被执行过」的那份零 IO 实现。
+    testImplementation(testFixtures(project(":domain")))
 }

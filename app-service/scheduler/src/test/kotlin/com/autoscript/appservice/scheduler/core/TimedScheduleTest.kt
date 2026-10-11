@@ -3,6 +3,7 @@ package com.autoscript.appservice.scheduler.core
 import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import com.autoscript.domain.scripts.TimedSchedule
 
 class TimedScheduleTest {
 

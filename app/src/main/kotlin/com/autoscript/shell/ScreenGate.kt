@@ -1,6 +1,6 @@
 package com.autoscript.shell
 
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
+import com.autoscript.domain.scripts.ScreenGuarantee
 
 /**
  * 屏幕门禁（docs §8.6 守时契约，§9.5 三态门禁）：

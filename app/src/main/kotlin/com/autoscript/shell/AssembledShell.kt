@@ -19,6 +19,7 @@ import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
+import com.autoscript.domain.scripts.TimedSchedule
 
 /**
  * 装壳产物与壳自己的协程域（2026-10-01 D7 自 `AppShellKit.kt` 原样外迁：它们与

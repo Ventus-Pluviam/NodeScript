@@ -1,7 +1,7 @@
 package com.autoscript.shell
 
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.ScreenGuarantee
+import com.autoscript.domain.scripts.TimedSchedule
 import com.autoscript.domain.host.ScheduleSpec
 import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.domain.host.TaskRegistration
@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.time.ZoneId
+import com.autoscript.domain.scripts.CronTab
+import com.autoscript.domain.scripts.ScheduledTask
 
 /**
  * 登记闸门（[TaskCenterOps.toScheduledTask]）：`:domain` [TaskRegistration] → 调度器

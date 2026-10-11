@@ -3,6 +3,7 @@ package com.autoscript.ui.state
 import com.autoscript.domain.host.ScheduleSpec
 import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.domain.host.TaskRegistration
+import com.autoscript.domain.scripts.CronTab
 
 /**
  * 任务中心「登记任务」表单的纯状态（文本字段 → [TaskRegistration] 的解析在提交时跑一次）。

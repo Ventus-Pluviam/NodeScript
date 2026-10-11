@@ -142,7 +142,7 @@ class FileRunArchive(private val dir: Path) : RunArchive, AutoCloseable {
         truncateTail(lastFullLineEnd)
     }
 
-    /** 截掉文件尾残片（外审 B3 半，2026-10-11）：理由与实现同 [com.autoscript.appservice.scheduler.persist.FileTaskStore.truncateTail]。 */
+    /** 截掉文件尾残片（外审 B3 半，2026-10-11）：理由与实现同 `FileTaskStore.truncateTail`（同包的 `tasks.jsonl` 侧；那是 private 成员，KDoc 链接点不进去）。 */
     private fun truncateTail(offset: Int) {
         if (offset <= 0) { Files.deleteIfExists(file); return }
         try {

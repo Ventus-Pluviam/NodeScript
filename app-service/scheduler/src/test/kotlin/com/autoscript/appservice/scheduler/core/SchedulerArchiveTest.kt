@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
+import com.autoscript.domain.scripts.ScheduledTask
+import com.autoscript.domain.scripts.TimedSchedule
 
 /**
  * §8.5 归档入口（scheduler 侧验证）：

@@ -1,6 +1,8 @@
-package com.autoscript.appservice.scheduler.core
+package com.autoscript.domain.scripts
 
 /**
+ * 守时诚实契约（亮屏/熄屏）是**登记载荷的形状**的一部分，与 [TimedSchedule] 同批搬进 `:domain`（2026-10-11 批 102）。
+ *
  * 定时任务守时诚实契约（docs §8.6）：
  * 设备「亮屏 + 解锁」是保底；熄屏任务必须显式声明其一，未经声明不投递。
  */

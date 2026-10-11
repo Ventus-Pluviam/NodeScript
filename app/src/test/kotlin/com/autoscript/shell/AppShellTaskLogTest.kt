@@ -1,8 +1,8 @@
 package com.autoscript.shell
 
-import com.autoscript.appservice.scheduler.core.ScheduledTask
+import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.TimedSchedule
 import com.autoscript.domain.bridge.HandleRef
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineRunReceipt

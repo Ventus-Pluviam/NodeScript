@@ -1,8 +1,8 @@
 package com.autoscript.appservice.scheduler.persist
 
-import com.autoscript.appservice.scheduler.core.ScheduledTask
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.ScheduledTask
+import com.autoscript.domain.scripts.ScreenGuarantee
+import com.autoscript.domain.scripts.TimedSchedule
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test

@@ -5,6 +5,9 @@ import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
 import com.autoscript.domain.scripts.isTerminal
+import com.autoscript.domain.scripts.ScheduledTask
+import com.autoscript.domain.scripts.TaskStore
+import com.autoscript.domain.scripts.TimedSchedule
 
 /**
  * 调度编排（§8.6）：登记/取消/触发 → 意图日志 RUN_START → dispatcher → COMMIT。

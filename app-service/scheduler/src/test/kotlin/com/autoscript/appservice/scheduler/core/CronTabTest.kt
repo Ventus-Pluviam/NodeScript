@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import com.autoscript.domain.scripts.CronTab
+import com.autoscript.domain.scripts.TimedSchedule
 
 /**
  * cron 排期数学（[CronTab] + [TimedSchedule.Cron.nextFireAfter]）。

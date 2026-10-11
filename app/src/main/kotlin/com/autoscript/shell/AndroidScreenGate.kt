@@ -1,7 +1,7 @@
 package com.autoscript.shell
 
 import android.content.Context
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
+import com.autoscript.domain.scripts.ScreenGuarantee
 import com.autoscript.platform.system.power.WakeLockLedger
 
 /**

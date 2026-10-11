@@ -1,6 +1,9 @@
-package com.autoscript.appservice.scheduler.core
+package com.autoscript.domain.scripts
 
 /**
+ * 排期模型是**登记载荷的形状**（`ScheduledTask` 的一个字段），而存储面（`TaskStore` 的 SQLite 实现要住 `:platform:system`）需要它 ——
+ * 故随载荷一起搬进 `:domain`，与 `IntentStore`/`RunArchive` 同址（2026-10-11 批 102，P4 jsonl→SQLite）。
+ *
  * 定时任务的调度计划（docs §8.6 / §9.6 定时 API）：
  * 「每日定点」+「一次性（倒计时/延迟）」+「cron 表达式」（P1 已落地，解析/推进见 [CronTab]）。
  * [nextFireAfter] 是唯一时序来源，供 alarm 预拉（wakeAheadMs）与 UI 预览使用。

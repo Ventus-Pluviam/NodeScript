@@ -2,9 +2,9 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.scheduler.core.InMemoryIntentLog
 import com.autoscript.appservice.scheduler.core.IntentLog
-import com.autoscript.appservice.scheduler.core.ScheduledTask
+import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.TimedSchedule
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.bridge.BridgeRequest

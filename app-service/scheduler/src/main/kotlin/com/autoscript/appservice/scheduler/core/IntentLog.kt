@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.scripts.ScreenGuarantee
 /**
  * checkpoint 意图日志（docs §8.5）：
  * `RUN_START(projectId, entry, runNonce, scheduledAt, screen) → …execute… → COMMIT(result)`。
