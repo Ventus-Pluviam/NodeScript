@@ -126,8 +126,15 @@ stdout/stderr/退出码经同一条 socket 以**假管道**回填（`BridgedChil
 临时引擎」—— 引擎池那条路要求「让引擎执行一段 JS」，而这里要执行的是 npm 自己。
 ③ **不做最小 CapabilityMask**（§10.5-4）：脚本进程与 App **同 UID**；设备上没有可用的隔离
 手段（沙箱已裁），「最小能力」现在只能靠「宿主只跑它认得的那条命令」近似。
-④ **不做输出流式**（脚本 stdout 由 npm 自己捕获，宿主只拿摘要）、**stdin 转发不做背压**、
-**`signal` 恒 null**（Java 的 `Process` 不给信号号）。
+④ ~~**不做输出流式**（脚本 stdout 由 npm 自己捕获，宿主只拿摘要）、**stdin 转发不做背压**、
+**`signal` 恒 null**（Java 的 `Process` 不给信号号）。~~ **流式与取消已落（2026-10-11，批 94）**：
+`ScriptOpExecutor.execute` 补 `OutputSink` 缝（与 `HeavyOpExecutor` 同形），npm 会话进程的
+stdout **边读边落控制台环**，报过流则失败详情不再重复尾部；**取消可杀**：`waitFor` 改切片
+轮询查 `ScriptOp.cancelSignal`（控制台「停止」→ facade `cancelConsoleCommand` → 置位 →
+destroyForcibly + 会话关断收子进程），桥侧 `child.kill()` 发 **kill 帧**（SIGTERM/SIGKILL，
+其余如实 `ERR_NOT_IMPLEMENTED`），exit 帧对宿主确知的杀按 Node 口径 `code=null, signal=<名>`。
+**仍欠**：stdin 转发不做背压、同步三入口不支持、**没人点名时 `signal` 恒 null**（Java
+`Process` 不给信号号，128+n 无从还原信号名 —— 只有宿主经 kill 帧杀的那条给得出）。
 **两条 shim 互斥**：安装会话（T0）注门禁 shim（零 spawn），T1 会话**只注桥那一份** ——
 把门禁也注进去，T1 的每一次 spawn 都会先撞门禁，那不是更安全，是把刚接上的路又堵死。
 **同步三兄弟**（`spawnSync`/`execSync`/`execFileSync`）与 `fork` 如实 `ERR_NOT_IMPLEMENTED`
@@ -216,6 +223,7 @@ interface PackageManager {
   suspend fun globalRegistry(): NpmRegistrySnapshot            // 全局镜像源读数（configured/defaultRegistry/secondaryRegistry；2026-10-09 批 83）
   suspend fun setGlobalRegistry(raw: String?)                  // 设/清全局镜像源；null 或空白 = 恢复出厂官方；校验不过抛原文
   suspend fun runConsoleCommand(projectId, line): NpmConsoleHandle  // 控制台命令面（2026-10-09 批 84）：解析→回显→派发；解析不过抛原文
+  suspend fun cancelConsoleCommand(projectId): Boolean            // 控制台停止（2026-10-11 批 94）：停掉该项目在跑的命令；回「是否取消到了东西」；T1 真杀进程树，重操作弃结果（TTL 兜底）
   suspend fun consoleOutput(projectId, sinceSeq, maxLines=256): NpmConsoleSnapshot  // 控制台输出读数（seq 游标拉取，同 drainEvents 的形）
   suspend fun consoleHistory(projectId): List<String>              // 控制台命令历史读数（2026-10-10 批 90）：**按项目**、最近在最前、已去重
   suspend fun recordConsoleHistory(projectId, line)                // 同上写口：由 :ui 在**派发点**调（那里才有用户敲的原文，见下）
@@ -457,6 +465,14 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
      跑完、子页在前台时一直跟 —— 原先每个读口都是"进页面 / 手动刷新时取一次"，而宿主是
      入队即返回的，两者合起来就是"敲完什么都不动"。**刻意不用**宿主的 `progress` SharedFlow：
      它没有重放，晚到的订阅者永久丢那一批，而"切进来时命令已经跑了一半"正是常态。
+   - **T1 通道的流式与停止已落（2026-10-11 批 94）**：批 90 的真流式只盖住宿主自己起的
+     npm 安装会话 —— `npm run`/`npx` 走的 T1 会话进程那侧，脚本 stdout 此前被 npm 吞掉、
+     宿主只攪尾部。本批 `ScriptOpExecutor.execute` 补 `OutputSink` 缝（与 `HeavyOpExecutor`
+     同形），T1 会话进程的 stdout 也**边读边落控制台环**（报过流则失败详情不再重复尾部）。
+     **停止按钮**（跑动中「执行」位换成「停止」）：`PackageManagerFacade.cancelConsoleCommand`
+     （按项目停，`HostSummary` 同名转发）→ 协调器逐个 `cancel` 未终态句柄；**T1 通道真杀**
+     （`waitFor` 切片轮询查取消位 → destroyForcibly + 会话关断收子进程；桥侧 `child.kill()`
+     发 kill 帧，见 §10.3 T1 落地追记④），**重操作仍弃结果不杀进程**（TTL 兜底，覆盖面如实）。
    - ~~**未落**：shell 引号解析、`npm config`/`publish` 一类子命令（白名单外）、T1 spawn 桥本体
      （`scriptExecutor` 仍缺，§11.2 T2）~~ **T1 spawn 桥本体已落（2026-10-10，批 91）** ——
      上一条的「获批但桥未接」分支随之作废。**仍未落**：shell 引号解析、
