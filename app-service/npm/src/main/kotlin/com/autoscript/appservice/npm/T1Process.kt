@@ -42,6 +42,15 @@ class T1Child(
     @Volatile
     private var stdin: OutputStream? = null
 
+    /**
+     * kill 帧指定的信号（批 94）。null = 没被 kill 帧点过名。
+     *
+     * 它同时是**进程还没起时的 pending 位**：kill 帧可以先于 spawn 落地（shim 是发完
+     * spawn 就能发 kill 的），这时 [process] 还是 null —— [run] 起完进程后查这一位补杀。
+     */
+    @Volatile
+    private var killSignal: String? = null
+
     /** 起进程 → 泵输出 → 等退出。在会话给这条子进程开的线程上跑。 */
     fun run() {
         // detached 在 shim 那侧已经拒过一次，这里再拒一次：**两侧各拒一次是刻意的** ——
@@ -59,6 +68,8 @@ class T1Child(
             return
         }
         process = proc
+        // kill 帧先于进程落地时在这里补杀（见 [killSignal] 的 KDoc）。
+        killSignal?.let { sig -> destroyWith(proc, sig) }
         stdin = proc.outputStream
         val errPump = Thread({ pump(proc.errorStream, fd = 2) }, "t1-child-$id-err").apply {
             isDaemon = true
@@ -67,16 +78,18 @@ class T1Child(
         pump(proc.inputStream, fd = 1)
         proc.waitFor()
         errPump.join(ERR_PUMP_JOIN_MILLIS)
+        // 被 kill 帧杀的那条：按**真 child_process 的口径**报 —— `code=null` +
+        // `signal=<我们发出去的那个信号名>`（信号名是确知的事实不是编造；signal 恒 null
+        // 那条记账管的是"没人点名、只看到 128+n"的情形，那条照旧 null）。
+        // 判据是 `exitValue >= 128`（信号终止的 128+n 约定值）：destroy 与自然退出可以
+        // 赛跑，先退成 0 的那次按自然退出报，不把"恰好要杀"写成"被杀"。
+        val sig = killSignal?.takeIf { proc.exitValue() >= 128 }
         emit(
             mapOf(
                 "t" to "exit",
                 "id" to id,
-                "code" to proc.exitValue(),
-                // signal 本版恒 null：Java 的 Process 不给信号号（`exitValue()` 对信号终止
-                // 给的是 128+n 那个约定值，不是信号名）。**不编一个**：脚本侧拿到的
-                // `signalCode` 为 null，而 `exitCode` 是 128+n —— 与真 child_process 在
-                // "被信号杀死"这一档上不同，如实记账。
-                "signal" to null,
+                "code" to if (sig == null) proc.exitValue() else null,
+                "signal" to sig,
             ),
         )
     }
@@ -106,6 +119,24 @@ class T1Child(
         } catch (_: IOException) {
             // 子进程已退：写不进去是正常结果（真 child_process 在这种情况下给 EPIPE）。
         }
+    }
+
+    /**
+     * kill 帧（批 94）：杀**这一条**子进程（不是整条会话）。
+     *
+     * 信号面与 shim 对齐：`SIGKILL` → `destroyForcibly`，其余（shim 只放行 `SIGTERM`）
+     * → `destroy`（TERM）。进程还没起时只记 [killSignal]，由 [run] 起完补杀 ——
+     * kill 帧先于 spawn 落地是合法时序（shim 发完 spawn 帧就能发 kill）。
+     * 幂等：重复 kill 只是再发一次 destroy（对已死进程是 no-op）。
+     */
+    fun kill(signal: String?) {
+        val sig = if (signal == "SIGKILL") "SIGKILL" else "SIGTERM"
+        killSignal = sig
+        process?.let { destroyWith(it, sig) }
+    }
+
+    private fun destroyWith(proc: Process, signal: String) {
+        if (signal == "SIGKILL") proc.destroyForcibly() else proc.destroy()
     }
 
     /**

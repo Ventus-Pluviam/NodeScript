@@ -94,6 +94,17 @@ class ConsoleCmdOpsTest {
             failRun?.let { throw it }
             return com.autoscript.domain.host.ShellConsoleResult(0, "ok", null)
         }
+
+        /** 停止面的调用账（批 94）：停了哪个项目、宿主怎么答。 */
+        val stopped = mutableListOf<String>()
+        var cancelResult: Boolean = true
+        var failCancel: Exception? = null
+
+        override suspend fun cancelConsoleCommand(projectId: String): Boolean {
+            stopped += projectId
+            failCancel?.let { throw it }
+            return cancelResult
+        }
     }
 
     private fun echo(seq: Long, text: String) =
@@ -321,5 +332,36 @@ class ConsoleCmdOpsTest {
         val done = loadConsoleCmd(host, polled.copy(running = true))
         assertEquals(2, host.historyCalls, "停下来之后取一次")
         assertEquals(listOf("npm install axios"), done.history)
+    }
+
+    // ── 停止（2026-10-11 批 94）───────────────────────────────────────────
+
+    @Test
+    fun `停止：交给宿主句柄账，回执不替宿主宣布结果`() = runBlocking {
+        val host = CmdHost()
+        val loaded = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+        val s = stopConsoleCmd(host, loaded.copy(running = true))
+        assertEquals(listOf("p1"), host.stopped, "停的是当前选中项目")
+        assertTrue(s.opNotice!!.contains("已请求停止"), "回执说的是'请求'不是'停掉了'：${s.opNotice}")
+        assertNull(s.opError)
+
+        // 宿主说没有在跑的：如实转述（按钮多按一次不是错误）。
+        host.cancelResult = false
+        val noop = stopConsoleCmd(host, s)
+        assertTrue(noop.opNotice!!.contains("没有在跑"), "${noop.opNotice}")
+
+        // 宿主抛：原文进 opError（与其余执行面同纪律），不吞。
+        host.failCancel = IllegalStateException("npm 未接线")
+        val failed = stopConsoleCmd(host, noop)
+        assertEquals("npm 未接线", failed.opError)
+        assertNull(failed.opNotice)
+    }
+
+    @Test
+    fun `停止：没选中项目时不当往返一趟（界面当场拒）`() = runBlocking {
+        val host = CmdHost(projects = emptyList())
+        val s = stopConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+        assertTrue(s.opError != null && s.opError!!.contains("还没有选中的项目"), "${s.opError}")
+        assertTrue(host.stopped.isEmpty(), "没选中就不该把请求发出去")
     }
 }

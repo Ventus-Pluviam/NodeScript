@@ -3,7 +3,13 @@ package com.autoscript.appservice.npm
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.testkit.HostNpm
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
@@ -97,7 +103,7 @@ class T1BridgeE2ETest {
     @Test
     fun `npm run 的脚本经桥真跑起来，效果落在盘上`() = runBlocking {
         val root = project("p1", mapOf("hello" to "node -e \"require('fs').writeFileSync('t1-ran.txt','ok')\""))
-        val summary = executor().execute(op("p1", root, "hello"), {})
+        val summary = executor().execute(op("p1", root, "hello"), {}, OutputSink.None)
         assertTrue(summary.contains("完成"), "执行体该回一句人类可读的摘要：$summary")
         val written = root.resolve("t1-ran.txt")
         assertTrue(Files.isRegularFile(written), "脚本的副作用必须真发生（桥没把 spawn 接上的话这里什么都没有）")
@@ -109,20 +115,21 @@ class T1BridgeE2ETest {
         // npm 把脚本输出转发到自己的 stdout —— 这条链要成立，桥必须把 `out` 帧
         // 回填进 shim 那个 Readable，否则 npm 拿到的是空 stdout（脚本"跑了但没说话"）。
         val root = project("p2", mapOf("talk" to "node -e \"console.log('BRIDGE-SAID-HELLO')\""))
-        val summary = executor().execute(op("p2", root, "talk"), {})
+        val summary = executor().execute(op("p2", root, "talk"), {}, OutputSink.None)
         assertTrue(summary.contains("完成"), "退出码 0：$summary")
         // 摘要里没有脚本输出（那是 npm 自己的 stdout，本执行体只回摘要）—— 故这里验的是
         // **失败路径**能把它带出来（见下一例）。这一例只钉"跑成了"。
     }
 
     @Test
-    fun `脚本非零退出时，它的输出出现在失败详情里`() = runBlocking {
+    fun `脚本非零退出时，它的输出出现在失败详情里（没报过流的兜底路）`() = runBlocking {
         val root = project(
             "p3",
             mapOf("boom" to "node -e \"console.error('BRIDGE-FAILURE-MARK'); process.exit(3)\""),
         )
         val e = assertThrows(AutojsException::class.java) {
-            runBlocking { executor().execute(op("p3", root, "boom"), ProgressSink {}) }
+            // OutputSink.None = 没报过流 → 尾部必须进失败详情（老路径，批 94 保留）。
+            runBlocking { executor().execute(op("p3", root, "boom"), ProgressSink {}, OutputSink.None) }
         }
         val msg = e.message ?: ""
         assertTrue(msg.contains("退出码"), "非零退出要如实报码：$msg")
@@ -142,9 +149,63 @@ class T1BridgeE2ETest {
             mapOf("det" to "node -e \"require('child_process').spawn('echo',['x'],{detached:true})\""),
         )
         val e = assertThrows(AutojsException::class.java) {
-            runBlocking { executor().execute(op("p4", root, "det"), ProgressSink {}) }
+            runBlocking { executor().execute(op("p4", root, "det"), ProgressSink {}, OutputSink.None) }
         }
         val msg = e.message ?: ""
         assertTrue(msg.contains("detached") || msg.contains("ERR_PERMISSION_DENIED"), "拒绝要能被看见：$msg")
+    }
+
+    @Test
+    fun `脚本输出在进程退出前就到流上（批 94 真流式），失败详情不再重复尾部`() = runBlocking {
+        // 脚本先吐标记、再睡三秒才退：流若"跑完才报"，标记的到达时间会贴近返回时间；
+        // 真流式下它在脚本一开口就该到（npm 起来的那一两秒是共同底噪，不计）。
+        val root = project(
+            "p5",
+            mapOf("slow" to "node -e \"console.log('STREAM-MARK'); setTimeout(()=>{},3000)\""),
+        )
+        val arrivals = mutableListOf<Pair<String, Long>>()
+        val summary = executor().execute(
+            op("p5", root, "slow"),
+            {},
+            OutputSink { text -> synchronized(arrivals) { arrivals += text to System.currentTimeMillis() } },
+        )
+        val returnedAt = System.currentTimeMillis()
+        assertTrue(summary.contains("完成"), "退出码 0：$summary")
+        val mark = synchronized(arrivals) { arrivals.firstOrNull { it.first.contains("STREAM-MARK") } }
+        assertTrue(mark != null, "流上必须有脚本那行：$arrivals")
+        assertTrue(
+            returnedAt - mark!!.second > 1_500L,
+            "标记必须远早于返回（脚本吐完又睡了 3s）—— 到达时间贴近返回 = 那是攒完再报不是流式：" +
+                "到达差 ${returnedAt - mark.second}ms",
+        )
+    }
+
+    @Test
+    fun `取消探针置位后执行体在切片间隙杀掉会话（不等 60s TTL）`() = runBlocking {
+        // 长睡脚本（60s）：不取消就该跑到 TTL。取消探针在 2s 后置位（npm 起来 + 子进程
+        // 在飞），执行体必须在 200ms 切片内 destroyForcibly + 关会话，抛 ERR_ENGINE_STOPPED。
+        // 断"远小于 TTL"而不是断精确毫秒（绝对 ms 不是常量）。
+        val root = project("p6", mapOf("sleep" to "node -e \"setTimeout(()=>{},60000)\""))
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val op = op("p6", root, "sleep", timeoutMillis = 60_000L).copy(
+            cancelSignal = OpCancelSignal { cancelled.get() },
+        )
+        val startedAt = System.currentTimeMillis()
+        // 独立 scope（同 InstallCoordinatorTest.detached 的理由）：子协程失败会取消父作用域，
+        // 那会让异常从测试方法自己抛出去、assertThrows 根本接不到。
+        val job = CoroutineScope(Dispatchers.IO).async { executor().execute(op, ProgressSink {}, OutputSink.None) }
+        delay(2_000L)
+        cancelled.set(true)
+        val e = assertThrows(AutojsException::class.java) { runBlocking { withTimeout(30_000L) { job.await() } } }
+        assertEquals(
+            com.autoscript.domain.core.ErrorCode.ERR_ENGINE_STOPPED,
+            e.error,
+            "取消的病理话术要如实（不是超时不是崩溃）：${e.message}",
+        )
+        val elapsed = System.currentTimeMillis() - startedAt
+        assertTrue(
+            elapsed < 30_000L,
+            "取消后必须秒级收尾，而不是陪跑到 TTL：${elapsed}ms",
+        )
     }
 }

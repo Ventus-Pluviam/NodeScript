@@ -24,6 +24,10 @@ class PackageManagerFacadeContractTest {
             "globalRegistry", "setGlobalRegistry",
             // 控制台命令面（§10.9 第 3 条「npm 终端视图」；同样不经桥）
             "runConsoleCommand", "consoleOutput",
+            // 控制台停止（2026-10-11 批 94：「停止」按钮的宿主面 —— 与 runConsoleCommand
+            // 并列而不是 cancel(handle) 的别名：界面拿到的是 NpmConsoleHandle，它没有
+            // InstallHandle 的句柄号，按项目停是界面唯一说得清的语义）
+            "cancelConsoleCommand",
             // 命令历史（§10.9 第 3 条；2026-10-10 批 90 —— 环 vs 盘：输出环随进程消失，
             // 历史落盘，故是**另一个口**而不是 consoleOutput 的一个参数）
             "consoleHistory", "recordConsoleHistory",

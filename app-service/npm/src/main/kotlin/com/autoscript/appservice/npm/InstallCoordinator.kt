@@ -234,7 +234,11 @@ class InstallCoordinator(
         @Volatile var journalStarted: Boolean = false,
         @Volatile var cancelled: Boolean = false,
         @Volatile var done: Boolean = false,
-    )
+    ) : OpCancelSignal {
+        // 执行体经 ScriptOp.cancelSignal 读的就是这一位（批 94：「停止」按下去 → 这里置位
+        // → 执行体在 waitFor 切片间隙看到 → 杀进程树）。
+        override fun isCancelled(): Boolean = cancelled
+    }
 
     // ══════════ 重操作 ══════════
 
@@ -413,6 +417,19 @@ class InstallCoordinator(
                 emit(InstallEvent.Finished(handle.projectId, handle.id, success = false, detail = "已取消"))
             }
         }
+    }
+
+    /**
+     * 控制台「停止」（批 94）：取消该项目此刻全部未终态句柄。
+     *
+     * 快照 values 再逐个 [cancel] —— `cancel` 会把句柄从 [handles] 摘掉（`finish()`），
+     * 边遍历边摘会漏。覆盖面（T1 真杀 / 重操作弃结果）见 facade 方法的 KDoc，
+     * 本方法不另判通道：**取消的判据只有一处**（句柄账），通道差异在执行体那侧兑现。
+     */
+    override suspend fun cancelConsoleCommand(projectId: String): Boolean {
+        val running = handles.values.filter { it.handle.projectId == projectId && !it.done }
+        running.forEach { cancel(it.handle) }
+        return running.isNotEmpty()
     }
 
     /**
@@ -918,6 +935,7 @@ class InstallCoordinator(
         npmArgs: List<String>,
     ): InstallHandle {
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
+        val tracked = TrackedOp(handle, "script-${handle.id}", journaled = false)
         val op = ScriptOp(
             handleId = handle.id,
             projectId = projectId,
@@ -929,8 +947,9 @@ class InstallCoordinator(
             npmArgs = npmArgs,
             versionHash = versionHash,
             timeoutMillis = SCRIPT_TIMEOUT_MILLIS,
+            // 批 94：执行体经它看到「停止」—— 句柄账在协调器手里，这是唯一的观测缝。
+            cancelSignal = tracked,
         )
-        val tracked = TrackedOp(handle, "script-${handle.id}", journaled = false)
         handles[handle.id] = tracked
         try {
             withProjectLock(projectId) {
@@ -938,9 +957,21 @@ class InstallCoordinator(
                     emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.QUEUED))
                     try {
                         if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "脚本执行已取消")
+                        // 批 94：脚本会话的输出真流式 —— 执行体边读边报，这里逐行落控制台环
+                        // （与 runHeavy 的那条缝同形；失败详情里要不要重复尾部由执行体判，
+                        // 见 NpmScriptExecutor.execute 的注释）。
                         val summary = withTimeoutOrNull(op.timeoutMillis) {
                             // 同 runHeavy：经 `emit` 才进环（见那处的注释）。
-                            scriptExecutor.execute(op) { ev -> emit(ev) }
+                            scriptExecutor.execute(
+                                op,
+                                { ev -> emit(ev) },
+                                { text ->
+                                    consoleLine(
+                                        projectId,
+                                        NpmConsoleLine(NpmConsoleLineKind.OUTPUT, text, now()),
+                                    )
+                                },
+                            )
                         } ?: throw AutojsException(
                             ErrorCode.ERR_TIMEOUT,
                             "脚本执行超时（${op.timeoutMillis}ms）：${what}（执行体未在 TTL 内收尾）",

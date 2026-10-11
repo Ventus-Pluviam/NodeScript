@@ -174,4 +174,100 @@ class T1ProcessTest {
             "TERM 不退就要 KILL —— 只 TERM 不 KILL 留下的正是不理会 TERM 的孤儿",
         )
     }
+
+    /** 被 kill 的假进程：destroy(Forcibly) 后按 128+n 的信号约定值退出。 */
+    private class SignalKilledProcess : Process() {
+        val destroyed = AtomicBoolean(false)
+        val forcibly = AtomicBoolean(false)
+        private val done = CountDownLatch(1)
+
+        @Volatile
+        private var exitCode: Int = 0
+
+        override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+        override fun getInputStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun waitFor(): Int {
+            done.await()
+            return exitCode
+        }
+
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = done.await(timeout, unit)
+        override fun exitValue(): Int = exitCode
+        override fun destroy() {
+            destroyed.set(true)
+            exitCode = 143 // 128 + SIGTERM
+            done.countDown()
+        }
+
+        override fun destroyForcibly(): Process {
+            forcibly.set(true)
+            exitCode = 137 // 128 + SIGKILL
+            done.countDown()
+            return this
+        }
+
+        override fun isAlive(): Boolean = done.count > 0
+        override fun pid(): Long = -1L
+    }
+
+    @Test
+    fun `kill(SIGTERM) 真发 destroy，exit 帧按 child_process 口径报信号`() {
+        val frames = Frames()
+        val proc = SignalKilledProcess()
+        val c = child(proc, frames)
+        val t = Thread { c.run() }.apply { isDaemon = true; start() }
+        Thread.sleep(100)
+        c.kill("SIGTERM")
+        t.join(5_000)
+
+        assertTrue(proc.destroyed.get(), "SIGTERM 必须落到 destroy（TERM）上")
+        assertFalse(proc.forcibly.get(), "SIGTERM 不该升级成 destroyForcibly")
+        val exit = frames.of("exit").single()
+        assertEquals(null, exit["code"], "信号终止按真 child_process 口径：code=null")
+        assertEquals("SIGTERM", exit["signal"], "信号名是我们发出去的那个，如实回填")
+    }
+
+    @Test
+    fun `kill(SIGKILL) 走 destroyForcibly`() {
+        val frames = Frames()
+        val proc = SignalKilledProcess()
+        val c = child(proc, frames)
+        val t = Thread { c.run() }.apply { isDaemon = true; start() }
+        Thread.sleep(100)
+        c.kill("SIGKILL")
+        t.join(5_000)
+
+        assertTrue(proc.forcibly.get(), "SIGKILL 必须落到 destroyForcibly 上")
+        val exit = frames.of("exit").single()
+        assertEquals(null, exit["code"])
+        assertEquals("SIGKILL", exit["signal"])
+    }
+
+    @Test
+    fun `kill 先于进程起：起完立刻补杀（kill 帧合法时序）`() {
+        // shim 发完 spawn 帧就能发 kill —— 宿主侧 spawn 帧的处理与 kill 帧的处理在同一条
+        // 读线程上串行，但进程 start() 可能还没返回；这一例钉"那条缝不丢杀"。
+        val frames = Frames()
+        val proc = SignalKilledProcess()
+        val c = child(proc, frames)
+        c.kill("SIGTERM") // 进程还没起
+        c.run()           // run 里 start 之后必须补杀
+
+        assertTrue(proc.destroyed.get(), "起完要立刻补杀（pending 位不能丢）")
+        val exit = frames.of("exit").single()
+        assertEquals("SIGTERM", exit["signal"])
+    }
+
+    @Test
+    fun `自然退出不带信号名（没人点名时 128+n 也照旧 code=… signal=null）`() {
+        val frames = Frames()
+        val c = child(DoneProcess(exitCode = 7), frames)
+        c.kill("SIGTERM") // 赛跑里自然退出先到：exitValue=7 < 128 → 不算被杀
+        c.run()
+
+        val exit = frames.of("exit").single()
+        assertEquals(7, exit["code"], "先退成 0/7 的那次按自然退出报，不把'恰好要杀'写成'被杀'")
+        assertEquals(null, exit["signal"])
+    }
 }

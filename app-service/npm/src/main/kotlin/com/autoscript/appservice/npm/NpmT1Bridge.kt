@@ -248,7 +248,8 @@ object NpmT1Bridge {
  *
  * 帧协议（newline 分隔的 JSON，字段名与 shim 逐字对应）：
  * - 会话 → 宿主：`{"t":"hello","v":1,"token":"<64hex>"}`、
- *   `{"t":"spawn","id":N,"cmd":..,"args":[..],"opts":{..}}`、`{"t":"in","id":N,"data":"<b64>"}`
+ *   `{"t":"spawn","id":N,"cmd":..,"args":[..],"opts":{..}}`、`{"t":"in","id":N,"data":"<b64>"}`、
+ *   `{"t":"kill","id":N,"signal":"SIGTERM"|"SIGKILL"}`（批 94：单条子进程的取消）
  * - 宿主 → 会话：`{"t":"helloAck","v":1}` / `{"t":"helloErr","code":..,"detail":..}`、
  *   `{"t":"out","id":N,"fd":1|2,"data":"<b64>"}`、`{"t":"exit","id":N,"code":N,"signal":..}`、
  *   `{"t":"err","id":N,"code":..,"detail":..}`
@@ -352,6 +353,7 @@ class T1Session(
         when ((fields["t"] as? DomainJson.Value.S)?.v) {
             "spawn" -> onSpawn(fields)
             "in" -> onStdin(fields)
+            "kill" -> onKill(fields)
             else -> Unit // 未知帧类型：忽略（版本偏斜时前向兼容）
         }
     }
@@ -387,6 +389,12 @@ class T1Session(
         val id = (fields["id"] as? DomainJson.Value.N)?.raw?.toLongOrNull() ?: return
         val data = (fields["data"] as? DomainJson.Value.S)?.v ?: return
         children[id]?.writeStdin(data)
+    }
+
+    private fun onKill(fields: Map<String, DomainJson.Value>) {
+        val id = (fields["id"] as? DomainJson.Value.N)?.raw?.toLongOrNull() ?: return
+        val signal = (fields["signal"] as? DomainJson.Value.S)?.v
+        children[id]?.kill(signal)
     }
 
     /** 读一行（`\n` 界）；EOF 回 null；超 [NpmT1Bridge.MAX_FRAME_BYTES] 抛（由 [run] 收成关断）。 */

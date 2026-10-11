@@ -203,6 +203,36 @@ internal suspend fun runConsoleCmd(
 }
 
 /**
+ * 停掉该项目在跑的控制台命令（2026-10-11 批 94：控制台「停止」按钮）。
+ *
+ * 回执不替宿主宣布结果（同 [runConsoleCmd] 的 `noticeFor` 纪律）：「已请求停止」+
+ * 进程回收是异步的，终态行由页面轮询随后拉回来。`false`（没有在跑的）也如实说 ——
+ * 按钮多按一次不是错误。
+ */
+internal suspend fun stopConsoleCmd(host: HostSummary?, state: ConsoleCmdState): ConsoleCmdState {
+    if (host == null) {
+        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+    }
+    val projectId = state.project
+        ?: return state.copy(opError = "还没有选中的项目：控制台命令跑在某个项目的 node_modules 上", opNotice = null)
+    return try {
+        val stopped = host.cancelConsoleCommand(projectId)
+        state.copy(
+            opError = null,
+            opNotice = if (stopped) {
+                "已请求停止：进程回收是异步的，终态见上方输出"
+            } else {
+                "没有在跑的命令（停止是 no-op）"
+            },
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Exception) {
+        state.copy(opError = t.message ?: t.javaClass.simpleName, opNotice = null)
+    }
+}
+
+/**
  * 按解析结果派发到对应的宿主口。
  *
  * **两条面分开走**：npm 命令面（`runNpmCommand`，安装会话）与

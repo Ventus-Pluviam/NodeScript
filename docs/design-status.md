@@ -1,4 +1,30 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 94（T1 欠账两件：脚本输出真流式 + 命令可取消 —— 桥 kill 帧 + 控制台「停止」）**：
+> 批 91 登记的七件欠账里做掉两件。**① 输出流式**：`ScriptOpExecutor.execute` 补 `OutputSink`
+> 缝（与批 90 `HeavyOpExecutor` 同形），T1 会话进程（`npm run`/`npx`）的 stdout 边读边落
+> 控制台环 —— 此前那条路只攴尾部进异常详情，控制台看不到脚本逐行输出；「报过流不再重复
+> 尾部」的判据落在**调用方选型**上（`OutputSink.None` = 「这边没人看流」，尾部必须兜底）。
+> **② 桥侧 kill 帧**：`BridgedChild.kill()` 从「只置 `killed` 位」变真发 `{t:'kill',id,signal}`
+> 帧（SIGTERM → destroy、SIGKILL → destroyForcibly，**其余如实 ERR_NOT_IMPLEMENTED**）；
+> kill 先于 spawn 落地是合法时序（shim 发完 spawn 就能发 kill），`T1Child` pending 位兜住、
+> 起完补杀；exit 帧对**宿主确知的杀**按真 child_process 口径 `code=null, signal=<发出去的
+> 信号名>`（「signal 恒 null」旧记账管的是没人点名只看到 128+n 的情形，那条照旧 null）。
+> **③ 控制台「停止」**：`ScriptOp` 加 `cancelSignal: OpCancelSignal`（读位不是回调 ——
+> `TrackedOp.cancelled` 那个 `@Volatile` 位直接透出，没有「句柄收走后回调悬挂」的问题）；
+> `NpmScriptExecutor` 的 `waitFor(timeout)` 单发改**切片轮询**（200ms 一片，片间查取消位与
+> 墙钟）—— 置位即 destroyForcibly + 关会话（子进程随 `session.close()` 被收），这是「停止」
+> 按下去后进程树**真死**的物理机制。facade/`HostSummary` 加 `cancelConsoleCommand(projectId):
+> Boolean`（回「是否取消到了东西」；缺省抛 `ERR_NOT_IMPLEMENTED` 同纪律）；协调器实现 =
+> 快照该项目未终态句柄逐个走既有 `cancel`。UI 跑动中「执行」位换成「停止」，回执措辞
+> 「已请求停止」（回收是异步的，终态行由页面轮询随后拉）。**覆盖面如实**：T1 真杀；
+> **重操作（install 会话）仍弃结果不杀进程**（TTL 兜底），本批没给它接取消探针。
+> 守卫：`T1BridgeNodeTest` +1 / `T1BridgeE2ETest` +2（流式到达时间戳 + 秒级取消）/
+> `T1ProcessTest` +4 / `InstallCoordinatorTest` +2 / `ConsoleCmdOpsTest` +2；完整 CI JVM 门
+> 14 任务 + detekt（`:ui` baseline 重生成，`ConsoleScreen`/`InputRow` 加参）+ `lintDebug` 全绿。
+> 契约卷同步：§10.3 T1 落地追记④、§10.7 方法表、§10.9 第 3 条。决策：
+> [`design-decisions.md`](design-decisions.md) 第 63 项。**边界**：真机行为由用户自测。
+> 细节见 [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 93（控制台 `npm run` / `npx` 拆除人工审批 + env-NUL 缺陷修复，真机实证）**：
 > 用户在真机上看清审批卡的形态后裁定「审批不是这样用的……依赖面板是方便用户直接安装和管理
 > 依赖的地方。你把审批去掉吧」—— **整面拆除**：`ApprovalLedger`/`ApprovalLedgerStore` 及
@@ -465,6 +491,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 2 | 批 94：T1 欠账两件 —— 脚本输出真流式（`ScriptOpExecutor` 补 `OutputSink` 缝，T1 会话进程 stdout 边读边落控制台环）+ 命令可取消（桥侧 `kill` 帧 SIGTERM/SIGKILL、`waitFor` 切片轮询查 `ScriptOp.cancelSignal`、facade/`HostSummary` `cancelConsoleCommand`、UI 停止按钮）；覆盖面如实：T1 真杀、重操作仍弃结果（TTL 兜底）。守卫五测试类 +11 例 + detekt baseline 重生成 + lintDebug 全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 1 | 批 93：控制台 `npm run`/`npx` 拆除人工审批 + env-NUL 修复 —— 用户裁定「审批不是这样用的……依赖面板是方便用户直接安装和管理依赖的地方。你把审批去掉吧」，**整面拆**：账本两类/桥面 `requestApprove`+`approvals`/`:domain` 七个审批类型/facade 四个方法/UI 审批卡（`approvalLedgerSnapshot` 保留只读）；放行判据改解析层白名单，`versionHash` 只进审计。同批修真机暴露 env-NUL：`connectTarget` 的 `"\0"` 前缀经 env 进 `ProcessBuilder` 必抛 `Invalid environment variable value` —— 改 env 给裸名、shim 按 `main.cpp` 同源 '/' 判别补前缀；桌面路径型原样，`T1BridgeNodeTest`+`T1BridgeE2ETest` 继续绿 = 直连分支钉死。守卫：完整 CI JVM 门 14 任务全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-10 | 3 | 批 91：T1 spawn 桥本体 —— `npm run`/`npx` 第一次真跑起来（`npm-t1-bridge.cjs` 经 unix socket 把 spawn 报给宿主、宿主起真进程、stdio 假管道回填；只放行异步三兄弟，`detached` 当场拒；**两条 shim 互斥** —— T1 只注桥那一份）。最贵的一课：`Channels.newInputStream/newOutputStream` 共用 `blockingLock()`，读线程抱锁阻塞 → 写线程永远拿不到锁，双向协议被流包装锁成单向（两类测试双双挂死、报错面只有「超时」）；改直读 `SocketChannel` 即绿。同批修握手死锁（`send` 排队等 `ready` 而 `ready` 等 `helloAck`）与 socket 保活（`refWhileBusy()`：无在途子进程 unref、有则 ref）。守卫 16 例（真 node 7 / 真 npm 4 / 替身 5），T1 两类不设 `assumeTrue`。欠账：不用引擎池 / 同 UID 无最小掩码 / 无输出流式 / `signal` 恒 null / 孙子被 reparent 后杀树链断 | [`log/2026-10-10.md`](log/2026-10-10.md) |
 | 2026-10-10 | 2 | 批 90：控制台「活着」三件 —— **① 真流式 stdout**（`HostNodeExecutor.runNpm` 从「先 `readBytes()` 再 `waitFor`」改成专门读流线程 + 新的 `OutputSink` 缝；缝与 `ProgressSink` 分开 —— 那条装 `InstallEvent`（脚本侧契约形状），这条装 npm 原文；流真报过时不再补 `outputTail` 行、空行跳过 —— 后者是 `HostNodeNpmE2ETest` 抓到的：真实 npm 输出以空行结尾而 `takeLast(8000)` 取到空行）+ **② 常驻进度推送**（`:ui` 新增 `LivePoll.pollWhile` + 两个调用点：提交后跟到跑完 / 子页在前台时一直跟；**刻意不用**宿主的 `progress` SharedFlow —— 无重放，晚到订阅者永久丢一批；三条自我约束：有界 / 只依据宿主给的事实 / 每轮同一读口；间隔与轮数可注入）+ **③ 命令历史落盘**（新增 `ConsoleHistory`，`files/.autojs/console-history.jsonl`；与审计史纪律相反 —— 那个只追加永不清理、这个允许修剪，差别写进类 KDoc 防误搬；按项目分开读；带凭据形态的行**整条不记**（不打码：打码后的历史看起来能跑，点进去得到「认证失败」）；写口在 `:ui` **派发点**）。**同批修一处真错**（探针 `SinkRingProbeTest` 测出来的，三个环各自的测试都绿因为都只喂自己那条路）：两处执行体 sink 调用点写的是 `events.tryEmit(ev)`，只喂 `SharedFlow` 没经 `emit` —— 执行体独有的 `DOWNLOAD`/`REIFY` **从未进过事件环**，脚本侧 `onProgress` 收不到、阶段条停在 `RESOLVE`。守卫：`HostNodeExecutorStreamTest`（含到达时间戳断言）/ `NpmEventDrainTest` 新增一例 / `ConsoleHistoryTest` 9 例 / `LivePollTest` 4 例 / `ConsoleCmdOpsTest` 新增 3 例 / `InstallCoordinatorTest` 新增 2 例；反证四条各自命中。边界：真机未验；凭据守卫认参数名形态不是 DLP | [`log/2026-10-10.md`](log/2026-10-10.md) |

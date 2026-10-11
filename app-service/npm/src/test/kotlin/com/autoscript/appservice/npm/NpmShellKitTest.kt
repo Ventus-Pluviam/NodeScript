@@ -62,6 +62,7 @@ class NpmShellKitTest {
                 override suspend fun execute(
                     op: ScriptOp,
                     sink: ProgressSink,
+                    output: OutputSink,
                 ): String {
                     seen += op.what
                     return "ok"

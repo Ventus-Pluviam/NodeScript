@@ -334,7 +334,7 @@ class InstallCoordinatorTest {
         val cancel = kotlinx.coroutines.CancellationException("cancel script")
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
         val c = coordinator(script = object : ScriptOpExecutor {
-            override suspend fun execute(op: ScriptOp, sink: ProgressSink): String { throw cancel }
+            override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String { throw cancel }
         })
         val thrown = assertThrows(kotlinx.coroutines.CancellationException::class.java) {
             runBlocking { c.runScript("p1", "build") }
@@ -814,7 +814,7 @@ class InstallCoordinatorTest {
         val gate = CompletableDeferred<Unit>()
         val c = coordinator(
             script = object : ScriptOpExecutor {
-                override suspend fun execute(op: ScriptOp, sink: ProgressSink): String {
+                override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String {
                     gate.await()
                     return "ok"
                 }
@@ -837,7 +837,7 @@ class InstallCoordinatorTest {
         val gate = CompletableDeferred<Unit>()
         val c = coordinator(
             script = object : ScriptOpExecutor {
-                override suspend fun execute(op: ScriptOp, sink: ProgressSink): String {
+                override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String {
                     gate.await()
                     sink.emit(InstallEvent.Progress("p1", op.handleId, InstallEvent.Phase.REIFY))
                     return "ok"
@@ -856,6 +856,58 @@ class InstallCoordinatorTest {
         val finals = events.filterIsInstance<InstallEvent.Finished>().filter { it.handleId == handle }
         assertEquals(1, finals.size, "同一句柄两个终态会让订阅方无从裁决：$events")
         assertEquals(false, finals.single().success, "取消的终态只能是失败")
+    }
+
+    @Test
+    fun `T1 输出流式：执行体报的行落控制台环，终态行压在其后`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
+        val c = coordinator(
+            script = object : ScriptOpExecutor {
+                override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String {
+                    output.line("流-第一行")
+                    output.line("流-第二行")
+                    return "ok"
+                }
+            },
+        )
+        c.runScript("p1", "build")
+        val lines = c.consoleOutput("p1", 0, 64).lines.map { it.line }
+        val outputs = lines.filter { it.kind == NpmConsoleLineKind.OUTPUT }.map { it.text }
+        assertEquals(listOf("流-第一行", "流-第二行"), outputs, "执行体报的流必须逐行进控制台环：$lines")
+        val lastOut = lines.indexOfLast { it.kind == NpmConsoleLineKind.OUTPUT }
+        val result = lines.indexOfLast { it.kind == NpmConsoleLineKind.RESULT }
+        assertTrue(result in 0..lines.lastIndex && lastOut < result, "终态行必须压在输出之后（顺序反了会看到『完成』盖住输出）：$lines")
+    }
+
+    @Test
+    fun `cancelConsoleCommand 停掉在跑的 T1：执行体经取消位看到，句柄只有一个终态`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
+        val observedCancel = CompletableDeferred<Unit>()
+        val c = coordinator(
+            script = object : ScriptOpExecutor {
+                override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String {
+                    // 模拟 NpmScriptExecutor 的切片轮询：间隙查位、置位即收（真杀在执行体里）。
+                    while (!op.cancelSignal.isCancelled()) {
+                        delay(50)
+                    }
+                    observedCancel.complete(Unit)
+                    throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "脚本执行已取消：build（npm 会话与它起的子进程一并回收）")
+                }
+            },
+        )
+        val mine = detached { c.runScript("p1", "build") }
+        val handle = awaitHandle(c)
+        assertTrue(c.cancelConsoleCommand("p1"), "有在跑的：必须回 true")
+        withTimeout(5_000) { observedCancel.await() }
+        val ex = assertThrows(AutojsException::class.java) { runBlocking { mine.await() } }
+        assertEquals(ErrorCode.ERR_ENGINE_STOPPED, ex.error)
+        assertTrue(cHandles(c).isEmpty(), "取消后句柄必须收干净")
+        val finals = c.drainEvents("p1", 0, 32).events.map { it.event }
+            .filterIsInstance<InstallEvent.Finished>()
+        assertEquals(1, finals.size, "同一句柄只能有一个终态：$finals")
+        assertEquals(false, finals.single().success)
+        assertEquals("已取消", finals.single().detail)
+        assertEquals(false, c.cancelConsoleCommand("p1"), "没有在跑的：再按一次是 no-op 回 false")
     }
 
     @Test
@@ -1789,7 +1841,7 @@ class InstallCoordinatorTest {
     private fun recording(): ScriptOpExecutor {
         scriptOps.clear()
         return object : ScriptOpExecutor {
-            override suspend fun execute(op: ScriptOp, sink: ProgressSink): String {
+            override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String {
                 scriptOps += op
                 return "ok:" + op.what
             }
