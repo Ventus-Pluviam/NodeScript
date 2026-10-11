@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -312,6 +313,138 @@ class BridgeSocketListenerTest {
             listener.close()
             s1.close()
             s2.close()
+        }
+    }
+}
+
+/**
+ * 外审 M3（2026-10-11 批 98）：**accept 遇瞬时 [java.io.IOException] 不得收掉整条桥**。
+ *
+ * 病灶：原实现 `catch (_: IOException) { break }` —— `IOException` 是个家族，
+ * `EMFILE`（fd 用尽）/`ENFILE`（系统表用尽）/`ECONNABORTED`（内核踢半开连接）
+ * 都是**瞬时**的，一次就 break 等于**整条桥对所有未来脚本静默死亡**（无日志、无重启、
+ * 现场表现是「脚本再也连不上」）。
+ *
+ * 判据用**可观测行为**而不是内部状态：抛 N 次瞬时错之后**照样能 serve 下一个连接**。
+ * 这样若将来把重试逻辑挪走或改形，这条用例仍红 —— 它钉的是「桥还活着」这件事。
+ */
+class BridgeSocketListenerAcceptRetryTest {
+
+    @TempDir
+    lateinit var dir: Path
+
+    private fun probeAuthorization() = ScriptAuthorizationSnapshot(mask = CapabilityMask.ALL)
+
+    private class FakeConn(
+        override val peerUid: Int,
+        frame: String = "",
+        override val peerPid: Int? = null,
+    ) : AcceptedBridgeConnection {
+        override val input: InputStream = ByteArrayInputStream(frame.toByteArray())
+        override val output: ByteArrayOutputStream = ByteArrayOutputStream()
+        override fun close() = Unit
+        fun response(): String = synchronized(output) { output.toString(StandardCharsets.UTF_8) }
+    }
+
+    /**
+     * 假监听面：先按脚本抛 [IOException]，之后照常吐连接。
+     *
+     * 退避时长注入 1ms —— 本机单测不该真等 1s（那条是给生产的退避，见
+     * `BridgeSocketListener.ACCEPT_RETRY_BACKOFF_MILLIS`）。
+     */
+    private class FlakyBound(private val failures: Int) : BoundBridgeSocket {
+        private val queue = LinkedBlockingQueue<AcceptedBridgeConnection>()
+        private val closed = AtomicBoolean(false)
+        private val thrown = AtomicInteger(0)
+
+        fun enqueue(conn: AcceptedBridgeConnection) { queue.put(conn) }
+        fun thrownCount(): Int = thrown.get()
+
+        override fun accept(): AcceptedBridgeConnection? {
+            var spins = 0
+            while (!closed.get()) {
+                if (thrown.get() < failures && spins++ < 50) {
+                    thrown.incrementAndGet()
+                    throw java.io.IOException("Too many open files (simulated EMFILE)")
+                }
+                val conn = queue.poll(5, TimeUnit.MILLISECONDS) ?: continue
+                if (closed.get()) return null
+                return conn
+            }
+            return null
+        }
+
+        override fun close() { closed.set(true) }
+    }
+
+    /** 轮询到条件成立（accept 循环在自己线程上跑，测试线程只等观测面）。 */
+    private fun await(what: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (cond()) return
+            Thread.sleep(20)
+        }
+        throw AssertionError("超时（${timeoutMillis}ms）未观测到：$what")
+    }
+
+    private class RecordingProvider : com.autoscript.appservice.scheduler.core.SchedulerProvider {
+        override suspend fun registerTrigger(
+            targetFireAtMillis: Long,
+            taskId: String,
+        ): com.autoscript.appservice.scheduler.core.TriggerHandle =
+            com.autoscript.appservice.scheduler.core.TriggerHandle { }
+
+        override suspend fun cancelTrigger(
+            handle: com.autoscript.appservice.scheduler.core.TriggerHandle,
+        ) = handle.cancel()
+    }
+
+    private fun kit(): AssembledShell = AppShellKit.assemble(
+        npmT1Binder = com.autoscript.appservice.npm.NpmT1Bridge.fileSystemBinder(),
+        filesDir = dir.resolve("files"),
+        cacheDir = dir.resolve("cache"),
+        intentStore = InMemoryIntentStore(),
+        schedulerProvider = RecordingProvider(),
+        screenGate = ScreenGate.AllowAll,
+    )
+
+    @Test
+    fun `瞬时 IOException 之后桥照样 serve（外审 M3）`() {
+        val bound = FlakyBound(failures = 3)
+        val errors = java.util.concurrent.CopyOnWriteArrayList<String>()
+        BridgeSocketListener.bind(
+            socketName = "retry",
+            binder = { bound },
+            myUid = 1_000,
+            onAcceptError = { errors.add(it) },
+            acceptRetryBackoffMillis = 1L,
+        )!!.use { listener ->
+            // 壳必须活到断言结束：start 挂的是它的 frameServer，提前 close 等于测「桥被关」
+            // 而不是测「桥活着」。
+            kit().use { s ->
+                listener.start(s.shell)
+
+                // 先让三次瞬时错真的发生并留下回执（否则本用例是假通过）。
+                await("三次瞬时 IOException 的诊断回执") { errors.size >= 3 }
+                assertEquals(3, bound.thrownCount(), "替身确认确实抛过瞬时错")
+
+                // 判据：桥**还活着** —— 退避之后这个连接照样被 serve（票据无效也回一份响应）。
+                val conn = FakeConn(
+                    peerUid = 1_000,
+                    // 用 BridgeHandshake 的金样构造 hello（错 token）：既有合法帧形状，
+                    // 又必然被身份账拒 —— 于是「serve 面还在工作」可由回包观测到。
+                    frame = BridgeHandshake.hello("0".repeat(64)).toString(Charsets.UTF_8),
+                )
+                bound.enqueue(conn)
+                await("退避后桥仍 serve 新连接（外审 M3 的核心判据）") {
+                    conn.response().isNotEmpty()
+                }
+                assertTrue(
+                    conn.response().contains("helloErr"),
+                    "退避后 serve 面仍在工作（错 token 的 hello 应回 helloErr）：${conn.response()}",
+                )
+                assertTrue(listener.acceptRetryCount() >= 3, "accept 退避计数是唯一的可见信号")
+            }
         }
     }
 }
