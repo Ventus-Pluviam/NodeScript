@@ -281,6 +281,21 @@ interface HostSummary {
         )
 
     /**
+     * 停掉该项目此刻还在跑的控制台命令（2026-10-11 批 94：控制台「停止」按钮）。
+     *
+     * 与 [runNpmCommand] 同一条分工：交给**装配产物里那个 facade**（句柄账在协调器手里，
+     * 换一个实例就找不到要停的那个句柄）；未接线**抛**，不假装停过。
+     *
+     * 回 `true` = 确实取消到了东西；`false` = 没有在跑的（多按一次是 no-op）。
+     * 覆盖面（T1 真杀 / 重操作弃结果）见 [com.autoscript.domain.npm.PackageManagerFacade.cancelConsoleCommand]。
+     */
+    suspend fun cancelConsoleCommand(projectId: String): Boolean =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "控制台命令面未接线：本宿主没有接上 npm 命令执行入口（停止请求未执行）",
+        )
+
+    /**
      * 在控制台执行一条 **shell 命令**（2026-10-09 用户口径：控制台要能执行 shell）。
      *
      * 与 [runNpmCommand] 并列的第二条执行面，**不走 npm 那条链**：shell 命令与

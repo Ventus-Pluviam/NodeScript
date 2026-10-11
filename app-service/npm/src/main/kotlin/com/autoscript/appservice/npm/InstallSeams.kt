@@ -144,11 +144,19 @@ fun interface OutputSink {
  * TERM→超时→SIGKILL 回收顺序），否则超时后会成为争抢同一项目锁的孤儿。
  */
 fun interface ScriptOpExecutor {
-    suspend fun execute(op: ScriptOp, sink: ProgressSink): String   // 返回摘要（人类可读）
+    /**
+     * 返回摘要（人类可读）。
+     *
+     * [output] 是**脚本会话自己的输出**（2026-10-11 批 94 补，真流式）：T1 会话进程
+     * （`npm run` / `npx`）的 stdout/stderr 是脚本说话的地方，而它在跑完之前就该
+     * 到控制台 —— 形状与语义逐字同 [HeavyOpExecutor.execute] 的那条缝（不重复注释，
+     * 见那边：尽力而为、实现方不抛、与 `ProgressSink` 分开的理由）。
+     */
+    suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String   // 返回摘要（人类可读）
 
     /** 默认：spawn 桥未接入 → 如实 ERR_NOT_IMPLEMENTED（门禁已过也不假装跑过）。 */
     object Unavailable : ScriptOpExecutor {
-        override suspend fun execute(op: ScriptOp, sink: ProgressSink): String {
+        override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String {
             throw AutojsException(
                 ErrorCode.ERR_NOT_IMPLEMENTED,
                 "T1 spawn 桥未接入：${op.what}（${op.action}）未执行。" +
@@ -179,9 +187,32 @@ data class ScriptOp(
     val npmArgs: List<String>,
     val versionHash: String,
     val timeoutMillis: Long,
+    /**
+     * **用户取消的观测缝**（2026-10-11 批 94）：协调器的句柄账执行体看不见 —— 但
+     * 「停止」按钮按下去之后**进程树必须真死**，靠的是执行体在 `waitFor` 的切片间隙
+     * 查到这一位（TTL 契约「合作式响应取消」在 T1 这条路上的物理载体）。
+     * 缺省恒 false：测试替身与无句柄的调用零改动。
+     */
+    val cancelSignal: OpCancelSignal = OpCancelSignal.NONE,
 ) {
     /** 主体段（`"<pkg>|<what>"`）—— 审计条目与错误话术同款，不再各拼各的。 */
     val subject: String get() = "$pkg|$what"
+}
+
+/**
+ * 取消观测缝（2026-10-11 批 94）。
+ *
+ * 为什么是**读位**而不是回调：调用方（协调器）持有的是 `TrackedOp.cancelled` 那个
+ * `@Volatile` 位，执行体要的只是「现在该不该停」—— 一个布尔探针把两边的并发面都压到
+ * 最小（回调要在句柄收走后防悬挂；读位没有这个问题：位还在，值只是不再变）。
+ */
+fun interface OpCancelSignal {
+    fun isCancelled(): Boolean
+
+    companion object {
+        /** 缺省：永不取消（测试替身 / 无句柄上下文）。 */
+        val NONE = OpCancelSignal { false }
+    }
 }
 
 /**

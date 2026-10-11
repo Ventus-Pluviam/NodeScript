@@ -419,6 +419,24 @@ interface PackageManagerFacade {
         )
 
     /**
+     * 停掉该项目此刻还在跑的控制台命令（2026-10-11 批 94：控制台「停止」按钮的宿主面）。
+     *
+     * 回 `true` = 确实取消到了东西；`false` = 没有在跑的（按钮多按一次是 no-op，不是错误）。
+     *
+     * **覆盖面如实写死**：T1 通道（`npm run` / `npx`）取消后进程树**真死**（执行体在
+     * `waitFor` 切片间隙查取消位 → destroy + 会话关断收子进程）；
+     * 重操作（install 会话）沿用 [cancel] 的既有语义 —— **弃结果不杀进程**，墙钟 TTL 兜底
+     * （那条通道的进程杀伐在执行体内部，本批没有给它接取消探针）。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身**不假装停过**。
+     */
+    suspend fun cancelConsoleCommand(projectId: String): Boolean =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "控制台命令面未接线：本实现没有接上 npm 命令执行入口（停止请求未执行）",
+        )
+
+    /**
      * 控制台 **shell 面**：跑一条 shell 命令（2026-10-09 用户口径：控制台要能执行 shell）。
      *
      * 与 [runConsoleCommand] 并列的第二条执行面，**不走 npm 那条链**：不建事务、不占安装

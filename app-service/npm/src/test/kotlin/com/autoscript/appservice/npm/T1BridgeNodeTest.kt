@@ -140,6 +140,32 @@ class T1BridgeNodeTest {
     }
 
     @Test
+    fun `真 node：child 的 kill 经 kill 帧真杀子进程，exit 事件带信号名`() {
+        // 批 94：kill() 从「只置位」变成「发 kill 帧」。真 sleep 子进程被 SIGTERM 掉，
+        // exit 事件按真 child_process 口径是 (code=null, signal='SIGTERM') ——
+        // 这条在纯 Kotlin 断言下验不到（要真帧往返 + 真进程死亡）。
+        val s = openSession()
+        try {
+            val (out, err, code) = runNode(
+                """
+                const cp = require('child_process')
+                const c = cp.spawn('sleep', ['30'])
+                c.on('exit', (code, signal) => { console.log('EXIT code=' + code + ' signal=' + signal); process.exit(0) })
+                setTimeout(() => c.kill('SIGTERM'), 300)
+                """.trimIndent(),
+                s,
+            )
+            assertEquals(0, code, "探针自身不该炸；stderr=$err")
+            assertTrue(
+                out.contains("EXIT code=null signal=SIGTERM"),
+                "kill 帧要真杀掉 sleep（30s 的等待不能等满），且 exit 事件口径与 Node 一致；实为：$out / stderr=$err",
+            )
+        } finally {
+            s.close()
+        }
+    }
+
+    @Test
     fun `真 node：同步入口如实不支持（不假装）`() {
         val s = openSession()
         try {

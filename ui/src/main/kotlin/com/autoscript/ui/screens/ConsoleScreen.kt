@@ -72,7 +72,8 @@ import kotlinx.coroutines.launch
  * - 丢包（环容量满丢最老）非零**不藏**：用户看到的不是全部，得知道；
  * - 本批拉满提示可继续拉 —— 措辞是「可能还有」，拉满不等于确实还有；
  * - **在跑就禁用输入行**：重操作会挂起在安装会话上，灰按钮说明「现在不能敲」，
- *   而按下去没反应什么都说明不了。
+ *   而按下去没反应什么都说明不了。跑动中「执行」位换成「停止」（批 94）——
+ *   灰着的这段时间里用户唯一想按的就是它。
  *
  * 游标与累积在 [ConsoleCmdState]（MainActivity 经 `reloadConsoleCmd` 驱动），本屏只画。
  *
@@ -87,6 +88,8 @@ fun ConsoleScreen(
     onSelectProject: (String) -> Unit,
     onDraft: (String) -> Unit,
     onRun: () -> Unit,
+    /** 停掉在跑的命令（2026-10-11 批 94：`state.running` 时「执行」换成「停止」）。 */
+    onStop: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     /**
@@ -161,7 +164,7 @@ fun ConsoleScreen(
                     .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
             )
         }
-        InputRow(state, onDraft, onRun, history)
+        InputRow(state, onDraft, onRun, onStop, history)
     }
 }
 
@@ -226,16 +229,19 @@ private fun OutputList(
 }
 
 /**
- * 输入行 + 「执行」（裸 `BasicTextField`，同 `RegistryScreen` 的编辑行）。
+ * 输入行 + 「执行」/「停止」（裸 `BasicTextField`，同 `RegistryScreen` 的编辑行）。
  *
  * 跑动中（[ConsoleCmdState.canRun] 为 false）整行禁用：见类 KDoc 那条 ——
  * 灰按钮说明「现在不能敲」，按下去没反应什么都说明不了。
+ * 但**跑动中「执行」换成「停止」**（2026-10-11 批 94）：一整段时间只有一个可按的键，
+ * 而那时用户最可能想按的是「停」—— 灰掉执行、旁边却没有任何出路，等于把人晾着。
  */
 @Composable
 private fun InputRow(
     state: ConsoleCmdState,
     onDraft: (String) -> Unit,
     onRun: () -> Unit,
+    onStop: () -> Unit,
     history: List<String>,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -255,7 +261,11 @@ private fun InputRow(
                 enabled = state.canRun, onSubmit = onRun, modifier = Modifier.weight(1f),
                 mode = state.mode,
             )
-            PillButton("执行", selected = false, enabled = state.canRun, onClick = onRun)
+            if (state.running) {
+                PillButton("停止", selected = false, enabled = true, onClick = onStop)
+            } else {
+                PillButton("执行", selected = false, enabled = state.canRun, onClick = onRun)
+            }
         }
         // 特权模式徽标（2026-10-09）：**进了模式必须一眼看得见** —— 否则用户以为自己在
         // 默认模式里敲 npm，实际每条都在往 root shell 送（§9.3「三通道必须显式指定」）。
@@ -271,7 +281,7 @@ private fun InputRow(
             text = when {
                 !state.load.isLoaded -> "尚未读取：点右上「刷新」现取一次"
                 state.project == null -> "没有可跑命令的项目"
-                state.running -> "有命令在跑：跑完才能敲下一行"
+                state.running -> "有命令在跑：点「停止」中断，或等它跑完再敲下一行"
                 state.opInFlight -> "正在提交…"
                 state.mode == ShellConsoleMode.DEFAULT ->
                     "默认：裸命令按依赖提供的命令解析（tsc / eslint…）；su 或 shizuku 进特权模式"

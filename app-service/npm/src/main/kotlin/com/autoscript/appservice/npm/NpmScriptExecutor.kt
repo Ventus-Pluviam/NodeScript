@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
  * | 工作目录 | `stageDir` 旁的 `npmwork-<nonce>` | **项目根**（脚本就该在项目里跑） |
  * | spawn 门禁 | `npm-spawn-gate.cjs`（**一律拒**） | `npm-t1-bridge.cjs`（**经桥放行**） |
  * | 放行判据 | 无（重操作即脚本的判据） | 解析层白名单（脚本可跑性，无人工审批） |
- * | 输出 | 落控制台环 + `outputTail` | 只回摘要（脚本的输出经桥回到 npm 自己，再由 npm 决定怎么显示） |
+ * | 输出 | 落控制台环 + `outputTail` | 落控制台环（真流式，批 94）+ 失败详情带尾部 |
  *
  * **两条 shim 是互斥的**，不是叠加：安装会话要的是"零 spawn"，T1 会话要的恰恰是
  * "spawn 走桥"。把门禁 shim 也注进去，T1 的每一次 spawn 都会先撞门禁 —— 那不是安全，
@@ -40,9 +40,16 @@ import java.util.concurrent.TimeUnit
  *   `destroyForcibly` 承担。**这是一条真实的架构欠账**，登记在流水里。
  * - **不做最小 CapabilityMask**（§10.5-4）：脚本进程与 App 同 UID。设备上没有可用的隔离
  *   手段（沙箱已裁），故"最小能力"这一条现在只能靠"宿主只跑认得的那条命令"来近似。
- * - **不做输出流式**：脚本的 stdout 由 npm 自己捕获（它是父进程），宿主这侧只拿到
- *   npm 的摘要。控制台要看脚本输出，得等 T1 那条 `npm run` 的输出经 `HostNodeExecutor`
- *   的读流线程 —— 而那是**另一条命令**（用户在控制台敲的那次 `npm run`），不是本类。
+ *
+ * ## 输出与取消（2026-10-11 批 94 补齐）
+ *
+ * - **真流式**：npm 会话进程的 stdout（= npm 自己的播报 + 它捕获的脚本输出，`npm run`
+ *   对子进程是 stdio 继承）由读流线程**边读边 [OutputSink.line]**，与批 90 安装会话那条
+ *   逐字同纪律（空行跳过；报过流则失败异常**不再重复尾部**，防同一段文本出现两遍）。
+ * - **取消可杀**：`waitFor` 改**切片轮询**（[CANCEL_POLL_SLICE_MILLIS] 一片），间隙查
+ *   [ScriptOp.cancelSignal] —— 置位即 `destroyForcibly` + 关会话（桥侧子进程随
+ *   `session.close()` 被收），这是「停止」按钮按下去后进程树**真死**的物理机制。
+ *   超时路径不变（同一条轮询里判墙钟）。
  */
 class NpmScriptExecutor(
     private val npmCliJs: Path,
@@ -55,45 +62,56 @@ class NpmScriptExecutor(
     private val userConfig: Path? = null,
 ) : ScriptOpExecutor {
 
-    override suspend fun execute(op: ScriptOp, sink: ProgressSink): String = withContext(Dispatchers.IO) {
-        if (!Files.isRegularFile(npmCliJs)) {
-            throw AutojsException(
-                ErrorCode.ERR_NOT_IMPLEMENTED,
-                "T1 执行体缺 npm CLI：$npmCliJs（素材未落位，见 AssembledShell.npmCliFailure）",
-            )
-        }
-        if (!Files.isRegularFile(shimFile)) {
-            throw AutojsException(
-                ErrorCode.ERR_NOT_IMPLEMENTED,
-                "T1 桥 shim 未落位：$shimFile（装配层 fail closed：缺它不许假装脚本跑过）",
-            )
-        }
-        // 桥会话先开：**端口与凭据必须在 spawn 之前就绪**，否则 npm 会话一起来就发不出
-        // 第一条 spawn 帧（shim 的 `ensureConn` 读不到 env 会当场回 ERR_NOT_IMPLEMENTED）。
-        val session = sessionFactory.open() ?: throw AutojsException(
-            ErrorCode.ERR_NOT_IMPLEMENTED,
-            "T1 桥 socket 绑定失败（名字被抢/平台不支持）：本次脚本未执行",
-        )
-        session.start()
-        try {
-            sink.emit(InstallEvent.Progress(op.projectId, op.handleId, InstallEvent.Phase.QUEUED))
-            val outcome = runNpm(op, session)
-            if (outcome.exitCode != 0) {
+    override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String =
+        withContext(Dispatchers.IO) {
+            if (!Files.isRegularFile(npmCliJs)) {
                 throw AutojsException(
-                    ErrorCode.ERR_IO,
-                    "npm ${op.npmArgs.joinToString(" ")} 退出码 ${outcome.exitCode}：${outcome.tail.ifBlank { "（无输出）" }}",
+                    ErrorCode.ERR_NOT_IMPLEMENTED,
+                    "T1 执行体缺 npm CLI：$npmCliJs（素材未落位，见 AssembledShell.npmCliFailure）",
                 )
             }
-            "npm ${op.action.replace('_', ' ')} ${op.what} 完成（退出码 0）"
-        } finally {
-            // 会话关断 = 收掉本次起的全部子进程（TERM → KILL）。放在 finally：异常/超时
-            // 取消两条路都必须走到 —— 漏掉的那次留下的是一棵还在跑的进程树。
-            session.close()
+            if (!Files.isRegularFile(shimFile)) {
+                throw AutojsException(
+                    ErrorCode.ERR_NOT_IMPLEMENTED,
+                    "T1 桥 shim 未落位：$shimFile（装配层 fail closed：缺它不许假装脚本跑过）",
+                )
+            }
+            // 桥会话先开：**端口与凭据必须在 spawn 之前就绪**，否则 npm 会话一起来就发不出
+            // 第一条 spawn 帧（shim 的 `ensureConn` 读不到 env 会当场回 ERR_NOT_IMPLEMENTED）。
+            val session = sessionFactory.open() ?: throw AutojsException(
+                ErrorCode.ERR_NOT_IMPLEMENTED,
+                "T1 桥 socket 绑定失败（名字被抢/平台不支持）：本次脚本未执行",
+            )
+            session.start()
+            try {
+                sink.emit(InstallEvent.Progress(op.projectId, op.handleId, InstallEvent.Phase.QUEUED))
+                val outcome = runNpm(op, session, output)
+                if (outcome.exitCode != 0) {
+                    // 报过流就不重复尾部（批 94，与批 90「报了流就不再补 outputTail」同纪律）：
+                    // 那些行已经在控制台里逐行出现过，异常里再贴一遍 = 同一段文本两处。
+                    // **[OutputSink.None] 例外**：那是调用方显式说「这边没人看流」——
+                    // 尾部就成了失败详情的唯一输出来源，必须兜底（判据在调用方的选型上，
+                    // 不在"我们报没报"：对 None 报了也是空操作，拿它当"已经让人看见了"是撒谎）。
+                    val detail = if (outcome.streamed && output !is OutputSink.None) {
+                        "（输出见上方）"
+                    } else {
+                        outcome.tail.ifBlank { "（无输出）" }
+                    }
+                    throw AutojsException(
+                        ErrorCode.ERR_IO,
+                        "npm ${op.npmArgs.joinToString(" ")} 退出码 ${outcome.exitCode}：$detail",
+                    )
+                }
+                "npm ${op.action.replace('_', ' ')} ${op.what} 完成（退出码 0）"
+            } finally {
+                // 会话关断 = 收掉本次起的全部子进程（TERM → KILL）。放在 finally：异常/超时
+                // 取消两条路都必须走到 —— 漏掉的那次留下的是一棵还在跑的进程树。
+                session.close()
+            }
         }
-    }
 
     /** 一次 npm 会话的进程侧结果。 */
-    private class Outcome(val exitCode: Int, val tail: String)
+    private class Outcome(val exitCode: Int, val tail: String, val streamed: Boolean)
 
     /**
      * 起 npm 会话并等它退。
@@ -103,10 +121,10 @@ class NpmScriptExecutor(
      * 把 npm 的项目级配置也一并挪走（`.npmrc` 只看 prefix）。脚本就该在项目里跑，
      * 所以这里既不给 `--prefix` 也不另建 workDir。
      *
-     * 输出**累积尾部**（不落控制台环）：脚本的 stdout 由 npm 捕获后自己处理，宿主这侧
-     * 拿到的只是 npm 的摘要与可能的错误栈 —— 那些进异常详情，够定位。
+     * 输出**边读边报 + 攒尾部**（批 94）：流喂控制台（尽力而为），尾部进失败详情
+     * （报过流就不带，见 [execute]）。
      */
-    private fun runNpm(op: ScriptOp, session: T1SessionHandle): Outcome {
+    private fun runNpm(op: ScriptOp, session: T1SessionHandle, output: OutputSink): Outcome {
         val argv = buildList {
             add(nodeBin)
             add(npmCliJs.toAbsolutePath().toString())
@@ -124,11 +142,19 @@ class NpmScriptExecutor(
         pb.redirectErrorStream(true)
         val proc = pb.start()
         val collected = StringBuilder()
+        // 读线程写、主线程在 reader.join() 之后读 —— join 自带 happens-before，普通 var 即可。
+        var streamed = false
         val reader = Thread(
             {
                 try {
                     proc.inputStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
                         lines.forEach { line ->
+                            // 空行跳过（批 90 同款理由）：真实 npm 输出以空行结尾，环里塞空行
+                            // 是在用户屏幕上画一条空白。
+                            if (line.isNotEmpty()) {
+                                streamed = true
+                                output.line(line)
+                            }
                             synchronized(collected) {
                                 collected.append(line).append('\n')
                                 // 只留尾部：脚本可能刷几万行，宿主只需要"最后说了什么"。
@@ -147,19 +173,38 @@ class NpmScriptExecutor(
             isDaemon = true
             start()
         }
-        val exited = proc.waitFor(op.timeoutMillis, TimeUnit.MILLISECONDS)
-        if (!exited) {
-            proc.destroyForcibly()
-            // 会话也要跟着收：npm 死了但桥那侧起的子进程还在跑 —— 那是这次超时最该收干净的东西。
-            session.close()
-            reader.join(READER_JOIN_MILLIS)
-            throw AutojsException(
-                ErrorCode.ERR_TIMEOUT,
-                "T1 脚本超时（${op.timeoutMillis}ms）：${op.what}（npm 会话与它起的子进程一并回收）",
-            )
+        // 切片轮询（批 94）：一片内 `waitFor` 是真阻塞（不让空转烧 CPU），片间查取消与墙钟。
+        // 原先的单发 `waitFor(timeout)` 看不到取消 —— 「停止」按下后 npm 会话照跑到底，
+        // TTL 契约里"合作式响应取消"那句在这里落不了地。
+        val deadlineNanos = System.nanoTime() + op.timeoutMillis * 1_000_000
+        while (!proc.waitFor(CANCEL_POLL_SLICE_MILLIS, TimeUnit.MILLISECONDS)) {
+            if (op.cancelSignal.isCancelled()) {
+                proc.destroyForcibly()
+                // 会话跟着收：npm 死了但桥那侧起的子进程还在跑 —— 取消要收的正是它们。
+                session.close()
+                reader.join(READER_JOIN_MILLIS)
+                throw AutojsException(
+                    ErrorCode.ERR_ENGINE_STOPPED,
+                    "脚本执行已取消：${op.what}（npm 会话与它起的子进程一并回收）",
+                )
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                proc.destroyForcibly()
+                // 会话也要跟着收：npm 死了但桥那侧起的子进程还在跑 —— 那是这次超时最该收干净的东西。
+                session.close()
+                reader.join(READER_JOIN_MILLIS)
+                throw AutojsException(
+                    ErrorCode.ERR_TIMEOUT,
+                    "T1 脚本超时（${op.timeoutMillis}ms）：${op.what}（npm 会话与它起的子进程一并回收）",
+                )
+            }
         }
         reader.join(READER_JOIN_MILLIS)
-        return Outcome(proc.exitValue(), synchronized(collected) { collected.toString() }.trim())
+        return Outcome(
+            exitCode = proc.exitValue(),
+            tail = synchronized(collected) { collected.toString() }.trim(),
+            streamed = streamed,
+        )
     }
 
     private companion object {
@@ -168,5 +213,12 @@ class NpmScriptExecutor(
 
         /** 等读流线程收尾的上限（与 `HostNodeExecutor` 同值同理由）。 */
         const val READER_JOIN_MILLIS = 2_000L
+
+        /**
+         * 取消/墙钟的轮询切片。200ms：「停止」按下去到进程被杀的延迟人感知不到，
+         * 而一秒钟只自旋五次。用真实值验"到点会杀"的用例不会被这个数拖慢
+         * （超时用例注入的是小 TTL，不是等这个切片转满）。
+         */
+        const val CANCEL_POLL_SLICE_MILLIS = 200L
     }
 }

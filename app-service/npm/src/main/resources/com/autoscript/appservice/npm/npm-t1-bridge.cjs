@@ -295,10 +295,22 @@ class BridgedChild extends EventEmitter {
     this.emit('close', null, null)
   }
 
-  kill() {
+  kill(signal) {
+    const sig = signal === undefined || signal === null ? 'SIGTERM' : String(signal)
+    // 宿主只有两种终止手段（Java 的 destroy/destroyForcibly），其余信号**如实拒**：
+    // 返回 true 却什么都没发生，会让调用方以为"杀过了"（而进程还在跑）——
+    // 那比抛错更坏。Node 在信号无效时也抛 ESRCH/EINVAL，形状一致。
+    if (sig !== 'SIGTERM' && sig !== 'SIGKILL') {
+      throw deny(
+        CODE_NOT_IMPLEMENTED,
+        'child_process 的 kill(' + sig + ') 在 T1 桥下不可用：宿主只有 SIGTERM/SIGKILL 两种终止手段。',
+      )
+    }
     this.killed = true
-    // 宿主侧真杀由 socket 上的一条 kill 帧完成；本版**不发**（见 KDoc：取消是 T1 的后续件），
-    // 如实把 killed 置位让调用方知道"杀过"，但不谎称进程已停。
+    if (this._done) return true
+    // 真杀经这条 kill 帧到宿主（批 94）：宿主 destroy(Forcibly) 那条子进程，
+    // 退出码/信号经既有的 exit 帧回来 —— 不另立一条"杀完了"的应答。
+    send({ t: 'kill', id: this._id, signal: sig })
     return true
   }
 

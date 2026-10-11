@@ -813,6 +813,21 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 停掉控制台在跑的命令（批 94，[HostSummary] 的生产实现）。
+     *
+     * 与 [runNpmCommand] 同一条分工：交给**装配产物里那个 facade** —— 句柄账在那个
+     * 协调器手里，换一个实例去 cancel 就是在一本空账上找句柄（永远找不到，表现为
+     * 「按了停止但什么都没停」）。未接线抛，不假装停过。
+     */
+    override suspend fun cancelConsoleCommand(projectId: String): Boolean {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：控制台无法停止命令" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：控制台命令无法停止（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.cancelConsoleCommand(projectId)
+    }
+
+    /**
      * 安装审计史读数（§10.5-2，[HostSummary] 的生产实现）。
      *
      * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个

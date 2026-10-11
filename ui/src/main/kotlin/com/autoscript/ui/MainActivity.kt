@@ -100,6 +100,7 @@ import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
+import com.autoscript.ui.state.stopConsoleCmd
 import com.autoscript.ui.state.selectConsoleProject
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.LoadState
@@ -641,6 +642,7 @@ class MainActivity : ComponentActivity() {
                 onSelectProject = { scope.launch { consoleCmdState = selectConsoleProject(hostSummary(), consoleCmdState, it) } },
                 onDraft = { consoleCmdState = consoleCmdState.copy(draft = it, opError = null, opNotice = null) },
                 onRun = { scope.launch { runConsoleCmdOp() } },
+                onStop = { scope.launch { stopConsoleCmdOp() } },
                 onBack = onCloseConsole,
                 modifier = Modifier,
                 history = consoleCmdState.history,
@@ -1060,6 +1062,16 @@ class MainActivity : ComponentActivity() {
         } finally {
             consoleCmdState = consoleCmdState.copy(opInFlight = false)
         }
+    }
+
+    /**
+     * 停掉在跑的控制台命令（批 94「停止」按钮）：交给宿主句柄账（T1 通道真杀进程树）。
+     *
+     * 不等它死透 —— 回执是「已请求停止」，进程回收是异步的；终态行由页面轮询
+     * （[LivePoll]）随后拉回来。回执措辞不替宿主宣布结果，同 [stopRunOp] 那条纪律。
+     */
+    private suspend fun stopConsoleCmdOp() {
+        consoleCmdState = stopConsoleCmd(hostSummary(), consoleCmdState)
     }
 
     /**
