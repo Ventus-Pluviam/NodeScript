@@ -7,8 +7,9 @@
   1. **M4 错误映射 —— 已做**：新增 `ErrorCode.ERR_INTERNAL`（宿主代码缺陷**不是**调用方参数错）；
      `BridgeRouter` 折叠改两档：`AutojsException` 原码透传、`IllegalArgumentException` →
      `ERR_INVALID_PARAM`、**其余一切 → `ERR_INTERNAL`**（此前一切折成参数错且回显 `e.message`）。
-     三处落字同步（`:domain` / `bridge/js` 双表 / 契约卷 §7.6），由 `err-catalog.test.cjs`
-     三面对账门钉住。守卫 `BridgeRouterTest` 三条成对。
+     两处落字已同步（`:domain` / `bridge/js` 双表），由 `err-catalog.test.cjs` 三面对账门钉住。
+     **契约卷 §7.6 的同步撤出**（冻结面，`check-frozen-paths.sh` 当场红，待维护者开）——
+     补丁内容已写进批 97 的 `revert(docs)` 提交说明里。守卫 `BridgeRouterTest` 三条成对。
   2. **M5 pid 绑定 —— 已做**：`engine:node-process` `ProcessLauncher` 补 pid 私有字段反射阶梯
      → Android 8–12 的 `spawn.pid` 不再恒 null（此前 `RunIdentityRegistry` 防劫持判据**整段
      静默跳过**）；加 `pidUnavailable` 计数。守卫 +2。

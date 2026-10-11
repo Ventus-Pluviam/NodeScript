@@ -4,9 +4,10 @@
 > **不是**调用方参数错），`BridgeRouter` 折叠改两档 —— `AutojsException` 原码透传、
 > `IllegalArgumentException` → `ERR_INVALID_PARAM`、**其余一切 → `ERR_INTERNAL`**；此前一切
 > 未预料异常都折成参数错并回显 `e.message`（脚本去改错方向的参数 + 内部路径进 wire），且与
-> `RpcNamespaceHandler` KDoc「未知异常照旧穿出」直接矛盾。三处落字同步（`:domain` /
-> `bridge/js` `ErrCode`+`ERROR_CODES` / 契约卷 §7.6，`err-catalog.test.cjs` 三面对账门钉住），
-> 守卫三条成对。**M5 pid 绑定**：`engine:node-process` `ProcessLauncher` 补 pid 私有字段那级
+> `RpcNamespaceHandler` KDoc「未知异常照旧穿出」直接矛盾。两处落字已同步（`:domain` +
+> `bridge/js` `ErrCode`+`ERROR_CODES`，`err-catalog.test.cjs` 三面对账门钉住；**契约卷 §7.6
+> 属冻结面已撤出**，待维护者同步），
+> 守卫三条成对；契约卷 §7.6 属冻结面已撤出待维护者同步。**M5 pid 绑定**：`engine:node-process` `ProcessLauncher` 补 pid 私有字段那级
 > 反射阶梯 → Android 8–12（`Process.pid()` 需 API 33、minSdk 26）`spawn.pid` 不再恒 null，
 > 此前 `RunIdentityRegistry` 的防劫持判据**整段静默跳过**；加 `pidUnavailable` 计数
 > （「跳过」与「度量通过」在返回类型上一样，计数是唯一可见信号）。**M8 kv 升版**：
