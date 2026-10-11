@@ -145,7 +145,20 @@ class NodeProcessEngine(
                     }
                     old.lease?.naturalExit()
                 }
-                val scriptAbs = ScriptPaths.scriptFile(config.filesDir, run.projectId, run.scriptPath)
+                // scriptPath/projectId 的词法闸在 ScriptPaths.scriptFile 内（外审 M1 收口，
+                // 2026-10-12）。这里把它折成 ERR_INVALID_PARAM 而不是让 IllegalArgumentException
+                // 裸穿出去：这条路径两个调用方语义不同 —— 桥侧 RPC 本来就把 IAE 折成
+                // ERR_INVALID_PARAM（RpcNamespaceHandler），而调度侧会把裸 IAE 记成宿主内部错。
+                // 判据「参数不对」只有一个错误码，两条路才对得上。
+                val scriptAbs = try {
+                    ScriptPaths.scriptFile(config.filesDir, run.projectId, run.scriptPath)
+                } catch (e: IllegalArgumentException) {
+                    throw AutojsException(
+                        ErrorCode.ERR_INVALID_PARAM,
+                        "脚本路径非法：${e.message}（projectId=${run.projectId}）",
+                        e,
+                    )
+                }
                 if (!Files.isRegularFile(scriptAbs)) {
                     throw AutojsException(
                         ErrorCode.ERR_FILE_NOT_FOUND,
