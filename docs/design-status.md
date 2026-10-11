@@ -1,4 +1,18 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 101（维护者拍案：§7.6 解冻同步 + §10.3 杀树口径入契约 —— F1/F2）**：
+> 维护者对拍板清单逐条裁定：**F1 开**、**F2 做**、**P1 不做**（LockSigner 维持单签名文件）、
+> **P3 不做**（D13 缓）、**P2 做**（池记账重构）、**P4 做**（jsonl→SQLite）。本批做契约同步：
+> ① **§7.6**：补 `ERR_INTERNAL` 进错误目录 + 写「折叠两档、中间隔一档内部错误」为契约
+> （`AutojsException` 原码透传 / `IllegalArgumentException` → `ERR_INVALID_PARAM` /
+> **其余一切 → `ERR_INTERNAL`**）—— 这同时**对齐了 `RpcNamespaceHandler` 基类 KDoc 与路由层
+> 实际行为**（批 97 之前两处矛盾：KDoc 说「照旧穿出」，路由层一律折 `ERR_INVALID_PARAM`）；
+> ② **§10.3**：把 `/proc` 扫描 + `kill` 二进制 + **扫在杀之前** 三档写进契约正文（各自对应
+> 一类设备失效形态：`ProcessHandle` 不在 android.jar / JVM 无按 pid 杀的 API / reparent 断链），
+> 并把**降级档（pid 探不到 → 只杀主进程）写成契约的一部分** —— 它意味着「杀树在某些运行时上
+> 不做它声称的事」，调用方不能假设孙进程一定收净。
+> **P2 与 P4 各自占其后一批**（多文件重排级改动，不与契约同步夹批）。细节见
+> [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 100（外审整改第五刀：桥在途字节闸 —— M2 的可做那半）**：
 > 原口径只有**条数**闸（`maxInFlight`=256），而 `maxFrameBytes`（8 MiB）× 256 = **2 GiB 堆**
 > —— 两个**已生效**默认值相乘就能得到的数，minSdk 26 设备上直接 OOM，而那一刻的现场是
@@ -582,6 +596,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 9 | 批 101（维护者拍案，F1/F2）：**契约同步** —— §7.6 补 `ERR_INTERNAL` 进错误目录 + 写「折叠两档、中间隔一档内部错误」为契约（AutojsException 原码透传 / IllegalArgumentException → ERR_INVALID_PARAM / 其余 → ERR_INTERNAL），同时对齐 `RpcNamespaceHandler` 基类 KDoc 与路由层实际行为（批 97 之前两处矛盾）；§10.3 把 `/proc` 扫描 + `kill` 二进制 + 扫在杀之前三档写进契约正文，并把**降级档（pid 探不到 → 只杀主进程）写成契约的一部分**（不留在 KDoc 私货里）。P2（池记账重构）/ P4（jsonl→SQLite）已拍板，各占其后一批。bridge/js 三面对账门 201 pass | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 8 | 批 100：外审整改第五刀 —— 桥在途**字节**闸（`maxBytesInFlight`=16 MiB）。原口径只有条数闸 256，而 `maxFrameBytes`(8 MiB)×256 = **2 GiB 堆**（两个已生效默认值相乘）→ 设备 OOM 且看不出是哪条面。条数与字节正交（与批 99 zip `MAX_ENTRIES` 同纪律），故加第三档：CAS 取闸 / 单条超上限直接拒不部分接纳 / 拒这一条不拒整条连接（回 `ERR_PERMISSION_DENIED` 且话术点名「字节」，不静默丢）。同条另两半（每连接配额 / `limitedParallelism`）如实登记不排期。守卫先红后绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 7 | 批 99：外审整改第四刀 —— **M6** shell 收尸从「只杀直接子进程」变「杀整棵树」（`killTree` = `/proc` ppid 图 + `kill` 二进制 + pid 两级反射，`TreeOps` 缝；原 KDoc「不留孤儿进程」不成立，已订正；顺带订正顺序错：点名在杀之前）+ stdin 立即关闭（`cat`/`read x` 不再挂到超时）；**M7** zip 三条硬化（条目数闸 1 万：零字节海量条目能过两道字节闸，计数与字节正交 / `.tmp` 不自含 / `walk` 的 `UncheckedIOException` 折成 IOException 否则 tmp 残留且码不对）。记两份 `ProcOps` 的关系（手法同款代码两份，依赖方向所迫，KDoc 互相点名）。守卫 7 例 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 6 | 批 98：外审整改第三刀 —— 两处 accept 循环（`BridgeSocketListener` 设备面 + `NewlineFrameServer` 本机 TCP 面）改「瞬时故障退避重试」（`EMFILE`/`ENFILE`/`ECONNABORTED` 一次就 break = 整条桥对所有未来脚本静默死亡）；本端 close 才收循环、连续 20 次才认定非瞬时、退避用 `retryGate.wait()` 供 close 唤醒；诊断面加 `acceptRetryCount` + 失败回执缝。守卫先红后绿（阈值改 1 即模拟旧行为），判据用可观测行为（握手仍能完成）。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
