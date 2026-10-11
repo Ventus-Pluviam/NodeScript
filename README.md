@@ -79,7 +79,7 @@ node-slice / libopencv 的 artifact 起 `assembleDebug`，末尾断言 `lib/arm6
 ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:test \
   :app-service:script-repo:testDebugUnitTest :app-service:permission-center:test \
   :app-service:packager:test :app-service:npm:test :platform:capabilities:testDebugUnitTest \
-  :platform:system:testDebugUnitTest :engine:node-process:testDebugUnitTest \
+  :platform:process:test :platform:system:testDebugUnitTest :engine:node-process:testDebugUnitTest \
   :ui:testDebugUnitTest :app:testDebugUnitTest
 
 # 单模块（纯 JVM 模块用 :test；Android 模块用 :testDebugUnitTest）

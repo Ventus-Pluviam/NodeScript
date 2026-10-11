@@ -1,5 +1,7 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.platform.process.ProcTreeOps
+import com.autoscript.platform.process.TreeOps
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -22,7 +24,9 @@ import java.util.concurrent.TimeUnit
  *
  * 批 91 那版用 `ProcessHandle.descendants()`，在**设备上从来没跑起来过**（`ProcessHandle`
  * 整类不在 android.jar 里，`NoSuchMethodError` 被 `runCatching` 吞成空集 —— 静默退化成
- * 只杀主进程）。为什么换、以及 /proc 版的判据，见 [ProcOps] 的类 KDoc；**不再用
+ * 只杀主进程）。为什么换、以及 /proc 版的判据，见
+ * [com.autoscript.platform.process.ProcOps] 的类 KDoc（批 105 自本模块移出，两份副本
+ * 合并到该模块 —— 手法逐字同款、代码两份是批 95 留下的重复）；**不再用
  * `kill -- -<pgid>`**：负 pgid 要求子进程没有自己的进程组，而 `sh -c` 之后是否另起
  * 进程组由 shell 与 ROM 决定 —— /proc 父子链与"谁把谁生出来"这个事实同源。
  */
@@ -37,8 +41,8 @@ class T1Child(
     private val runner: T1ProcessRunner,
     /** 往会话 socket 写一帧（由 [T1Session] 提供，已加锁）。 */
     private val emit: (Map<String, Any?>) -> Boolean,
-    /** 杀树的缝（批 95；生产 = [ProcTreeOps]，单测注入替身）。 */
-    private val treeOps: T1TreeOps = ProcTreeOps(),
+    /** 杀树的缝（批 95；批 105 起生产实现住 `:platform:process`，单测注入替身）。 */
+    private val treeOps: TreeOps = ProcTreeOps(),
 ) {
 
     @Volatile

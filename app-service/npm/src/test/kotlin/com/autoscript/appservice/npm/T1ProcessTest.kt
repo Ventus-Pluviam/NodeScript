@@ -1,5 +1,7 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.platform.process.ProcTreeOps
+import com.autoscript.platform.process.TreeOps
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -94,7 +96,7 @@ class T1ProcessTest {
         frames: Frames,
         detached: Boolean = false,
         cmd: String = "echo",
-        treeOps: T1TreeOps = NoopTreeOps(),
+        treeOps: TreeOps = NoopTreeOps(),
     ) = T1Child(
         id = 1L,
         cmd = cmd,
@@ -109,7 +111,7 @@ class T1ProcessTest {
     )
 
     /** 记录式杀树替身（默认零后代、零动作 —— 既有用例的 reap 行为不变）。 */
-    private open class NoopTreeOps : T1TreeOps {
+    private open class NoopTreeOps : TreeOps {
         override fun descendantsOf(process: Process): Set<Long> = emptySet()
         override fun descendantsOf(alivePids: Set<Long>): Set<Long> = emptySet()
         override fun kill(pids: Collection<Long>, force: Boolean) = Unit
@@ -309,7 +311,7 @@ class T1ProcessTest {
         private val firstWave: Set<Long>,
         private val lateWave: Map<Long, Set<Long>>, // 仍活着的第一轮成员 → 它们的后代
         private val alivePids: Set<Long>,
-    ) : T1TreeOps {
+    ) : TreeOps {
         val killed = mutableListOf<Pair<Set<Long>, Boolean>>()
         var firstScanProcess: Process? = null
 

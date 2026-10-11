@@ -83,7 +83,10 @@ private val jdkProcessPidMethod: java.lang.reflect.Method? = try {
  * 而 minSdk 26 —— 于是 Android 8–12 上 [SpawnedProcess.pid] 恒 null，看门狗走 noPid 清单，
  * **且 [com.autoscript.bridge.RunIdentityRegistry] 的防劫持检查整段被跳过**（`peerPid != null
  * && spawn.pid != null` 两条件）。Android 13 libcore 的 `ProcessImpl` 有 `pid` 这个字段 ——
- * 与批 95 的 `ProcOps.pidOf` 同一手法、同一理由（那处是为了杀树，这里是为了身份绑定）。
+ * 与批 95 的 `ProcOps.pidOf` 同一手法、同一理由（那处是为了杀树，这里是为了身份绑定）；
+ * 批 105 起那处住 `:platform:process`（两份副本合并），本模块这份**仍留** ——
+ * `:platform:*` 是引擎的下层，引擎不得反向依赖它（§6 + 本模块 ArchitectureTest 黑名单），
+ * 一份纯反射阶梯的拷贝比那条越界依赖便宜。
  *
  * **桌面 JDK 上这一级是死代码**：模块系统拒 `setAccessible`，但那时 tier 1 已经成了。
  */
@@ -264,9 +267,9 @@ private class StderrTail(
 /**
  * 取子进程 pid（两级反射阶梯：方法 → 私有字段）。
  *
- * 与 `app-service:npm` 的 `ProcOps.pidOf` 逐字同款：**两处抽不出共享模块**（npm → domain 的
- * 依赖方向上 domain 不该知道进程；反之 `ProcOps` 还要 /proc 扫描，用不上就多背一份），
- * 故同一手法抄两处并在两侧 KDoc 互相点名 —— 改一处时另一处必须跟着看。
+ * 与 `:platform:process` 的 `ProcOps.pidOf`（批 105 的合并落点）同一手法、同一理由，
+ * 仍抄一份在本地：**两处抽不出共享模块** —— 引擎在 `:platform` 之上，反向依赖即破 §6 依赖
+ * 方向（本模块 ArchitectureTest 把 `com.autoscript.platform..` 钉在黑名单里）。
  *
  * @return null = 运行时两个 tier 都探不到（诚实 noPid，**绝不给 0/自身**）。
  */

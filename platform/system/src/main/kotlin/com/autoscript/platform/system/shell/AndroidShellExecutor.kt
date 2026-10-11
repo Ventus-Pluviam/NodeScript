@@ -2,6 +2,8 @@ package com.autoscript.platform.system.shell
 
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
+import com.autoscript.platform.process.ProcTreeOps
+import com.autoscript.platform.process.TreeOps
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -60,7 +62,7 @@ class AndroidShellExecutor(
     private val logSink: ShellCaptureLimit.LogSink = ShellCaptureLimit.defaultLogSink,
     /**
      * 进程树收尸的操作面（外审 M6，批 99；缝的理由见 [killTree]）。
-     * 缺省生产实现走 `/proc` + `kill` 二进制（与批 95 的 T1 杀树逐字同款手法）。
+     * 缺省生产实现走 `/proc` + `kill` 二进制（批 105 起住 `:platform:process`）。
      */
     private val treeOps: TreeOps = ProcTreeOps(),
 ) : ShellExecutor {
@@ -137,12 +139,13 @@ class AndroidShellExecutor(
      * 收掉**整棵进程树**（外审 M6，批 99）。
      *
      * [Process.destroyForcibly] 只杀直接子进程（`sh`/`su`），它们自己起的孙进程留在设备上
-     * —— 而「越跑越卡」这种现场恰恰查不到源头。手法与批 95 的 T1 杀树**逐字同款**：
-     * **扫在杀之前**（reparent 只断死后回找，pid 集合在树还活着时到手）、同 UID 靠 fork
-     * 继承（ppid 图上可达即同 UID）、按 pid 杀用 `kill` 二进制（JVM 没有「按 pid 杀」的
-     * API）、pid 取不到就**诚实降级为只杀直接子进程**（不更坏、不炸收尸）。
+     * —— 而「越跑越卡」这种现场恰恰查不到源头。手法（**扫在杀之前** —— reparent 只断
+     * 死后回找，pid 集合在树还活着时到手；同 UID 靠 fork 继承，ppid 图上可达即同 UID；
+     * 按 pid 杀用 `kill` 二进制，JVM 没有「按 pid 杀」的 API）与批 95 的 T1 杀树
+     * **逐字同款** —— 批 105 起两者共用 `:platform:process` 的**同一份实现**，不再
+     * 是两份副本。pid 取不到就**诚实降级为只杀直接子进程**（不更坏、不炸收尸）。
      *
-     * **为什么不在这里 new 一份而要注入**（与 T1 的 `T1TreeOps` 同理由）：判据要能用替身
+     * **为什么不在这里 new 一份而要注入**（与 T1 的 [TreeOps] 同理由）：判据要能用替身
      * 跑成确定性用例（「孙进程确实被点名了」），而真 `/proc` 那条由真进程用例单独钉。
      */
     private fun killTree(process: Process) {

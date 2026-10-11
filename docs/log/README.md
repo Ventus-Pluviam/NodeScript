@@ -1,5 +1,18 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-12，批 105：两份 ProcOps 合并成 :platform:process）
+
+- [2026-10-12 · 两份 `ProcOps` 合并成 `:platform:process`](2026-10-11.md)：
+  [`ProcOps`](../../platform/process/src/main/kotlin/com/autoscript/platform/process/ProcOps.kt) /
+    [`TreeOps`](../../platform/process/src/main/kotlin/com/autoscript/platform/process/TreeOps.kt)
+  —— 批 95（npm 的 T1 杀树）与批 99（shell 收尸）各落了一份**手法逐字同款、代码两份**的
+  `ProcOps`，两边 KDoc 当初互相点名「等维护者拍板抽模块」。本批抽成 **`:platform:process`**：
+  它只用 `java.nio` 与 `Process` 桩面，连 `:domain` 都不需要（**叶子模块**）—— 塞进
+  `:domain` 能消重复，但消的是症状，留的是根因（领域层不该知道 `/proc`）。
+  **留了一处没合并是判断**：`:engine:node-process` 的 `ProcessLauncher.pidOf` 反向依赖
+  即破 §6，那段纯反射不值得。模块数 17→18、测试任务 14→15，冻结面五处同步；顺带被
+  `ModuleGraphTest` 的计数门抓到 `build-logic/settings.gradle.kts` 头注释漏改。守卫 7 + 1。
+
 ## 最新追记（2026-10-12，批 104：M1 + B3）
 
 - [2026-10-12 · 外审 M1 收口 + B3 流式读](2026-10-11.md)：

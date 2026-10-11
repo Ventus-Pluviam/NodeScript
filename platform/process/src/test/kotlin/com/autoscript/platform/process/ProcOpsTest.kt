@@ -1,4 +1,4 @@
-package com.autoscript.appservice.npm
+package com.autoscript.platform.process
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -9,12 +9,18 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * [ProcOps] 的 /proc 面（批 95）：stat 解析与 ppid 图下行遍历。
+ * [ProcOps] 的 `/proc` 面（批 105 从 `:app-service:npm` 与 `:platform:system` 两份合并到
+ * 本模块的**唯一一份**测试 —— 合并前 npm 那侧有 [ProcOpsTest]、platform 那侧只有一条
+ * 走真进程的用例，合进来的判据取两边并集）。
  *
- * **喂的是合成的 /proc 树**（@TempDir），不借宿主 `/proc` 判状态 —— 借宿主的判据在
- * CI 上是假绿（本仓有过教训：pid=4242 借宿主 /proc 判死，本机全绿 CI 红）。
- * 真 /proc 那条由 T1ProcessTest 的「真进程树」用例钉（那里起的是自己生的进程，
+ * **喂的是合成的 `/proc` 树**（@TempDir），不借宿主 `/proc` 判状态 —— 借宿主的判据在
+ * CI 上是假绿（本仓有过教训：pid=4242 借宿主 `/proc` 判死，本机全绿 CI 红）。
+ * 真 `/proc` 那条由两侧调用方自己的「真进程树」用例钉（那里起的是自己生的进程，
  * 判据是自己那棵树，不借别人的）。
+ *
+ * 「真进程树」那条为什么留在调用方而不搬来：它们要连同**调用方的收尸判据**
+ * （TERM→KILL 的顺序、二次收割）一起验，搬过来就只剩 `/proc` 面自己，而那已经被
+ * 合成树的三例钉住了。
  */
 class ProcOpsTest {
 
@@ -27,7 +33,7 @@ class ProcOpsTest {
         Files.createDirectories(dirPid)
         Files.write(
             dirPid.resolve("stat"),
-            ("$pid ($comm) $state $ppid 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n").toByteArray(),
+            ("$pid ($comm) $state $ppid 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n").toByteArray(),
         )
     }
 
@@ -97,13 +103,27 @@ class ProcOpsTest {
         assertTrue(ops().descendantsOf(fake).isEmpty())
     }
 
+    /**
+     * 二次收割的判据（批 95 的 T1 用，批 99 的 shell 不用 —— 它没有宽限期这一档）。
+     *
+     * 形态照抄 T1 那条真实判据：第一轮扫到 101；**然后** 101 在宽限期内新起 103（合成树里
+     * 就是多写一个 stat 文件），第二轮必须从**仍活着的 101** 捡到它 —— 从主进程 100 再扫
+     * 也能捡到，那不叫二次收割、那叫第一轮没扫干净。
+     */
     @Test
-    fun `signalName 表：1-31 有名字，0 与 32+ 不猜`() {
-        assertEquals("SIGTERM", signalName(15))
-        assertEquals("SIGKILL", signalName(9))
-        assertEquals("SIGPIPE", signalName(13))
-        assertNull(signalName(0))
-        assertNull(signalName(32), "32+ 是实时信号，编号各家不同 —— 不猜")
-        assertNull(signalName(143 - 128 + 100), "查不到就回 null，调用方拿 code 原样")
+    fun `二次收割：从仍活着的成员再扫一轮，捡到宽限期内新生的后代`() {
+        stat(100L, "root", 'S', 1L)
+        stat(101L, "child", 'S', 100L)
+
+        // 第一轮按 rootPid 走的是 [ProcOps]（[ProcTreeOps] 的 Process 重载只在有 Process 对象时用）
+        val ops = ProcTreeOps(ProcOps(dir))
+        assertEquals(setOf(101L), ProcOps(dir).descendantsOf(100L), "第一轮只有 101（此刻 103 还没起）")
+        assertTrue(ops.descendantsOf(setOf(101L)).isEmpty(), "第二轮此刻也无新东西")
+
+        stat(103L, "grandchild", 'S', 101L)   // 宽限期内 101 新起了 103
+
+        assertEquals(setOf(103L), ops.descendantsOf(setOf(101L)), "从活着的 101 再扫一轮必须捡到 103")
+        assertTrue(ops.alive(101L), "101 在合成树里就是活着的（alive 走注入的 procDir，不查宿主）")
+        assertTrue(!ops.alive(4242L), "不在树里的 pid 判死（与「借宿主 /proc 判状态」同一条纪律）")
     }
 }

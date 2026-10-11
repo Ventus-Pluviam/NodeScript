@@ -2,6 +2,8 @@ package com.autoscript.platform.system.shell
 
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
+import com.autoscript.platform.process.ProcOps
+import com.autoscript.platform.process.TreeOps
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -460,6 +462,10 @@ class AndroidShellExecutorReapingTest {
     private class RecordingTreeOps(private val firstWave: Set<Long>) : TreeOps {
         val killed = mutableListOf<Pair<Set<Long>, Boolean>>()
         override fun descendantsOf(process: Process): Set<Long> = firstWave
+        // shell 收尸不二次收割（那是 T1 的判据，宽限期在 timeout 之前就结束了）——
+        // 这两件随 :platform:process 的 TreeOps 合并进来后，替身必须显式回空档。
+        override fun descendantsOf(alivePids: Set<Long>): Set<Long> = emptySet()
+        override fun alive(pid: Long): Boolean = false
         override fun kill(pids: Collection<Long>, force: Boolean) {
             if (pids.isNotEmpty()) killed += pids.toSet() to force
         }
@@ -561,7 +567,7 @@ class AndroidShellExecutorReapingTest {
      * 数不对」与「executor 调它的顺序」是两个独立判据 —— 前者在这里，后者在上方替身用例。
      */
     @Test
-    fun `真进程树：proc 面能数出 sh 的后台孙子并收掉（生产路径 ProcOps）`() {
+    fun `真进程树——proc 面能数出 sh 的后台孙子并收掉（生产路径 platform process 的 ProcOps）`() {
         val sh = ProcessBuilder("sh", "-c", "sleep 300 & echo $!; wait").start()
         val out = StringBuilder()
         Thread {

@@ -10,6 +10,8 @@ android {
 
 dependencies {
     implementation(project(":domain"))
+    // 进程/`/proc` 面（批 105）：shell 收尸的另一份副本合并进 `:platform:process`。
+    implementation(project(":platform:process"))
     implementation(libs.kotlinx.coroutines.core)
     // §8.5 契约套件（IntentStoreContract）：SqliteIntentStore 与 InMemoryIntentStore 跑同一组用例。
     testImplementation(testFixtures(project(":domain")))
