@@ -22,7 +22,23 @@ object DeployPath {
         return true
     }
 
-    /** 解析到 root 之下并做二次校验（防符号链接/边界绕行）。 */
+    /**
+     * 解析到 root 之下并做二次校验（**纯词法**：防边界绕行，**不防符号链接**）。
+     *
+     * **这一句 KDoc 曾经写着「防符号链接/边界绕行」，那句话不成立**（2026-10-12 订正，
+     * 外审「KDoc 与实现矛盾」那条）：本方法只做 `normalize()` + `startsWith(base)`，两者
+     * 都是**字符串级**判据 —— 路径里若含指向 root 之外的符号链接（`root/link → /data/other`，
+     * `resolveIn(root, "link/f.txt")` 返回 `root/link/f.txt`，词法检查一路放行），真正的
+     * 目标在 root 之外。`normalize` 解析的是 `.`/`..` 这类**语法**分量，不是文件系统。
+     *
+     * **当前是否真的构成风险**：本仓的写入方（[isSafeRelPath] 那一侧）拿到的 `relPath`
+     * 全是仓内生成的（assets 清单、npm 布局常量），调用方里没有一条接受未校验的外部
+     * `relPath`；文件也都在 App 私有 `filesDir` 下，脚本侧无法造出符号链接。所以这是
+     * **判据本身不够强**，不是**当下可利用的漏洞** —— 如实分开记。
+     *
+     * 要真防住需改成 `Path.toRealPath()` 比对（每级解析真实 inode，且要求目标已存在），
+     * 代价是写入路径上多一次 syscall，且对「先建文件再 fsync」的原子部署顺序有约束。
+     */
     fun resolveIn(root: Path, relPath: String): Path {
         require(isSafeRelPath(relPath)) { "非法相对路径: $relPath" }
         val base = root.toAbsolutePath().normalize()

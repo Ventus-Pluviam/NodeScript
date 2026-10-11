@@ -1,5 +1,48 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-12，批 104：M1 + B3）
+
+- [2026-10-12 · 外审 M1 收口 + B3 流式读](2026-10-11.md)：
+  [`ScriptPaths.scriptFile`](../../domain/src/main/kotlin/com/autoscript/domain/scripts/ScriptPaths.kt)
+  **此前一个字都不校验**，而 `NodeProcessEngine` 拿它的返回值直接拼进 `node <路径>` 执行 ——
+  补上读侧词法闸（`projectId` 复用 `isValidProjectId`，`scriptPath` 拒绝对路径/`..`/`.`/
+  空段/反斜杠，归一后要求严格在项目根之下），非法路径折 `ERR_INVALID_PARAM` 而不是裸穿 IAE。
+  判据用**词法**不用 `toRealPath()`：后者要求目标已存在，会把「部署晚于调度」错报成参数错。
+  [`FileScriptEnvStore.replay`](../../app-service/script-repo/src/main/kotlin/com/autoscript/appservice/scriptrepo/core/FileScriptEnvStore.kt)
+  去 `readAllBytes` 改逐字节流式扫（append-only 长度只增不减）；不用 `readLine()` 是因为
+  末行无换行时它照样吐出来，而末行半行必须丢弃。守卫新增 7 + 1 + 1。
+
+## 最新追记（2026-10-12，待办池清池续）
+
+- [2026-10-12 · 划掉的 31 行直接删掉（决策第 73 项）](2026-10-11.md)：
+  [`backlog.md`](../backlog.md) A–E 五张表里全部 31 条**划掉的行已删除**（只删条目行，
+  结论不丢：已完成叙事在流水、裁定口径在决策记录）。上一轮那批划掉的
+  B3 / B4 / B14 / D13 / E3 / A13 判的是「**不再跟进**」，不是「已完成」——
+  划线等于往待办池塞一条**永远不会被领走的假待办**，下次列清单它又冒出来。
+  **划线在本仓是「结论已定」的记号，不是「待办」的记号**；没结论的（外审
+  B3/M1/M2 三条半成品、结构性长线项）一条没动。**D6 是 A–E 唯一活着的行**（需拍板）。
+
+## 最新追记（2026-10-12，KDoc 矛盾七处）
+
+- [2026-10-12 · KDoc 与实现矛盾七处：只订正文字，零行为变更](2026-10-11.md)：
+  外审那七处「KDoc 承诺的比实现做的多」全部订正，**代码零变更**。七处错法各异：
+  `resolveIn` 是**纯词法**（`normalize` 解析语法分量，不问文件系统）；
+  `scriptFile` **一个字都不校验**（越界不是「读不到」而是「读得到」）；
+  `RpcNamespaceHandler` 的「穿出」在 Router 更外层还有一档 → `ERR_INTERNAL`（批 97）；
+  `generation` 在批 103 后**不再承担正确性**（拿它判过期就是用假不变量）；
+  `FileTaskStore` 收敛的只是**崩溃最后半行**（行内损坏是响亮失败）；
+  `LockSigner`「防搬锁」只对一半（单文件覆盖所有项目 → 签 B 废 A，行为不改）；
+  `AndroidShellExecutor` 的准确口径是「**尽力**收整棵树、不保证」。三处同时在 KDoc 里
+  记了补法与代价，而不是只留 TODO。
+
+## 最新追记（2026-10-12，批 103 收官）
+
+- [2026-10-12 · 批 103 收官：待办池清池](2026-10-11.md)：
+  [`backlog.md`](../backlog.md) A–E 各表**未划掉**的六行（B3 / B4 / B14 / D13 / E3 /
+  A13）按**不再跟进**划掉 —— **不是「已完成」**，原文逐字保留。外审登记表里的半成品
+  （B3 压缩/流式读、M1 的 KDoc 矛盾、M2 每连接配额与 `limitedParallelism`）与结构性
+  长线（typed ids / actor 化 / KDoc 文字七处）**不在清池范围内**，保持原状。
+
 ## 最新追记（2026-10-12，批 103）
 
 - [2026-10-12 · 批 103：P2 池记账重构（外审 B2 的彻底解 —— 三阶段落地）](2026-10-11.md)：

@@ -135,8 +135,13 @@ object ScriptFileOps {
      * `files/scripts/demo/lib/main.js` 去读另一个文件。**2026-10-06 实测踩过这个坑**：
      * 编辑器报"不是文件：demo/main.js"，因为被拼成了 `files/scripts/demo/demo/main.js`。
      *
-     * 三道校验：[DeployPath.resolveIn] 防 `..`/绝对路径/越界（[ScriptPaths.scriptFile] 刻意
-     * 不做逃逸校验 —— 它服务的是调度侧的不透明透传）、首段与项目名一致、项目目录存在。
+     * 三道校验：[DeployPath.resolveIn] 防 `..`/绝对路径/越界、首段与项目名一致、项目目录存在。
+     *
+     * （原文这里写着「[ScriptPaths.scriptFile] 刻意不做逃逸校验」，**2026-10-12 删掉**——
+     * 那是批 7c0fec9 订正前的状态：外审 M1 收口时 `scriptFile` 已补上词法闸，理由与
+     * 词法判据的边界见该方法 KDoc。这里仍用自己的 `resolveIn` 而不是复用 `scriptFile`：
+     * 两条路径的入参形状不同（那边是项目内相对路径，这边首段就是 `projectId`），判据可共用、
+     * 拼接不能共用。）
      */
     private fun resolveInProject(filesDir: Path, projectId: String, relPath: String): Path {
         // 目录行的 relPath 以 / 结尾（契约约定），读写只服务文件 —— 先削掉再校验，

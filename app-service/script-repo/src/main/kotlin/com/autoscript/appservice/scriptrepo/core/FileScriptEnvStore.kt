@@ -4,6 +4,8 @@ import com.autoscript.domain.json.DomainJson
 import com.autoscript.domain.scripts.ScriptEnvEntry
 import com.autoscript.domain.scripts.ScriptEnvKeys
 import com.autoscript.domain.scripts.ScriptEnvStore
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -74,16 +76,40 @@ class FileScriptEnvStore(private val dir: Path) : ScriptEnvStore {
     /** 落盘文件（诊断/测试用；生产不读它，读的是 [all]）。 */
     fun file(): Path = file
 
+    /**
+     * replay：**流式**扫盘（外审 B3 的「全量 `readAllBytes`」那半，2026-10-12 改）。
+     *
+     * 为什么必须流式：append-only 的长度只增不减，而这份表的写入方是**用户点出来的**
+     * 「添加一条」—— 同一个 key 改一百次就是一百行，删掉的键也各留一行墓碑。`readAllBytes`
+     * 会在每次冷启动把整份**历史**拉进堆，收敛后的结果可能只剩几十条。流式读把峰值压到
+     * 「一行」量级。
+     *
+     * **自己按字节扫，不用 `readLine()`**：末行没有换行时 `BufferedReader.readLine()` **照样吐出来**
+     * （它的语义是「读到 EOF 为止」），而末行半行必须**丢弃**（崩溃截断，见类 KDoc 与既有
+     * 守卫「最后半行被丢弃」）。要区分「半行」与「整行」，就得知道这一行后面跟的是不是
+     * `\n` —— 那是字节级的信息，`readLine` 不给。
+     *
+     * 为什么逐字节 `read()` 还不慢：`BufferedInputStream` 的缓冲让 syscall 落到块级，
+     * 每字节只多一次数组读；这份表冷启动只扫一遍，与 Gradle/Node 那种真热点不同构。
+     *
+     * 值里可能有换行，但那是**转义后**的 `\n` 两个字符 —— 写入侧 [q] 走 [DomainJson.encode]，
+     * 行内不会出现裸 `\n`。这条是「按 `\n` 扫」成立的前提，与类 KDoc 同一条依据。
+     */
     private fun replay() {
         if (!Files.exists(file)) return
-        val bytes = Files.readAllBytes(file)
-        var pos = 0
-        while (true) {
-            val nl = findNewline(bytes, pos)
-            if (nl < 0) return                       // 最后半行：丢弃（崩溃截断）
-            val line = String(bytes, pos, nl - pos, StandardCharsets.UTF_8)
-            pos = nl + 1
-            if (line.isNotBlank()) apply(line)
+        BufferedInputStream(Files.newInputStream(file)).use { ins ->
+            val line = ByteArrayOutputStream()   // 只留当前行
+            while (true) {
+                val b = ins.read()
+                if (b < 0) return                          // 行缓冲里还有内容 = 最后半行 → 丢弃
+                if (b == '\n'.code) {
+                    val s = line.toString(StandardCharsets.UTF_8.name())
+                    line.reset()
+                    if (s.isNotBlank()) apply(s)
+                } else {
+                    line.write(b)
+                }
+            }
         }
     }
 
@@ -106,11 +132,6 @@ class FileScriptEnvStore(private val dir: Path) : ScriptEnvStore {
     private fun str(f: Map<String, DomainJson.Value>, name: String): String =
         (f[name] as? DomainJson.Value.S)?.v
             ?: throw IOException("script-env 行损坏：缺字符串字段 $name")
-
-    private fun findNewline(b: ByteArray, from: Int): Int {
-        for (i in from until b.size) if (b[i] == '\n'.code.toByte()) return i
-        return -1
-    }
 
     /** 追加一行并 fsync 后才返回（见类 KDoc：不持有常开 channel）。 */
     private fun appendLine(s: String) {
