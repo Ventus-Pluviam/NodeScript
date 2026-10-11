@@ -34,8 +34,16 @@ class PoolSlot internal constructor(
 
     /**
      * 占位代次（docs §7.4 generation 纪律）：每次夺槽 / kill 收归都 +1。
-     * [PoolHandle] 获取时记下代次；release 时对不上即过期句柄 —— 绝不拆新占用者。
-     * 须在池的互斥临界区（[FixedEnginePool] 的 stateLock）内读写。
+     *
+     * **这段 KDoc 曾经写着「[PoolHandle] 获取时记下代次；release 时对不上即过期句柄」，
+     * 那两句现在都不成立**（2026-10-12 订正，批 103 P2 之后）：[PoolHandle] 根本不再
+     * 持有代次，而 release 也**不再拿它判过期** —— 过期判据换成了 [PoolLease] 的 CAS
+     * 归还权（归还恰好一次），过期句柄在**物理上**到不了本槽位。
+     *
+     * 现在这个计数**只剩诊断价值**（`recycle` 与归还时推进，能看出这个槽被占用过几轮），
+     * 不承担正确性。删不掉是因为 §7.4 的代次纪律要留个可观测的痕迹，但**谁要拿它判过期
+     * 就是用了一个假不变量** —— 队列化的那条真不变量是「槽要么在队列里、要么在 lease 手里」。
+     * 读写须在池的互斥临界区内（队列化后即 `Channel` 的收发本身）。
      */
     var generation: Long = 0L
         private set

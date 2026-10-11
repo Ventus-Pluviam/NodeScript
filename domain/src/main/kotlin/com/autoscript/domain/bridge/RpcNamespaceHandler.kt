@@ -11,7 +11,15 @@ import com.autoscript.domain.core.ErrorCode
  * - [IllegalArgumentException] → `ERR_INVALID_PARAM`（解码/参数校验的统一出口，
  *   `Decode.kt` 的 helpers 全抛它）。
  *
- * **未知异常不接**：照旧穿出 = bug 显形（测试红/进程炸），不伪造参数错掩盖。
+ * **未知异常**：本基类**确实不接**（照旧穿出）；但**穿出不等于「裸奔到 wire」** ——
+ * `:bridge:java` 的 `BridgeRouter` 在更外层还有一档 `catch (e: Exception)`，把它折成
+ * `ERR_INTERNAL`。所以对写 handler 的人：**未知异常最终会变成 `ERR_INTERNAL` 回到脚本，
+ * 而不是进程炸、也不是 `ERR_INVALID_PARAM`**（后者是批 97 之前的旧行为，已订正）。
+ *
+ * **本基类为什么还要留着这两档而不是全交给 Router**：子类调用栈深，中途穿出的
+ * `AutojsException` 会被自己的 `try`/`catch` 误捕或变形；就地收口让「这个 handler 的
+ * 参数错误」在最近的一层就被命名。Router 那档只兜「绕过基类的那一半」（见其 KDoc）。
+ *
  * 未知方法不在这里兜：`dispatch` 的 `else` 分支按各自命名空间回
  * `ERR_NOT_IMPLEMENTED`（消息带方法名，§7.5 不猜别名）。
  *

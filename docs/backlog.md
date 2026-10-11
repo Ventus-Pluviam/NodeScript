@@ -793,6 +793,6 @@ B14 / D13 / E3 / A13）—— 这些条目并未做完，一律按**不再跟进
 - **池记账单一真源**（`Channel<PoolSlot>` 空闲表 + `Lease` 幂等归还）= B2 的彻底解 🔶
 - **单一 actor 持有控制器状态**（外审推荐的最干净形态，但会把每个方法变成消息）🔶
 - **jsonl 三份手写格式 → SQLite**（`FileTaskStore`/`FileRunArchive` + 意图日志；已有 `SqliteIntentStore` 可参照）🔶 含一次性导入器
-- **KDoc 与实现矛盾 7 处**（`DeployPath.resolveIn` 声称防符号链接实为词法；`scriptFile` 声称越界只读不到；`RpcNamespaceHandler` 声称未知异常穿出；`AndroidShellExecutor` 声称无孤儿进程；`FixedEnginePool` 声称 stale release 不拆新占用者；`FileTaskStore` 声称重放收敛；`LockSigner` 声称防跨项目搬锁）—— 批 96 已修其中 3 处隐含面（半行清盘让「重放收敛」真成立），**KDoc 文字本身未改** 🔶
+- ~~**KDoc 与实现矛盾 7 处**~~ —— **2026-10-12 全部订正完毕**（零行为变更，只改注释；批 96 此前修的是其中 3 处的**隐含面**，文字一直没动）。原文逐字保留：`DeployPath.resolveIn` 声称防符号链接实为词法；`scriptFile` 声称越界只读不到；`RpcNamespaceHandler` 声称未知异常穿出；`AndroidShellExecutor` 声称无孤儿进程；`FixedEnginePool` 声称 stale release 不拆新占用者；`FileTaskStore` 声称重放收敛；`LockSigner` 声称防跨项目搬锁。七处的错法各异，逐条订正见 [`docs/log/2026-10-11.md`](log/2026-10-11.md) 同日流水 | ✅ 文字订正；**代码零变更**
 - **文档面**：1.4 MB markdown、约 520 KB 流水、全中文（对外贡献门槛）、`docs/` 按受众重排（= **D13**）、威胁模型逐行映射到测试、并发契约块与时序图 —— 与 **D13** 合并考虑 🔶
 - **无 `ERR_INTERNAL`**：错误表 22 个码里没有「内部错误」这一档，M4 的根因就在这 🔶 与 M4 同批
