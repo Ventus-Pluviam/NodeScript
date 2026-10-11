@@ -28,11 +28,34 @@ class SqliteKvOps(context: Context) : AndroidDataStore.KvOps, AutoCloseable {
             db.execSQL(CREATE_SQL)
         }
 
+        /**
+         * 升版走**显式迁移表**（2026-10-11 批 97，外审 M8）—— 此前是「版本一升就 DROP 重建」，
+         * 用户的脚本数据说没就没。现口径见 [KvSchemaMigrations]：找不到路径抛
+         * [KvSchemaMigrations.UnknownMigration] 让升级整体失败（响亮），绝不静默重建。
+         */
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            // P0 单版本无迁移路径：升级即重建。kv 是脚本可再生数据，干净重建比
-            // 留一个半迁移状态好解释（半迁移 = 读出来 kind 对不上、写进去的又混型）。
-            db.execSQL("DROP TABLE IF EXISTS $TABLE")
-            onCreate(db)
+            val steps = KvSchemaMigrations.upgradeSteps(oldVersion, newVersion)
+            if (steps.isEmpty()) return
+            db.beginTransaction()
+            try {
+                steps.forEach { db.execSQL(it.sql) }
+                db.execSQL("PRAGMA user_version = $newVersion")
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+
+        /**
+         * 降版**响亮失败**（[SQLiteOpenHelper] 的缺省实现也是抛，但那是平台默认，
+         * 不是被审过的口径）。写明理由：新版本加的列在旧二进制读不出来，静默打开等于
+         * 把「读不出」伪装成「读出空值」。真要降级 = 显式动作（清 `kv` 或删库）。
+         */
+        override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            throw IllegalStateException(
+                "kv 库版本回退 $oldVersion → $newVersion：拒绝降级打开。" +
+                    "新版本加的列在旧二进制读不出来；清空 kv 或删库是显式动作，别由版本号隐式触发",
+            )
         }
     }
 

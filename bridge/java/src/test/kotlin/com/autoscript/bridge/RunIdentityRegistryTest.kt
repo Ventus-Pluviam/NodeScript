@@ -67,6 +67,19 @@ class RunIdentityRegistryTest {
             val dead = registry.issue(EngineId(0), 3, testProject, snapshot()).also { it.confirmSpawn(null) { false } }
             assertThrows(AutojsException::class.java) { runBlocking { registry.authenticate(dead.token, null, 3, {}, {}) } }
             assertEquals(0, registry.size())
+            // 外审 M5（批 97）：上面那组里 `4 to null` 那次 = 「宿主 pid 不可得 ⇒ 本次没做
+            // pid 绑定」。计数是它唯一的可见信号（静默跳过与度量通过在返回类型上长得一样）。
+            assertEquals(1, registry.pidUnavailable, "peer 有 pid 而宿主无 pid 应记一次「未绑定」")
+        }
+        Unit
+    }
+
+    @Test
+    fun `两侧都有 pid 且相等时不记未绑定（计数不许把正常路径算进去）`() = runBlocking {
+        RunIdentityRegistry().use { registry ->
+            val lease = registry.issue(EngineId(0), 1, testProject, snapshot()).also { it.confirmSpawn(7) { true } }
+            registry.authenticate(lease.token, 7, 1, {}, {}).close()
+            assertEquals(0, registry.pidUnavailable)
         }
         Unit
     }

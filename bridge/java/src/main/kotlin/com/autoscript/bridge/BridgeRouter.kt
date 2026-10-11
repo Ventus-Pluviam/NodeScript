@@ -4,6 +4,7 @@ import com.autoscript.domain.bridge.AuthenticatedRunContext
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.NamespaceHandler
+import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.Clock
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.core.SystemClock
@@ -101,8 +102,24 @@ class BridgeRouter(
                 BridgeResponse.Err(request.id, ErrorCode.ERR_TIMEOUT.code, "handler 处理超时 $ttl ms")
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: AutojsException) {
+                // SPI 抛的领域异常自带真码（ERR_PERMISSION_DENIED/ERR_NOT_FOUND/…）——原样透传。
+                // RpcNamespaceHandler 基类已经收过一次；这里是 handler 自己绕过基类直抛的那一半。
+                BridgeResponse.Err(request.id, e.error.code, e.message)
+            } catch (e: IllegalArgumentException) {
+                // 参数/解码类（RpcNamespaceHandler 只收这两类之外的穿出，这里兜住 handler
+                // 自己抛的那一半）——「能读懂的事实」，脚本据此改参数。
+                BridgeResponse.Err(request.id, ErrorCode.ERR_INVALID_PARAM.code, "参数非法: ${e.message}")
             } catch (e: Exception) {
-                BridgeResponse.Err(request.id, ErrorCode.ERR_INVALID_PARAM.code, "handler 异常: ${e.message}")
+                // 其余一律「宿主内部错误」（2026-10-11 批 97，外审 M4）：**不是调用方的错**。
+                // 此前折成 ERR_INVALID_PARAM 会让脚本把代码 bug 当成参数 bug 去改参数；
+                // 回显 e.message 还会把内部路径/字段名带进 wire（外审同条的泄露面）。
+                // 详情只在 detail（宿主侧另有堆栈日志），脚本侧按「宿主有问题」处理。
+                BridgeResponse.Err(
+                    request.id,
+                    ErrorCode.ERR_INTERNAL.code,
+                    "${request.namespace}.${request.method} 内部异常（${e::class.simpleName ?: "?"}）：${e.message}",
+                )
             }
             registry.complete(ticket, response)
         }
