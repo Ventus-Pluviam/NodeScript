@@ -1,4 +1,17 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 99（外审整改第四刀：shell 杀树与 stdin 关闭 · zip 三条硬化 —— M6/M7）**：
+> **M6-a shell 杀树**：原 KDoc 的「不留孤儿进程」**不成立**（`destroyForcibly()` 只杀
+> `sh`/`su`）。加 `killTree`（`/proc` ppid 图 + `kill` 二进制 + pid 两级反射阶梯）+ `TreeOps`
+> 缝；超时路径与 `finally` 都走它；**订正了自己写出的顺序错**（点名必须在杀之前 —— 批 95 的
+> 纪律）；pid 取不到时诚实降级为只杀主进程。**M6-b stdin 立即关**：shell 面契约是「不喂
+> 输入」，攥着写端会让 `cat`/`read x` 挂到超时。**M7 zip 三条**：条目数闸（1 万 —— 零字节
+> 海量条目能过掉两道**字节**闸，计数与字节**正交**）、`.tmp` 不自含（绝对路径相等判据）、
+> `walk` 的 `UncheckedIOException` 折成 `IOException`（原来接不住 → tmp 不删、码也不对）。
+> **两份 `ProcOps`**（`:platform:system` 与 `:app-service:npm`）手法同款、代码两份 ——
+> 依赖方向所迫，两份 KDoc 互相点名，改一处必须看另一处；消重需抽模块（模块表变更，待拍板）。
+> 守卫 7 例（shell 4 含真 `/proc` 那条、zip 3；tmp 那条实测先红后绿）。细节见
+> [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 98（外审整改第三刀：accept 遇瞬时故障不再收掉整条桥 —— M3）**：
 > 两处 accept 循环（`BridgeSocketListener` 设备 `LocalServerSocket` 面 / `NewlineFrameServer`
 > 本机 TCP 面）都是「任何 `IOException` 就 break」—— `EMFILE`/`ENFILE`/`ECONNABORTED` 都是
@@ -554,6 +567,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 7 | 批 99：外审整改第四刀 —— **M6** shell 收尸从「只杀直接子进程」变「杀整棵树」（`killTree` = `/proc` ppid 图 + `kill` 二进制 + pid 两级反射，`TreeOps` 缝；原 KDoc「不留孤儿进程」不成立，已订正；顺带订正顺序错：点名在杀之前）+ stdin 立即关闭（`cat`/`read x` 不再挂到超时）；**M7** zip 三条硬化（条目数闸 1 万：零字节海量条目能过两道字节闸，计数与字节正交 / `.tmp` 不自含 / `walk` 的 `UncheckedIOException` 折成 IOException 否则 tmp 残留且码不对）。记两份 `ProcOps` 的关系（手法同款代码两份，依赖方向所迫，KDoc 互相点名）。守卫 7 例 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 6 | 批 98：外审整改第三刀 —— 两处 accept 循环（`BridgeSocketListener` 设备面 + `NewlineFrameServer` 本机 TCP 面）改「瞬时故障退避重试」（`EMFILE`/`ENFILE`/`ECONNABORTED` 一次就 break = 整条桥对所有未来脚本静默死亡）；本端 close 才收循环、连续 20 次才认定非瞬时、退避用 `retryGate.wait()` 供 close 唤醒；诊断面加 `acceptRetryCount` + 失败回执缝。守卫先红后绿（阈值改 1 即模拟旧行为），判据用可观测行为（握手仍能完成）。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 5 | 批 97：外审整改第二刀 —— 新增 `ERR_INTERNAL`（宿主代码缺陷≠参数错）+ BridgeRouter 折叠两档（AutojsException 透传 / IllegalArgumentException→ERR_INVALID_PARAM / 其余→ERR_INTERNAL）；pid 取值补私有字段反射阶梯（Android 8–12 防劫持判据不再整段跳过）+ `pidUnavailable` 计数；kv `onUpgrade` 从 DROP 重建改显式迁移表 `KvSchemaMigrations`（找不到路径抛、不静默重建）+ `onDowngrade` 响亮失败。守卫 7 例；契约卷 §7.6 同步；14 任务零跳过绿 + facade 201 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 4 | 批 96：外审整改第一刀 —— 「排队不挡急停」（start 等证出 guard + 急停代次对表，修前 stop(A) 2927ms → 修后 ≈0，守卫 3 例先红后绿）/ jsonl 半行清盘（FileTaskStore/FileRunArchive 打开时截到最后一个完整行，守卫走通「重开→再写→再重开」）/ 桥请求 TTL 溢出截断（显式 24h 上限）。守卫全模块绿；登记未改：BridgeRouter 未知异常吞成 ERR_INVALID_PARAM、readAllBytes 全量读、进程池重构、SqliteKvOps.onUpgrade 丢表 | [`log/2026-10-11.md`](log/2026-10-11.md) |

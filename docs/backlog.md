@@ -1,5 +1,30 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 99：外审整改第四刀 —— shell 杀树与 stdin 关闭（M6）+ zip 三条硬化（M7）
+
+- **外审 M6/M7 已做**（外审登记表该两行改 ✅），口径见决策第 68 项：
+  1. **M6-a shell 收尸杀整棵树** —— 原 KDoc 的「不留孤儿进程」**不成立**
+     （`destroyForcibly()` 只杀 `sh`/`su`）。加 `killTree`（`/proc` ppid 图 + `kill` 二进制
+     + pid 两级反射阶梯，手法与批 95 同款）+ `TreeOps` 缝；超时路径与 `finally` 都走它。
+     **顺带订正了自己第一版写出的顺序错**（点名必须在杀之前，与批 95 纪律同）。
+     pid 取不到时**诚实降级**为只杀主进程。
+  2. **M6-b stdin 立即关闭** —— `ShellExecutor.exec` 签名里没有 stdin 参数（契约是
+     「只执行命令」），但写端一直攥着 → `cat`/`read x` 挂到超时。启动后立刻关。
+  3. **M7 zip 三条**：条目数闸（1 万 —— 零字节海量条目能过掉两道**字节**闸，计数与字节
+     **正交**）/ `.tmp` 不自含（绝对路径相等判据）/ `walk` 的 `UncheckedIOException`
+     折成 `IOException`（原来接不住 → tmp 残留且错误码不对）。
+- **两份 `ProcOps` 的关系（主动记下，别当成疏忽）**：`:platform:system` 本批新增的那份与
+  `:app-service:npm` 批 95 那份**手法逐字同款、代码两份** —— 依赖方向所迫（两模块都只
+  依赖 `:domain`，而 `/proc` 是进程/文件系统面不是领域概念）。两份 KDoc **互相点名**，
+  改一处必须看另一处；彻底消重要抽「进程工具」模块（**模块表变更，待维护者拍板**）。
+- **守卫**：shell 4 例（stdin 关 / 超时点名整棵树含顺序账 / pid 取不到的降级档 / 真 `/proc`
+  真 `kill` 那条——替身钉顺序与点名、真进程钉 `/proc` 面数得对，两者分开）+ zip 3 例；
+  其中 tmp 那条实测**先红后绿**（去掉 skipTmp 即当场红）。14 任务全门零跳过绿 + detekt 绿
+  （修了三处：`RethrowCaughtException` / `LoopWithTooManyJumpStatements` / 未用私有属性）。
+- **仍在挂**（外审登记表剩余）：B2 池记账（彻底解要通道化重构）、M1 `scriptFile` KDoc 与
+  实现矛盾、M2 桥资源限额、M9 LockSigner per-project 签名（要拍板）、jsonl 全量读无压缩，
+  以及结构性项（typed ids / 池重构 / actor 化 / jsonl→SQLite / 文档重排 = D13）。
+
 ## 2026-10-11 追记（批 98：外审整改第三刀 —— accept 遇瞬时故障不再收掉整条桥）
 
 - **外审 M3 已做**（下方「外审登记」条该行改 ✅）：两处 accept 循环
@@ -675,8 +700,8 @@
 | **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | ✅ 批 98 已修（两处各退避重试 + 计数与回执，两条守卫先红后绿） |
 | **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | ✅ 批 97 已修（`ERR_INTERNAL` + 折叠两档，契约卷 §7.6 同步） |
 | **M5** | pid 绑定在 Android 8–12 失效（`Process.pid()` 需 API 33，minSdk 26；`spawn.pid` 为 null 时跳过防劫持检查） | **成立且已知**（`ProcessLauncher` 两级反射只取 `pid()` 方法，**无私有字段那级**——批 95 的 `ProcOps.pidOf` 已补上那一级，可复用） | ✅ 批 97 已修（`ProcessLauncher.pidOf` 补第二级 + `pidUnavailable` 计数） |
-| **M6** | shell 执行器：`destroyForcibly()` 只杀 `sh`/`su` 不杀其子；孙进程持管道时线程/fd 泄漏；stdin 从不关闭（`cat` 挂到超时）；命令串进错误与日志 | **部分成立**：孙进程持写端的宽限已有（`DRAIN_GRACE_MILLIS`），但**杀树没做**、**stdin 未关**属实；命令串进日志是**有意**的（`warnIfTruncated` KDoc 已论证「没它定位不到是谁」） | 🔶 登记：复用批 95 的 `ProcOps`；stdin 关闭与命令串脱敏属行为变更 |
-| **M7** | zip：`Files.walk` 抛 `UncheckedIOException` 被 `catch (IOException)` 漏过（`.tmp` 残留 + 错误码错）；打进源目录会自含 `.tmp`；无条目数上限（零字节文件绕过字节上限）；包含性纯词法 | **成立**（`JdkZipArchiver.compress`） | 🔶 登记 |
+| **M6** | shell 执行器：`destroyForcibly()` 只杀 `sh`/`su` 不杀其子；孙进程持管道时线程/fd 泄漏；stdin 从不关闭（`cat` 挂到超时）；命令串进错误与日志 | **部分成立**：孙进程持写端的宽限已有（`DRAIN_GRACE_MILLIS`），但**杀树没做**、**stdin 未关**属实；命令串进日志是**有意**的（`warnIfTruncated` KDoc 已论证「没它定位不到是谁」） | ✅ 批 99 已修杀树 + stdin 关闭（命令串进日志**有意**，KDoc 已论证；脱敏未做） |
+| **M7** | zip：`Files.walk` 抛 `UncheckedIOException` 被 `catch (IOException)` 漏过（`.tmp` 残留 + 错误码错）；打进源目录会自含 `.tmp`；无条目数上限（零字节文件绕过字节上限）；包含性纯词法 | **成立**（`JdkZipArchiver.compress`） | ✅ 批 99 已修三条（条目数闸 / `.tmp` 不自含 / `UncheckedIOException` 折码）；「包含性纯词法」那条同批以绝对路径相等守住本仓自己那处 |
 | **M8** | `SqliteKvOps.onUpgrade` 版本升级即 DROP 表、无 `onDowngrade` | **成立** | ✅ 批 97 已修（`KvSchemaMigrations` + `onDowngrade` 响亮失败） |
 | **M9** | `LockSigner`：一份 `lock.sig` 服务所有项目（签 B 废 A）；验签在入队时而 `npm ci` 在队列里更晚跑；null signer 静默跳过验签 | **半成立**：KDoc 已明写「同一把签名覆盖所有项目」（签的是 `projectId\|lock 内容`）——**单签名文件是设计而非 bug**，但「签 B 使 A 验不过」确是可用性代价；`ci` 的验签与 `enqueueHeavy` **相邻同函数**（无 TOCTOU 窗口） | 🔶 登记：per-project 签名文件属存储格式变更，要拍板 |
 

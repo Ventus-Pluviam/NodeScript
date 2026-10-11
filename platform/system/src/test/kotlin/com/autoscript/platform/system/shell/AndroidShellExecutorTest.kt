@@ -11,17 +11,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * `shell` Android 实现的契约测试（docs §9.6）：超时、收尸、双流、argv 形态。
@@ -431,5 +439,176 @@ class AndroidShellExecutorTest {
                 }
             }
         }
+    }
+}
+
+/**
+ * 外审 M6（2026-10-11 批 99）：shell 面的两条 —— **杀树**与 **stdin 关闭**。
+ *
+ * 两条各自的现场：
+ * - 杀树：`destroyForcibly()` 只杀 `sh`/`su` 直接子进程，孙进程（`sh -c "sleep 300 &"`）
+ *   留在设备上。原 KDoc 写「不留孤儿进程」——那句话不成立。
+ * - stdin：shell 面的契约是「只执行命令、不喂输入」（签名里根本没有 stdin 参数），
+ *   不关写端的话 `cat`/`read x` 会**一直挂到超时**，用户看到「一条 cat 跑满超时返回空」。
+ */
+class AndroidShellExecutorReapingTest {
+
+    @TempDir
+    lateinit var dir: Path
+
+    /** 记录式树面：第一轮后代集合与 kill 账都能断言。 */
+    private class RecordingTreeOps(private val firstWave: Set<Long>) : TreeOps {
+        val killed = mutableListOf<Pair<Set<Long>, Boolean>>()
+        override fun descendantsOf(process: Process): Set<Long> = firstWave
+        override fun kill(pids: Collection<Long>, force: Boolean) {
+            if (pids.isNotEmpty()) killed += pids.toSet() to force
+        }
+    }
+
+    /** 假进程：可断言 stdin 被关、`destroyForcibly` 被调、可选挂住 `waitFor`。 */
+    private class FakeProcess(private val hangSeconds: Long = 0) : Process() {
+        var stdinClosed = false
+        var forciblyCalled = false
+        private val done = CountDownLatch(1)
+        private val stdin = ByteArrayOutputStream()
+
+        override fun getOutputStream(): OutputStream = object : OutputStream() {
+            override fun write(b: Int) = Unit
+            override fun write(b: ByteArray, off: Int, len: Int) = Unit
+            override fun close() {
+                stdinClosed = true
+                stdin.close()
+            }
+        }
+
+        override fun getInputStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun waitFor(): Int {
+            done.await()
+            return 0
+        }
+
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean {
+            if (hangSeconds <= 0) {
+                done.countDown()
+                return true
+            }
+            return done.await(hangSeconds, unit)
+        }
+
+        override fun exitValue(): Int = 0
+        override fun destroy() = Unit
+        override fun destroyForcibly(): Process {
+            forciblyCalled = true
+            done.countDown()
+            return this
+        }
+
+        override fun isAlive(): Boolean = done.count > 0
+    }
+
+    @Test
+    fun `stdin 立即关闭——等输入的命令立刻读到 EOF 而不是挂到超时（外审 M6）`() = runBlocking {
+        val proc = FakeProcess()
+        val shell = AndroidShellExecutor(
+            launcher = { proc },
+            treeOps = RecordingTreeOps(emptySet()),
+        )
+        shell.exec("cat", ShellMode.DEFAULT, 5_000)
+
+        assertTrue(proc.stdinClosed, "stdin 必须关：shell 面不喂输入，攥着写端=等输入的命令挂到超时")
+    }
+
+    @Test
+    fun `超时收尸点名整棵树：后代 TERM 后补 KILL（外审 M6）`() = runBlocking {
+        val proc = FakeProcess(hangSeconds = 30)
+        val ops = RecordingTreeOps(firstWave = setOf(31L, 32L))
+        val shell = AndroidShellExecutor(launcher = { proc }, treeOps = ops)
+
+        val e = assertThrows(AutojsException::class.java) {
+            runBlocking { shell.exec("sh -c 'sleep 300 & wait'", ShellMode.DEFAULT, 120) }
+        }
+        assertEquals(ErrorCode.ERR_TIMEOUT.code, e.error.code)
+
+        assertTrue(proc.forciblyCalled, "主进程必须被强杀（destroyForcibly 只杀直接子进程那一半）")
+        assertEquals(
+            listOf(setOf(31L, 32L) to false, setOf(31L, 32L) to true),
+            ops.killed,
+            "孙进程必须被点名：TERM 一波 + 立刻补 KILL（收尸路径不等宽限）",
+        )
+    }
+
+    @Test
+    fun `pid 取不到时降级为只杀主进程 不炸收尸（外审 M6 的降级档）`() = runBlocking {
+        val proc = FakeProcess(hangSeconds = 30)
+        val ops = RecordingTreeOps(firstWave = emptySet())   // 模拟 pid 取不到 / /proc 不可读
+        val shell = AndroidShellExecutor(launcher = { proc }, treeOps = ops)
+
+        assertThrows(AutojsException::class.java) {
+            runBlocking { shell.exec("sleep 300", ShellMode.DEFAULT, 100) }
+        }
+        assertTrue(proc.forciblyCalled, "降级也必须杀掉主进程（不更坏）")
+        assertTrue(ops.killed.isEmpty(), "没有后代集合时不得凭空点名")
+    }
+
+    /**
+     * 真 `/proc` + 真 `kill` 的那条（批 99 唯一一条不走替身的用例）—— 与批 95 npm 那侧
+     * 「真进程树」用例同款分工：替身钉**顺序与点名**（[RecordingTreeOps]），
+     * 这一条钉**`/proc` 面真的能数出孙子**。
+     *
+     * 为什么不经 [AndroidShellExecutor] 走一遍：executor 自己两条 [PipeReader] 会把
+     * stdout 读干，`echo $!` 那行 pid 抓不到（抓 pid 的线程与读流互斥）。而「`/proc` 面
+     * 数不对」与「executor 调它的顺序」是两个独立判据 —— 前者在这里，后者在上方替身用例。
+     */
+    @Test
+    fun `真进程树：proc 面能数出 sh 的后台孙子并收掉（生产路径 ProcOps）`() {
+        val sh = ProcessBuilder("sh", "-c", "sleep 300 & echo $!; wait").start()
+        val out = StringBuilder()
+        Thread {
+            runCatching {
+                sh.inputStream.bufferedReader().useLines { ls ->
+                    ls.forEach { synchronized(out) { out.append(it).append('\n') } }
+                }
+            }
+        }.apply { isDaemon = true }.start()
+
+        val pid = waitForPid(out)
+        val ops = ProcOps()
+        try {
+            assertTrue(Files.exists(Paths.get("/proc").resolve(pid.toString())), "前置：后台 sleep 此刻该活着")
+            val root = ops.pidOf(sh)
+            assertTrue(root != null && root > 0, "pid 取得到（真进程 + 两级反射阶梯）")
+            val tree = ops.descendantsOf(sh)
+            assertTrue(
+                pid in tree,
+                "proc 面必须数出后台 sleep（pid=$pid）：$tree",
+            )
+            ops.kill(tree, force = true)
+            sh.destroyForcibly()
+            sh.waitFor()
+            val deadline = System.currentTimeMillis() + 5_000
+            while (Files.exists(Paths.get("/proc").resolve(pid.toString())) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
+            }
+            assertFalse(
+                Files.exists(Paths.get("/proc").resolve(pid.toString())),
+                "按 pid 杀掉之后后台 sleep 必须没了（pid=$pid）",
+            )
+        } finally {
+            runCatching { ProcessBuilder("kill", "-9", pid.toString()).start().waitFor() }
+            runCatching { sh.destroyForcibly() }
+        }
+        Unit
+    }
+
+    private fun waitForPid(stdout: StringBuilder): Long {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            val text = synchronized(stdout) { stdout.toString() }
+            val pid = text.trim().lines().firstOrNull { it.trim().toLongOrNull() != null }?.trim()?.toLongOrNull()
+            if (pid != null) return pid
+            Thread.sleep(50)
+        }
+        throw AssertionError("sh 没把后台 sleep 的 pid 打出来（前置失败）")
     }
 }
