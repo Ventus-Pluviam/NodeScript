@@ -131,6 +131,9 @@ class AndroidSqliteRunner(
         /** 运行档案库（批 102 阶段 B 新增，与意图日志分文件）。 */
         const val DB_NAME_RUN_ARCHIVE: String = "autoscript-run-archive.db"
 
+        /** 任务注册表库（批 102 阶段 C 新增，与前两者分文件）。 */
+        const val DB_NAME_TASK_REGISTRY: String = "autoscript-tasks.db"
+
         private const val DB_VERSION = 1
     }
 }

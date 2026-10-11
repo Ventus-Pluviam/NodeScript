@@ -131,7 +131,11 @@ class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchiv
     private fun Map<String, Any?>.long(key: String): Long =
         this[key] as? Long ?: error("列 $key 缺失或非整数（库异常）")
 
-    private fun RunRecord.toFlat(): RunArchiveRecord = RunArchiveRecord(
+    /**
+     * `:domain` 的 [RunRecord] → SQL 层的扁平行。internal（不是 private）：
+     * [RunArchiveWiring.migrate] 拿到迁移解析出来的 [RunRecord] 后要造同一种行。
+     */
+    internal fun RunRecord.toFlat(): RunArchiveRecord = RunArchiveRecord(
         engineRunId = id,
         projectId = projectId,
         scriptPath = scriptPath,
