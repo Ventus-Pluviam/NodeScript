@@ -12,6 +12,41 @@
 
 ---
 
+## 64. T1 杀树换 /proc 实现；无人点名的 signal 按 128+n 惯例反查（2026-10-11，批 95）
+
+**背景**：批 94 后 T1 七件欠账剩五件，本批做掉「杀树断链」与「signal 恒 null」两件。做的
+过程中挖出实情：批 91 那条 `ProcessHandle.descendants()` 在**真机上从来没跑起来过** ——
+`java.lang.ProcessHandle` 整类不在 android.jar（api-versions.xml 无条目、jar 无 class、
+`Process` 桩面无 `toHandle()`/`pid()`），运行时 `NoSuchMethodError` 被 `runCatching` 吞成
+空集，杀树静默退化为只杀主进程。批 91 记的「孙子被 reparent 后链断」不是主要问题：
+**整条后代链在设备上都不存在**。
+
+**① 杀树用 /proc ppid 图 + `kill` 二进制，不用 ProcessHandle、不用负 pgid**。三个判据：
+**扫在杀之前**（reparent 只断死后回找，pid 集合到手后无所谓）；**同 UID 是继承出来的**
+（fork 不换 uid，图上可达即同 UID，不逐 pid 查 status）；**按 pid 杀只能靠 `kill` 二进制**
+（JVM 无此 API，toybox/util-linux 两边都有）。pid 获取走**两级反射阶梯**（`pid()` 方法 →
+私有字段 `pid`），与 `ProcessLauncher` 同一手法 —— 都探不到如实 null（降级只杀主进程，
+不回 0/自身，§8.4 同款）。收尸顺序里**二次收割**是 §10.3 原文那句的兑现：宽限后从仍活着的
+第一轮成员再扫一轮 —— TERM 被忽略的那条在宽限期内新生的后代，父已死时被 reparent，从主
+进程已经走不到。**为什么不用 `kill -- -<pgid>`**（维持批 91 的裁定）：负 pgid 要求子进程
+没有自己的进程组，而 `sh -c` 之后是否另起进程组由 shell 与 ROM 决定 —— /proc 父子链与
+「谁把谁生出来」这个事实同源。
+
+**② 无人点名的 signal：`exitValue >= 128` 时按 POSIX shell 惯例反查信号名（1–31）**。
+这不是编造：128+n 就是「被信号 n 杀死」的编码本身，真 child_process 在这一档报的也是同名；
+32+ 是实时信号、编号各家不同，**不猜**（查不到照旧 `code=128+n, signal=null`）。
+**已知误报档**：进程自己 `exit(143)` 会被报成 SIGTERM —— POSIX shell（含 npm 跑的 `sh`）
+对同一数字也是这么报的，脚本生态里正常退出码 < 128。**仍欠**：要区分「自杀 exit」与
+「被杀」得上 JNI waitid（`si_status` 配 `CLD_KILLED`/`CLD_EXITED`）—— NDK 件，未排期；
+纯 JVM 的可解半边到此为止。
+
+**③ 教训入账（「看着能用」同族第四例）**：`Path.of`（API 34）→ `UnixDomainSocketAddress`
+（不在 jar）→ env-NUL（execve 协议）→ **本批 `ProcessHandle`/`toHandle()`/`pid()`**
+（不在 jar）。共同形态：**纯 JVM 模块**按桌面 JDK 编译放行、无 lint NewApi 兜底、桌面测试
+全绿，设备上炸（Error 不是 Exception，`catch (e: Exception)` 拦不住）或**静默空转**
+（`runCatching` 吞掉）。`NpmScriptExecutor`/`T1Child` 这条链今后凡新增平台 API，先查
+`platforms/android-3*/data/api-versions.xml` 再写。
+
 ## 63. T1 的输出流式与取消：`OutputSink` 缝、kill 帧的信号面、取消用「读位」（2026-10-11，批 94）
 
 **背景**：批 91 登记的七件欠账里，本批做掉两件（输出流式、命令的取消）。三处口径需要拍死，

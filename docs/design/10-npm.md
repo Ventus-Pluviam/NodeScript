@@ -120,8 +120,14 @@ stdout/stderr/退出码经同一条 socket 以**假管道**回填（`BridgedChil
 `:app` 的 `AndroidT1SocketBinder`（设备侧 `android.net.LocalServerSocket` + abstract 名）。
 **与本文上表 T1 行逐条对照，四处偏离**（口径见
 [`../design-decisions.md`](../design-decisions.md) 第 61 项，不在这里重述）：
-① 杀树用 `ProcessHandle.descendants()` 而非 `kill -- -<pgid>`（负 pgid 要求子进程没有自己的
-进程组，而 `sh -c` 之后是否另起进程组由 shell 与 ROM 决定）；**代价是孙子被 reparent 后链断**。
+① ~~杀树用 `ProcessHandle.descendants()` 而非 `kill -- -<pgid>`（负 pgid 要求子进程没有自己的
+进程组，而 `sh -c` 之后是否另起进程组由 shell 与 ROM 决定）；**代价是孙子被 reparent 后链断**。~~
+**已换 /proc 实现（2026-10-11，批 95）**：`ProcessHandle` **整类不在 android.jar**，
+批 91 那版在真机上 `NoSuchMethodError` 被吞成空集、杀树静默空转（决策第 64 项）。
+现为 /proc ppid 图扫描 + `kill` 二进制：**扫在杀之前**（reparent 只断死后回找）；
+不用负 pgid 的理由不变；宽限后 KILL 活口 + **二次收割**（从仍活着的第一轮成员再扫，
+捡 TERM 被忽略那条新生的）。pid 两级反射阶梯（`pid()` 方法 → 私有字段），都探不到
+如实 null（降级只杀主进程）。
 ② **不用引擎池**：本版起的是 `node <npm-cli.js> run <name>`，不是「沿 EnginePool 同路径拉
 临时引擎」—— 引擎池那条路要求「让引擎执行一段 JS」，而这里要执行的是 npm 自己。
 ③ **不做最小 CapabilityMask**（§10.5-4）：脚本进程与 App **同 UID**；设备上没有可用的隔离
@@ -133,8 +139,12 @@ stdout **边读边落控制台环**，报过流则失败详情不再重复尾部
 轮询查 `ScriptOp.cancelSignal`（控制台「停止」→ facade `cancelConsoleCommand` → 置位 →
 destroyForcibly + 会话关断收子进程），桥侧 `child.kill()` 发 **kill 帧**（SIGTERM/SIGKILL，
 其余如实 `ERR_NOT_IMPLEMENTED`），exit 帧对宿主确知的杀按 Node 口径 `code=null, signal=<名>`。
-**仍欠**：stdin 转发不做背压、同步三入口不支持、**没人点名时 `signal` 恒 null**（Java
-`Process` 不给信号号，128+n 无从还原信号名 —— 只有宿主经 kill 帧杀的那条给得出）。
+~~**仍欠**：stdin 转发不做背压、同步三入口不支持、**没人点名时 `signal` 恒 null**（Java
+`Process` 不给信号号，128+n 无从还原信号名 —— 只有宿主经 kill 帧杀的那条给得出）。~~
+**没人点名的 signal 已解（纯 JVM 半边，2026-10-11，批 95）**：`exitValue >= 128` 时按
+POSIX shell 惯例 `n = exit - 128` 反查信号名表（1–31；32+ 实时信号不猜）。
+**仍欠**：stdin 转发不做背压、同步三入口不支持、**区分「自杀 exit(143)」与「被 SIGTERM」**
+（要 JNI waitid 的 `si_status` + `CLD_KILLED`/`CLD_EXITED`，NDK 件未排期）。
 **两条 shim 互斥**：安装会话（T0）注门禁 shim（零 spawn），T1 会话**只注桥那一份** ——
 把门禁也注进去，T1 的每一次 spawn 都会先撞门禁，那不是更安全，是把刚接上的路又堵死。
 **同步三兄弟**（`spawnSync`/`execSync`/`execFileSync`）与 `fork` 如实 `ERR_NOT_IMPLEMENTED`

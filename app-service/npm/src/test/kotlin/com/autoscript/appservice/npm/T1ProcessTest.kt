@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
 import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -93,6 +94,7 @@ class T1ProcessTest {
         frames: Frames,
         detached: Boolean = false,
         cmd: String = "echo",
+        treeOps: T1TreeOps = NoopTreeOps(),
     ) = T1Child(
         id = 1L,
         cmd = cmd,
@@ -103,7 +105,16 @@ class T1ProcessTest {
         shell = false,
         runner = { spec -> proc ?: throw IOException("本测试里没有这条命令：${spec.cmd}") },
         emit = frames::emit,
+        treeOps = treeOps,
     )
+
+    /** 记录式杀树替身（默认零后代、零动作 —— 既有用例的 reap 行为不变）。 */
+    private open class NoopTreeOps : T1TreeOps {
+        override fun descendantsOf(process: Process): Set<Long> = emptySet()
+        override fun descendantsOf(alivePids: Set<Long>): Set<Long> = emptySet()
+        override fun kill(pids: Collection<Long>, force: Boolean) = Unit
+        override fun alive(pid: Long): Boolean = false
+    }
 
     private fun decode(frame: Map<String, Any?>): String =
         String(Base64.getDecoder().decode(frame["data"] as String))
@@ -260,7 +271,7 @@ class T1ProcessTest {
     }
 
     @Test
-    fun `自然退出不带信号名（没人点名时 128+n 也照旧 code=… signal=null）`() {
+    fun `自然退出不带信号名（exit 小于 128 时 code 照给 signal=null）`() {
         val frames = Frames()
         val c = child(DoneProcess(exitCode = 7), frames)
         c.kill("SIGTERM") // 赛跑里自然退出先到：exitValue=7 < 128 → 不算被杀
@@ -269,5 +280,131 @@ class T1ProcessTest {
         val exit = frames.of("exit").single()
         assertEquals(7, exit["code"], "先退成 0/7 的那次按自然退出报，不把'恰好要杀'写成'被杀'")
         assertEquals(null, exit["signal"])
+    }
+
+    @Test
+    fun `没人点名但 128+n：按 shell 惯例反查信号名（批 95 补的那半）`() {
+        // OOM killer / 别人 kill -TERM —— 没有 kill 帧，JVM 只给 128+15=143。
+        // 批 94 之前这一档恒 null；批 95 起按 POSIX 惯例反查（143 → SIGTERM）。
+        val frames = Frames()
+        child(DoneProcess(exitCode = 143), frames).run()
+
+        val exit = frames.of("exit").single()
+        assertEquals(null, exit["code"], "有信号名时 code=null（真 child_process 同款）")
+        assertEquals("SIGTERM", exit["signal"], "128+15 的编码本身就是「被 SIGTERM 杀死」")
+    }
+
+    @Test
+    fun `没人点名且 128+n 查不到名字：照旧 code=128+n signal=null（不编）`() {
+        val frames = Frames()
+        child(DoneProcess(exitCode = 128 + 50), frames).run() // 50 不在 1–31 表里
+
+        val exit = frames.of("exit").single()
+        assertEquals(128 + 50, exit["code"], "实时信号/未知档不猜名字，编码原样给")
+        assertEquals(null, exit["signal"])
+    }
+
+    /** 记录式杀树替身：第一轮/二次收割的后代集合与 kill 账都能断言。 */
+    private class RecordingTreeOps(
+        private val firstWave: Set<Long>,
+        private val lateWave: Map<Long, Set<Long>>, // 仍活着的第一轮成员 → 它们的后代
+        private val alivePids: Set<Long>,
+    ) : T1TreeOps {
+        val killed = mutableListOf<Pair<Set<Long>, Boolean>>()
+        var firstScanProcess: Process? = null
+
+        override fun descendantsOf(process: Process): Set<Long> {
+            firstScanProcess = process
+            return firstWave
+        }
+
+        override fun descendantsOf(alivePids: Set<Long>): Set<Long> =
+            alivePids.flatMap { lateWave[it] ?: emptySet() }.toSet()
+
+        override fun kill(pids: Collection<Long>, force: Boolean) {
+            if (pids.isNotEmpty()) killed += pids.toSet() to force
+        }
+
+        override fun alive(pid: Long): Boolean = pid in alivePids
+    }
+
+    @Test
+    fun `收尸扫在杀之前，TERM 后代再 KILL，二次收割捡 reparent 的漏网`() {
+        val frames = Frames()
+        val proc = StubbornProcess() // TERM 不理会 → 走到 KILL 与二次收割
+        // 第一轮后代 11、12；宽限后 11 还活着，它的后代里有新生的 21（12 已死、无新生）。
+        val ops = RecordingTreeOps(
+            firstWave = setOf(11L, 12L),
+            lateWave = mapOf(11L to setOf(21L)),
+            alivePids = setOf(11L),
+        )
+        val c = child(proc, frames, treeOps = ops)
+        val t = Thread { c.run() }.apply { isDaemon = true; start() }
+        Thread.sleep(100)
+        c.reap()
+        t.join(5_000)
+
+        assertTrue(ops.firstScanProcess === proc, "第一轮扫描必须拿主进程当根（扫在杀之前）")
+        assertEquals(
+            listOf(setOf(11L, 12L) to false, setOf(11L) to true, setOf(21L) to true),
+            ops.killed,
+            "TERM 第一波（11/12）→ 宽限后只 KILL 还活着的（11）→ KILL 二次收割捡到的 21" +
+                "（reparent 后从主进程走不到的那条）",
+        )
+    }
+
+    /**
+     * 真 /proc + 真 `kill` 的进程树收尸（批 95 的生产路径，唯一一条不走替身的用例）。
+     *
+     * 起一棵真树（sh → 后台 sleep），reap 之后**孙子必须也没了** —— 这正是批 91 那版
+     * 在设备上静默失效的那一段（ProcessHandle 缺席 → 后代恒空）。判据借的是**自己这棵
+     * 树**的 pid（/proc 里查还在不在），不是宿主的任何既有进程 —— 与"借宿主 /proc 判死"
+     * 那条教训不冲突。
+     */
+    @Test
+    fun `真进程树：sh 的后台孙子也收得掉（生产路径 ProcTreeOps）`() {
+        val frames = Frames()
+        val c = T1Child(
+            id = 1L,
+            cmd = "sh",
+            args = listOf("-c", "sleep 300 & echo $!; wait"),
+            cwd = null,
+            env = null,
+            detached = false,
+            shell = false,
+            runner = ProcessBuilderT1Runner(),
+            emit = frames::emit,
+            treeOps = ProcTreeOps(),
+        )
+        val t = Thread { c.run() }.apply { isDaemon = true; start() }
+        // 等 sh 真把后台 sleep 起起来（stdout 里那行 pid 就是孙子）。
+        val deadline = System.currentTimeMillis() + 10_000
+        var grandPid: Long? = null
+        while (System.currentTimeMillis() < deadline && grandPid == null) {
+            synchronized(frames) {
+                frames.of("out").firstOrNull()?.let { grandPid = (decode(it).trim().toLongOrNull()) }
+            }
+            if (grandPid == null) Thread.sleep(50)
+        }
+        val pid = requireNotNull(grandPid) { "sh 没把后台 sleep 的 pid 打出来（前置失败）" }
+        val procDir = java.nio.file.Paths.get("/proc")
+        assertTrue(Files.exists(procDir.resolve(pid.toString())), "前置：孙子此刻该活着")
+        try {
+            c.reap()
+            t.join(10_000)
+            // KILL 是异步送达的：给内核一个短窗，但必须收敛到"没了"。
+            val reapDeadline = System.currentTimeMillis() + 5_000
+            while (Files.exists(procDir.resolve(pid.toString())) &&
+                System.currentTimeMillis() < reapDeadline
+            ) {
+                Thread.sleep(50)
+            }
+            assertFalse(
+                Files.exists(procDir.resolve(pid.toString())),
+                "reap 之后后台 sleep（pid=$pid）必须没了吧 —— 孙子漏收正是批 91 的静默空转",
+            )
+        } finally {
+            runCatching { ProcessBuilder("kill", "-9", pid.toString()).start().waitFor() }
+        }
     }
 }
