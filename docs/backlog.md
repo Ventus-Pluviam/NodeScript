@@ -1,5 +1,20 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 101：维护者拍案 —— F1/F2 契约同步；P2/P4 已排期，P1/P3 不做）
+
+- **维护者对拍板清单逐条裁定**（口径见决策第 70 项）：
+  - **F1 开 / F2 做** → 批 101 落契约同步：§7.6 补 `ERR_INTERNAL` + 折叠两档；
+    §10.3 杀树三档与降级档写进契约正文。
+  - **P2 做**（池记账彻底重构 `Channel<PoolSlot>` 空闲表 + 幂等 `Lease`）→ **排其后一批**，
+    一整批不夹带其他件。批 96 的急停代次只是垫片。
+  - **P4 做**（jsonl → SQLite 三份手写格式并入已有 SQLite 意图存储）→ **排其后一批**，
+    顺手解掉「全量 `readAllBytes` 无压缩」。
+  - **P1 不做**（LockSigner per-project 签名）—— 那是设计而非 bug（签的是
+    `projectId|lock 内容`，KDoc 已论证），改它是**存储格式变更**要迁移策略。下方外审
+    登记表 M9 那行改为「不做，理由如上」。
+  - **P3 不做**（D13 文档重排）—— 收益最晚、风险最高（§ 号权威锚 / 9 处反链 /
+    `ModuleGraphTest` 扫描面），缓。下方 **D13 那行注明裁定为缓**，不再挂在待办池里当待办。
+
 ## 2026-10-11 追记（批 100：外审整改第五刀 —— 桥在途字节闸，M2 的可做那半）
 
 - **外审 M2 的「字节加权」那半已做**（下方外审登记表该行部分改 ✅），口径见决策第 69 项：
@@ -660,7 +675,7 @@
 | ~~**D10**~~ | 已完成（2026-10-02）—— 叙事见 [`docs/log/2026-10-02.md`](log/2026-10-02.md) （本条不留历史；口径变更另见 [`design-decisions.md`](design-decisions.md)） | — | ✅ | — | — |
 | ~~**D11**~~ | 已完成（2026-10-02）—— 叙事见 [`docs/log/2026-10-02.md`](log/2026-10-02.md) （本条不留历史；口径变更另见 [`design-decisions.md`](design-decisions.md)） | — | ✅ | — | — |
 | ~~**D12**~~ | 已完成（2026-10-02）—— 叙事见 [`docs/log/2026-10-02.md`](log/2026-10-02.md) （本条不留历史；口径变更另见 [`design-decisions.md`](design-decisions.md)） | — | ✅ | — | — |
-| **D13** | **`docs/` 按受众重排**（外审建议的目标形态：`guide/`（新）+ `api/` + `design/` + `process/` + `reference/`）：把现在混在一起的**人类向导**（README/CONTRIBUTING）、**契约**（`design/`）、**过程台账**（status/decisions/backlog/implementation-notes/log/archive）与**参考件**（`api/`、`autojspro-docs.txt`）分开。**本仓的具体约束（外审也点了，逐条复核成立）**：① § 号是唯一权威锚，**带 § 号的文件名不能改**；② `design-status.md#实现注记自各分卷外迁逐字保留` 被 **9 处**分卷正文链接，搬迁必须留占位标题或同批改齐 9 处；③ 文档链接门读 `git ls-files`（**先 `git add` 再跑**）；④ `ModuleGraphTest` 会扫特定文档路径。**风险最高、收益最晚的一条** —— 建议排在所有 P0/P1 之后，且一次只搬一个目录、一个目录一个 PR（**证据**：`docs/` 全树；`docs/README.md`（地图要同批改）） | ✅ 2026-10-02（9 处反链、链接门输入源、ModuleGraphTest 扫描面均实测复核） | M–L |
+| **D13** | **`docs/` 按受众重排**（外审建议的目标形态：`guide/`（新）+ `api/` + `design/` + `process/` + `reference/`）：把现在混在一起的**人类向导**（README/CONTRIBUTING）、**契约**（`design/`）、**过程台账**（status/decisions/backlog/implementation-notes/log/archive）与**参考件**（`api/`、`autojspro-docs.txt`）分开。**本仓的具体约束（外审也点了，逐条复核成立）**：① § 号是唯一权威锚，**带 § 号的文件名不能改**；② `design-status.md#实现注记自各分卷外迁逐字保留` 被 **9 处**分卷正文链接，搬迁必须留占位标题或同批改齐 9 处；③ 文档链接门读 `git ls-files`（**先 `git add` 再跑**）；④ `ModuleGraphTest` 会扫特定文档路径。**风险最高、收益最晚的一条** —— 建议排在所有 P0/P1 之后，且一次只搬一个目录、一个目录一个 PR（**证据**：`docs/` 全树；`docs/README.md`（地图要同批改）） | ⛔ **裁定缓做**（2026-10-11 维护者）：风险最高、收益最晚（§ 号是权威锚、9 处反链、文档链接门读 `git ls-files`、`ModuleGraphTest` 扫特定路径 —— 四条硬约束），且收益要等 P2/P4 都落地才看得出。证据保留：`docs/` 全树；`docs/README.md`（地图要同批改）；核实 ✅ 2026-10-02 | 缓（不定 M–L） |
 | ~~**D14**~~ | 已完成（2026-10-02）—— 叙事见 [`docs/log/2026-10-02.md`](log/2026-10-02.md) （本条不留历史；口径变更另见 [`design-decisions.md`](design-decisions.md)） | — | ✅ | — | — |
 
 ## E. 需要拍板（产品面，不是工程顺手能做）
@@ -723,7 +738,7 @@
 | **M6** | shell 执行器：`destroyForcibly()` 只杀 `sh`/`su` 不杀其子；孙进程持管道时线程/fd 泄漏；stdin 从不关闭（`cat` 挂到超时）；命令串进错误与日志 | **部分成立**：孙进程持写端的宽限已有（`DRAIN_GRACE_MILLIS`），但**杀树没做**、**stdin 未关**属实；命令串进日志是**有意**的（`warnIfTruncated` KDoc 已论证「没它定位不到是谁」） | ✅ 批 99 已修杀树 + stdin 关闭（命令串进日志**有意**，KDoc 已论证；脱敏未做） |
 | **M7** | zip：`Files.walk` 抛 `UncheckedIOException` 被 `catch (IOException)` 漏过（`.tmp` 残留 + 错误码错）；打进源目录会自含 `.tmp`；无条目数上限（零字节文件绕过字节上限）；包含性纯词法 | **成立**（`JdkZipArchiver.compress`） | ✅ 批 99 已修三条（条目数闸 / `.tmp` 不自含 / `UncheckedIOException` 折码）；「包含性纯词法」那条同批以绝对路径相等守住本仓自己那处 |
 | **M8** | `SqliteKvOps.onUpgrade` 版本升级即 DROP 表、无 `onDowngrade` | **成立** | ✅ 批 97 已修（`KvSchemaMigrations` + `onDowngrade` 响亮失败） |
-| **M9** | `LockSigner`：一份 `lock.sig` 服务所有项目（签 B 废 A）；验签在入队时而 `npm ci` 在队列里更晚跑；null signer 静默跳过验签 | **半成立**：KDoc 已明写「同一把签名覆盖所有项目」（签的是 `projectId\|lock 内容`）——**单签名文件是设计而非 bug**，但「签 B 使 A 验不过」确是可用性代价；`ci` 的验签与 `enqueueHeavy` **相邻同函数**（无 TOCTOU 窗口） | 🔶 登记：per-project 签名文件属存储格式变更，要拍板 |
+| **M9** | `LockSigner`：一份 `lock.sig` 服务所有项目（签 B 废 A）；验签在入队时而 `npm ci` 在队列里更晚跑；null signer 静默跳过验签 | **半成立**：KDoc 已明写「同一把签名覆盖所有项目」（签的是 `projectId\|lock 内容`）——**单签名文件是设计而非 bug**，但「签 B 使 A 验不过」确是可用性代价；`ci` 的验签与 `enqueueHeavy` **相邻同函数**（无 TOCTOU 窗口） | ⛔ **裁定不做**（2026-10-11 维护者）：单签名文件是设计而非 bug（签的是 `projectId\|lock 内容`，KDoc 已论证），改它是存储格式变更要迁移策略，代价大于收益 |
 
 #### 设计 / 结构 / 文档（外审建议，非缺陷）
 
