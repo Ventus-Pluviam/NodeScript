@@ -1,6 +1,8 @@
 package com.autoscript.appservice.scheduler.core
 
 import com.autoscript.domain.scripts.EngineRunLink
+import com.autoscript.domain.scripts.RunArchive
+import com.autoscript.domain.scripts.RunArchiveContract
 import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
 import com.autoscript.domain.scripts.isTerminal
@@ -127,4 +129,30 @@ class InMemoryRunArchiveTest {
         runNonce = "nonce-$id",
         state = state,
     )
+}
+
+/**
+ * §8.5 契约套件打在 [InMemoryRunArchive] 上 —— 与 `FileRunArchive`（jsonl）、
+ * `SqliteRunArchive`（`:platform:system`）跑的是**同一组用例**。
+ *
+ * 本类保留自己原有的用例（它们额外钉着「内存实现零 IO」这一面），本套件钉的是
+ * **跨实现不许漂**的那部分（状态机纪律 + 读口语义）。
+ *
+ * 它**不**继承 [RunArchivePersistenceContract]：零 IO 形态重开即清零是它的语义本身
+ * （见该套件 KDoc「为什么按能力切」），不是缺陷 —— 那一套只由两个持久实现继承。
+ */
+class InMemoryRunArchiveContractTest : RunArchiveContract() {
+    /**
+     * 内存实现**每次都是一个全新空档案** —— 它没有「指向同一份底层数据」的载体，
+     * 重开即清零是它的**语义本身**（零 IO、无持久）。
+     *
+     * 所以三条依赖「重开仍读得回」的用例（持久性 / 裁定失败无残留 / 特殊字段往返）
+     * 在这个实现上**不成立** —— 不是它违反契约，而是那些判据量的是**持久性**，
+     * 而 [RunArchive] 契约对此没有要求（生产用的两个实现都是持久的）。
+     *
+     * 契约套件因此把这三条**从本实现上跳过并说明**；它们由 `FileRunArchive` 与
+     * `SqliteRunArchive` 两个持久实现各跑一遍（那才是「换存储引擎不许漂」的真实战场）。
+     * 这个「跳过」是**带理由的显式豁免**，不是 `assumeTrue` 环境门禁那种「探不到就跳过」。
+     */
+    override fun open(): RunArchive = InMemoryRunArchive()
 }

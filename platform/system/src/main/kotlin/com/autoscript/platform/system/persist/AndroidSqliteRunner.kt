@@ -30,15 +30,27 @@ import android.database.sqlite.SQLiteOpenHelper
  * 连接生命周期：`SQLiteOpenHelper` 持应用级单例库；[close] 随壳收口时由装配层调
  * （同 `SqliteKvOps` 的收口入口形状）。
  */
-class AndroidSqliteRunner(context: Context) : SqliteIntentStore.Runner {
+class AndroidSqliteRunner(
+    context: Context,
+    /**
+     * 库文件名（**构造参数**，批 102 P4 阶段 B 加）。
+     *
+     * 原来是硬编码 `autoscript-intent-log.db`。两份存储（意图日志 / 运行档案 / 任务注册表）
+     * 共用这一个执行体，而**共用同一个库文件是最难查的一类错** —— 它们会互相看到对方的表，
+     * 而每张表的列名恰好不同源，于是症状是「某个查询偶发少一行/多一列」那种没法复现的东西。
+     * 库名由调用方给，每份存储各持一个文件（与 `datastore` 的 kv 库分开同理：
+     * 各表升级路径不同，kv 可丢、日志不可丢）。
+     */
+    private val dbName: String = DB_NAME_INTENT_LOG,
+) : SqliteIntentStore.Runner {
 
-    private val helper = object : SQLiteOpenHelper(context.applicationContext, DB_NAME, null, DB_VERSION) {
-        override fun onCreate(db: SQLiteDatabase) {
-            // 建表语句逐条 execSQL：Android 的 execSQL 只跑第一条语句（SQLiteStatement 只
-            // prepare 一次），整段 DDL 一把塞进去会静默只建表、不建索引 —— 而索引正是
-            // 幂等锚点，缺了它「同 nonce 拒绝」会退化成「来者不拒」。
-            IntentStoreSql.SCHEMA.forEach(db::execSQL)
-        }
+    private val helper = object : SQLiteOpenHelper(context.applicationContext, dbName, null, DB_VERSION) {
+        /**
+         * 建表语句由**调用方在 init 里 ddl 出去**，不在这里建 —— 库名参数化之后，
+         * 「这份执行体对应哪张表」已经不由库文件本身决定了（同一执行体服务三份存储），
+         * 建表语句必须跟着调用方走。留在 `onCreate` 里只会建出一份写死 intent_log 的表。
+         */
+        override fun onCreate(db: SQLiteDatabase) = Unit
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             // P0 单版本无迁移路径：升级即重建。与 `SqliteKvOps` 同一条口径 —— 意图日志是
@@ -105,7 +117,7 @@ class AndroidSqliteRunner(context: Context) : SqliteIntentStore.Runner {
                 Cursor.FIELD_TYPE_STRING -> getString(i)
                 Cursor.FIELD_TYPE_INTEGER -> getLong(i)
                 else -> error(
-                    "intent_log 列 ${getColumnName(i)} 类型越界（type=${getType(i)}）—— 库被外部改过？",
+                    "$dbName 列 ${getColumnName(i)} 类型越界（type=${getType(i)}）—— 库被外部改过？",
                 )
             }
         }
@@ -113,8 +125,12 @@ class AndroidSqliteRunner(context: Context) : SqliteIntentStore.Runner {
     }
 
     companion object {
-        /** 与 `datastore` 的 kv 库分开一个文件：两张表的升级路径不同（kv 可丢、意图日志不可）。 */
-        private const val DB_NAME = "autoscript-intent-log.db"
+        /** 意图日志库（缺省，保持批 78 以来既有文件名不变 —— 改它会让老设备重开空库）。 */
+        const val DB_NAME_INTENT_LOG: String = "autoscript-intent-log.db"
+
+        /** 运行档案库（批 102 阶段 B 新增，与意图日志分文件）。 */
+        const val DB_NAME_RUN_ARCHIVE: String = "autoscript-run-archive.db"
+
         private const val DB_VERSION = 1
     }
 }
