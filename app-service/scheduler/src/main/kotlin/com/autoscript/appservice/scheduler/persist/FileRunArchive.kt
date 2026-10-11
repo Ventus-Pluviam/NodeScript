@@ -119,11 +119,13 @@ class FileRunArchive(private val dir: Path) : RunArchive, AutoCloseable {
         if (!Files.exists(file)) return
         val bytes = Files.readAllBytes(file)
         var pos = 0
+        var lastFullLineEnd = 0                        // 最后一个完整行的行尾偏移（含换行）
         while (pos < bytes.size) {
             val nl = findNewline(bytes, pos)
-            if (nl < 0) break                       // 最后半行：丢弃（崩溃截断）
+            if (nl < 0) break                       // 最后半行：**以下一并截掉**（崩溃截断）
             val line = String(bytes, pos, nl - pos, StandardCharsets.UTF_8)
             pos = nl + 1
+            lastFullLineEnd = minOf(pos, bytes.size)
             if (line.isBlank()) continue
             val rec = ArchiveCodec.parse(line)
             // replay 不走 adjudicate：journal 是已裁定事实的追加史，同一 id 后行覆盖前行
@@ -136,6 +138,17 @@ class FileRunArchive(private val dir: Path) : RunArchive, AutoCloseable {
                 // 关联一旦成立不改写：首个 link 胜（与 adjudicate 的"成立不改写"同向）
                 linkOf.putIfAbsent(rec.record.id, cand)
             }
+        }
+        truncateTail(lastFullLineEnd)
+    }
+
+    /** 截掉文件尾残片（外审 B3 半，2026-10-11）：理由与实现同 [com.autoscript.appservice.scheduler.persist.FileTaskStore.truncateTail]。 */
+    private fun truncateTail(offset: Int) {
+        if (offset <= 0) { Files.deleteIfExists(file); return }
+        try {
+            FileChannel.open(file, StandardOpenOption.WRITE).use { ch -> ch.truncate(offset.toLong()) }
+        } catch (_: java.io.IOException) {
+            // 同 FileTaskStore：截不动是半截故障，不让本构造直接炸
         }
     }
 

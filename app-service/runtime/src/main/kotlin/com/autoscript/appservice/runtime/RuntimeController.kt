@@ -94,6 +94,15 @@ class RuntimeController(
      */
     private val startedAt = HashMap<Long, Long>()
 
+    /**
+     * 急停代次（[killAll]/[forceStopAll] 推进；读写都在 [guard] 临界区内）。
+     *
+     * 为什么要它：本类是池的**唯一**调用方，而池侧「排队等证」与「execute 启动中」两个窗口
+     * 都可能与急停并发（见 [start] 的 KDoc）。代次是「这条 start 跨过了急停」的唯一判据 ——
+     * 池侧 [EnginePool.killAll] 只认槽位，在途表只认 runId，两者之间需要这个锚。
+     */
+    private var stopEpoch: Long = 0L
+
     /** 启动结果（对偶 JS PoolAcquireOutcome：granted/timedOut/failed）。 */
     sealed interface StartOutcome {
         data class Started(val runId: Long, val handle: HandleRef) : StartOutcome
@@ -108,19 +117,37 @@ class RuntimeController(
         data object AlreadyGone : StopOutcome
     }
 
-    /** 取槽启动；满则按 [PoolAcquireRequest.waitTimeoutMillis] 排队（null = 无限等）。 */
-    suspend fun start(request: PoolAcquireRequest): StartOutcome = guard.withLock {
+    /**
+     * 取槽启动；满则按 [PoolAcquireRequest.waitTimeoutMillis] 排队（null = 无限等）。
+     *
+     * **等证不持 [guard]**（2026-10-11 批 96，外审 B1）：`pool.acquire` 在满池时会挂到
+     * `waitTimeoutMillis`（调度链路 60–120s）。原实现整段 `guard.withLock`，于是「A 在跑、
+     * B 排队」时 A 的 [stop]/[killAll]/[forceStopAll] 与看门狗取锚全被 B 的排队挡住 ——
+     * 实测容量 1 下 `stop(A)` 耗时 2927ms（= B 的排队超时），现场表现为「脚本停不下来、
+     * 急停按不动」。现在只在**记账那一刻**取锁（夺槽本身由池的 stateLock 保证原子），
+     * 并在这里补一次「急停代次」对表：等证期间发生过 [killAll]/[forceStopAll] 就作废本条
+     * （池侧 [EnginePool.killAll] 已把当时非 FREE 的槽强释，这条的执行体不属于任何人）。
+     */
+    suspend fun start(request: PoolAcquireRequest): StartOutcome {
         // 授权决策**一次算死**（A5 整改第 4 条）：调用方没给快照时在这里补一份，随后
         // 池请求 → 引擎请求 → 身份签发 → 连接上下文搬的都是这**同一份**，下游不重算 ——
         // 否则会出现「预检校验的是 A 掩码、签发出去的是 B 掩码」的窗口。
+        // 这一段是纯计算（读策略矩阵），本就不需要持 guard。
         val effective = request.authorization?.let { request }
             ?: request.copy(authorization = authorization.decide(request.projectId).snapshot())
-        when (val outcome = pool.acquire(effective)) {
-            is PoolAcquireOutcome.Granted -> {
-                val receipt = outcome.handle.receipt
-                active[receipt.runId] = outcome.handle
-                startedAt[receipt.runId] = clock()
-                StartOutcome.Started(receipt.runId, receipt.handle)
+        val epochAtEntry = guard.withLock { stopEpoch }
+        return when (val outcome = pool.acquire(effective)) {
+            is PoolAcquireOutcome.Granted -> guard.withLock {
+                if (stopEpoch != epochAtEntry) {
+                    // 等证/启动期间急停过：这条执行体已在池侧被强杀，不得进在途表
+                    // （进了就等于把一条已死的 run 记成在途，stop/killRun 都当它活着）。
+                    StartOutcome.StartFailed(ABORTED_BY_STOP)
+                } else {
+                    val receipt = outcome.handle.receipt
+                    active[receipt.runId] = outcome.handle
+                    startedAt[receipt.runId] = clock()
+                    StartOutcome.Started(receipt.runId, receipt.handle)
+                }
             }
             PoolAcquireOutcome.TimedOut -> StartOutcome.QueueTimeout
             is PoolAcquireOutcome.Failed -> StartOutcome.StartFailed(outcome.message)
@@ -220,6 +247,7 @@ class RuntimeController(
 
     /** 全部强杀（killAll 与 start/stop 串行，防许可证超发）。 */
     suspend fun killAll(reason: KillCause) = guard.withLock {
+        stopEpoch += 1
         val gone = active.keys.toList()
         active.clear()
         startedAt.clear()
@@ -238,6 +266,7 @@ class RuntimeController(
      * （调用方按急停路径记账，不污染正常停止的审计）。
      */
     suspend fun forceStopAll(cause: KillCause) = guard.withLock {
+        stopEpoch += 1
         val gone = active.keys.toList()
         active.clear()
         startedAt.clear()
@@ -471,6 +500,9 @@ class RuntimeController(
 
     companion object {
         const val POLL_INTERVAL_MILLIS: Long = 200
+
+        /** [StartOutcome.StartFailed] 的话术：等证/启动期间撞上急停（与池侧常量同一句）。 */
+        const val ABORTED_BY_STOP: String = "启动期间宿主急停（killAll/forceStopAll）：本次执行已作废"
     }
 
     /**

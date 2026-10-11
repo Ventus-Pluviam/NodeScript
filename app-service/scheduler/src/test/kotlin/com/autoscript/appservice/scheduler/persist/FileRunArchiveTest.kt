@@ -124,6 +124,27 @@ class FileRunArchiveTest {
         second.close()
     }
 
+    /** 外审 B3 半（2026-10-11）：半行清盘 + 新写不被粘连，闭环同 FileTaskStore 那条。 */
+    @Test
+    fun `半行截断后新写入不被粘连：重开仍可读（外审 B3 半）`() = runBlocking {
+        FileRunArchive(dir).use { archive -> archive.put(run(1, RunState.SUCCEEDED), EngineRunLink(1, 1)) }
+        Files.write(
+            dir.resolve("run-archive.jsonl"),
+            """{"op":"put","id":2,"projectId":""".toByteArray(),
+            java.nio.file.StandardOpenOption.APPEND,
+        )
+        FileRunArchive(dir).use { archive ->
+            assertEquals(listOf(1L), archive.records().map { it.id })
+            archive.put(run(2, RunState.RUNNING), EngineRunLink(2, 2))
+        }
+        FileRunArchive(dir).use { archive ->
+            assertEquals(
+                listOf(1L, 2L), archive.records().map { it.id },
+                "半行必须已在打开时截掉：否则新行与残片粘成一行，重放直接抛 IOException",
+            )
+        }
+    }
+
     @Test
     fun `特殊字符往返：引号与换行`() = runBlocking {
         val archive = FileRunArchive(dir)
