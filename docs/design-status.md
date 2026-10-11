@@ -1,4 +1,16 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 98（外审整改第三刀：accept 遇瞬时故障不再收掉整条桥 —— M3）**：
+> 两处 accept 循环（`BridgeSocketListener` 设备 `LocalServerSocket` 面 / `NewlineFrameServer`
+> 本机 TCP 面）都是「任何 `IOException` 就 break」—— `EMFILE`/`ENFILE`/`ECONNABORTED` 都是
+> **瞬时**的，一次就 break 等于**整条桥对所有未来脚本静默死亡**（无日志、无重启、无自愈）。
+> 现口径：本端已 close（`running==false` / listener 已移除）→ 收循环；瞬时错 → 计数 + 退避 1s
+> 重试、**连续 20 次**才收（无限重试 = 线程永远转不出结果且桥看起来还活着）；非 socket 类
+> 异常 → 照旧收（代码 bug 不该被重试掩盖）；退避用 `retryGate.wait()` 以便 close 立刻唤醒。
+> 用 `SocketException` 而非 `IOException`（前者只从 accept 抛出，语义精确）。**两份独立实现
+> 各修各的、各钉一次**。诊断面各加 `acceptRetryCount` + 失败回执缝（此前死起来零痕迹）。
+> 守卫先红后绿（阈值改 1 即模拟旧行为，两条当场红），判据是「握手仍能完成」这个**可观测行为**。
+> CI 逐字同源 14 任务全绿零跳过；detekt 全模块绿。细节见 [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 97（外审整改第二刀：ERR_INTERNAL 与折叠两档 / kv 迁移表 / pid 第二级 —— M4·M5·M8）**：
 > 三条「单条语义改动 + 守卫」。**M4 错误映射**：新增 `ErrorCode.ERR_INTERNAL`（宿主代码缺陷
 > **不是**调用方参数错），`BridgeRouter` 折叠改两档 —— `AutojsException` 原码透传、
@@ -542,6 +554,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 6 | 批 98：外审整改第三刀 —— 两处 accept 循环（`BridgeSocketListener` 设备面 + `NewlineFrameServer` 本机 TCP 面）改「瞬时故障退避重试」（`EMFILE`/`ENFILE`/`ECONNABORTED` 一次就 break = 整条桥对所有未来脚本静默死亡）；本端 close 才收循环、连续 20 次才认定非瞬时、退避用 `retryGate.wait()` 供 close 唤醒；诊断面加 `acceptRetryCount` + 失败回执缝。守卫先红后绿（阈值改 1 即模拟旧行为），判据用可观测行为（握手仍能完成）。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 5 | 批 97：外审整改第二刀 —— 新增 `ERR_INTERNAL`（宿主代码缺陷≠参数错）+ BridgeRouter 折叠两档（AutojsException 透传 / IllegalArgumentException→ERR_INVALID_PARAM / 其余→ERR_INTERNAL）；pid 取值补私有字段反射阶梯（Android 8–12 防劫持判据不再整段跳过）+ `pidUnavailable` 计数；kv `onUpgrade` 从 DROP 重建改显式迁移表 `KvSchemaMigrations`（找不到路径抛、不静默重建）+ `onDowngrade` 响亮失败。守卫 7 例；契约卷 §7.6 同步；14 任务零跳过绿 + facade 201 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 4 | 批 96：外审整改第一刀 —— 「排队不挡急停」（start 等证出 guard + 急停代次对表，修前 stop(A) 2927ms → 修后 ≈0，守卫 3 例先红后绿）/ jsonl 半行清盘（FileTaskStore/FileRunArchive 打开时截到最后一个完整行，守卫走通「重开→再写→再重开」）/ 桥请求 TTL 溢出截断（显式 24h 上限）。守卫全模块绿；登记未改：BridgeRouter 未知异常吞成 ERR_INVALID_PARAM、readAllBytes 全量读、进程池重构、SqliteKvOps.onUpgrade 丢表 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 3 | 批 95：T1 杀树换 /proc 实现 —— ProcessHandle 整类不在 android.jar（批 91 杀树在真机静默空转）；ProcOps/ProcTreeOps：/proc ppid 图 + kill 二进制 + 扫在杀之前 + 二次收割 + pid 反射两级阶梯；无人点名 signal 按 128+n 惯例反查信号名表。守卫 ProcOpsTest 7 例 + T1ProcessTest +5（真进程树用例抓到 readStat 读目录的真 bug）。**边界**：真机自测 | [`log/2026-10-11.md`](log/2026-10-11.md) |

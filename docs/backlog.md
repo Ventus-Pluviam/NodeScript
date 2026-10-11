@@ -1,5 +1,23 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 98：外审整改第三刀 —— accept 遇瞬时故障不再收掉整条桥）
+
+- **外审 M3 已做**（下方「外审登记」条该行改 ✅）：两处 accept 循环
+  （`BridgeSocketListener` 设备 `LocalServerSocket` 面 + `NewlineFrameServer` 本机 TCP 面）
+  都是「任何 `IOException` 就 break」—— `EMFILE`/`ENFILE`/`ECONNABORTED` 都是**瞬时**的，
+  一次就 break = **整条桥对所有未来脚本静默死亡**（无日志、无重启、无自愈）。现口径：
+  本端已 close 才收循环；瞬时错 → 计数 + 退避 1s 重试、连续 20 次才收；非 socket 类异常
+  → 照旧收（代码 bug 不该被重试掩盖）；退避用 `retryGate.wait()` 供 close 立刻唤醒。
+  诊断面各加 `acceptRetryCount` + 失败回执缝（此前零痕迹）。口径见决策第 67 项。
+- **两份独立实现各修各的、也各钉一次**（本批新增两条用例）；守卫先红后绿（阈值改 1 即
+  模拟旧行为，两条当场红），判据用可观测行为「握手仍能完成」。
+- **验证**：CI 逐字同源 14 测试任务全绿零跳过；detekt 全模块绿。
+- **仍挂**（外审登记条剩余）：B2 池记账（彻底解要通道化重构）、M1 `scriptFile` KDoc 与
+  实现矛盾、M2 桥资源限额（每连接配额/字节加权/`limitedParallelism`）、M6 shell 杀树与
+  stdin 不关、M7 zip 的 `UncheckedIOException` 漏过、M9 LockSigner per-project 签名（要
+  拍板）、M3 半行的 `readAllBytes` 全量读无压缩，以及结构性项（typed ids / 池重构 /
+  actor 化 / jsonl→SQLite / 文档重排 = D13）。
+
 ## 2026-10-11 追记（批 97：外审整改第二刀 —— ERR_INTERNAL/折叠两档 / kv 迁移表 / pid 第二级）
 
 - **外审报告里剩下三条「单条语义改动 + 守卫」做掉（外审 M4/M5/M8）**，口径见决策第 66 项，
@@ -654,7 +672,7 @@
 |---|---|---|---|
 | **M1** | 路径未校验（`engines.exec` / `workManager.create` 只判空；`scriptPath` 越界会被执行；`cwd` 来自未校验 `projectId`） | **半成立**：`ScriptPaths.isValidProjectId`（无 `.`）/`DeployPath.resolveIn`（startsWith(root)）/`ScriptDeployRecovery.isSafeRelPath` **都已在**；外审设想的 `projectId="builtin"` 提权场景在「全部项目解析为 UNKNOWN」下**不成立**。**真问题**是 `ScriptPaths.scriptFile` 的 KDoc 说「越界只读不到」而 `NodeProcessEngine:148` **会执行它** —— KDoc 与实现矛盾 | 🔶 登记：随 `TrustTierResolver` 排期收口；先补 KDoc 事实 |
 | **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | 🔶 字节加权信号量 + 每连接上限 + `limitedParallelism` 未做 |
-| **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | 🔶 登记（瞬时错误应 `continue` + 计数，不当关断信号） |
+| **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | ✅ 批 98 已修（两处各退避重试 + 计数与回执，两条守卫先红后绿） |
 | **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | ✅ 批 97 已修（`ERR_INTERNAL` + 折叠两档，契约卷 §7.6 同步） |
 | **M5** | pid 绑定在 Android 8–12 失效（`Process.pid()` 需 API 33，minSdk 26；`spawn.pid` 为 null 时跳过防劫持检查） | **成立且已知**（`ProcessLauncher` 两级反射只取 `pid()` 方法，**无私有字段那级**——批 95 的 `ProcOps.pidOf` 已补上那一级，可复用） | ✅ 批 97 已修（`ProcessLauncher.pidOf` 补第二级 + `pidUnavailable` 计数） |
 | **M6** | shell 执行器：`destroyForcibly()` 只杀 `sh`/`su` 不杀其子；孙进程持管道时线程/fd 泄漏；stdin 从不关闭（`cat` 挂到超时）；命令串进错误与日志 | **部分成立**：孙进程持写端的宽限已有（`DRAIN_GRACE_MILLIS`），但**杀树没做**、**stdin 未关**属实；命令串进日志是**有意**的（`warnIfTruncated` KDoc 已论证「没它定位不到是谁」） | 🔶 登记：复用批 95 的 `ProcOps`；stdin 关闭与命令串脱敏属行为变更 |
