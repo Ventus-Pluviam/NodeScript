@@ -26,6 +26,7 @@ export const enum ErrCode {
   REGISTRY_UNAVAILABLE = 'ERR_REGISTRY_UNAVAILABLE',
   NPM_LOWMEM = 'ERR_NPM_LOWMEM',
   IO = 'ERR_IO',
+  INTERNAL = 'ERR_INTERNAL',
 }
 
 /** 桥回包中的可序列化错误骨架（跨进程往返的唯一错误载体）。 */
@@ -97,6 +98,7 @@ export const ERROR_CODES: readonly string[] = [
   'ERR_REGISTRY_UNAVAILABLE',
   'ERR_NPM_LOWMEM',
   'ERR_IO',
+  'ERR_INTERNAL',
 ]
 
 function fromErrPayload(p: ErrPayload): AutojsError {

@@ -77,6 +77,32 @@ private val jdkProcessPidMethod: java.lang.reflect.Method? = try {
 }
 
 /**
+ * 私有字段 `pid` 的反射句柄（2026-10-11 批 97，外审 M5 的**第二级阶梯**）。
+ *
+ * 为什么加这一级：`pid()` 方法在 Android 上只有 API 33+ 才有（`api-versions.xml` 实查），
+ * 而 minSdk 26 —— 于是 Android 8–12 上 [SpawnedProcess.pid] 恒 null，看门狗走 noPid 清单，
+ * **且 [com.autoscript.bridge.RunIdentityRegistry] 的防劫持检查整段被跳过**（`peerPid != null
+ * && spawn.pid != null` 两条件）。Android 13 libcore 的 `ProcessImpl` 有 `pid` 这个字段 ——
+ * 与批 95 的 `ProcOps.pidOf` 同一手法、同一理由（那处是为了杀树，这里是为了身份绑定）。
+ *
+ * **桌面 JDK 上这一级是死代码**：模块系统拒 `setAccessible`，但那时 tier 1 已经成了。
+ */
+private val jdkProcessPidField: java.lang.reflect.Field? = run {
+    var cls: Class<*>? = Process::class.java
+    while (cls != null && cls != Any::class.java) {
+        val found = runCatching {
+            cls!!.getDeclaredField("pid").apply { isAccessible = true }
+        }.getOrNull()
+        if (found != null) {
+            found
+        } else {
+            cls = cls.superclass
+        }
+    }
+    null
+}
+
+/**
  * 真起进程（`ProcessBuilder`）。stdout 读即弃、**stderr 捕获有界尾部**（backlog B11）——
  * 不排水会把管道写满、把子进程卡死在 write 上（经典 pipe 反压死锁）：stdout 那条通道
  * 仍然只管排空，不存内容；stderr 在排空时顺带写入环形尾 buffer，诊断要用的是"崩了之后
@@ -152,13 +178,8 @@ class ProcessBuilderLauncher : ProcessLauncher {
         private val drainErr: Thread,
         private val tail: StderrTail,
     ) : SpawnedProcess {
-        override val pid: Int? = try {
-            (jdkProcessPidMethod?.invoke(process) as? Long)?.toInt()
-        } catch (_: java.lang.ReflectiveOperationException) {
-            null                      // 运行时无 Process.pid()/反射不可达：诚实 noPid（§8.4），不是 0/自身
-        } catch (_: SecurityException) {
-            null
-        }
+        /** 两级阶梯（`pid()` 方法 → 私有字段）：都探不到才回 null（§8.4 诚实 noPid，不是 0/自身）。 */
+        override val pid: Int? = pidOf(process)
 
         override val isAlive: Boolean get() = process.isAlive
 
@@ -238,4 +259,25 @@ private class StderrTail(
         for (i in 0 until length) out[i] = ring[(start + i) % capacityBytes]
         return String(out, StandardCharsets.UTF_8)
     }
+}
+
+/**
+ * 取子进程 pid（两级反射阶梯：方法 → 私有字段）。
+ *
+ * 与 `app-service:npm` 的 `ProcOps.pidOf` 逐字同款：**两处抽不出共享模块**（npm → domain 的
+ * 依赖方向上 domain 不该知道进程；反之 `ProcOps` 还要 /proc 扫描，用不上就多背一份），
+ * 故同一手法抄两处并在两侧 KDoc 互相点名 —— 改一处时另一处必须跟着看。
+ *
+ * @return null = 运行时两个 tier 都探不到（诚实 noPid，**绝不给 0/自身**）。
+ */
+internal fun pidOf(process: Process): Int? {
+    jdkProcessPidMethod?.let { m ->
+        val viaMethod = runCatching { (m.invoke(process) as? Number)?.toLong() }.getOrNull()
+        if (viaMethod != null && viaMethod > 0) return viaMethod.toInt()
+    }
+    jdkProcessPidField?.let { f ->
+        val viaField = runCatching { (f.get(process) as? Number)?.toLong() }.getOrNull()
+        if (viaField != null && viaField > 0) return viaField.toInt()
+    }
+    return null
 }

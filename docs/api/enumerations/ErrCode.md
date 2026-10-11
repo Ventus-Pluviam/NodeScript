@@ -60,6 +60,14 @@ FILE_NOT_FOUND: "ERR_FILE_NOT_FOUND";
 
 ***
 
+### INTERNAL
+
+```ts
+INTERNAL: "ERR_INTERNAL";
+```
+
+***
+
 ### INVALID\_PARAM
 
 ```ts

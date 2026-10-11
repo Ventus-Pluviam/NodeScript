@@ -1,5 +1,19 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-11，批 97）
+
+- [2026-10-11 · 批 97：外审整改第二刀 —— ERR_INTERNAL/折叠两档 + kv 迁移表 + pid 第二级（M4·M5·M8）](2026-10-11.md)：
+  批 96 之后的三条「单条语义改动 + 守卫」。**M4**：新增 `ERR_INTERNAL`（宿主代码缺陷 ≠
+  调用方参数错），`BridgeRouter` 折叠改两档 —— `AutojsException` 原码透传、
+  `IllegalArgumentException` → `ERR_INVALID_PARAM`、**其余一切 → `ERR_INTERNAL`**（此前全部
+  折成参数错且回显 `e.message`：脚本去改错方向的参数 + 内部路径泄露；与 `RpcNamespaceHandler`
+  KDoc「未知异常照旧穿出」直接矛盾）。三处落字同步（`:domain` / `bridge/js` 双表 / §7.6），
+  守卫三条成对。**M5**：`ProcessLauncher` 补 pid 私有字段那级反射 → Android 8–12 的
+  `spawn.pid` 不再恒 null（此前 `RunIdentityRegistry` 的防劫持判据**整段静默跳过**）；
+  加 `pidUnavailable` 计数（「跳过」≠「度量通过」）。**M8**：`onUpgrade` 从「DROP 重建」改为
+  显式迁移表（纯函数 `KvSchemaMigrations`，可单测）+ `onDowngrade` 响亮失败，找不到路径抛
+  而非静默重建。14 任务全门零跳过绿；facade 201 pass；detekt 绿。
+
 ## 最新追记（2026-10-11，批 96）
 
 - [2026-10-11 · 批 96：外审整改第一刀 —— 「排队不挡急停」/jsonl 半行清盘/TTL 截断](2026-10-11.md)：

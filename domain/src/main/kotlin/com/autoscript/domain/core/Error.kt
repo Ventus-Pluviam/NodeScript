@@ -26,7 +26,20 @@ enum class ErrorCode(val code: String, val summary: String) {
     ERR_NOT_SUPPORTED("ERR_NOT_SUPPORTED", "本平台不支持该特性（如 git: 依赖）"),
     ERR_REGISTRY_UNAVAILABLE("ERR_REGISTRY_UNAVAILABLE", "包注册表不可用"),
     ERR_NPM_LOWMEM("ERR_NPM_LOWMEM", "安装会话内存不足"),
-    ERR_IO("ERR_IO", "文件系统/归档读写失败");
+    ERR_IO("ERR_IO", "文件系统/归档读写失败"),
+    /**
+     * 宿主内部错误（2026-10-11 批 97，外审 M4）：**代码有 bug**，不是调用方参数错。
+     *
+     * 为什么必须有这一档：此前桥路由把任何未预料的 `Exception` 折成
+     * `ERR_INVALID_PARAM` —— 脚本 `catch (e) { e.is('ERR_INVALID_PARAM') }` 会把
+     * 「宿主崩了」当成「你参数写错了」去改参数，而真相在宿主堆栈里。这是「响亮失败」
+     * 纪律的反面：不是把 bug 说清，是把 bug 说成别人的错。
+     *
+     * 与 [ERR_INVALID_PARAM] 的分工：前者是**能读懂的事实**（参数、时序、状态不对），
+     * 后者是**读不懂的事实**（宿主内部抛了说不清的东西）。脚本侧应把后者当
+     * 「宿主有问题，详情找日志」而不是「重试我的代码」。
+     */
+    ERR_INTERNAL("ERR_INTERNAL", "宿主内部错误（代码缺陷，非调用方问题）");
 
     fun message(detail: String? = null): String =
         "$code: $summary" + (detail?.let { " —— $it" } ?: "")

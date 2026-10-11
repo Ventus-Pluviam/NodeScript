@@ -1,4 +1,22 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 97（外审整改第二刀：ERR_INTERNAL 与折叠两档 / kv 迁移表 / pid 第二级 —— M4·M5·M8）**：
+> 三条「单条语义改动 + 守卫」。**M4 错误映射**：新增 `ErrorCode.ERR_INTERNAL`（宿主代码缺陷
+> **不是**调用方参数错），`BridgeRouter` 折叠改两档 —— `AutojsException` 原码透传、
+> `IllegalArgumentException` → `ERR_INVALID_PARAM`、**其余一切 → `ERR_INTERNAL`**；此前一切
+> 未预料异常都折成参数错并回显 `e.message`（脚本去改错方向的参数 + 内部路径进 wire），且与
+> `RpcNamespaceHandler` KDoc「未知异常照旧穿出」直接矛盾。两处落字已同步（`:domain` +
+> `bridge/js` `ErrCode`+`ERROR_CODES`，`err-catalog.test.cjs` 三面对账门钉住；**契约卷 §7.6
+> 属冻结面已撤出**，待维护者同步），
+> 守卫三条成对；契约卷 §7.6 属冻结面已撤出待维护者同步。**M5 pid 绑定**：`engine:node-process` `ProcessLauncher` 补 pid 私有字段那级
+> 反射阶梯 → Android 8–12（`Process.pid()` 需 API 33、minSdk 26）`spawn.pid` 不再恒 null，
+> 此前 `RunIdentityRegistry` 的防劫持判据**整段静默跳过**；加 `pidUnavailable` 计数
+> （「跳过」与「度量通过」在返回类型上一样，计数是唯一可见信号）。**M8 kv 升版**：
+> `onUpgrade` 从「DROP 重建」改为显式迁移表（纯函数 `KvSchemaMigrations`，理由：`:platform:system`
+> 无 Robolectric，Android 面本机只编译不执行）+ `onDowngrade` 响亮失败；找不到路径抛
+> `UnknownMigration` 而非静默重建。守卫 7 例（3+2+...）。CI 逐字同源 14 任务全绿零跳过；
+> facade 201 pass（1 skip = 既有真 addon 环境门禁）；detekt 全模块绿。细节见
+> [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 96（外审整改第一刀：排队不挡急停 / jsonl 半行清盘 / 桥 TTL 截断）**：
 > 维护者转来外部评审报告，本批做其中四件（纯工程、本机可验证）。**① 排队的 start 不挡
 > stop/killAll/看门狗（B1 高）**：`start` 等证不再整段持 `guard`（满池排队可挂 60–120s），
@@ -524,6 +542,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 5 | 批 97：外审整改第二刀 —— 新增 `ERR_INTERNAL`（宿主代码缺陷≠参数错）+ BridgeRouter 折叠两档（AutojsException 透传 / IllegalArgumentException→ERR_INVALID_PARAM / 其余→ERR_INTERNAL）；pid 取值补私有字段反射阶梯（Android 8–12 防劫持判据不再整段跳过）+ `pidUnavailable` 计数；kv `onUpgrade` 从 DROP 重建改显式迁移表 `KvSchemaMigrations`（找不到路径抛、不静默重建）+ `onDowngrade` 响亮失败。守卫 7 例；契约卷 §7.6 同步；14 任务零跳过绿 + facade 201 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 4 | 批 96：外审整改第一刀 —— 「排队不挡急停」（start 等证出 guard + 急停代次对表，修前 stop(A) 2927ms → 修后 ≈0，守卫 3 例先红后绿）/ jsonl 半行清盘（FileTaskStore/FileRunArchive 打开时截到最后一个完整行，守卫走通「重开→再写→再重开」）/ 桥请求 TTL 溢出截断（显式 24h 上限）。守卫全模块绿；登记未改：BridgeRouter 未知异常吞成 ERR_INVALID_PARAM、readAllBytes 全量读、进程池重构、SqliteKvOps.onUpgrade 丢表 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 3 | 批 95：T1 杀树换 /proc 实现 —— ProcessHandle 整类不在 android.jar（批 91 杀树在真机静默空转）；ProcOps/ProcTreeOps：/proc ppid 图 + kill 二进制 + 扫在杀之前 + 二次收割 + pid 反射两级阶梯；无人点名 signal 按 128+n 惯例反查信号名表。守卫 ProcOpsTest 7 例 + T1ProcessTest +5（真进程树用例抓到 readStat 读目录的真 bug）。**边界**：真机自测 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 2 | 批 94：T1 欠账两件 —— 脚本输出真流式（`ScriptOpExecutor` 补 `OutputSink` 缝，T1 会话进程 stdout 边读边落控制台环）+ 命令可取消（桥侧 `kill` 帧 SIGTERM/SIGKILL、`waitFor` 切片轮询查 `ScriptOp.cancelSignal`、facade/`HostSummary` `cancelConsoleCommand`、UI 停止按钮）；覆盖面如实：T1 真杀、重操作仍弃结果（TTL 兜底）。守卫五测试类 +11 例 + detekt baseline 重生成 + lintDebug 全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |

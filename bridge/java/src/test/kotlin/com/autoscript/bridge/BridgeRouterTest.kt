@@ -3,6 +3,7 @@ package com.autoscript.bridge
 import com.autoscript.domain.bridge.AuthenticatedRunContext
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.BridgeResponse
+import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.permission.BridgeCapability
@@ -73,14 +74,48 @@ class BridgeRouterTest {
         assertEquals(ErrorCode.ERR_TIMEOUT.code, err.errorCode)
     }
 
+    /**
+     * 外审 M4（2026-10-11 批 97）：**内部 bug 不得说成参数错**。
+     *
+     * 修前：任何 `Exception` 折成 `ERR_INVALID_PARAM` + 回显 `e.message` —— 脚本
+     * `e.is('ERR_INVALID_PARAM')` 会去改自己的参数，而真相在宿主堆栈里；回显还把
+     * 内部路径/字段名带进 wire。这条用例钉住「未预料的异常 → ERR_INTERNAL」。
+     */
     @Test
-    fun `handler exception mapped to ERR_INVALID_PARAM`() = runBlocking {
+    fun `handler 未知异常折 ERR_INTERNAL 不折参数错（外审 M4）`() = runBlocking {
         val r = router
         r.register("boom") { throw IllegalStateException("炸了") }
         val resp = r.dispatch(BridgeRequest(1, "boom", "m", null, 5_000))
         val err = assertInstanceOf(BridgeResponse.Err::class.java, resp)
-        assertEquals(ErrorCode.ERR_INVALID_PARAM.code, err.errorCode)
-        assertTrue(err.detail.orEmpty().contains("炸了"))
+        assertEquals(
+            ErrorCode.ERR_INTERNAL.code, err.errorCode,
+            "未预料的异常是宿主代码 bug，折成 ERR_INVALID_PARAM 会让脚本改错方向的参数",
+        )
+        assertTrue(err.detail.orEmpty().contains("boom.m"), "detail 要点名是哪个面炸的：${err.detail}")
+    }
+
+    /** 能读懂的事实仍走参数错（脚本据此改参数）—— 与上一条是一对，缺一即口径漂。 */
+    @Test
+    fun `handler 参数异常仍折 ERR_INVALID_PARAM`() = runBlocking {
+        val r = router
+        r.register("bad") { throw IllegalArgumentException("key 不得为空白") }
+        val resp = r.dispatch(BridgeRequest(1, "bad", "put", null, 5_000))
+        val err = assertInstanceOf(BridgeResponse.Err::class.java, resp)
+        assertEquals(ErrorCode.ERR_INVALID_PARAM.code, err.errorCode, "参数错仍是参数错")
+        assertTrue(err.detail.orEmpty().contains("不得为空白"))
+    }
+
+    /** 异常子类层次会骗人：`AutojsException`（含 ERR_PERMISSION_DENIED 等真码）不得被上面两条吞掉。 */
+    @Test
+    fun `handler 抛 AutojsException 时保留原码不折 ERR_INTERNAL`() = runBlocking {
+        val r = router
+        r.register("denied") { throw AutojsException(ErrorCode.ERR_PERMISSION_DENIED, "掩码未覆盖") }
+        val resp = r.dispatch(BridgeRequest(1, "denied", "m", null, 5_000))
+        val err = assertInstanceOf(BridgeResponse.Err::class.java, resp)
+        assertEquals(
+            ErrorCode.ERR_PERMISSION_DENIED.code, err.errorCode,
+            "SPI 抛的 AutojsException 带真码：折成 ERR_INTERNAL 会把「未授权」说成「宿主有 bug」",
+        )
     }
 
     // ── A5：桥面掩码在路由层 deny-by-default（§11） ─────────────────────
