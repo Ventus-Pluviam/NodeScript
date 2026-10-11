@@ -1,4 +1,28 @@
 # AutoScript 落地状态台账
+> **2026-10-12 · 批 102（P4：jsonl → SQLite，三份手写格式并两份，四阶段落地）**：
+> **阶段 A SPI 搬迁**（纯机械，语义零变化）：`SqliteTaskStore` 必须住 `:platform:system`
+> （`android.database.sqlite` 是 Android 面），依赖铁律 `:platform:* → :domain` 逼出这次搬迁 ——
+> `TaskStore`/`ScheduledTask`/`TimedSchedule`/`ScreenGuarantee`/`CronTab` → `:domain/scripts`，
+> `InMemoryTaskStore` → testFixtures，与 `IntentStore` 当初搬迁同一条纪律。**不留类型别名**
+> （别名会让「新代码 import 哪个」变成新问题）。detekt baseline 的 `CronTab` 9 条抑制跟着搬
+> （抑制按模块归属，留在原处等于给 `:domain` 新增 9 条违规）。
+> **阶段 B `SqliteRunArchive`**：终态不可改写/复活由 **SQL 条件 UPDATE** 挡（锚点归引擎，
+> 不是应用层先查后写）；`run_nonce` **无唯一索引**（档案不是幂等锚点，锚点在意图日志侧 ——
+> 同一 nonce 可以有多行 = 重投的两次执行都要留档）。**契约套件切两套**：共享套件钉状态机
+> 与读口语义（三个实现都跑），持久性只由两个持久实现跑 —— 第一版想用「带理由的豁免」
+> 塞跳过，**撞 `test-guard`（「skipped ≠ 绿」）：门是对的**，零 IO 形态重开即清零是它的
+> **语义本身**，假话不能钉成门。
+> **阶段 C `SqliteTaskStore` + 迁移接线**：`task_id` 是**用户给的** TEXT 主键（无自增硬
+> 要求）；排期落 `kind`/`a`/`b` **三列而非 JSON 列**（这三列能按它排序/查）；**重新登记
+> = 复活**（upsert 一并置 `revoked_at` 为 NULL，漏了则「撤销后再登记」的任务永不续排）。
+> 三份存储一套迁移纪律：导 + 改名归档 / 可重入 / **失败响亮且老文件原样留着** / **无回落**。
+> `File*` 两个 jsonl 实现**保留**（契约套件的第二个被测实现，删了就没人证明「换引擎那天
+> 行为没变」）。测试抓到两个真 bug：档案登记误写自增发号（id 来自调用方，自增让读回全错）、
+> 墓碑时刻用 `null`（null 是「存活」含义 → **撤销过的任务迁移后自己复活**）。
+> CI 14 任务零失败零跳过；detekt 全模块绿（baseline 用 detekt 自己的生成器重生成 ——
+> ID 含 KDoc 折行，手抄对不上，批 94 记过的同款坑）。细节见
+> [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 101（维护者拍案：§7.6 解冻同步 + §10.3 杀树口径入契约 —— F1/F2）**：
 > 维护者对拍板清单逐条裁定：**F1 开**、**F2 做**、**P1 不做**（LockSigner 维持单签名文件）、
 > **P3 不做**（D13 缓）、**P2 做**（池记账重构）、**P4 做**（jsonl→SQLite）。本批做契约同步：
@@ -596,6 +620,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-12 | 9 | 批 102（P4）：jsonl → SQLite 三份并两份，四阶段 —— **A** SPI 搬迁（`TaskStore`/`ScheduledTask`/`TimedSchedule`/`ScreenGuarantee`/`CronTab` → `:domain`，依赖铁律所迫，47 文件语义零变化；baseline 的 CronTab 9 条抑制跟着搬）**B** `SqliteRunArchive`（终态由 SQL 条件 UPDATE 挡；`run_nonce` 无唯一索引 —— 档案不是幂等锚点）+ 契约套件**切两套**（第一版塞跳过撞 test-guard，「skipped≠绿」这道门是对的）**C** `SqliteTaskStore`（`task_id` 用户给的 TEXT 主键、排期三列非 JSON 列、重新登记=复活）+ 两份存储迁移接线（三份一套纪律：导+归档/可重入/失败响亮/无回落），`File*` 保留为契约第二实现。测试抓到两 bug：登记误自增发号、墓碑 null 使撤销任务复活。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 9 | 批 101（维护者拍案，F1/F2）：**契约同步** —— §7.6 补 `ERR_INTERNAL` 进错误目录 + 写「折叠两档、中间隔一档内部错误」为契约（AutojsException 原码透传 / IllegalArgumentException → ERR_INVALID_PARAM / 其余 → ERR_INTERNAL），同时对齐 `RpcNamespaceHandler` 基类 KDoc 与路由层实际行为（批 97 之前两处矛盾）；§10.3 把 `/proc` 扫描 + `kill` 二进制 + 扫在杀之前三档写进契约正文，并把**降级档（pid 探不到 → 只杀主进程）写成契约的一部分**（不留在 KDoc 私货里）。P2（池记账重构）/ P4（jsonl→SQLite）已拍板，各占其后一批。bridge/js 三面对账门 201 pass | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 8 | 批 100：外审整改第五刀 —— 桥在途**字节**闸（`maxBytesInFlight`=16 MiB）。原口径只有条数闸 256，而 `maxFrameBytes`(8 MiB)×256 = **2 GiB 堆**（两个已生效默认值相乘）→ 设备 OOM 且看不出是哪条面。条数与字节正交（与批 99 zip `MAX_ENTRIES` 同纪律），故加第三档：CAS 取闸 / 单条超上限直接拒不部分接纳 / 拒这一条不拒整条连接（回 `ERR_PERMISSION_DENIED` 且话术点名「字节」，不静默丢）。同条另两半（每连接配额 / `limitedParallelism`）如实登记不排期。守卫先红后绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 7 | 批 99：外审整改第四刀 —— **M6** shell 收尸从「只杀直接子进程」变「杀整棵树」（`killTree` = `/proc` ppid 图 + `kill` 二进制 + pid 两级反射，`TreeOps` 缝；原 KDoc「不留孤儿进程」不成立，已订正；顺带订正顺序错：点名在杀之前）+ stdin 立即关闭（`cat`/`read x` 不再挂到超时）；**M7** zip 三条硬化（条目数闸 1 万：零字节海量条目能过两道字节闸，计数与字节正交 / `.tmp` 不自含 / `walk` 的 `UncheckedIOException` 折成 IOException 否则 tmp 残留且码不对）。记两份 `ProcOps` 的关系（手法同款代码两份，依赖方向所迫，KDoc 互相点名）。守卫 7 例 | [`log/2026-10-11.md`](log/2026-10-11.md) |

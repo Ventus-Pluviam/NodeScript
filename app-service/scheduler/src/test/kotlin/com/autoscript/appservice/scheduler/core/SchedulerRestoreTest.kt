@@ -5,6 +5,10 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import com.autoscript.domain.scripts.InMemoryTaskStore
+import com.autoscript.domain.scripts.ScheduledTask
+import com.autoscript.domain.scripts.TaskStore
+import com.autoscript.domain.scripts.TimedSchedule
 
 /**
  * 注册表持久与恢复（§8.6 调度持久性缺口的补账）：

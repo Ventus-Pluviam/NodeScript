@@ -1,9 +1,9 @@
 package com.autoscript.shell
 
 import com.autoscript.appservice.scheduler.core.RecoveryRecord
-import com.autoscript.appservice.scheduler.core.ScheduledTask
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.ScheduledTask
+import com.autoscript.domain.scripts.ScreenGuarantee
+import com.autoscript.domain.scripts.TimedSchedule
 import com.autoscript.domain.host.RecoveryRow
 import com.autoscript.domain.host.RunRow
 import com.autoscript.domain.host.ScheduleSpec

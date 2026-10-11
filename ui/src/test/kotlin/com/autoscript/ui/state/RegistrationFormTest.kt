@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import com.autoscript.domain.scripts.CronTab
 
 /**
  * 登记表单的解析（[RegistrationForm.toRegistration]）：文本 → `:domain` [com.autoscript.domain.host.TaskRegistration]。

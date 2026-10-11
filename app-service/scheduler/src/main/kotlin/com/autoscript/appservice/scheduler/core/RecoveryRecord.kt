@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scheduler.core
 
+import com.autoscript.domain.scripts.ScheduledTask
 /**
  * 恢复结果：一次未完成意向的封口 + 重投（§8.5）。
  *

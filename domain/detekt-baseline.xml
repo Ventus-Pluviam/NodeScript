@@ -2,6 +2,15 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
+    <ID>ThrowsCount:CronTab.kt$CronTab$private fun parseField( token: String, min: Int, max: Int, label: String, names: Map&lt;String, Int&gt;?, ): SortedSet&lt;Int&gt;</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段为空")</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段无有效值：$token")</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段有空项「$token」")</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段步长只能写一个「/」：$atom")</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段范围倒置：$atom")</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段范围只能写一个「-」：$atom")</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 越界 $min..$max：$atom")</ID>
+    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron 必须是 5 字段（分 时 日 月 周），收到「$expr」")</ID>
     <ID>ImplicitDefaultLocale:DomainJson.kt$DomainJson$String.format("%04x", c.code)</ID>
     <ID>LoopWithTooManyJumpStatements:PackSpec.kt$BuildIgnore$for</ID>
     <ID>MaxLineLength:SystemContracts.kt$*</ID>

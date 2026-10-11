@@ -2,7 +2,7 @@ package com.autoscript.appservice.scheduler.persist
 
 import com.autoscript.appservice.scheduler.core.IntentRun
 import com.autoscript.appservice.scheduler.core.RunOutcome
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
+import com.autoscript.domain.scripts.ScreenGuarantee
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.IntentStore
 

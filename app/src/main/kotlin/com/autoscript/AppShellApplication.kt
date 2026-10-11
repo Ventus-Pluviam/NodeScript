@@ -289,13 +289,18 @@ class AppShellApplication : Application(), HostSummary {
             // 单写者假设撑着的降级路径冒充"调度还能用"。
             // 打开住 PlatformWiring（本类不 import 任何 com.autoscript.platform..，
             // ArchitectureTest「平台实现只许装配包碰」看住）。
-            val intentStore = PlatformWiring.intentStore(appContext, filesDir.resolve(".autojs"))
+            val autojsDir = filesDir.resolve(".autojs")
+            val intentStore = PlatformWiring.intentStore(appContext, autojsDir)
+            // 运行档案与任务注册表（批 102 P4）：生产面换 SQLite，各带一次性 jsonl 迁移。
+            // 与 intentStore 同一纪律 —— 打不开即抛（异常冒到本函数的失败分支：记日志、
+            // 壳保持未就绪、闹钟走漏投记账），**不回落 jsonl**。
             val built = AppShellKit.assemble(
                 filesDir = filesDir,
                 cacheDir = cacheDir,
                 schedulerProvider = AlarmSchedulerProvider(port = port),
                 screenGate = screenGateOf(this),
                 intentStore = intentStore,
+                storesFactory = { PlatformWiring.stores(appContext, autojsDir) },
                 engineFactory = { engineId, identities ->
                     NodeProcessEngine(
                         engineId,

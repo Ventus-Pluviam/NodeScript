@@ -1,4 +1,4 @@
-package com.autoscript.appservice.scheduler.core
+package com.autoscript.domain.scripts
 
 import java.time.Instant
 import java.time.LocalDate
@@ -6,6 +6,8 @@ import java.time.ZoneId
 import java.util.SortedSet
 
 /**
+ * 纯日期算术（零 IO、零 Android）—— 它是排期模型的**实现**而不是调度策略，所以与 [TimedSchedule] 一起住 `:domain`（否则 `TimedSchedule.nextFireAfter` 要反向依赖服务层）。
+ *
  * 5 字段 cron（`分 时 日 月 周`，docs §8.6 P1 排期数学；[TimedSchedule.Cron] 唯一的解析/推进出处）。
  *
  * 支持的写法（标准 cron 子集，不含秒/年/`@宏`/`L`/`W`/`#` —— 遇到即构造拒绝，不猜）：

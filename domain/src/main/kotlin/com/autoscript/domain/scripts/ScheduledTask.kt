@@ -1,8 +1,10 @@
-package com.autoscript.appservice.scheduler.core
+package com.autoscript.domain.scripts
 
 import java.time.ZoneId
 
 /**
+ * 登记载荷的形状（一次登记 = 计划 + 投递参数 + 屏幕契约）；存储面（SQLite 实现）需要它，故随 [TaskStore] 搬进 `:domain`（2026-10-11 批 102）。
+ *
  * 定时任务模型（docs §8.6 / §9.6 定时 API）：
  * 一次登记 = 一个调度计划 + 投递参数 + 屏幕契约；每次触发生成新的 runNonce（意图日志幂等锚点）。
  *

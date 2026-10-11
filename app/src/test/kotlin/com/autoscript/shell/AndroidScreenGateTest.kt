@@ -1,6 +1,6 @@
 package com.autoscript.shell
 
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
+import com.autoscript.domain.scripts.ScreenGuarantee
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf

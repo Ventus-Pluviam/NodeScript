@@ -1,6 +1,9 @@
 package com.autoscript.appservice.scheduler.persist
 
 import com.autoscript.domain.scripts.EngineRunLink
+import com.autoscript.domain.scripts.RunArchive
+import com.autoscript.domain.scripts.RunArchiveContract
+import com.autoscript.domain.scripts.RunArchivePersistenceContract
 import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
 import kotlinx.coroutines.runBlocking
@@ -210,4 +213,20 @@ class FileRunArchiveTest {
         assertEquals(RunState.SUCCEEDED, second.record(1)!!.state, "拒绝的写入不得留痕")
         second.close()
     }
+}
+
+/**
+ * §8.5 契约套件打在 [FileRunArchive]（jsonl）上 —— 与 `InMemoryRunArchive`、
+ * `SqliteRunArchive` 跑的是**同一组用例**。
+ *
+ * 本类保留自己原有的用例（它们额外钉着「jsonl 独有的机制」：半行容忍、截断清盘、
+ * 旧行向后兼容 —— 那些换存储引擎后就由 SQLite 的事务性取代，不再是契约）。
+ */
+class FileRunArchiveContractTest : RunArchivePersistenceContract() {
+
+    @TempDir
+    lateinit var dir: Path
+
+    /** 每次 [open] 一个新实例（契约要求）—— 指向同一个目录，等价于「重启后重开」。 */
+    override fun open(): RunArchive = FileRunArchive(dir)
 }

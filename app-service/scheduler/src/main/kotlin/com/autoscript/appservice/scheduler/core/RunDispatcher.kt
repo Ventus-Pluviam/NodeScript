@@ -1,6 +1,7 @@
 package com.autoscript.appservice.scheduler.core
 
 import com.autoscript.domain.scripts.EngineRunLink
+import com.autoscript.domain.scripts.ScreenGuarantee
 
 /**
  * RunDispatcher 的返回值（§8.5「…execute… → COMMIT」段的执行真相）：

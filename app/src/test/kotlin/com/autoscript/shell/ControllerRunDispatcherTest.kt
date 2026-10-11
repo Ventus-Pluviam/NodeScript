@@ -6,7 +6,7 @@ import com.autoscript.appservice.runtime.PoolStats
 import com.autoscript.appservice.runtime.RuntimeController
 import com.autoscript.appservice.scheduler.core.PendingRun
 import com.autoscript.appservice.scheduler.core.RunOutcome
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
+import com.autoscript.domain.scripts.ScreenGuarantee
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineStatus

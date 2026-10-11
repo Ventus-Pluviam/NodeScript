@@ -2,7 +2,7 @@ package com.autoscript.appservice.scheduler
 
 import com.autoscript.appservice.scheduler.core.InMemoryIntentLog
 import com.autoscript.appservice.scheduler.core.InMemoryRunArchive
-import com.autoscript.appservice.scheduler.core.InMemoryTaskStore
+import com.autoscript.domain.scripts.InMemoryTaskStore
 import com.autoscript.appservice.scheduler.core.RunDispatcher
 import com.autoscript.appservice.scheduler.core.RunOutcome
 import com.autoscript.appservice.scheduler.core.Scheduler
@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import com.autoscript.domain.scripts.CronTab
 
 /**
  * `workManager` 桥面验证（§8.6/§9.6 定时 API 的脚本建任务链路）：

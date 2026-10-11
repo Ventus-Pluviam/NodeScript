@@ -6,12 +6,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
-import com.autoscript.appservice.scheduler.persist.FileTaskStore
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
 import com.autoscript.appservice.scriptrepo.core.BridgeAddonDeploy
 import com.autoscript.appservice.scriptrepo.core.BridgeDistDeploy
 import com.autoscript.domain.bridge.NamespaceHandler
+import com.autoscript.domain.scripts.TaskStore
 import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
@@ -19,6 +19,7 @@ import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
+import com.autoscript.domain.scripts.TimedSchedule
 
 /**
  * 装壳产物与壳自己的协程域（2026-10-01 D7 自 `AppShellKit.kt` 原样外迁：它们与
@@ -46,7 +47,7 @@ class AssembledShell internal constructor(
     val shell: AppShell,
     private val log: PersistentIntentLog,
     private val archive: RunArchive,
-    private val tasks: FileTaskStore?,
+    private val tasks: TaskStore?,
     /** npm 装配产出的 handler（装配测试/诊断用；null 表示本次装配未挂 npm）。 */
     val npmHandler: NamespaceHandler?,
     private val scope: ShellScope?,

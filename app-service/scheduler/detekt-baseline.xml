@@ -17,7 +17,6 @@
     <ID>NewLineAtEndOfFile:TimedScheduleTest.kt$com.autoscript.appservice.scheduler.core.TimedScheduleTest.kt</ID>
     <ID>NewLineAtEndOfFile:TriggerSource.kt$com.autoscript.appservice.scheduler.core.TriggerSource.kt</ID>
     <ID>SwallowedException:WorkManagerNamespaceHandler.kt$WorkManagerNamespaceHandler$e: IllegalArgumentException</ID>
-    <ID>ThrowsCount:CronTab.kt$CronTab$private fun parseField( token: String, min: Int, max: Int, label: String, names: Map&lt;String, Int&gt;?, ): SortedSet&lt;Int&gt;</ID>
     <ID>ThrowsCount:FileRunArchive.kt$FileRunArchive$private fun adjudicate(record: RunRecord, link: EngineRunLink?)</ID>
     <ID>ThrowsCount:JsonLine.kt$JsonLine$fun parse(line: String): Map&lt;String, Any?&gt;</ID>
     <ID>ThrowsCount:WorkManagerNamespaceHandler.kt$WorkManagerNamespaceHandler$private fun parseSchedule(f: Map&lt;String, DomainJson.Value&gt;): TimedSchedule</ID>
@@ -36,14 +35,6 @@
     <ID>UseCheckOrError:JournalFileStore.kt$JournalFileStore$throw IllegalStateException("runNonce 已 COMMIT，拒绝重复副作用: $nonce")</ID>
     <ID>UseCheckOrError:JournalFileStore.kt$JournalFileStore$throw IllegalStateException("runNonce 已有 COMMIT，拒绝重复投递: ${row.runNonce}")</ID>
     <ID>UseCheckOrError:JournalFileStore.kt$JournalFileStore$throw IllegalStateException("runNonce 已有未完成的 STARTED 行，拒绝重复投递: ${row.runNonce}")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段为空")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段无有效值：$token")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段有空项「$token」")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段步长只能写一个「/」：$atom")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段范围倒置：$atom")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 字段范围只能写一个「-」：$atom")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron $label 越界 $min..$max：$atom")</ID>
-    <ID>UseRequire:CronTab.kt$CronTab$throw IllegalArgumentException("cron 必须是 5 字段（分 时 日 月 周），收到「$expr」")</ID>
     <ID>UseRequire:FileRunArchive.kt$FileRunArchive$throw IllegalArgumentException( "EngineRunLink.engineRunId=${link.engineRunId} 与 RunRecord.id=${record.id} 不一致", )</ID>
     <ID>UseRequire:InMemoryRunArchive.kt$InMemoryRunArchive$throw IllegalArgumentException( "EngineRunLink.engineRunId=${link.engineRunId} 与 RunRecord.id=${record.id} 不一致", )</ID>
   </CurrentIssues>

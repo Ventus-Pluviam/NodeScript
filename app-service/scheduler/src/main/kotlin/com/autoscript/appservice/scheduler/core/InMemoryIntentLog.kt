@@ -3,6 +3,7 @@ package com.autoscript.appservice.scheduler.core
 import com.autoscript.domain.core.Clock
 import com.autoscript.domain.core.SystemClock
 import java.util.concurrent.atomic.AtomicLong
+import com.autoscript.domain.scripts.ScreenGuarantee
 
 /**
  * 内存意图日志（JVM 单测 / 非持久原型用）。

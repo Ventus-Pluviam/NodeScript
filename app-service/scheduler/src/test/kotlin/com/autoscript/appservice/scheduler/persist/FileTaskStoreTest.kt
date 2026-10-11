@@ -1,8 +1,11 @@
 package com.autoscript.appservice.scheduler.persist
 
-import com.autoscript.appservice.scheduler.core.ScheduledTask
-import com.autoscript.appservice.scheduler.core.ScreenGuarantee
-import com.autoscript.appservice.scheduler.core.TimedSchedule
+import com.autoscript.domain.scripts.ScheduledTask
+import com.autoscript.domain.scripts.TaskStore
+import com.autoscript.domain.scripts.TaskStoreContract
+import com.autoscript.domain.scripts.TaskStorePersistenceContract
+import com.autoscript.domain.scripts.ScreenGuarantee
+import com.autoscript.domain.scripts.TimedSchedule
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -160,4 +163,20 @@ class FileTaskStoreTest {
             assertEquals(false, reopened.loadAll().single().enabled)
         }
     }
+}
+
+/**
+ * §8.6 契约套件打在 [FileTaskStore]（jsonl）上 —— 与 `InMemoryTaskStore`、`SqliteTaskStore`
+ * 跑的是**同一组用例**。
+ *
+ * 本类保留自己原有的用例（它们额外钉着 jsonl 独有的机制：半行截断、截断清盘、cron 往返
+ * —— 换存储引擎后那些由 SQLite 的事务性取代，不再是契约）。
+ */
+class FileTaskStoreContractTest : TaskStorePersistenceContract() {
+
+    @TempDir
+    lateinit var dir: Path
+
+    /** 每次 [open] 一个新实例（契约要求）—— 指向同一个目录，等价于「重启后重开」。 */
+    override fun open(): TaskStore = FileTaskStore(dir)
 }

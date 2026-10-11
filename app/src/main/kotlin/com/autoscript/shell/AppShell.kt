@@ -8,7 +8,7 @@ import com.autoscript.appservice.runtime.HeartbeatLedger
 import com.autoscript.appservice.runtime.RuntimeController
 import com.autoscript.appservice.scheduler.core.InMemoryRunArchive
 import com.autoscript.appservice.scheduler.core.IntentLog
-import com.autoscript.appservice.scheduler.core.TaskStore
+import com.autoscript.domain.scripts.TaskStore
 import com.autoscript.appservice.scheduler.core.RecoveryRecord
 import com.autoscript.appservice.scheduler.core.Scheduler
 import com.autoscript.appservice.scheduler.core.SchedulerProvider

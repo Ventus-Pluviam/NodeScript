@@ -40,6 +40,7 @@ import com.autoscript.domain.scripts.IntentStore
 import com.autoscript.domain.permission.ScriptAuthorizationPolicy
 import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.RunArchive
+import com.autoscript.domain.scripts.TaskStore
 import com.autoscript.domain.scripts.RunRecord
 import java.nio.file.Files
 import java.nio.file.Path
@@ -253,6 +254,25 @@ object AppShellKit {
          */
         intentStore: IntentStore,
         /**
+         * 运行档案存储（§8.5；批 102 P4 注入缝）。
+         *
+         * 缺省 = 本配方自建 jsonl（[FileRunArchive]）—— **这是单测/离线配方那条路**，
+         * 生产必须显式传 `PlatformWiring.runArchive(...)` 给的 SQLite 面。
+         *
+         * **为什么档案与注册表有缺省而 [intentStore] 没有**：那是一次性裁定（2026-10-08），
+         * 理由是「回落目标的记账靠单写者假设撑着」。本次不重复那次争论 —— 但**口径一致**：
+         * 生产装配（[AppShellApplication]）一定会显式传，见该处调用点。
+         */
+        /**
+         * 运行档案 + 任务注册表两个存储的工厂（§8.5 / §8.6；批 102 P4 注入缝）。
+         *
+         * 合成一个参数（同 [PlatformWiring.stores] 的理由）：两者同源、同目录、同纪律，
+         * 且 `assemble` 的参数已经逼近 detekt 的 `LongParameterList` 上限。
+         * 缺省 = 本配方自建两份 jsonl（**单测/离线配方那条路**）；生产由
+         * `AppShellApplication` 经 `PlatformWiring.stores(...)` 显式传 SQLite 面。
+         */
+        storesFactory: (() -> Pair<RunArchive, TaskStore>)? = null,
+        /**
          * **来源授权策略**（A5，§11）：本壳所有执行拿到什么桥面能力的判据来源。
          *
          * 缺省 = 无来源元数据（`TrustTier.UNKNOWN` 的保守档 A，见
@@ -315,11 +335,14 @@ object AppShellKit {
         // 测试 = InMemoryIntentStore。两者语义由 `IntentStoreContract` 同一组用例守着。
         // **无回落**：打不开在 PlatformWiring 就抛了，装配层据此判壳未就绪。
         val log = PersistentIntentLog(intentStore)
-        val archive = FileRunArchive(autojsDir)
+        // 运行档案与任务注册表（批 102 P4）：存储引擎换 SQLite，各带一次性 jsonl 迁移。
+        // **存储引擎由调用方给**（本函数纪律）：生产 = `PlatformWiring.runArchive`/
+        // `PlatformWiring.taskStore`（SQLite，含迁移），单测 = `InMemory*`/jsonl 面。
+        // **无回落**（与 `intentStore` 同一条纪律，2026-10-08 裁定）：打不开就在
+        // `PlatformWiring` 抛了，装配层据此判壳未就绪 —— 不拿「回落 jsonl」冒充「还能用」。
+        val (archive, tasks) = storesFactory?.invoke() ?: (FileRunArchive(autojsDir) to FileTaskStore(autojsDir))
         // 注册表第三持久（§8.6）：意图日志管"已投递的意向"，这里管"还没到点的排期"。
-        // 同一 `.autojs` 目录（`tasks.jsonl`），同一追加+tombstone 纪律；Scheduler 经
-        // [AppShell][com.autoscript.shell.AppShell] 的 `taskStore` 缝拿到它。
-        val tasks = FileTaskStore(autojsDir)
+        // Scheduler 经 [AppShell][com.autoscript.shell.AppShell] 的 `taskStore` 缝拿到它。
 
         // vendored npm CLI 落位 + 执行体注入（§10.2 调用链首段/末段）。
         // 素材随包在 `assets/npm/**`，启动期先按打包前清单检疫 APK 文件集合与摘要，
