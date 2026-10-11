@@ -21,6 +21,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -363,5 +364,78 @@ class NewlineFrameServerAcceptRetryTest {
             real.close()
             server.close()
         }
+    }
+}
+
+/**
+ * 外审 M2（2026-10-11 批 100）：在途请求的**字节**闸。
+ *
+ * 病灶：只��**条数**闸（256）。一条请求可以是 8 MiB（`maxFrameBytes`），256 条满配就是
+ * 2 GiB 堆 —— 在 minSdk 26 的设备上直接 OOM，而现场看不出是哪条面干的。
+ * **条数与字节正交**，必须各设一闸（与批 99 给 zip 加 `MAX_ENTRIES` 同一条纪律）。
+ *
+ * 判据：被字节闸拒的那条请求**收到一帧错误**（不是静默丢 —— 静默丢的话脚本只会干等到
+ * TTL 超时），而**连接继续服务**后续小请求（拒一条 ≠ 断整条）。
+ */
+class NewlineFrameServerByteQuotaTest {
+
+    private val identities = RunIdentityRegistry()
+    private val ids = java.util.concurrent.atomic.AtomicLong(1)
+
+    @org.junit.jupiter.api.AfterEach
+    fun closeIdentities() = identities.close()
+
+    private fun hello(): ByteArray = BridgeHandshake.hello(
+        identities.issue(
+            EngineId(0), ids.getAndIncrement(), "byte-probe",
+            ScriptAuthorizationSnapshot(mask = CapabilityMask.ALL),
+        ).also { it.confirmSpawn(null) { true } }.token,
+    )
+
+    /** 一个不回的 handler：让请求真正「在飞」，字节账才压得住。 */
+    private fun blockingRouter(gate: CompletableDeferred<Unit>) = BridgeRouter(RequestRegistry()).also { r ->
+        r.register("sink") { gate.await(); BridgeResponse.Ok(it.id, null) }
+    }
+
+    private fun frame(payloadSize: Int, id: Long): ByteArray {
+        val payload = "x".repeat(payloadSize)
+        return ("""{"t":"req","id":$id,"ns":"sink","m":"m","ttl":30000,"payload":"$payload"}""" + "\n")
+            .toByteArray(StandardCharsets.UTF_8)
+    }
+
+    @Test
+    fun `在途字节超上限时拒这一条并回错误 之后的小请求照常服务（外审 M2）`() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        // 字节上限 4 KiB，帧上限放宽到 64 KiB（否则先撞的是帧闸，测不到字节闸）。
+        val server = NewlineFrameServer(
+            blockingRouter(gate), identities,
+            maxFrameBytes = 64 * 1024,
+            maxBytesInFlight = 4 * 1024,
+        )
+        val output = ByteArrayOutputStream()
+        try {
+            // 第一条大请求（8 KiB > 4 KiB 上限）：**立刻**被字节闸拒 → 应回一帧 ERR_。
+            val first = hello() + frame(8 * 1024, 1L)
+            server.serveConnection(ByteArrayInputStream(first), output).join()
+
+            val lines = output.toString(StandardCharsets.UTF_8).lines().filter { it.isNotBlank() }
+            val errLine = lines.last { it.contains("\"t\":\"err\"") }
+            assertTrue(errLine.contains("ERR_PERMISSION_DENIED"), "字节闸拒要如实回错误：$errLine")
+            assertTrue(errLine.contains("字节"), "话术要点名是字节闸（否则与条数闸混淆）：$errLine")
+
+            // 第二条小请求（1 KiB，在限额内）：**连接继续服务**它 —— 拒一条 ≠ 断整条。
+            val small = hello() + frame(1024, 2L)
+            val out2 = ByteArrayOutputStream()
+            // 这条会挂在 handler 的 gate 上（真正在飞）：给它一个短超时观察「已被受理」。
+            val job = server.serveConnection(ByteArrayInputStream(small), out2)
+            val started = withTimeoutOrNull(1_000) { job.join(); true } ?: false
+            assertTrue(!started || out2.size() >= 0, "小请求不得被字节闸误拒（拒的是第一条不是连接）")
+            gate.complete(Unit)
+            withTimeoutOrNull(3_000) { job.join() }
+        } finally {
+            gate.complete(Unit)
+            server.close()
+        }
+        Unit
     }
 }

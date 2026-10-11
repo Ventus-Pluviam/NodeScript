@@ -1,5 +1,25 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 100：外审整改第五刀 —— 桥在途字节闸，M2 的可做那半）
+
+- **外审 M2 的「字节加权」那半已做**（下方外审登记表该行部分改 ✅），口径见决策第 69 项：
+  原口径只有**条数**闸（256）与**帧**闸（8 MiB），两者相乘 = **2 GiB 堆** —— 两个**已生效
+  默认值**相乘就能得到的数，设备上直接 OOM，而现场看不出是哪条面干的。**条数与字节正交**
+  （与批 99 zip `MAX_ENTRIES` 同一条纪律），故加 `maxBytesInFlight` = 16 MiB：
+  **CAS** 取闸（`synchronized` 会变全局竞争点，这条每请求都走）/ 单条超上限**直接拒不部分
+  接纳**（部分接纳 = 请求永远等不到）/ **拒这一条不拒整条连接**（回一帧
+  `ERR_PERMISSION_DENIED`，话术点名「字节」，不静默丢 —— 静默丢的话脚本只会干等到 TTL 超时）。
+- **M2 同条另两半如实登记不排期**：① **每连接配额**（一条连接可吃满全部 256 条在途）——
+  要做得连同「连接级计数的可见面」一起设计，少一个就重演「三处记账手拿会漂」（批 96 池
+  记账那族，彻底解至今未排期）；② **`limitedParallelism`**（本类 scope 直接用
+  `Dispatchers.IO` 默认 64 线程）—— 要先定「每连接最多占几条读线程」。**不做半套**：
+  两道闸各管一半的中间态比只有一道更难解释「到底是被谁拒的」。
+- **守卫**：`NewlineFrameServerByteQuotaTest` 先红后绿（把字节闸短路 `if (false && …)`
+  即当场红；帧上限刻意放宽到 64 KiB，让**字节闸先撞**而不是帧闸）。
+- **外审还剩**：B2 池记账（彻底解要通道化重构）、M1 `scriptFile` KDoc 与实现矛盾、
+  M9 LockSigner per-project 签名（**要拍板**）、jsonl 全量读无压缩，以及结构性项
+  （typed ids / 池重构 / actor 化 / jsonl→SQLite / 文档重排 = D13）。
+
 ## 2026-10-11 追记（批 99：外审整改第四刀 —— shell 杀树与 stdin 关闭（M6）+ zip 三条硬化（M7）
 
 - **外审 M6/M7 已做**（外审登记表该两行改 ✅），口径见决策第 68 项：
@@ -696,7 +716,7 @@
 | # | 外审条目 | 核实结论 | 状态 |
 |---|---|---|---|
 | **M1** | 路径未校验（`engines.exec` / `workManager.create` 只判空；`scriptPath` 越界会被执行；`cwd` 来自未校验 `projectId`） | **半成立**：`ScriptPaths.isValidProjectId`（无 `.`）/`DeployPath.resolveIn`（startsWith(root)）/`ScriptDeployRecovery.isSafeRelPath` **都已在**；外审设想的 `projectId="builtin"` 提权场景在「全部项目解析为 UNKNOWN」下**不成立**。**真问题**是 `ScriptPaths.scriptFile` 的 KDoc 说「越界只读不到」而 `NodeProcessEngine:148` **会执行它** —— KDoc 与实现矛盾 | 🔶 登记：随 `TrustTierResolver` 排期收口；先补 KDoc 事实 |
-| **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | 🔶 字节加权信号量 + 每连接上限 + `limitedParallelism` 未做 |
+| **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | 🟡 批 100 做了字节加权信号量（`maxBytesInFlight`=16 MiB）；**每连接上限 + `limitedParallelism` 未做**（理由：前者要连同可见面一起设计，后者要先定每连接读线程配额；不做半套） |
 | **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | ✅ 批 98 已修（两处各退避重试 + 计数与回执，两条守卫先红后绿） |
 | **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | ✅ 批 97 已修（`ERR_INTERNAL` + 折叠两档，契约卷 §7.6 同步） |
 | **M5** | pid 绑定在 Android 8–12 失效（`Process.pid()` 需 API 33，minSdk 26；`spawn.pid` 为 null 时跳过防劫持检查） | **成立且已知**（`ProcessLauncher` 两级反射只取 `pid()` 方法，**无私有字段那级**——批 95 的 `ProcOps.pidOf` 已补上那一级，可复用） | ✅ 批 97 已修（`ProcessLauncher.pidOf` 补第二级 + `pidUnavailable` 计数） |

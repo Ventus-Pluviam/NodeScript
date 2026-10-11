@@ -33,6 +33,16 @@ import kotlinx.coroutines.sync.Semaphore
  * newline 帧接入（§7.5）：hello 绑定执行后才分发，handler 表共享、请求账按连接隔离。
  * 每连接持有真实 IO 关闭器：单纯 cancel 无法唤醒阻塞 socket.read。EOF 后先排完已接收请求，
  * 自然退出保留原归属读取尾帧；主动撤销立即关 IO。全局在途配额仍在起请求协程之前取。
+ *
+ * **三档配额（2026-10-11 批 100，外审 M2）**：本类原有**两个**上限，各钉一种滥用形态 ——
+ * [inFlight]（在途请求**条数**，默认 256）与 [handshakes]（未认证连接数，默认 32）。
+ * 批 100 补的第三条见 [maxBytesInFlight]（在途请求**字节**，默认 16 MiB）。
+ *
+ * **仍挂（外审 M2 同条的另一半，批 100 未做）**：① **每连接配额** —— 现在一条连接可以吃满
+ * 全部 256 条在途（其他连接的请求全被挤在门外）；② **`limitedParallelism`** ——
+ * 本类的 [scope] 直接用 `Dispatchers.IO`（默认 64 线程），连接数上去时读线程会与
+ * 其它 IO 用途抢同一个池。这两条要连同「连接级计数的可见面」一起设计（缺一个就会
+ * 重演「三处记账手拿会漂」那类问题），故登记不排期，不在本批做半套。
  */
 class NewlineFrameServer(
     val router: BridgeRouter,
@@ -41,6 +51,18 @@ class NewlineFrameServer(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val maxFrameBytes: Int = DEFAULT_MAX_FRAME_BYTES,
     private val maxInFlight: Int = DEFAULT_MAX_IN_FLIGHT,
+    /**
+     * 在途请求的**字节**上限（外审 M2，批 100）。
+     *
+     * 为什么 [maxInFlight] 不够：它是**条数**闸，而一条请求可以是 8 MiB（[maxFrameBytes]）
+     * —— 256 条满配就是 2 GiB 堆，在 minSdk 26 的设备上直接 OOM，而那一刻的现场是
+     * 「脚本发了一堆大请求把宿主撑死」，看不出是哪条面。**条数与字节正交**，必须各设一闸
+     * （与批 99 给 zip 加的 `MAX_ENTRIES` 同一条纪律）。
+     *
+     * 取值：256 × 典型帧（几十 KiB）远低于此；1 万条 1 KiB 的小帧也远低于此 ——
+     * 所以正常脚本**感知不到**这道闸，它只拦「用大帧把宿主撑死」那一档。
+     */
+    private val maxBytesInFlight: Long = DEFAULT_MAX_BYTES_IN_FLIGHT,
     private val handshakeMillis: Long = BridgeHandshake.TIMEOUT_MILLIS,
     private val drainMillis: Long = 5_000,
     private val onProtocolError: (reason: String) -> Unit = {},
@@ -89,7 +111,38 @@ class NewlineFrameServer(
     private val inFlight = Semaphore(maxInFlight)
     private val handshakes = Semaphore(32)
 
-    init { require(maxFrameBytes > 0 && maxInFlight > 0 && handshakeMillis > 0 && drainMillis > 0) }
+    /**
+     * 在途字节账（外审 M2，批 100）：取在**读出帧之后、起请求协程之前**，还与
+     * [inFlight] 的许可证成对（取字节必取条数、还字节必还条数 —— 两者是同一份「这条请求在
+     * 飞」的记账，两个独立信号量手拿会漂）。
+     *
+     * 用 `AtomicLong` + CAS 而不是拿字节数的信号量：字节数是变量不是计数许可，
+     * `Semaphore(permits = 1MiB)` 那种写法在 kotlinx 里不存在（它只数许可个数）。
+     */
+    private val bytesInFlight = java.util.concurrent.atomic.AtomicLong(0)
+
+    init {
+        require(maxFrameBytes > 0 && maxInFlight > 0 && handshakeMillis > 0 && drainMillis > 0)
+        require(maxBytesInFlight > 0) { "在途字节上限必须 > 0：$maxBytesInFlight" }
+    }
+
+    /**
+     * 在途字节账的 CAS 取闸（外审 M2，批 100）：`current + n <= 上限` 才进，否则 false。
+     *
+     * 为什么是 CAS 而不是 `synchronized`：读循环每秒能取放几千次，而这一段在**每条请求**上
+     * 都要走；`synchronized` 会把它变成全局竞争点（所有连接的读循环都串行过一次）。
+     * CAS 循环在无竞争时是一条 CAS 指令。
+     *
+     * 单条超上限（`n > 上限`）直接拒 —— 不去取 `[0, 上限)` 的随机起点那种「部分接纳」
+     * 的做法：一条 8 MiB 帧配 1 MiB 上限，**部分接纳等于让请求永远等不到**，不如立刻拒。
+     */
+    private fun tryReserveBytes(n: Long): Boolean {
+        while (true) {
+            val current = bytesInFlight.get()
+            if (current + n > maxBytesInFlight) return false
+            if (bytesInFlight.compareAndSet(current, current + n)) return true
+        }
+    }
 
     /**
      * accept 循环（外审 M3，2026-10-11 批 98 修订，与 [BridgeSocketListener] 同一纪律）。
@@ -279,13 +332,12 @@ class NewlineFrameServer(
                 supervisorScope {
                     while (isActive) {
                         val frame = readBlocking { readFrame(buffered, maxFrameBytes) } ?: break
-                        inFlight.acquire()
-                        val requestJob = launch(bound.caller + session, start = CoroutineStart.LAZY) {
-                            handleFrame(frame, output)
-                        }
-                        // 取消发生在 launch 前/首次调度前也归还许可证。
-                        requestJob.invokeOnCompletion { inFlight.release() }
-                        requestJob.start()
+                        // 条数与字节**各取一闸、取闸与起协程之间不留窗口**（外审 M2）：
+                        // 先拿字节再拿条数 —— 反过来的话，「拿到条数许可证但字节超限」那条
+                        // 路必须把条数许可证还回去，少一处还就少一份配额。
+                        // 「拒一条」那一支与主循环体一起搬进 [serveAcceptedFrame]（detekt
+                        // `LoopWithTooManyJumpStatements`：循环里只留 `break`）。
+                        this@supervisorScope.serveAcceptedFrame(frame, output, bound.caller, session)
                     }
                     beginDrain()
                 }
@@ -314,6 +366,55 @@ class NewlineFrameServer(
 
         private suspend fun writeBlocking(output: OutputStream, bytes: ByteArray) = readBlocking {
             synchronized(output) { output.write(bytes); output.flush() }
+        }
+
+        /**
+         * 一帧的「受理或拒绝」全段（外审 M2 抽出来的：字节闸 + 条数闸 + 起协程 + 成对归还）。
+         *
+         * 抽出来有两个理由：
+         * 1. **detekt `LoopWithTooManyJumpStatements`** —— 读循环里已有 `?: break`，字节闸那
+         *    一支再加 `continue` 就是两个跳转；
+         * 2. **可读性更重要**：「拒一条」与「断一条」是本批最容易被改错的判据
+         *    （`continue` 写成 `break`，就把「一个请求的配额问题」升级成「连接断掉」）——
+         *    给它一个名字比让它躺在循环中间耐改。
+         *
+         * 归还成对且在 [Job.invokeOnCompletion] 里（那里覆盖「launch 前/首次调度前被取消」
+         * 那一档 —— 与既有 [inFlight] 归还同一条纪律）。
+         */
+        private suspend fun kotlinx.coroutines.CoroutineScope.serveAcceptedFrame(
+            frame: ByteArray,
+            output: OutputStream,
+            caller: com.autoscript.domain.bridge.AuthenticatedRunContext,
+            session: InputChannelSession,
+        ) {
+            if (!tryReserveBytes(frame.size.toLong())) {
+                rejectOverByteQuota(frame, output)     // 拒这一条、连接继续（不静默丢）
+                return
+            }
+            inFlight.acquire()
+            val requestJob = launch(caller + session, start = CoroutineStart.LAZY) {
+                handleFrame(frame, output)
+            }
+            requestJob.invokeOnCompletion {
+                bytesInFlight.addAndGet(-frame.size.toLong())
+                inFlight.release()
+            }
+            requestJob.start()
+        }
+
+        /**
+         * 字节闸拒的那一条：**回一帧错误**（不静默丢 —— 静默丢的话脚本只会干等到 TTL 超时，
+         * 那才是真正的坑）。话术点名「字节」以免与条数闸混淆；帧里读不出 requestId 时
+         * 什么都不回（那不是一条完整请求，回一个无主的错帧反而会撞别处的在途）。
+         */
+        private suspend fun rejectOverByteQuota(frame: ByteArray, output: OutputStream) {
+            val requestId = transport.probeRequestId(frame) ?: return
+            val err = BridgeResponse.Err(
+                requestId,
+                ErrorCode.ERR_PERMISSION_DENIED.code,
+                "在途请求字节超上限（$maxBytesInFlight）：本请求 ${frame.size} 字节",
+            )
+            writeBlocking(output, transport.encodeResponse(err) + LF)
         }
 
         private suspend fun handleFrame(frame: ByteArray, output: OutputStream) {
@@ -392,6 +493,17 @@ class NewlineFrameServer(
     companion object {
         const val DEFAULT_MAX_FRAME_BYTES = 8 * 1024 * 1024
         const val DEFAULT_MAX_IN_FLIGHT = 256
+
+        /**
+         * 在途请求字节上限（外审 M2，批 100）：**条数闸的搭档**。
+         *
+         * 取值依据：最坏形态是「[DEFAULT_MAX_FRAME_BYTES]（8 MiB）× [DEFAULT_MAX_IN_FLIGHT]
+         * （256）= 2 GiB」—— 那不是理论值，是把两个已生效的默认值相乘就能得到的数。
+         * 本仓的合法用法（截图帧、无障碍树、图像分析）在**数十 KiB 到 1 MiB** 量级，
+         * 16 MiB 足够几十条大帧同时在飞；再往上是「拿大帧把宿主堆撑死」那一档。
+         * 与条数上限一样：它是**策略**，不是物理限制 —— 真要更大改此常量即可。
+         */
+        const val DEFAULT_MAX_BYTES_IN_FLIGHT: Long = 16L * 1024 * 1024
 
         /** accept 瞬时故障后的退避（毫秒），与 `BridgeSocketListener` 同一取值口径。 */
         const val ACCEPT_RETRY_BACKOFF_MILLIS: Long = 1_000L
