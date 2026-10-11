@@ -219,6 +219,27 @@ class NodeProcessEngineTest {
     }
 
     @Test
+    fun `脚本路径越界——ERR_INVALID_PARAM 且绝不 spawn`() {
+        // 外审 M1 收口：scriptFile 的读侧词法闸在这里透出成参数错。
+        // 关键点是「绝不 spawn」—— 越界路径若真拼进了 argv，那一刻就已经是越权执行。
+        writeScript("a.js")
+        val sibling = files.resolve("scripts").resolve("p2")
+        Files.createDirectories(sibling)
+        Files.write(sibling.resolve("secret.js"), "{}".toByteArray())
+
+        val launcher = FakeLauncher()
+        val e = engine(launcher)
+        val ex = assertThrows(AutojsException::class.java) {
+            runBlocking { e.execute(request().copy(scriptPath = "../../p2/secret.js")) }
+        }
+        assertEquals(
+            ErrorCode.ERR_INVALID_PARAM, ex.error,
+            "越界脚本路径是参数错，不是「文件不存在」——后者会把部署时序问题错报成权限问题：${ex.message}",
+        )
+        assertEquals(0, launcher.spawnCount, "越界路径绝不进 argv")
+    }
+
+    @Test
     fun `env 契约与 argv cwd 逐项对齐 main 契约`() {
         writeScript()
         val launcher = FakeLauncher()

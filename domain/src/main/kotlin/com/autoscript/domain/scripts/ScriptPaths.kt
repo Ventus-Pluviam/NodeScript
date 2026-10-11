@@ -55,28 +55,43 @@ object ScriptPaths {
      * 脚本文件的绝对路径：`files/scripts/<projectId>/<scriptPath>`（§9.6 项目内相对路径）。
      *
      * 引擎宿主拿到的必须是绝对路径：引擎进程有自己的 cwd（native 侧由 `:engine:node-process`
-     * 决定），相对路径会解析到别处。这里只做拼接，**不做逃逸校验** —— 调度侧早已把
-     * `projectId`/`scriptPath` 当不透明字符串透传（见 `ScheduledTask`），
-     * 要防逃逸的是**写入**侧（`DeployPath.resolveIn`）。
+     * 决定），相对路径会解析到别处。
      *
-     * **「读取侧越界只会读不到文件」这句话曾经写在这里，它不成立**（2026-10-12 订正，
-     * 外审 M1 的真问题 —— 同一批把外审设想的提权场景否掉了，剩下的是这一句 KDoc）：
-     * 本方法对 `scriptPath` **一个字都不校验**，`scriptFile(d, "p", "../../databases/app.db")`
-     * 返回的就是那条真实路径，**读得到**。`Path.resolve` 不做词法收敛（那是
-     * `normalize()` 的活），所以越界不是「读不到」而是「读到别的文件」。
+     * **读侧判据（2026-10-12 补，外审 M1 收口；此前本方法一个字都不校验）**：
+     * [scriptPath] 与 [projectId] 都过词法闸 —— 绝对路径、`..`/`.`/空段段、反斜杠一律
+     * `require` 拒（[IllegalArgumentException]），归一后还要求目标**严格在**项目根之下
+     * （用 [Path.startsWith] 词法判据）。加这道闸的理由不是当下有可利用的漏洞
+     * （`scriptPath` 的来源是 [com.autoscript.domain.engine.EngineRunRequest]，即本 App
+     * 自己的任务库与桥侧 `engines.exec`，跨 uid 越权要先进任务库，而写任务库的入口都过了
+     * 校验），而是**这句话本身就是引擎执行面的入参**：`NodeProcessEngine` 拿它的结果直接
+     * 当 `node <路径>` 的命令行拼进去执行。一个拼错即越界的路径函数留在执行面上，
+     * 下一个接线方把外部输入接进来时就没有第二道网。
      *
-     * **当下是否可利用**：`scriptPath` 的来源是 `ScheduledTask.scriptPath`（用户/项目自持）
-     * 与桥侧 `engines.exec`，即**本 App 自己**；跨 uid 越权读需要先写进任务库，而写任务库
-     * 的入口都过了 `isValidProjectId` / `isSafeRelPath`。所以这是**本函数缺一道读侧判据**，
-     * 不是**可被脚本触发的越权**。与 [isValidProjectId] 的分工照旧：那是判据，本方法只是拼接。
+     * 为什么用**词法**判据而不是 `toRealPath()`：那要求目标已存在（读侧判据会否掉
+     * 尚未部署的脚本路径，把「部署晚于调度」从 `ERR_FILE_NOT_FOUND` 变成参数错），
+     * 且对符号链接要逐级解真实 inode。写入侧防符号链接是另一条线（见
+     * `DeployPath.resolveIn` 的 KDoc，那里已如实分开记「判据不够强」与「当下可利用」）。
      *
-     * 补法：读侧真要收口，在本方法里加 `normalize()` 后的 `startsWith(projectRoot)` 判据
-     * （或把校验提到调用方），并把 `startWith` 前缀比较换成**绝对路径相等**比较 ——
-     * 源目录名可能是另一个目录名的前缀（`/a/scripts` vs `/a/scripts-evil`），
-     * 前缀比较那种坑 zip 硬化时已经踩过一次（批 99）。
+     * **与 [isValidProjectId] 的分工照旧**：那是判据（是/否），本方法是拼接；
+     * 这里复用它，所以项目号与项目内路径**同一份**正则口径（拼错的 id 也不会编译失败，
+     * 只会变成「写进去了但读不到」，同本对象开头那条教训）。
+     *
+     * **不做的一件事**：不查存在性（[Path.exists] 的事，不是约定的）。
      */
-    fun scriptFile(filesDir: Path, projectId: String, scriptPath: String): Path =
-        projectRoot(filesDir, projectId).resolve(scriptPath)
+    fun scriptFile(filesDir: Path, projectId: String, scriptPath: String): Path {
+        require(isValidProjectId(projectId)) { "非法项目号: $projectId" }
+        require(scriptPath.isNotBlank()) { "脚本路径为空" }
+        require(!scriptPath.startsWith("/") && !scriptPath.startsWith("\\")) { "脚本路径必须是项目内相对路径: $scriptPath" }
+        for (seg in scriptPath.split('/')) {
+            require(seg != ".." && seg != "." && seg.isNotEmpty() && !seg.contains('\\')) {
+                "非法脚本路径: $scriptPath"
+            }
+        }
+        val root = projectRoot(filesDir, projectId).toAbsolutePath().normalize()
+        val target = root.resolve(scriptPath).normalize()
+        require(target.startsWith(root) && target != root) { "脚本路径越出项目目录: $scriptPath" }
+        return target
+    }
 
     /**
      * 录屏产物的落点目录：`files/scripts/<projectId>/.recordings`（§9.2 录屏腿）。

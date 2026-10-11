@@ -98,6 +98,23 @@ class FileScriptEnvStoreTest {
     }
 
     @Test
+    fun `半行截在多字节字符中间——整条丢弃且不响亮`(@TempDir dir: Path) {
+        val s = FileScriptEnvStore(dir)
+        s.put("A", "1")
+        // 手工追加：JSON 头部 + 一个**腰斩的中文**（半个 UTF-8 序列），且**没有行尾换行**。
+        val head = """{"op":"put","k":"C","v":"中"""
+        val partial = head.toByteArray(StandardCharsets.UTF_8)
+        Files.write(file(dir), partial.copyOf(partial.size - 1), StandardOpenOption.APPEND)
+
+        assertEquals(
+            listOf(ScriptEnvEntry("A", "1")),
+            FileScriptEnvStore(dir).all(),
+            "断在半行（半个 UTF-8 码点）的记录整条丢弃、不连坐前行，也不响亮 —— " +
+                "它就是崩溃截断，语义与「最后半行」同一条",
+        )
+    }
+
+    @Test
     fun `损坏行响亮失败而非静默跳过`(@TempDir dir: Path) {
         Files.write(file(dir), "not json\n".toByteArray(StandardCharsets.UTF_8))
         assertThrows(java.io.IOException::class.java) { FileScriptEnvStore(dir) }
