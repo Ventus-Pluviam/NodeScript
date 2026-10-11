@@ -1,4 +1,24 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 95（T1 杀树换 /proc 实现 —— 修掉批 91 在真机上的静默空转 + 无人点名的 signal）**：
+> 挖出比记账更严重的实情：`java.lang.ProcessHandle` **整类不在 android.jar 里**（api-versions.xml
+> 无条目、jar 无 class、`Process` 桩面无 `toHandle()`/`pid()`，javap 逐方法核过）—— 批 91 的
+> `runCatching { proc.toHandle().descendants() }` 在**真机上恒空集、零报错**，杀树退化成只杀
+> 主进程（「孙子被 reparent 后链断」那条记账其实从未成为主要问题：整条后代链在设备上都不存在；
+> 同族「看着能用」坑的第四例，前三例是 `Path.of`/`UnixDomainSocketAddress`/env-NUL）。
+> **修法**：`ProcOps`/`ProcTreeOps`（新文件）—— /proc ppid 图扫描 + `kill` 二进制；**扫在杀
+> 之前**（reparent 只断死后回找）；同 UID 靠 fork 继承（图上可达即同 UID）；pid 两级反射阶梯
+> （`pid()` 方法 → 私有字段 `pid`，与 `ProcessLauncher` 同手法；都探不到如实 null）；
+> stat 解析找最后一个 `)`（comm 可变）；收尸 = 扫→TERM→宽限→KILL 活口→**二次收割**
+> （从仍活着的第一轮成员再扫，捡 TERM 被忽略那条新生的）→KILL。`T1TreeOps` 缝 +
+> procDir 注入（合成 /proc 树单测，不借宿主判状态）。
+> **无人点名的 signal**：`exitValue >= 128` 时按 POSIX 惯例 `n = exit - 128` 反查信号名表
+> （1–31；32+ 不猜）—— 128+n 就是「被信号杀死」的编码本身；已知误报档（自杀 `exit(143)`）
+> 与仍欠（区分 CLD_KILLED/CLD_EXITED 要 JNI waitid）如实记。
+> 守卫：`ProcOpsTest` 7 例 + `T1ProcessTest` +5（**真进程树用例抓到第一版实现的真 bug**：
+> readStat 读成了目录本身而非其下 stat 文件，症状与设备静默空转同形 —— 没有它这个 bug
+> 会原样带上真机）；完整 CI JVM 门 14 任务全绿。决策：[`design-decisions.md`](design-decisions.md)
+> 第 64 项。**边界**：真机行为由用户自测。细节见 [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 94（T1 欠账两件：脚本输出真流式 + 命令可取消 —— 桥 kill 帧 + 控制台「停止」）**：
 > 批 91 登记的七件欠账里做掉两件。**① 输出流式**：`ScriptOpExecutor.execute` 补 `OutputSink`
 > 缝（与批 90 `HeavyOpExecutor` 同形），T1 会话进程（`npm run`/`npx`）的 stdout 边读边落
@@ -491,6 +511,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 3 | 批 95：T1 杀树换 /proc 实现 —— ProcessHandle 整类不在 android.jar（批 91 杀树在真机静默空转）；ProcOps/ProcTreeOps：/proc ppid 图 + kill 二进制 + 扫在杀之前 + 二次收割 + pid 反射两级阶梯；无人点名 signal 按 128+n 惯例反查信号名表。守卫 ProcOpsTest 7 例 + T1ProcessTest +5（真进程树用例抓到 readStat 读目录的真 bug）。**边界**：真机自测 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 2 | 批 94：T1 欠账两件 —— 脚本输出真流式（`ScriptOpExecutor` 补 `OutputSink` 缝，T1 会话进程 stdout 边读边落控制台环）+ 命令可取消（桥侧 `kill` 帧 SIGTERM/SIGKILL、`waitFor` 切片轮询查 `ScriptOp.cancelSignal`、facade/`HostSummary` `cancelConsoleCommand`、UI 停止按钮）；覆盖面如实：T1 真杀、重操作仍弃结果（TTL 兜底）。守卫五测试类 +11 例 + detekt baseline 重生成 + lintDebug 全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 1 | 批 93：控制台 `npm run`/`npx` 拆除人工审批 + env-NUL 修复 —— 用户裁定「审批不是这样用的……依赖面板是方便用户直接安装和管理依赖的地方。你把审批去掉吧」，**整面拆**：账本两类/桥面 `requestApprove`+`approvals`/`:domain` 七个审批类型/facade 四个方法/UI 审批卡（`approvalLedgerSnapshot` 保留只读）；放行判据改解析层白名单，`versionHash` 只进审计。同批修真机暴露 env-NUL：`connectTarget` 的 `"\0"` 前缀经 env 进 `ProcessBuilder` 必抛 `Invalid environment variable value` —— 改 env 给裸名、shim 按 `main.cpp` 同源 '/' 判别补前缀；桌面路径型原样，`T1BridgeNodeTest`+`T1BridgeE2ETest` 继续绿 = 直连分支钉死。守卫：完整 CI JVM 门 14 任务全绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-10 | 3 | 批 91：T1 spawn 桥本体 —— `npm run`/`npx` 第一次真跑起来（`npm-t1-bridge.cjs` 经 unix socket 把 spawn 报给宿主、宿主起真进程、stdio 假管道回填；只放行异步三兄弟，`detached` 当场拒；**两条 shim 互斥** —— T1 只注桥那一份）。最贵的一课：`Channels.newInputStream/newOutputStream` 共用 `blockingLock()`，读线程抱锁阻塞 → 写线程永远拿不到锁，双向协议被流包装锁成单向（两类测试双双挂死、报错面只有「超时」）；改直读 `SocketChannel` 即绿。同批修握手死锁（`send` 排队等 `ready` 而 `ready` 等 `helloAck`）与 socket 保活（`refWhileBusy()`：无在途子进程 unref、有则 ref）。守卫 16 例（真 node 7 / 真 npm 4 / 替身 5），T1 两类不设 `assumeTrue`。欠账：不用引擎池 / 同 UID 无最小掩码 / 无输出流式 / `signal` 恒 null / 孙子被 reparent 后杀树链断 | [`log/2026-10-10.md`](log/2026-10-10.md) |

@@ -1,5 +1,19 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-11，批 95）
+
+- [2026-10-11 · 批 95：T1 杀树换 /proc 实现 —— 修掉批 91 在真机上的静默空转 + 无人点名的 signal](2026-10-11.md)：
+  **实情挖出比记账严重**：`java.lang.ProcessHandle` **整类不在 android.jar**（api-versions.xml
+  无条目、jar 无 class），批 91 的 `toHandle().descendants()` 在真机上被 `runCatching`
+  吞成空集 —— 杀树静默退化为只杀主进程，零报错（「看着能用」同族坑第四例）。
+  **修法**：`ProcOps`/`ProcTreeOps` —— /proc ppid 图 + `kill` 二进制；**扫在杀之前**
+  （reparent 只断死后回找）；pid 两级反射阶梯；收尸 = 扫→TERM→宽限→KILL 活口→
+  **二次收割**（从仍活着的第一轮成员再扫，捡 TERM 被忽略那条新生的）→KILL。
+  **无人点名 signal**：`exitValue >= 128` 按 POSIX 惯例反查信号名（1–31；32+ 不猜；
+  自杀 exit(143) 的误报档如实记；要零误报得 JNI waitid）。守卫：`ProcOpsTest` 7 例 +
+  `T1ProcessTest` +5（真进程树用例抓到 readStat 读目录而非其下 stat 文件的真 bug ——
+  没有它会原样带上真机）。完整 CI JVM 门 14 任务全绿。**边界**：真机自测。
+
 ## 最新追记（2026-10-11，批 94）
 
 - [2026-10-11 · 批 94：T1 欠账两件 —— 脚本输出真流式 + 命令可取消（桥 kill 帧 + 控制台「停止」）](2026-10-11.md)：

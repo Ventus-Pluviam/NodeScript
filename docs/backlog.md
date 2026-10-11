@@ -1,5 +1,28 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 95：T1 杀树换 /proc 实现 —— 批 91 那版在真机上是静默空转）
+
+- **批 91 清单的第 5、6 条做了，本条销账**（原文在下方 2026-10-10 追记里逐字保留）：
+  1. ~~**杀树的洞**~~ → `ProcOps`/`ProcTreeOps`：/proc ppid 图扫描 + `kill` 二进制，
+     **扫在杀之前** + 宽限后 KILL 活口 + **二次收割**（§10.3 原文那句的兑现）。
+     **实情订正**：批 91 的 `ProcessHandle.descendants()` 在真机上**从来没跑起来过**
+     （`ProcessHandle` 整类不在 android.jar，`NoSuchMethodError` 被 `runCatching` 吞成
+     空集）—— 原记账「孙子被 reparent 后链断」不是主要问题，整条后代链在设备上都不存在。
+  2. ~~**`signal` 恒 null**（纯 JVM 可解的半边）~~ → `exitValue >= 128` 时按 POSIX 惯例
+     `n = exit - 128` 反查信号名表（1–31；32+ 不猜）。
+  口径见 [`design-decisions.md`](design-decisions.md) 第 64 项，流水见
+  [`log/2026-10-11.md`](log/2026-10-11.md)。
+- **仍欠的两小条**（登记，不假装做完）：
+  1. **区分「自杀 exit(143)」与「被 SIGTERM」**：要上 JNI waitid（`si_status` +
+     `CLD_KILLED`/`CLD_EXITED`）—— NDK 件，未排期。纯 JVM 半边到批 95 为止。
+  2. **`kill` 二进制在极端 ROM 上缺席**：缺席时静默降级为只杀主进程（与批 91 行为同界，
+     不更坏）；要彻底兜住得 JNI kill（`Process.kill`/`kill(-pid)`）—— 同上未排期。
+- **剩余三件不变**（引擎池统一 / 最小 CapabilityMask / 同步三入口与 stdin 背压），
+  见下方 2026-10-10 追记。
+- **真机验证积压（批 95 新增）**：/proc 杀树在真机上的行为（`hidepid`、toybox `kill` 的
+  存在性与参数形）；无人点名 signal 反查在真机上的实际命中（OOM killer 那档最典型）。
+
+
 ## 2026-10-11 追记（批 94：T1 欠账七件里做掉两件 —— 输出流式与命令取消）
 
 - **批 91 那份七件清单的第 3、4 条已做，本条销账**（原文在下方 2026-10-10 追记里逐字保留）：
