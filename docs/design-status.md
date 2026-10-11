@@ -5,7 +5,10 @@
 > （外审 B3 三件的最后一件；前两件是批 96 半行清盘与批 104 流式读）。**判据不是「格式像
 > 不像 jsonl」，是「读口问的是现状还是发生过什么」** —— 前者可压（`all()` 就是收敛视图的
 > 投影），后者不可（`install-history.jsonl` 的全量读口是刻意的，压缩过去就是删审计）。
-> 顺带订正台账三处「已裁定/已做却仍写『仍挂』」的矛盾（M4 / A13 / `TrustTierResolver`）。
+> 顺带订正台账**五处**「已裁定/已做却仍写『仍挂』或仍挂 🔶」的矛盾 —— 三处在顶部追记块
+> 的「仍挂」清单（M4 的「另一半」/ A13 / `TrustTierResolver`），一处是 F 节「下一批」那份
+> 逐批过期的清单，一处是结构小节的 🔶 四条（其中三条早已做完：池记账=批 103、
+> jsonl→SQLite=批 102、无 `ERR_INTERNAL`=批 97）。**五处全是逐条 grep 出来的**。
 > 叙事见 [`本日流水`](log/2026-10-11.md)。
 > **2026-10-12 · 批 105：两份 `ProcOps` 合并成 `:platform:process`** ——
 > [`ProcOps`](../platform/process/src/main/kotlin/com/autoscript/platform/process/ProcOps.kt)
