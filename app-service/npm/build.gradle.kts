@@ -20,6 +20,9 @@ kotlin {
 
 dependencies {
     implementation(project(":domain"))
+    // 进程/`/proc` 面（批 105）：T1 杀树的两份副本之一被合并进 `:platform:process`，
+    // 本模块只保留 T1 自己的收尸顺序与信号名表（`T1SignalNames.kt`）。
+    implementation(project(":platform:process"))
     "testFixturesImplementation"(project(":domain"))
     implementation(libs.kotlinx.coroutines.core)
 }

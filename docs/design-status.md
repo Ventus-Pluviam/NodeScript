@@ -1,4 +1,13 @@
 # AutoScript 落地状态台账
+> **2026-10-12 · 批 105：两份 `ProcOps` 合并成 `:platform:process`** ——
+> [`ProcOps`](../platform/process/src/main/kotlin/com/autoscript/platform/process/ProcOps.kt)
+> + [`TreeOps`](../platform/process/src/main/kotlin/com/autoscript/platform/process/TreeOps.kt)
+> 住**新模块 `:platform:process`**（**叶子模块，连 `:domain` 都不依赖**）。消掉的是批 95
+> （npm T1 杀树）与批 99（shell 收尸）那两份「手法逐字同款、代码两份」的重复 ——
+> 塞 `:domain` 也能消重复，但那是消症状留根因。**`:engine:node-process` 的
+> `ProcessLauncher.pidOf` 刻意留一份**：反向依赖即破 §6。模块数 17→18、测试任务 14→15，
+> 冻结面五处同步。叙事见 [`本日流水`](log/2026-10-11.md)。
+>
 > **2026-10-12 · 批 104：外审 M1 收口 + B3 的流式读那半** ——
 > [`ScriptPaths.scriptFile`](../domain/src/main/kotlin/com/autoscript/domain/scripts/ScriptPaths.kt)
 > 补上读侧词法闸（此前它一个字都不校验，而 `NodeProcessEngine` 拿返回值直接拼 `node <路径>`
@@ -669,6 +678,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-12 | 15 | 批 105：两份 `ProcOps` 合并成**新模块 `:platform:process`**（消掉批 95/99 留下的「手法逐字同款、代码两份」重复）。**落点选叶子模块而非塞 `:domain`** —— 它只用 `java.nio` + `Process` 桩面，塞领域层能消重复但消的是症状留的是根因（领域层不该知道 `/proc`）。**`:engine:node-process` 的 `ProcessLauncher.pidOf` 刻意留一份**：反向依赖即破 §6，那段纯反射不值得。顺带两处：`ProcTreeOps.alive` 改走注入的 procDir（原来写死 `DEFAULT_PROC`，合成树插不进去）+ 信号名表拆成 npm 侧的 `T1SignalNames.kt`（T1 exit 帧契约，只此一个调用方）。模块数 17→18 / 测试任务 14→15，冻结面五处同步（`ModuleGraphTest` 的计数门当场抓到 `build-logic/settings.gradle.kts` 漏改）。两侧 ArchitectureTest 黑名单**逐条改**，放行粒度到子包（`platform.process` 放行，其余 `platform.*` 三面仍零依赖）。守卫 7 + 1 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 14 | 批 104：外审 **M1 收口**（`scriptFile` 补读侧词法闸 —— 此前一个字都不校验，而返回值直接进 `node <路径>` 的 argv；`projectId` 复用 `isValidProjectId`，非法路径折 `ERR_INVALID_PARAM`）+ **B3 的流式读那半**（`FileScriptEnvStore.replay` 去 `readAllBytes`，改逐字节扫）。守卫新增 7 + 1 + 1 | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 13 | 待办池清池续：**划掉的 31 行直接删掉**（决策第 73 项）—— A–E 五张表里全部 31 条划掉的行已删除（只删条目行，结论不丢：已完成叙事在流水切片、裁定口径在决策记录）。上一轮那批判的是「不再跟进」不是「已完成」，划线等于往待办池塞一条**永远不会被领走的假待办**，下次列清单它又冒出来 —— **划线在本仓是「结论已定」的记号，不是「待办」的记号**；没结论的（外审 B3/M1/M2 三条半成品、结构性长线项）一条没动。**D6 是 A–E 唯一活着的行**（需拍板） | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 12 | KDoc 与实现矛盾七处订正（**零行为变更**）—— 逐条只改注释：`resolveIn` 纯词法不防符号链接、`scriptFile` 不做读侧校验（越界**读得到**）、`RpcNamespaceHandler` 的穿出在 Router 那档折成 `ERR_INTERNAL`、`generation` 只剩诊断价值（拿它判过期=假不变量）、`FileTaskStore` 收敛的只是崩溃半行（行内损坏响亮失败）、`LockSigner`「防搬锁」只对一半且单文件覆盖所有项目（行为不改，M9 裁定不做）、`AndroidShellExecutor` 准确口径是「尽力收整棵树、不保证」 | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |

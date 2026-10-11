@@ -1,5 +1,24 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-12 追记（批 105：两份 ProcOps 合并成 `:platform:process`）
+
+- **重复已消**：批 95（npm T1 杀树）与批 99（shell 收尸）那两份「手法逐字同款、代码两份」
+  的 `ProcOps` 合并成**新模块 `:platform:process`**（`ProcOps`/`TreeOps`/`ProcTreeOps`），
+  两处副本删除、口径见决策第 74 项。**它是叶子模块**（连 `:domain` 都不依赖）——
+  塞进 `:domain` 也能消重复，但那是消症状留根因（领域层不该知道 `/proc`，
+  而那条边界正是当初两份重复的成因）。
+- **刻意留一份**：`:engine:node-process` 的 `ProcessLauncher.pidOf` 反向依赖即破 §6，
+  为一段构造期纯反射不值得。KDoc 写明为什么不合并。
+- **冻结面五处同步**（模块数 17→18、测试任务 14→15）：`settings.gradle.kts` /
+  `ci.yml` 的 `./gradlew` 行 / `CLAUDE.md`（两处计数 + 仓库地图一行）/
+  `docs/design/06-modules.md` 模块表 / `ModuleGraphTest` 允许集。**`ModuleGraphTest`
+  的计数门当场抓到第六处漏改**（`build-logic/settings.gradle.kts` 头注释）。
+- **两侧 ArchitectureTest 黑名单逐条改**：放行粒度到**子包** —— `platform.process` 放行，
+  其余 `platform.*` 三面仍零依赖（「进程面」不得变成「平台面」的入口）。
+- **仍挂**（不因本批减少）：B3 的压缩半边、M2 另两半（每连接配额 / `limitedParallelism`）、
+  `BridgeRouter` 未知异常语义缝的另一半、`TrustTierResolver`、A13 保留期/清理、
+  结构性项（typed ids / actor 化 / D13）；D6 两小问仍等你拍板。
+
 ## 2026-10-12 追记（批 103：P2 池记账重构 —— 拍板项做掉第二个）
 
 - **P2 已做**（口径见决策第 72 项），三阶段：① **空闲队列 = 唯一真源** + `PoolLease`

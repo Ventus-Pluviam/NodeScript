@@ -16,7 +16,7 @@
 | `docs/backlog.md` | **待办池**：未排期项 + 外审建议（逐条带证据位置、核实状态、成本、建议批次）——是收件箱不是承诺，排期/做完/裁定不做了都从这里移走 | — |
 | `.claude/skills/skill-designer/` | 项目级 skill：设计/创建技能 + 外科手术式改代码 + git 提交 | — |
 
-## Gradle 模块（模块表由 `settings.gradle.kts` 冻结，17 个 —— `:engine:sandbox` 空壳 2026-09-30 已注释摘除、`:app-service:npm` 同日审查步骤 5 自 packager 拆出；复活 sandbox = 重建模块目录 + include 行加回 + ModuleGraphTest 允许集登记）
+## Gradle 模块（模块表由 `settings.gradle.kts` 冻结，18 个 —— `:engine:sandbox` 空壳 2026-09-30 已注释摘除、`:app-service:npm` 同日审查步骤 5 自 packager 拆出、`:platform:process` 2026-10-12 批 105 新增（两份 `ProcOps` 副本的合并落点）；复活 sandbox = 重建模块目录 + include 行加回 + ModuleGraphTest 允许集登记）
 
 - `:app` — AppShellApplication 启动装配（§4.1 Composition Root）；Compose UI 已拆去 `:ui`（2026-09-23 落地：launcher 随库 manifest 合并，`:app` 源码零 compose / 零 import ui）
 - `:app-service:runtime` — RuntimeController / EnginePool / Watchdog 仲裁（§8）
@@ -32,6 +32,7 @@
 - `:engine:node-process` — :nodeN 进程宿主：`NodeProcessEngine`（Kotlin spawn，实现 `:domain` 的 `ScriptEngine`）+ main.cpp（§5/§7.8；addon `.so` 本机 NDK 可交叉编译验证，APK `assembleDebug` 本机可直跑）
 - `:engine:sandbox` — QuickJS 宿主进程（**已裁 §18 第 1 项；壳 2026-09-30 已从 settings 注释摘除、不计入模块数**，空壳目录 2026-10-01 已从盘上删除、settings 里那行注释也同批删掉，见 `design-decisions.md` 同批追加行；复活 = 重建模块目录 + include 行加回 + ModuleGraphTest 允许集登记）
 - `:platform:capabilities` — **无障碍三面**：a11y 树/手势、screen 截图帧源、dialogs 对话框编排（`capabilities/{a11y,screen,dialogs,device}/` 子包；2026-09-30 步骤 6 系统面迁出，§9.1–9.4）
+- `:platform:process` — **进程/`/proc` 面**（批 105 新增）：杀树的 ppid 图 + `kill` 二进制 + pid 两级反射阶梯（`ProcOps`/`TreeOps`/`ProcTreeOps`）。**叶子模块，零模块依赖**（连 `:domain` 都不需要）—— `/proc` 不是领域概念，塞进 `:domain` 会失守「领域层零平台面」边界
 - `:platform:system` — **系统面 handler + SPI 实现 + 能力专用契约**：`SystemNamespaces` 十一件（shell/device/app/floatingWindow/datastore/zip/settings/notification/clipboard/sensors/images）+ 电源面 `PowerManagerNamespaceHandler`/`WakeLockLedger`（§8.7）+ `SystemSpis.of` 实现入口 + 五契约（步骤 6a 自 :domain 迁入；`DialogHost` 留 :domain，§9.6/§12.2）
 - `:ui` — Compose UI 呈现层：启动 Activity（launcher）、首屏/任务中心/控制台/能力中心界面；状态经 `:domain` 的 `HostSummary` 读口现取，禁依赖 `:app`（§6）
 - `bridge/js/` — **npm 包**（TS facade SDK，脚本侧导入名 `auto`，非 Gradle 模块、非 npm workspaces——空 `workspaces` 字段已删，§12.4）
@@ -39,7 +40,7 @@
 
 ## 依赖方向铁律（Gradle/archUnit 强制，见 §4.1）
 
-`:app` → `:app-service:*`/`:ui` → `:domain`；`:platform:*` → `:domain`（实现 SPI，不反向）；`:bridge:java` → `:domain`；`:domain` 零 Android/零桥。全部禁止把 UI/Dialog 类、危险权限、循环依赖带进下层。
+`:app` → `:app-service:*`/`:ui` → `:domain`；`:platform:*` → `:domain`（实现 SPI，不反向；`:platform:process` 是例外：**叶子模块，零模块依赖**）；`:bridge:java` → `:domain`；`:domain` 零 Android/零桥。全部禁止把 UI/Dialog 类、危险权限、循环依赖带进下层。
 
 ## 构建
 
@@ -54,7 +55,7 @@
 
   | job | 干什么 | 不变式（改它之前先读这条） |
   |---|---|---|
-  | `jvm-tests` | 14 个测试任务的 JVM 单测 + archUnit + detekt + jacoco 报告 | 「17 个模块」「14 个测试任务」两个数**从 `settings.gradle.kts` 的 include 与 `ci.yml` 的 `./gradlew` 行派生**，`:domain` 的 `ModuleGraphTest` 守着 —— 文档里写了数字就必须等于派生值。前置 `npm --prefix bridge/js ci && run build`：`:app` 的随包任务硬依赖 tsc 产物（`bridge/js/dist` **不入 git**） |
+  | `jvm-tests` | 15 个测试任务的 JVM 单测 + archUnit + detekt + jacoco 报告 | 「18 个模块」「15 个测试任务」两个数**从 `settings.gradle.kts` 的 include 与 `ci.yml` 的 `./gradlew` 行派生**，`:domain` 的 `ModuleGraphTest` 守着 —— 文档里写了数字就必须等于派生值。前置 `npm --prefix bridge/js ci && run build`：`:app` 的随包任务硬依赖 tsc 产物（`bridge/js/dist` **不入 git**） |
   | `js-tests` | `bridge/js` 的 npm test + `gen:wire && git diff --exit-code` | wire 生成物两份必须与 `bridge/schema/wire.schema.json` 同步，漂移即红 |
   | `docs-check` | `bash .github/scripts/check-doc-links.sh` | 全部 `*.md` 的相对链接必须指向存在的文件；**扫到 0 条也红**（门没跑起来 ≠ 门绿了） |
   | `android-build` | `./gradlew lintDebug` + `:app:assembleDebug`，两者上传 artifact | lint **不加模块前缀**：单跑 `:app` 看不见库模块的 NewApi（`checkDependencies` 缺省 false）。**该 APK 不含引擎二进制**（都不在 git，装配期「缺位只 warn」）—— 补齐路径记在 `docs/backlog.md` 的 B5 |

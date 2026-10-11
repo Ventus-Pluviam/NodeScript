@@ -51,7 +51,7 @@ jobs:
         # 的 8.9，与 AGP 8.5.2 匹配）。写死在这里会变成第二个事实来源，迟早与 wrapper 漂移。
       - name: JVM 单元测试
         run: |
-          ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:test :app-service:script-repo:testDebugUnitTest :app-service:permission-center:test :app-service:packager:test :app-service:npm:test :platform:capabilities:testDebugUnitTest :platform:editor:testDebugUnitTest :platform:system:testDebugUnitTest :engine:node-process:testDebugUnitTest :ui:testDebugUnitTest :app:testDebugUnitTest --stacktrace -PskipNpmE2E
+          ./gradlew :domain:test :bridge:java:test :app-service:runtime:test :app-service:scheduler:test :app-service:script-repo:testDebugUnitTest :app-service:permission-center:test :app-service:packager:test :app-service:npm:test :platform:capabilities:testDebugUnitTest :platform:editor:testDebugUnitTest :platform:process:test :platform:system:testDebugUnitTest :engine:node-process:testDebugUnitTest :ui:testDebugUnitTest :app:testDebugUnitTest --stacktrace -PskipNpmE2E
       # B6：覆盖率报告（只出报告不设阈值 —— 存量覆盖率未知，设门必红；本批只让盲区看得见）。
       # 与测试同 job：报告读的是上一步刚写出的 .exec，换 job 就得把执行数据当 artifact 搬运。
       - name: 覆盖率报告（jacoco，不设阈值）

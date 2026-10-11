@@ -1,29 +1,49 @@
-package com.autoscript.platform.system.shell
+package com.autoscript.platform.process
 
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
- * 进程树收尸的 `/proc` 面（外审 M6，2026-10-11 批 99）。
+ * 进程树收尸的 `/proc` 面与 pid 提取面（docs §8 / §9.6；外审 M6）。
  *
- * ## 与批 95 那份 `app-service:npm/ProcOps` 的关系
+ * ## 来历：两份逐字同款的重复合并到一处
  *
- * 手法**逐字同款**（`/proc` ppid 图 + `kill` 二进制 + pid 两级反射阶梯），但**代码在两个
- * 模块各有一份** —— 这是被依赖方向逼的，不是疏忽：npm 模块与 platform 模块都只依赖
- * `:domain`，而 `ProcOps` 属于进程/文件系统面（不是领域概念），把它塞进 `:domain` 等于
- * 让领域层知道 `/proc`。两份的 KDoc 在这里与 npm 那侧互相点名：**改一处时另一处必须
- * 跟着看**。真要消重，唯一干净的路是抽一个「进程工具」模块（那是一次模块表变更，
- * 要维护者拍板），本批不做。
+ * 2026-10-11 批 95（`:app-service:npm` 的 T1 杀树）与批 99（`:platform:system` 的 shell
+ * 收尸）各自落了一份 `ProcOps`，**手法逐字同款**（`/proc` ppid 图 + `kill` 二进制 + pid
+ * 两级反射阶梯），**代码两份**。当时两边 KDoc 互相点名、明确写下「被依赖方向逼的」：
+ * npm 与 platform 两个模块都只依赖 `:domain`，而 `ProcOps` 属于进程/文件系统面，
+ * 塞进 `:domain` 等于让领域层知道 `/proc`。**改一处时另一处必须跟着看** —— 那不是维护性，
+ * 是欠了债。批 105 抽本模块把债还掉，两侧现在各留一句「已合并」的指针。
+ *
+ * 本模块**零模块依赖**（连 `:domain` 都不需要）：只用 `java.nio` 与 `Process` 桩面。
  *
  * ## 为什么不用 `java.lang.ProcessHandle`
  *
- * **那整类不在 android.jar 里**（批 95 已实查：`api-versions.xml` 无条目、jar 无 class、
- * `Process` 桩面无 `toHandle()`/`pid()`）—— 桌面 JDK 编译放行、设备上
- * `NoSuchMethodError`/`NoClassDefFoundError` 被吞成**静默空转**。「看着能用」同族第四例。
+ * **那整类不在 android.jar 里**（批 95 已实查：`platforms/android-35/data/api-versions.xml`
+ * 无条目、jar 无 class、`Process` 桩面无 `toHandle()`/`pid()`）—— 桌面 JDK 编译放行、
+ * 设备上 `NoSuchMethodError`/`NoClassDefFoundError` 被吞成**静默空转**：后代集合恒空 →
+ * 杀树退化成只杀主进程，**且没有任何报错**。这正是 `ProcessLauncher` KDoc 记的「看着能用」
+ * 错觉的来源（javac 按桌面 JDK 放行，npm/platform 两模块是纯 JVM 模块、没有 lint 的
+ * `NewApi` 兜着）。用户设备 Android 13 上，批 91 记的「孙子被 reparent 后链断」
+ * 其实从未成为主要问题 —— **整条后代链在设备上都不存在**。
+ *
+ * ## `/proc` 版的三个要点
+ *
+ * 1. **扫在杀之前**：reparent 只断「死了之后沿 ppid 往回找」；pid 集合一旦在树还活着时
+ *    到手，之后谁被 reparent 都无所谓 —— 我们手里有号。
+ * 2. **同 UID 是继承出来的**：后代的 uid 必然等于我们的 uid（fork 不换 uid），所以
+ *    ppid 图上从 rootPid 走得到的集合**天然同 UID**，不必逐 pid 查 `/proc/<pid>/status`；
+ *    Android 的 hidepid=2 还会让别家的条目在扫描时直接读不到（跳过即可）。
+ * 3. **按 pid 杀用 `kill` 二进制**（toybox/util-linux 两边都有）：JVM 没有「按 pid 杀」的
+ *    API（`ProcessHandle` 上面说了不在设备上），我们只有主进程的 `Process` 对象。
+ *
+ * [procDir] 可注入（单测喂一棵合成的 /proc 树 —— 借宿主 /proc 判状态在 CI 上是假绿，
+ * 本仓有过教训：pid=4242 借宿主 /proc 判死，本机全绿 CI 红）。默认 `/proc`。
  */
 class ProcOps(
-    private val procDir: Path = DEFAULT_PROC,
+    /** 扫哪个 `/proc`。可注入（合成树单测）；生产走 [DEFAULT_PROC]。 */
+    val procDir: Path = DEFAULT_PROC,
 ) {
 
     /** [process] 的全部后代 pid（不含它自己）；pid 取不到 / 平台不可读 → 空集（降级只杀主进程）。 */
@@ -56,9 +76,10 @@ class ProcOps(
     /**
      * [process] 的 pid；取不到回 null（**诚实降级，不回 0/自身** —— §8.4 同一条纪律）。
      *
-     * 两级反射阶梯（与批 95 同手法、同理由）：`pid()` 方法（JDK 9+ / Android 14+ 运行时有）
-     * → 私有字段 `pid`（Android 13 libcore 的 `ProcessImpl` 有）。本模块是纯 JVM 模块，
-     * 编译按桌面 JDK 放行，直调 `process.pid()` 在设备桩面上根本不存在。
+     * 两级反射阶梯（`:engine:node-process` 的 `ProcessLauncher` 同手法、同理由，那处是
+     * 为身份绑定，这里为杀树）：`pid()` 方法（JDK 9+ / Android 14+ 运行时有）→ 私有
+     * 字段 `pid`（Android 13 libcore 的 `ProcessImpl` 有）。本模块是纯 JVM 模块，编译
+     * 按桌面 JDK 放行，直调 `process.pid()` 在设备桩面上根本不存在。
      */
     fun pidOf(process: Process): Long? {
         pidMethod?.let { m ->
@@ -96,7 +117,7 @@ class ProcOps(
     }
 
     /** `/proc/<pid>/stat` 的三件：pid / state / ppid（comm 可变 → 找最后一个 `)`）。 */
-    internal data class Stat(val pid: Long, val state: Char, val ppid: Long)
+    data class Stat(val pid: Long, val state: Char, val ppid: Long)
 
     /**
      * 解析一条 `stat`。格式 `pid (comm) state ppid …`，而 **comm 是可变的**（进程可以
@@ -107,7 +128,7 @@ class ProcOps(
      * 踩过这个坑：第一版读成了目录本身，全部条目 "Is a directory" 被跳过 → 后代恒空集，
      * 而症状与设备上「静默空转」同形 —— 是那条真进程用例抓到的。
      */
-    internal fun readStat(entry: Path): Stat? {
+    fun readStat(entry: Path): Stat? {
         val pid = entry.fileName.toString().toLongOrNull() ?: return null
         val line = try {
             Files.readAllLines(entry.resolve("stat")).firstOrNull() ?: return null
@@ -135,26 +156,4 @@ class ProcOps(
             null
         }
     }
-}
-
-/**
- * 进程树收尸的操作面（缝：单测注入替身，生产 = [ProcTreeOps]）。
- *
- * 为什么是缝：收尸的判据（「孙进程确实被点名了」「TERM 后补 KILL」）要能跑成确定性用例，
- * 而真 `/proc` 那条由真进程用例单独钉 —— 与批 95 的 `T1TreeOps` 分工逐字相同。
- */
-interface TreeOps {
-    /** [process] 的全部后代 pid（不含它自己）。 */
-    fun descendantsOf(process: Process): Set<Long>
-
-    /** 按 pid 杀一批（TERM 或 KILL）。 */
-    fun kill(pids: Collection<Long>, force: Boolean)
-}
-
-/** 生产实现：`/proc` 扫描 + `kill` 二进制。 */
-class ProcTreeOps(
-    private val ops: ProcOps = ProcOps(),
-) : TreeOps {
-    override fun descendantsOf(process: Process): Set<Long> = ops.descendantsOf(process)
-    override fun kill(pids: Collection<Long>, force: Boolean) = ops.kill(pids, force)
 }
