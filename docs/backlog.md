@@ -1,5 +1,27 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 97：外审整改第二刀 —— ERR_INTERNAL/折叠两档 / kv 迁移表 / pid 第二级）
+
+- **外审报告里剩下三条「单条语义改动 + 守卫」做掉（外审 M4/M5/M8）**，口径见决策第 66 项，
+  流水见 [`log/2026-10-11.md`](log/2026-10-11.md)。下方「外审登记」条里对应三行改为 ✅：
+  1. **M4 错误映射 —— 已做**：新增 `ErrorCode.ERR_INTERNAL`（宿主代码缺陷**不是**调用方参数错）；
+     `BridgeRouter` 折叠改两档：`AutojsException` 原码透传、`IllegalArgumentException` →
+     `ERR_INVALID_PARAM`、**其余一切 → `ERR_INTERNAL`**（此前一切折成参数错且回显 `e.message`）。
+     三处落字同步（`:domain` / `bridge/js` 双表 / 契约卷 §7.6），由 `err-catalog.test.cjs`
+     三面对账门钉住。守卫 `BridgeRouterTest` 三条成对。
+  2. **M5 pid 绑定 —— 已做**：`engine:node-process` `ProcessLauncher` 补 pid 私有字段反射阶梯
+     → Android 8–12 的 `spawn.pid` 不再恒 null（此前 `RunIdentityRegistry` 防劫持判据**整段
+     静默跳过**）；加 `pidUnavailable` 计数。守卫 +2。
+  3. **M8 `onUpgrade` 丢表 —— 已做**：`KvSchemaMigrations` 纯函数迁移表（找不到路径抛、
+     不静默重建）+ `onDowngrade` 响亮失败。守卫 3 例。
+- **验证**：CI 逐字同源 14 测试任务全绿零失败零跳过；facade 201 pass（1 skip = 既有真
+  addon 环境门禁）；detekt 全模块绿（修了一处 `UseCheckOrError`）；文档链接门与冻结面门同批跑。
+- **仍在挂**（外审登记条里剩余项）：B2 池记账（彻底解是通道化重构，未排期）、M2 桥资源
+  限额、M3 accept 循环遇 `IOException` 直接 break、M6 shell 杀树/stdin、M7 zip 的
+  `UncheckedIOException` 漏过、M9 LockSigner 单签名文件（属存储格式变更，要拍板）、M1 的
+  `scriptFile` KDoc 与实现矛盾、以及结构性建议（typed ids / 池重构 / actor 化 / jsonl→SQLite /
+  文档重排 = D13）。
+
 ## 2026-10-11 追记（批 96：外审整改第一刀 —— 排队不挡急停 / jsonl 半行清盘 / 桥 TTL 截断）
 
 - **维护者转来外部评审报告，本月做四件（本批落账）**。完整报告已按月度归档在下方
@@ -632,11 +654,11 @@
 | **M1** | 路径未校验（`engines.exec` / `workManager.create` 只判空；`scriptPath` 越界会被执行；`cwd` 来自未校验 `projectId`） | **半成立**：`ScriptPaths.isValidProjectId`（无 `.`）/`DeployPath.resolveIn`（startsWith(root)）/`ScriptDeployRecovery.isSafeRelPath` **都已在**；外审设想的 `projectId="builtin"` 提权场景在「全部项目解析为 UNKNOWN」下**不成立**。**真问题**是 `ScriptPaths.scriptFile` 的 KDoc 说「越界只读不到」而 `NodeProcessEngine:148` **会执行它** —— KDoc 与实现矛盾 | 🔶 登记：随 `TrustTierResolver` 排期收口；先补 KDoc 事实 |
 | **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | 🔶 字节加权信号量 + 每连接上限 + `limitedParallelism` 未做 |
 | **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | 🔶 登记（瞬时错误应 `continue` + 计数，不当关断信号） |
-| **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | 🔶 登记：需新增 `ERR_INTERNAL` + 契约卷同步（§7.6 错误表），下一刀 |
-| **M5** | pid 绑定在 Android 8–12 失效（`Process.pid()` 需 API 33，minSdk 26；`spawn.pid` 为 null 时跳过防劫持检查） | **成立且已知**（`ProcessLauncher` 两级反射只取 `pid()` 方法，**无私有字段那级**——批 95 的 `ProcOps.pidOf` 已补上那一级，可复用） | 🔶 登记：把 `ProcOps.pidOf` 提到共享工具后接线 |
+| **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | ✅ 批 97 已修（`ERR_INTERNAL` + 折叠两档，契约卷 §7.6 同步） |
+| **M5** | pid 绑定在 Android 8–12 失效（`Process.pid()` 需 API 33，minSdk 26；`spawn.pid` 为 null 时跳过防劫持检查） | **成立且已知**（`ProcessLauncher` 两级反射只取 `pid()` 方法，**无私有字段那级**——批 95 的 `ProcOps.pidOf` 已补上那一级，可复用） | ✅ 批 97 已修（`ProcessLauncher.pidOf` 补第二级 + `pidUnavailable` 计数） |
 | **M6** | shell 执行器：`destroyForcibly()` 只杀 `sh`/`su` 不杀其子；孙进程持管道时线程/fd 泄漏；stdin 从不关闭（`cat` 挂到超时）；命令串进错误与日志 | **部分成立**：孙进程持写端的宽限已有（`DRAIN_GRACE_MILLIS`），但**杀树没做**、**stdin 未关**属实；命令串进日志是**有意**的（`warnIfTruncated` KDoc 已论证「没它定位不到是谁」） | 🔶 登记：复用批 95 的 `ProcOps`；stdin 关闭与命令串脱敏属行为变更 |
 | **M7** | zip：`Files.walk` 抛 `UncheckedIOException` 被 `catch (IOException)` 漏过（`.tmp` 残留 + 错误码错）；打进源目录会自含 `.tmp`；无条目数上限（零字节文件绕过字节上限）；包含性纯词法 | **成立**（`JdkZipArchiver.compress`） | 🔶 登记 |
-| **M8** | `SqliteKvOps.onUpgrade` 版本升级即 DROP 表、无 `onDowngrade` | **成立** | 🔶 登记：单条语义改动 + 守卫，可与 M4 同批 |
+| **M8** | `SqliteKvOps.onUpgrade` 版本升级即 DROP 表、无 `onDowngrade` | **成立** | ✅ 批 97 已修（`KvSchemaMigrations` + `onDowngrade` 响亮失败） |
 | **M9** | `LockSigner`：一份 `lock.sig` 服务所有项目（签 B 废 A）；验签在入队时而 `npm ci` 在队列里更晚跑；null signer 静默跳过验签 | **半成立**：KDoc 已明写「同一把签名覆盖所有项目」（签的是 `projectId\|lock 内容`）——**单签名文件是设计而非 bug**，但「签 B 使 A 验不过」确是可用性代价；`ci` 的验签与 `enqueueHeavy` **相邻同函数**（无 TOCTOU 窗口） | 🔶 登记：per-project 签名文件属存储格式变更，要拍板 |
 
 #### 设计 / 结构 / 文档（外审建议，非缺陷）

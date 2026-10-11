@@ -12,6 +12,54 @@
 
 ---
 
+## 66. 错误折叠两档 + ERR_INTERNAL；kv 升版走显式迁移表；pid 第二级反射（2026-10-11，批 97）
+
+外审第二刀（M4/M5/M8）。三条都是口径级改动，各带一句「为什么这么定」。
+
+### 66.1 错误折叠分两档，中间隔一档「宿主内部错误」（M4）
+
+原口径：桥路由 `catch (e: Exception)` 把任何未预料异常折成 `ERR_INVALID_PARAM` 并回显
+`e.message`。**被推翻**（两处理由）：① 语义说谎 —— 脚本 `e.is('ERR_INVALID_PARAM')` 会去改
+自己的参数，而真相是宿主代码有 bug；② 回显 `e.message` 把内部路径/字段名带进 wire。
+且它与 `RpcNamespaceHandler` 的 KDoc（「未知异常不接、照旧穿出」）**直接矛盾** ——
+KDoc 描述的纪律存在，路由层把它吃掉了。
+
+新口径（两档 + 一条透传）：
+- `AutojsException` → **原码透传**（SPI 抛的真码如 `ERR_PERMISSION_DENIED` 不许被说成「宿主有 bug」）；
+- `IllegalArgumentException` → `ERR_INVALID_PARAM`（**能读懂的事实**：参数、时序、状态不对，
+  脚本据此改参数）；
+- **其余一切 → `ERR_INTERNAL`**（**读不懂的事实** = 代码缺陷；脚本侧按「宿主有问题，
+  详情找日志」处理，不重试自己的代码）。
+
+新错误码的纪律：`ERR_INTERNAL` 是**给脚本用的第三档**，不是宿主日志的替代 —— detail 仍带
+真实原因与类名（诊断入口），但**回显面收窄**（不再把内部路径原样带给脚本）。
+三处落字同步（`:domain` 枚举 / `bridge/js` 双表 / §7.6），由 `err-catalog.test.cjs`
+三面对账门钉住（那正是它当初抓到 `ERR_IO` 漂移的同一条机制）。
+
+### 66.2 kv 升版：找不到路径就响亮失败，绝不静默重建（M8）
+
+原口径：`onUpgrade` = `DROP TABLE` + 重建（KDoc 理由是「kv 是脚本可再生数据」）。**被推翻**：
+「可再生」是**脚本侧**的事实，用户侧看到的是「装了个新版本，依赖面板里的东西全没了」；
+而「留一个半迁移状态不好解释」的代价让位给了「静默丢数据更不好解释」。
+
+新口径：
+- 升级路径是**数据**（`KvSchemaMigrations.upgradeSteps` 的显式表），不是注释；
+- 找不到 `old → new` 的路径 → 抛 `UnknownMigration`，让升级**整体失败**（响亮）；
+- `onDowngrade` 抛而不是静默打开（平台缺省也是抛，但那是默认不是审过的口径）；
+- 与 §8.5 意图日志「打不开不回落、异常直接冒到装配」（批 78）同源。
+
+**为什么是纯函数**：`:platform:system` 的 JVM 单测没有 Robolectric，Android 面本机只编译
+不执行 —— 升级策略住在 Android 类里就永远只能靠人读。
+
+### 66.3 pid 取值补第二级反射阶梯（M5）
+
+原口径：`Process.pid()` 单级反射，探不到就 null（诚实 noPid）。**保留那个诚实，但补一级**：
+`pid()` 在 Android 需 API 33、minSdk 26 → Android 8–12 上恒 null，而
+`RunIdentityRegistry` 的防劫持判据是 `peerPid != null && spawn.pid != null && …`，
+**两个条件都不成立 ⇒ 整段检查静默跳过**。新增私有字段 `pid` 那一级（与批 95
+`ProcOps.pidOf` 逐字同款）。真拿不到时仍跳过，但**记账一次**（`pidUnavailable`）：
+「跳过」与「度量通过」在返回类型上长得一样，计数是唯一的可见信号。
+
 ## 65. 排队中的 start 不挡 stop / jsonl 半行清盘 / 桥 TTL 截断（2026-10-11，批 96，外审整改）
 
 **背景**：外部评审报告（按月归档在 backlog「外审登记」条）把「Queued starts block everything」

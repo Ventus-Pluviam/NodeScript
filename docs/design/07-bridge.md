@@ -110,14 +110,9 @@ class AutojsError extends Error {
 }
 ```
 错误目录（前 20 个中最关键）：`ERR_TIMEOUT`、`ERR_STALE_HANDLE`、`ERR_PERMISSION_DENIED`（能力未授权/被降级）、`ERR_SERVICE_DISABLED`、`ERR_SCREEN_LOCKED`、`ERR_BLACK_FRAME`（FLAG_SECURE）、
-`ERR_CAPTURE_DENIED`、`ERR_ENGINE_STOPPED`、`ERR_ENGINE_CRASHED`（进程死）、`ERR_NOT_IMPLEMENTED`（本平台不支持，如 child_process）、`ERR_INVALID_PARAM`、`ERR_INTERNAL`（宿主代码缺陷，**不是调用方的参数错**；2026-10-11 批 97 补，此前所有未预料异常都折成 `ERR_INVALID_PARAM`）、`ERR_FILE_NOT_FOUND`、`ERR_FILE_EXISTS`（打包产物已存在等）、
+`ERR_CAPTURE_DENIED`、`ERR_ENGINE_STOPPED`、`ERR_ENGINE_CRASHED`（进程死）、`ERR_NOT_IMPLEMENTED`（本平台不支持，如 child_process）、`ERR_INVALID_PARAM`、`ERR_FILE_NOT_FOUND`、`ERR_FILE_EXISTS`（打包产物已存在等）、
 `ERR_DISK_FULL`、`ERR_NOT_FOUND`（UiSelector 未找到 → 可选 `NotFoundError` 对齐 Pro v9）。
 映射规则：`Java Exception → 分类 → AutojsError`，保留 `javaStack`，JS `instanceof` 可判。
-**折叠的两档**（2026-10-11 批 97 定，`BridgeRouter` 落）：`AutojsException` 原码透传；
-`IllegalArgumentException` → `ERR_INVALID_PARAM`（能读懂的事实：参数、时序、状态不对，
-脚本据此改参数）；**其余一切 → `ERR_INTERNAL`**（读不懂的事实：宿主代码抛了说不清的东西，
-脚本侧应按「宿主有问题，详情找日志」而不是「重试我的代码」）。这条把
-`RpcNamespaceHandler` 的 KDoc 口径（未知异常不接、照旧穿出）与路由层实际行为对齐了。
 目录三处落字（`:domain` `core/Error.kt` 的 `ErrorCode`、`bridge/js/src/errors.ts` 的 `ErrCode` + `ERROR_CODES`、本文提及）由 `bridge/js/test/err-catalog.test.cjs` **三面对账**（Kotlin ⇄ JS 双向相等、
 同文件枚举 ⇄ 字面量表双向相等、文档提及必须两处都在；随 `npm test` 进 CI）——2026-09-26 首跑就抓到真漂移：`ERR_IO` 在宿主全线服役（zip/settings/images/
 spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 false；已补码并被该门的「回潮」断言钉死。
