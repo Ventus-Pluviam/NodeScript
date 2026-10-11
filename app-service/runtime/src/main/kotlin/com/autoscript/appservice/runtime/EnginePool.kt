@@ -29,9 +29,14 @@ interface EnginePool {
     suspend fun killAll(reason: KillCause)
 
     /**
-     * 看门狗 kill 后的槽位收归（kill 权威归 RuntimeController，§4.1；许可证记账归池）。
-     * 池侧原子完成「槽位复位 + 许可证归还」，保证杀槽不缩水池容量（free 与可领证恒一致）。
-     * 重复收归（槽位已 FREE）幂等，绝不超发许可证。
+     * 看门狗 kill 后的槽位收归（kill 权威归 RuntimeController，§4.1）。
+     *
+     * **生产路径不走这里**（2026-10-12 批 103 P2）：控制器改走 [PoolHandle.lease] 的
+     * [PoolLease.forceReturn] —— 因为「归还权」必须与 [release] 抢**同一个 CAS**，否则
+     * 「killRun 与迟到的 stop 同时到达」会双重归还。本方法保留给
+     * 「只拿到槽位、拿不到 lease」的诊断路径与直接测池记账的单测。
+     *
+     * 重复收归幂等（经 lease 的 claim）。
      */
     fun recycle(slot: PoolSlot, cause: KillCause? = null)
 

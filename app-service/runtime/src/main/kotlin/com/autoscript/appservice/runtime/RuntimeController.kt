@@ -23,8 +23,10 @@ import kotlinx.coroutines.sync.withLock
  * 池 + 看门狗的唯一装配点，JS `engines.*` 面的 Kotlin 对偶。
  *
  * 职责：
- * - [start]/[stop]/[killAll] 经 [guard] 串行化（FixedEnginePool 要求调用方串行化
- *   killAll 与 acquire/release，防许可证超发——本类就是那个调用方）；
+ * - **[start]/[stop]/[killAll] 经 [guard] 串行化**——串的是**在途表**（谁活着、
+ *   谁被摘走），**不是池的容量记账**：容量记账由池自己扛（批 96 摘掉「整段持锁」的病灶、
+ *   批 103 换成空闲队列为唯一真源 + [PoolLease] 独占归还），本类不再因「排队等槽」而
+ *   阻塞 stop/killAll/看门狗（那正是外审 B1 测到的 2927ms）；
  * - 以 runId 为键维护在途表：`stop(未知 runId)` 如实回 [StopOutcome.AlreadyGone]，
  *   绝不静默吞掉（JS `engines.stop(runId)` 语义）；
  * - kill 权威：[killRun]/[killAll] 是唯一强杀入口（看门狗只给裁决，见 [judge]）；
@@ -238,9 +240,12 @@ class RuntimeController(
         revokeRunResources(runId)
         return withContext(NonCancellable) {
             val killed = handle.slot.engine.kill()
-            // 强杀即终结：槽位 + 许可证必须成对归还（§8.2 记账）；
-            // cause 透传给状态机归类（§8.3：REQUESTED→STOPPED，watchdog/OOM→CRASHED）
-            pool.recycle(handle.slot, cause)
+            // 强杀即终结：槽位必须归还（§8.2 记账）；cause 透传给状态机归类
+            // （§8.3：REQUESTED→STOPPED，watchdog/OOM→CRASHED）。
+            // 归还经 [PoolHandle.lease]（批 103 P2：空闲队列是唯一真源，lease 的 claim
+            // 独占归还权）—— 与 [stop] 走的是**同一条归还路径**，故
+            // 「killRun 与迟到的 stop 同时到达」只会归还一次。
+            handle.lease.forceReturn(cause)
             killed
         }
     }
