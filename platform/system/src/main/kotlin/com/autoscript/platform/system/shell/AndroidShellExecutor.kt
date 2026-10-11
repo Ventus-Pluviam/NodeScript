@@ -20,9 +20,13 @@ import java.util.concurrent.TimeUnit
  * 1. **超时是实现者义务**（铁律 3）：[ShellExecutor] 的 KDoc 明说「调用方只传建议值，
  *    实现不得无限等待」。所以超时到点就 `destroyForcibly()` 并抛
  *    [ErrorCode.ERR_TIMEOUT] —— 不是"返回已读到的半截输出"，更不是继续挂着。
- * 2. **任何退出路径都要收尸**：成功、超时、被上层取消（桥 TTL 到点会取消 handler 协程）
- *    三条路都走 `finally` 里的 `destroyForcibly()`。少这一条，脚本被杀之后
- *    `su`/`sh` 会变成孤儿进程留在设备上，而这在真机上只表现为"越跑越卡"，查不到源头。
+ * 2. **任何退出路径都要收尸（但「收尸」不等于「杀干净整棵树」——2026-10-11 批 99 订正）**：
+ *    成功、超时、被上层取消（桥 TTL 到点会取消 handler 协程）三条路都走 `finally` 里的
+ *    [Process.destroyForcibly]。**但那条只杀直接子进程**（`sh` 或 `su`）—— 它们自己起的
+ *    孙进程（`sh -c "sleep 300 &"`）不会被连带杀掉，仍留在设备上。批 99 起按 [killTree]
+ *    走 `/proc` ppid 图把整棵树收掉（复用批 95 的同一手法，见下方第 5 条）。
+ *    **诚实边界**：批 99 之前那条 KDoc 写的是「不留孤儿进程」，那句话**不成立** ——
+ *    原实现只保证「不留直接子进程」。
  * 3. **双流必须并发读干**：管道缓冲区（Linux 默认 64KB）写满即阻塞子进程，
  *    先读干 stdout 再读 stderr 会在输出超过一屏时死锁 —— 所以两条读流在
  *    `waitFor` **之前**就起来了。
@@ -52,6 +56,11 @@ import java.util.concurrent.TimeUnit
 class AndroidShellExecutor(
     private val launcher: ProcessLauncher = ProcessLauncher { Runtime.getRuntime().exec(it) },
     private val logSink: ShellCaptureLimit.LogSink = ShellCaptureLimit.defaultLogSink,
+    /**
+     * 进程树收尸的操作面（外审 M6，批 99；缝的理由见 [killTree]）。
+     * 缺省生产实现走 `/proc` + `kill` 二进制（与批 95 的 T1 杀树逐字同款手法）。
+     */
+    private val treeOps: TreeOps = ProcTreeOps(),
 ) : ShellExecutor {
 
     /** 进程启动缝：真机走 [Runtime.exec]；单测注入以记录 argv / 供可控进程。 */
@@ -78,6 +87,12 @@ class AndroidShellExecutor(
             }
             val out = PipeReader(process.inputStream, "autoscript-shell-stdout").start()
             val err = PipeReader(process.errorStream, "autoscript-shell-stderr").start()
+            // stdin 立即关（外审 M6，批 99）：shell 面的契约是「**只执行命令，不喂输入**」
+            // （[ShellExecutor.exec] 签名里根本没有 stdin 参数）。不关的话，等 stdin 的
+            // 命令（`cat`、`read x`）会**一直挂到超时** —— 用户看到的是「一条 cat 命令
+            // 跑满超时还返回空」，而根因是宿主攥着写端不撒手。关掉之后它们立刻读到 EOF
+            // 并正常退出 —— 这才是「没有输入」该有的形态。
+            runCatching { process.outputStream.close() }
             try {
                 // runInterruptible：桥 TTL 到点取消本协程时，阻塞中的 waitFor 才收得到中断
                 //（否则取消只能等进程自己结束，"超时"就成了一句空话）。
@@ -87,10 +102,10 @@ class AndroidShellExecutor(
                 if (!finished) {
                     // 先杀再抛：抛出去之后本函数只剩 finally，中间没有任何顺序保证能证明
                     // "进程已强杀"这句话 —— 这里显式杀，也让读线程尽早拿到 EOF/重置。
-                    process.destroyForcibly()
+                    killTree(process)
                     throw AutojsException(
                         ErrorCode.ERR_TIMEOUT,
-                        "shell 超时 ${timeoutMillis}ms（进程已强杀）：$command",
+                        "shell 超时 ${timeoutMillis}ms（进程树已强杀）：$command",
                     )
                 }
                 // 进程已退出 ⇒ 写端关闭 ⇒ 两条读流应当**立刻** EOF（正常形态：剩余的
@@ -110,10 +125,31 @@ class AndroidShellExecutor(
                     truncated = out.truncated || err.truncated,
                 )
             } finally {
-                // 收尸兜底：超时/取消/异常路径都不留孤儿进程（见 KDoc 第 2 条）。
-                if (process.isAlive) process.destroyForcibly()
+                // 收尸兜底：超时/取消/异常路径都把**整棵树**收掉（见 KDoc 第 2 条与 [killTree]）。
+                if (process.isAlive) killTree(process)
             }
         }
+    }
+
+    /**
+     * 收掉**整棵进程树**（外审 M6，批 99）。
+     *
+     * [Process.destroyForcibly] 只杀直接子进程（`sh`/`su`），它们自己起的孙进程留在设备上
+     * —— 而「越跑越卡」这种现场恰恰查不到源头。手法与批 95 的 T1 杀树**逐字同款**：
+     * **扫在杀之前**（reparent 只断死后回找，pid 集合在树还活着时到手）、同 UID 靠 fork
+     * 继承（ppid 图上可达即同 UID）、按 pid 杀用 `kill` 二进制（JVM 没有「按 pid 杀」的
+     * API）、pid 取不到就**诚实降级为只杀直接子进程**（不更坏、不炸收尸）。
+     *
+     * **为什么不在这里 new 一份而要注入**（与 T1 的 `T1TreeOps` 同理由）：判据要能用替身
+     * 跑成确定性用例（「孙进程确实被点名了」），而真 `/proc` 那条由真进程用例单独钉。
+     */
+    private fun killTree(process: Process) {
+        val firstWave = runCatching { treeOps.descendantsOf(process) }.getOrDefault(emptySet())
+        runCatching { treeOps.kill(firstWave, force = false) }     // 后代 TERM（先点名，主进程还在）
+        process.destroyForcibly()
+        runCatching { treeOps.kill(firstWave, force = true) }
+        // pid 拿不到 / /proc 不可读 → firstWave 为空：上面退化成「只杀主进程」，
+        // 与批 95 的降级口径一致（不更坏、也不假装收干净了）。
     }
 
     /**

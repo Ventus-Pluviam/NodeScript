@@ -13,6 +13,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.zip.Deflater
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /**
@@ -240,5 +241,100 @@ class JdkZipArchiverTest {
         val archive = craftBomb("exact.bin", inflatedBytes = 4096)
         JdkZipArchiver(maxEntryBytes = 4096, maxTotalBytes = 4096).extract(archive, out)
         assertEquals(4096, Files.size(out.resolve("exact.bin")), "等于上限必须通过，否则上限就成了「少一字节」")
+    }
+}
+
+/**
+ * 外审 M7（2026-10-11 批 99）：zip 面的三条 —— 条目数闸、`.tmp` 不自含、
+ * `walk` 的 `UncheckedIOException` 不再让 `.tmp` 残留。
+ *
+ * 三个判据各自独立：① 零字节条目绕过字节闸（**计数与字节正交**，必须单独设闸）；
+ * ② 归档写进源目录时把本次 `.tmp` 包进自己；③ 遍历期 IO 错误被 `Files.walk` 包成
+ * `UncheckedIOException`（**不是** `IOException`）→ 外层 `catch (e: IOException)` 接不住，
+ * `.tmp` 不删、错误码也不是 `ERR_IO`。
+ */
+class JdkZipArchiverHardeningTest {
+
+    @TempDir
+    lateinit var tmp: Path
+
+    private fun write(p: Path, text: String) {
+        Files.createDirectories(p.parent)
+        Files.write(p, text.toByteArray())
+    }
+
+    private fun craft(entries: List<Pair<String, ByteArray?>>): Path {
+        val archive = tmp.resolve("crafted.zip")
+        ZipOutputStream(Files.newOutputStream(archive)).use { zos ->
+            for ((name, body) in entries) {
+                zos.putNextEntry(ZipEntry(name))
+                if (body != null) zos.write(body)
+                zos.closeEntry()
+            }
+        }
+        return archive
+    }
+
+    /** ① 零字节条目炸弹：合计字节 0、单条字节 0，两道字节闸都过不掉它。 */
+    @Test
+    fun `零字节海量条目被条目数闸拦下（外审 M7）`() = runBlocking {
+        val archive = craft((1..40).map { "empty-$it" to null })
+        // 上限压到 10：40 条 > 10。字节上限给得极大 —— 证明**是条目数闸**在拦，不是字节闸。
+        val capped = JdkZipArchiver(maxEntryBytes = 1L * 1024 * 1024, maxTotalBytes = 1L * 1024 * 1024, maxEntries = 10)
+        val target = tmp.resolve("out-many")
+
+        val e = assertThrows(AutojsException::class.java) { runBlocking { capped.extract(archive, target) } }
+        assertEquals(ErrorCode.ERR_INVALID_PARAM.code, e.error.code, "归档本身不合格 = 输入问题（同 zip-slip 一档）")
+        assertTrue(e.message!!.contains("条目数"), "话术要点名是条目数（否则与字节闸混淆）：${e.message}")
+        assertFalse(Files.exists(target.resolve("empty-1")), "先验后写：不合格的包一个字节都不许落")
+    }
+
+    /** ② 归档写进源目录里：`.tmp` 不得进包（自含 = 解出来是个套娃半截 zip）。 */
+    @Test
+    fun `归档写进源目录时不把本次 tmp 包进自己（外审 M7）`() = runBlocking {
+        val src = tmp.resolve("payload")
+        Files.createDirectories(src)
+        write(src.resolve("keep.txt"), "内容")
+
+        val archive = src.resolve("out.zip")      // ← 归档在源目录内部
+        val z = JdkZipArchiver()
+        z.compress(src, archive)
+        // tmp 此刻已被 rename 掉（它就是 archive 本身）—— 判据要看包里有没有「半截 zip」。
+        val names = ZipFile(archive.toFile()).use { zf -> zf.entries().asSequence().map { it.name }.toList() }
+        assertTrue(names.contains("keep.txt"), "源文件必须在包里：$names")
+        assertFalse(
+            names.any { it.endsWith(".tmp") || it.endsWith("out.zip") },
+            "不得把本次 tmp 或成品自身包进去（自含）：$names",
+        )
+    }
+
+    /**
+     * ③ `Files.walk` 的 `UncheckedIOException` 折码与 tmp 清理（M7 那条的可造半）。
+     *
+     * 遍历期 IO 错误在本机（root）造不出来 —— 那是真机/受限环境才有的形态。本例改钉
+     * **折码那一层的契约本身**：给一个会抛 `UncheckedIOException` 的压缩源（用一个
+     * 目录 whose 子项在枚举时不可读的面造），断言调用方拿到的是 `ERR_IO` 而不是
+     * `UncheckedIOException` 原样穿透。
+     *
+     * 造法：`Files.walk` 的**开流**就失败（源不是目录）→ 那是 `IOException` 路径，
+     * 不是本条要钉的迭代期。所以改用「迭代期间把目录换成文件」——
+     * 仍不可靠。故本条断言降级为**恒真的契约注记 + tmp 清理真判据**（见下）。
+     */
+    @Test
+    fun `压缩失败不留半截 tmp（外审 M7 的可造那半）`() = runBlocking {
+        val src = tmp.resolve("src-fail")
+        Files.createDirectories(src)
+        write(src.resolve("a.txt"), "x")
+        // 目标归档的父目录是个**文件** → createDirectories 抛 → 进 catch 前 tmp 尚未建。
+        // 换成真会中途失败的情形：把归档路径指向一个已存在的目录（move 目标非法）。
+        val archive = tmp.resolve("dir-target")
+        Files.createDirectories(archive)
+
+        val z = JdkZipArchiver()
+        assertThrows(Exception::class.java) { runBlocking { z.compress(src, archive) } }
+        assertFalse(
+            Files.exists(archive.resolveSibling("dir-target.tmp")),
+            "失败路径不得留半截 tmp（那会被下一次 compress 当成成品的一部分）",
+        )
     }
 }

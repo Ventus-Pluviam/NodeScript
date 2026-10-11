@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.UncheckedIOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -53,6 +54,15 @@ class JdkZipArchiver(
      */
     private val maxEntryBytes: Long = MAX_ENTRY_BYTES,
     private val maxTotalBytes: Long = MAX_TOTAL_BYTES,
+    /**
+     * 条目**个数**上限（2026-10-11 批 99，外审 M7）。
+     *
+     * 为什么字节上限不够：一个「零字节 × 50 万条」的归档能过掉 [maxTotalBytes]（合计 0）
+     * 与 [maxEntryBytes]（每条 0）两道闸，却在解包时造 50 万个目录项/文件 inode ——
+     * 这是「用小体积换大计数」的那一类攻击，与字节上限**正交**，必须单独设闸。
+     * 与字节上限同层（zip-slip 同层），同样**先验后写**。
+     */
+    private val maxEntries: Int = MAX_ENTRIES,
 ) : ZipArchiver {
 
     override suspend fun compress(source: Path, archive: Path): Unit = withContext(Dispatchers.IO) {
@@ -65,16 +75,41 @@ class JdkZipArchiver(
             ZipOutputStream(Files.newOutputStream(tmp)).use { zos ->
                 if (Files.isDirectory(source)) {
                     // 目录：显式写目录条目（空目录也保得住），文件条目用相对源根的 / 路径。
+                    //
+                    // 两条外审 M7 的修法在这一段：
+                    // ① **`.tmp` 不自含**：临时文件是 `archive.resolveSibling(...)`，当用户把
+                    //    归档写进**源目录里面**时，`Files.walk` 会走到它（walk 是边走边枚举，
+                    //    而 tmp 在 zos 打开那一刻就已经存在）—— 于是包把自己包了进去，解出来
+                    //    是「一个 zip 里装着那个 zip 的半截」。判据用**绝对路径**（不用
+                    //    `startsWith(source)` 那种前缀比较：源目录名是别的目录名前缀时会误判）。
+                    // ② **walk 的 `UncheckedIOException`**：`Files.walk` 的迭代器把 IO 错误包成
+                    //    `UncheckedIOException`，它**不是** `IOException` —— 原来的
+                    //    `catch (e: IOException)` 接不住，于是 `deleteIfExists(tmp)` 也被跳过，
+                    //    留下半截 tmp 并把错误类型原样抛给调用方（不是本类的 `ERR_IO`）。
                     val root = source.toAbsolutePath().normalize()
-                    Files.walk(root).use { walk ->
-                        walk.forEach { p ->
-                            val rel = root.relativize(p).toString().replace('\\', '/')
-                            if (rel.isEmpty()) return@forEach           // 源根自己不进包
-                            val name = if (Files.isDirectory(p)) "$rel/" else rel
-                            zos.putNextEntry(ZipEntry(name))
-                            if (!Files.isDirectory(p)) Files.copy(p, zos)
-                            zos.closeEntry()
+                    val tmpAbs = tmp.toAbsolutePath().normalize()
+                    val skipTmp = { p: Path -> p.toAbsolutePath().normalize() == tmpAbs }
+                    try {
+                        Files.walk(root).use { walk ->
+                            val iterator = walk.iterator()
+                            while (iterator.hasNext()) {
+                                val p = iterator.next()
+                                // 两个 continue 合成一个判据（detekt LoopWithTooManyJumpStatements）：
+                                // 「本次 tmp」与「源根自己」都不进包。
+                                val rel = root.relativize(p).toString().replace('\\', '/')
+                                if (skipTmp(p) || rel.isEmpty()) continue
+                                val name = if (Files.isDirectory(p)) "$rel/" else rel
+                                zos.putNextEntry(ZipEntry(name))
+                                if (!Files.isDirectory(p)) Files.copy(p, zos)
+                                zos.closeEntry()
+                            }
                         }
+                    } catch (e: UncheckedIOException) {
+                        // walk 的**迭代期** IO 错误（目录在遍历中被删、权限回卷…）走这里：
+                        // `UncheckedIOException` **不是** `IOException`，外层的
+                        // `catch (e: IOException)` 接不住 → tmp 不会被删、错误码也不是 ERR_IO。
+                        // 故折成 IOException 再抛。
+                        throw IOException("遍历源目录失败: ${e.cause?.message ?: e.message}", e)
                     }
                 } else {
                     zos.putNextEntry(ZipEntry(source.fileName.toString()))
@@ -108,6 +143,9 @@ class JdkZipArchiver(
         try {
             ZipFile(archive.toFile()).use { zf ->
                 val all = zf.entries().asSequence().toList()
+                if (all.size > maxEntries) {
+                    throw tooManyEntries(all.size, maxEntries)
+                }
 
                 // ── 第一拍：全包条目名 + **声明体积**校验，任何一条不合格都没开始写 ──
                 var declaredTotal = 0L
@@ -205,6 +243,17 @@ class JdkZipArchiver(
         )
 
     /**
+     * 条目数超限的统一出口（批 99，外审 M7）。与 [tooLarge] 同码同层：都是「这个归档本身
+     * 不合格」（**输入**的问题），话术必须点名「个数」以免与字节闸混淆。
+     */
+    private fun tooManyEntries(actual: Int, limit: Int): AutojsException =
+        AutojsException(
+            ErrorCode.ERR_INVALID_PARAM,
+            "条目数超过解压上限（疑似零字节条目炸弹）: $actual 条 > $limit 上限",
+            null,
+        )
+
+    /**
      * 条目名 → 目标根内的绝对路径；越界（`../` 逃逸 / 绝对路径条目）抛
      * `ERR_INVALID_PARAM`（zip-slip）。normalize 后比前缀：`a/../../x` 这类
      * 混了正常段的逃逸也会被剥出来判掉。
@@ -251,6 +300,16 @@ class JdkZipArchiver(
          * 单条目的闸防「一个巨物」，总量的闸防「一群小东西」。
          */
         const val MAX_TOTAL_BYTES: Long = 1024L * 1024 * 1024
+
+        /**
+         * 条目个数上限（批 99，外审 M7）：**零字节条目绕过字节闸的那一档**。
+         *
+         * 取值依据：合法归档（脚本包/离线 bundle/录屏产物切片）的条目数在**数百到数千**
+         * 量级；1 万条对合法用途是够不着的余量，而 50 万条零字节条目足以把 inode 与
+         * 目录项耗满（Android 上更早触发的是「目录项过多」的 ENAMETOOLONG/ENOSPC）。
+         * 与字节上限一样：它是**策略**，不是物理限制 —— 真要更大改此常量即可。
+         */
+        const val MAX_ENTRIES: Int = 10_000
 
         /** 抄字节的块大小（[copyCapped]）；与 `ShellCaptureLimit` 的读块同量级。 */
         private const val COPY_CHUNK_BYTES = 64 * 1024
