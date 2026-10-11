@@ -82,6 +82,32 @@ class PoolSlot internal constructor(
         busySinceMillis = 0L
     }
 
+    /**
+     * **归还**（2026-10-12 批 103 P2）：队列化之后，槽回到空闲队列**之前**由 lease 调它。
+     *
+     * **为什么单独一个方法而不是复用 [reuse]**：[reuse] 会走状态机（按 [cause] 归类到
+     * STOPPED/CRASHED 再回收 IDLE），那是**归档**语义（看门狗 kill 之后的归因）；
+     * 而「正常归还」与「kill 强释后归还」都不该按某个 cause 归类 —— 它们已经各自走过
+     * quiesce / forceFree 了，状态机已经落到 STOPPED 或 IDLE。这里只做**状态复位**
+     * （BUSY|QUIESCING → FREE，清 busySince），让槽可以被下一个持有者安全取走。
+     *
+     * **幂等**：已 FREE 时是 no-op（归还路径可能重复到达，见 [PoolLease]）。
+     */
+    fun markFree() {
+        if (state == SlotState.FREE) return
+        state = SlotState.FREE
+        busySinceMillis = 0L
+        // 状态机此时必然已在 STOPPED 或 CRASHED（quiesce / forceFree / reuse 都走过）——
+        // 这里不再调 onRecycle：那会把 IDLE→BOOTING 之外的路径留在半路，而下一个持有者
+        // 夺槽时又会调 onExecuteRequested（要求当前是 IDLE）。故**要求**它在 STOPPED/CRASHED，
+        // 若不是（理论上不可达）就响亮失败而不是悄悄改状态。
+        check(statusMachine.status == EngineStatus.STOPPED || statusMachine.status == EngineStatus.CRASHED) {
+            "槽 $index 归还时状态机在 ${statusMachine.status}（应为 STOPPED/CRASHED）—— " +
+                "归还路径漏了 quiesce/forceFree/reuse 其中一步"
+        }
+        statusMachine.onRecycle()
+    }
+
     /** kill 收归复用（仅 [FixedEnginePool.recycle] 用，调用方持 stateLock）：状态复位，不触碰许可证。 */
     fun reuse(cause: KillCause = KillCause.REQUESTED) {
         if (state != SlotState.FREE) {

@@ -17,7 +17,12 @@ interface EnginePool {
     /** 取空槽执行；满则排队至 [PoolAcquireRequest.waitTimeoutMillis]（null = 无限等待）。 */
     suspend fun acquire(request: PoolAcquireRequest): PoolAcquireOutcome
 
-    /** 放回槽位：四步 quiesce（[ScriptEngine.stop]），TimedOut 由池 kill 兜底。 */
+    /**
+     * 放回槽位：四步 quiesce（[ScriptEngine.stop]），TimedOut 由池 kill 兜底。
+     *
+     * **幂等**（批 103 P2）：经 [PoolHandle.lease] 归还，重复调用是 no-op（返回 Clean）——
+     * 原实现的「双重归还 → 超发一证 → 同一引擎跑两个脚本」那条路已消除。
+     */
     suspend fun release(handle: PoolHandle): StopResult
 
     /** 全部槽位强杀（kill 权威仅归 RuntimeController，§4.1）。 */
@@ -92,11 +97,19 @@ sealed interface PoolAcquireOutcome {
 /** 已获槽位的执行句柄（池内身份：请求 + 槽位 + 收据 + 代次；无跨层包装——会话面在桥两侧各一边：Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，JS 侧是 `EngineSessionImpl`/`EngineChannel`）。 */
 class PoolHandle internal constructor(
     val request: PoolAcquireRequest,
-    val slot: PoolSlot,
+    /**
+     * 本次占用的**归还凭证**（2026-10-12 批 103 P2）：release / recycle 都经它，
+     * 而**不是**外部直接碰 [slot]。归还**恰好一次**由 [PoolLease] 的 CAS 保证。
+     */
+    val lease: PoolLease,
     val receipt: EngineRunReceipt,
-    /** 获取时的槽位代次（§7.4 generation 纪律）：release 时对不上即过期句柄。 */
-    internal val slotGeneration: Long = slot.generation,
-)
+) {
+    /** 本次占用的槽位（宿主状态查询与诊断摘要仍经它；**生命周期**不由外部驱动）。 */
+    val slot: PoolSlot get() = lease.slot
+
+    /** 该占用是否已被归还（读面；归还之后持有者不得再动槽的生命周期）。 */
+    val leaseReturned: Boolean get() = lease.isReturned
+}
 
 data class PoolStats(
     val capacity: Int,
