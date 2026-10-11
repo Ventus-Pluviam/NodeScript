@@ -1,5 +1,24 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-11 追记（批 94：T1 欠账七件里做掉两件 —— 输出流式与命令取消）
+
+- **批 91 那份七件清单的第 3、4 条已做，本条销账**（原文在下方 2026-10-10 追记里逐字保留）：
+  1. ~~**T1 输出的流式**~~ → `ScriptOpExecutor.execute` 补 `OutputSink` 缝，T1 会话进程
+     stdout 边读边落控制台环（`NpmScriptExecutor`）；
+  2. ~~**命令的取消**~~ → 桥侧 `kill` 帧（`BridgedChild.kill()` 真发帧，SIGTERM/SIGKILL）+
+     宿主侧 `ScriptOp.cancelSignal` 读位 + `waitFor` 切片轮询 + facade/`HostSummary` 的
+     `cancelConsoleCommand` + UI「停止」按钮。**覆盖面如实**：`NpmScriptExecutor` 这条路
+     真杀；重操作的 `cancel` 仍是「弃结果不杀进程」（TTL 兜底）—— 那半没扩，别当成已修。
+  口径见 [`design-decisions.md`](design-decisions.md) 第 63 项，流水见
+  [`log/2026-10-11.md`](log/2026-10-11.md)。
+- **第 4 条里「`signal` 恒 null」那半只解了一半**：宿主经 kill 帧杀的那条现在给得出信号名
+  （exit 帧 `code=null, signal=<名>`）；**没人点名、只看到 128+n** 的情形照旧 null ——
+  要真解得上 `/proc` 或 JNI，未排期。
+- **剩余五件不变**（引擎池统一 / 最小 CapabilityMask / 没人点名时的 signal / 杀树断链 /
+  同步三入口与 stdin 背压），见下方 2026-10-10 追记。
+- **真机验证积压（批 94 新增）**：kill 帧在 abstract 名 socket 上的真机行为；停止按钮的
+  观感与「已请求停止」到进程真死的延迟。
+
 ## 2026-10-10 追记（批 91：T1 spawn 桥本体落地 —— npm P1 剩余件换了一批）
 
 - **`scriptExecutor`（T1 spawn 桥本体）已落，本条销账**。落点：`npm-t1-bridge.cjs` +

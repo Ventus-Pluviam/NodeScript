@@ -1,5 +1,20 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-11，批 94）
+
+- [2026-10-11 · 批 94：T1 欠账两件 —— 脚本输出真流式 + 命令可取消（桥 kill 帧 + 控制台「停止」）](2026-10-11.md)：
+  批 91 登记的七件欠账里做掉两件（纯工程、本机可验证）。**① 输出流式**：
+  `ScriptOpExecutor.execute` 补 `OutputSink` 缝（与批 90 `HeavyOpExecutor` 同形），
+  T1 会话进程的 stdout 边读边落控制台环；「报过流不再重复尾部」的判据落在调用方选型上
+  （`OutputSink.None` = 「这边没人看流」，尾部必须兜底）。**② 桥侧 kill 帧**：
+  `BridgedChild.kill()` 从「只置位」变真发帧，SIGTERM/SIGKILL 之外如实拒；kill 先于
+  spawn 是合法时序（pending 位兜住）；exit 帧对宿主确知的杀按真 child_process 口径
+  `code=null, signal=<名>`。**③ 控制台「停止」**：`ScriptOp.cancelSignal` 读位 +
+  `waitFor` 切片轮询（200ms）→ 置位即 destroyForcibly + 关会话（进程树真死）；
+  facade/`HostSummary` 加 `cancelConsoleCommand(projectId)`；UI 跑动中「执行」换「停止」。
+  **覆盖面如实**：T1 真杀；重操作仍弃结果不杀进程（TTL 兜底）。守卫：五测试类 +11 例，
+  完整 CI JVM 门 + detekt（`:ui` baseline 重生成）+ lintDebug 全绿。**边界**：真机自测。
+
 ## 最新追记（2026-10-11，批 93）
 
 - [2026-10-11 · 批 93：控制台 `npm run` / `npx` 拆除人工审批 + env-NUL 缺陷修复（真机实证）](2026-10-11.md)：
