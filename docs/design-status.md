@@ -1,4 +1,19 @@
 # AutoScript 落地状态台账
+> **2026-10-11 · 批 100（外审整改第五刀：桥在途字节闸 —— M2 的可做那半）**：
+> 原口径只有**条数**闸（`maxInFlight`=256），而 `maxFrameBytes`（8 MiB）× 256 = **2 GiB 堆**
+> —— 两个**已生效**默认值相乘就能得到的数，minSdk 26 设备上直接 OOM，而那一刻的现场是
+> 「脚本发了一堆大请求把宿主撑死」，看不出是哪条面干的。**条数与字节正交**（与批 99 给 zip
+> 加 `MAX_ENTRIES` 同一条纪律），故加第三档闸 `maxBytesInFlight` = 16 MiB：
+> **CAS** 取闸（`synchronized` 会变全局竞争点，这条每请求都走）/ 单条超上限**直接拒不
+> 部分接纳**（部分接纳 = 请求永远等不到）/ **拒这一条不拒整条连接** —— 回一帧
+> `ERR_PERMISSION_DENIED`（话术点名「字节」以免与条数闸混淆），连接继续服务后续小请求，
+> **不静默丢**（静默丢的话脚本只会干等到 TTL 超时）。
+> **同条另两半如实登记不排期**：每连接配额（一条连接可吃满全部 256 条在途；要连同「连接级
+> 计数的可见面」一起设计，否则重演「三处记账手拿会漂」）、`limitedParallelism`
+> （本类 scope 直接用 `Dispatchers.IO`，默认 64 线程）。
+> 守卫先红后绿（短路字节闸即当场红；帧上限刻意放宽让字节闸先撞）。细节见
+> [`log/2026-10-11.md`](log/2026-10-11.md)。
+
 > **2026-10-11 · 批 99（外审整改第四刀：shell 杀树与 stdin 关闭 · zip 三条硬化 —— M6/M7）**：
 > **M6-a shell 杀树**：原 KDoc 的「不留孤儿进程」**不成立**（`destroyForcibly()` 只杀
 > `sh`/`su`）。加 `killTree`（`/proc` ppid 图 + `kill` 二进制 + pid 两级反射阶梯）+ `TreeOps`
@@ -567,6 +582,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-11 | 8 | 批 100：外审整改第五刀 —— 桥在途**字节**闸（`maxBytesInFlight`=16 MiB）。原口径只有条数闸 256，而 `maxFrameBytes`(8 MiB)×256 = **2 GiB 堆**（两个已生效默认值相乘）→ 设备 OOM 且看不出是哪条面。条数与字节正交（与批 99 zip `MAX_ENTRIES` 同纪律），故加第三档：CAS 取闸 / 单条超上限直接拒不部分接纳 / 拒这一条不拒整条连接（回 `ERR_PERMISSION_DENIED` 且话术点名「字节」，不静默丢）。同条另两半（每连接配额 / `limitedParallelism`）如实登记不排期。守卫先红后绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 7 | 批 99：外审整改第四刀 —— **M6** shell 收尸从「只杀直接子进程」变「杀整棵树」（`killTree` = `/proc` ppid 图 + `kill` 二进制 + pid 两级反射，`TreeOps` 缝；原 KDoc「不留孤儿进程」不成立，已订正；顺带订正顺序错：点名在杀之前）+ stdin 立即关闭（`cat`/`read x` 不再挂到超时）；**M7** zip 三条硬化（条目数闸 1 万：零字节海量条目能过两道字节闸，计数与字节正交 / `.tmp` 不自含 / `walk` 的 `UncheckedIOException` 折成 IOException 否则 tmp 残留且码不对）。记两份 `ProcOps` 的关系（手法同款代码两份，依赖方向所迫，KDoc 互相点名）。守卫 7 例 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 6 | 批 98：外审整改第三刀 —— 两处 accept 循环（`BridgeSocketListener` 设备面 + `NewlineFrameServer` 本机 TCP 面）改「瞬时故障退避重试」（`EMFILE`/`ENFILE`/`ECONNABORTED` 一次就 break = 整条桥对所有未来脚本静默死亡）；本端 close 才收循环、连续 20 次才认定非瞬时、退避用 `retryGate.wait()` 供 close 唤醒；诊断面加 `acceptRetryCount` + 失败回执缝。守卫先红后绿（阈值改 1 即模拟旧行为），判据用可观测行为（握手仍能完成）。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 5 | 批 97：外审整改第二刀 —— 新增 `ERR_INTERNAL`（宿主代码缺陷≠参数错）+ BridgeRouter 折叠两档（AutojsException 透传 / IllegalArgumentException→ERR_INVALID_PARAM / 其余→ERR_INTERNAL）；pid 取值补私有字段反射阶梯（Android 8–12 防劫持判据不再整段跳过）+ `pidUnavailable` 计数；kv `onUpgrade` 从 DROP 重建改显式迁移表 `KvSchemaMigrations`（找不到路径抛、不静默重建）+ `onDowngrade` 响亮失败。守卫 7 例；契约卷 §7.6 同步；14 任务零跳过绿 + facade 201 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
