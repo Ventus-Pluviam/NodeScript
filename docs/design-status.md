@@ -1,4 +1,10 @@
 # AutoScript 落地状态台账
+> **2026-10-12 · 批 103 收官：待办池清池** —— [`backlog.md`](backlog.md) A–E 各表**未划掉**
+> 的六行（B3 / B4 / B14 / D13 / E3 / A13）已按**不再跟进**划掉（原文逐字保留；**不是
+> 「已完成」**）。外审登记表里的半成品（B3 压缩/流式读、M1 的 KDoc 矛盾、M2 每连接配额与
+> `limitedParallelism`）与结构性长线（typed ids / actor 化 / KDoc 文字）**未动**，仍挂在
+> 登记表里。叙事见 [`本日流水 · 批 103 收官`](log/2026-10-11.md)。
+>
 > **2026-10-12 · 批 103（P2 池记账重构 —— 外审 B2 的彻底解，三阶段落地）**：
 > 批 96 修的是**症状**（`stopEpoch` 垫片让调用方不必整段持锁），本批换**根**：
 > `Semaphore permits`（计数）+ `PoolSlot.state`（状态）两套靠手拿同步的记账 →
@@ -639,6 +645,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-12 | 11 | 批 103 收官：**待办池清池** —— A–E 各表未划掉的六行（B3/B4/B14/D13/E3/A13）按「不再跟进」划掉（**非「已完成」**，原文逐字保留）；外审登记表里的半成品与结构性长线未动。见 [`backlog.md`](backlog.md) 同日追记块 | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 10 | 批 103（P2）：池记账换「空闲队列 = 唯一真源」+ `PoolLease` 幂等归还凭证（消除 `Semaphore`+`slot.state` 两套手拿同步；四种失真改为结构上不可能，含最坏的「双重归还超发一证 → 同一引擎跑两个脚本」）。阶段二的闩控交错守卫逼出归还顺序：**CAS 独占 → quiesce → 回队**（另两种各错一样）；`forceReturn` 给 killAll 不等 quiesce。阶段三 Controller.killRun 改走 lease。`stopEpoch` 删不掉（量「急停跨过排队窗口」）；`generation` 彻底退场（过期句柄物理上到不了槽位）。两处自写断言抓到真缺陷（启动失败路径漏 reuse / quiesce 撞 IDLE→STOPPED），断言一度放宽又回退（探测器变噪声即无探测器）。守卫 8+3 例 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 9 | 批 102（P4）：jsonl → SQLite 三份并两份，四阶段 —— **A** SPI 搬迁（`TaskStore`/`ScheduledTask`/`TimedSchedule`/`ScreenGuarantee`/`CronTab` → `:domain`，依赖铁律所迫，47 文件语义零变化；baseline 的 CronTab 9 条抑制跟着搬）**B** `SqliteRunArchive`（终态由 SQL 条件 UPDATE 挡；`run_nonce` 无唯一索引 —— 档案不是幂等锚点）+ 契约套件**切两套**（第一版塞跳过撞 test-guard，「skipped≠绿」这道门是对的）**C** `SqliteTaskStore`（`task_id` 用户给的 TEXT 主键、排期三列非 JSON 列、重新登记=复活）+ 两份存储迁移接线（三份一套纪律：导+归档/可重入/失败响亮/无回落），`File*` 保留为契约第二实现。测试抓到两 bug：登记误自增发号、墓碑 null 使撤销任务复活。14 任务零跳过绿 + detekt 绿 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-11 | 9 | 批 101（维护者拍案，F1/F2）：**契约同步** —— §7.6 补 `ERR_INTERNAL` 进错误目录 + 写「折叠两档、中间隔一档内部错误」为契约（AutojsException 原码透传 / IllegalArgumentException → ERR_INVALID_PARAM / 其余 → ERR_INTERNAL），同时对齐 `RpcNamespaceHandler` 基类 KDoc 与路由层实际行为（批 97 之前两处矛盾）；§10.3 把 `/proc` 扫描 + `kill` 二进制 + 扫在杀之前三档写进契约正文，并把**降级档（pid 探不到 → 只杀主进程）写成契约的一部分**（不留在 KDoc 私货里）。P2（池记账重构）/ P4（jsonl→SQLite）已拍板，各占其后一批。bridge/js 三面对账门 201 pass | [`log/2026-10-11.md`](log/2026-10-11.md) |
