@@ -485,7 +485,7 @@ class MainActivity : ComponentActivity() {
                                 // （2026-10-12；`ManagementTransition` 里逐值对着
                                 // `ActionBarLayout.startLayoutAnimation`）。`page == null`
                                 // 就是面板本身 —— 它也占一个槽位，所以「返回」是同一条路径。
-                                Tab.MANAGEMENT -> ManagementTransition(page = subPage) { page ->
+                                Tab.MANAGEMENT -> ManagementTransition(page = subPage, content = { page ->
                                     if (page == null) {
                                         ManagementScreen(
                                             onOpenConsole = { consoleOpen = true },
@@ -508,7 +508,7 @@ class MainActivity : ComponentActivity() {
                                             scope = scope,
                                         )
                                     }
-                                }
+                                })
                                 Tab.SETTINGS -> SettingsScreen(
                                     state = capabilityState,
                                     onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,7 +44,7 @@ import androidx.compose.ui.graphics.graphicsLayer
  * ## 为什么是两层而不是一层
  *
  * 离场动画要求**旧页在动画期间仍在树上** —— 直接把 `page` 换掉，旧页当场被删，
- * 就没有「退出去」这回事了。所以常驻两层：[settled] 是底下那页，[top] 是盖在上面那页
+ * 就没有「退出去」这回事了。所以常驻两层：[under] 是底下那页，[top] 是盖在上面那页
  * （`null` = 没有覆盖层），`progress` 是盖在上面的那层的**在场程度**（0 = 全透明，
  * 1 = 完全就位）。切入与切出复用同一条公式，因为 `progress` 走的方向相反：
  *
@@ -53,7 +54,7 @@ import androidx.compose.ui.graphics.graphicsLayer
  * ```
  *
  * 深度不超过两层（面板 → 子页 → 子页，子页里没有第三层），所以两个槽位够用；
- * 真要三���，`settled`/`top` 得换成栈。
+ * 真要三层，`under`/`top` 得换成栈。
  *
  * @param page 要显示的那一层。**动画的输入，不是状态**。
  * @param content 画一层。过渡期间会被调用两次（底 + 顶），**必须无副作用**。
@@ -64,37 +65,46 @@ internal fun <T> ManagementTransition(
     content: @Composable (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var settled by remember { mutableStateOf(page) }
+    // `under` 是盖在底下的那一层，`top` 是盖在上面的（null = 没有覆盖层）。
+    //
+    // **为什么不能用「当前显示的那层」当底层**：从审计返回依赖管理时，`page` 变回
+    // 依赖管理，而它此刻正是 `top`。若底层也画它，用户会看到同一个页面淡出又淡入 ——
+    // 两次绘制同一个内容。`under` 存的是「`top` 之前那一层」，返回时它已经在那儿了。
+    var under by remember { mutableStateOf(page) }
     var top by remember { mutableStateOf<T?>(null) }
     // 1 = 上层完全就位（初值：首帧没有覆盖层，直接就位，不做进场动画）。
     val progress = remember { Animatable(1f) }
 
     LaunchedEffect(page) {
         if (page == top) return@LaunchedEffect
-        if (page == settled) {
-            // 切出：上层（= settled）滑出去，底下那页回来。
+        if (page == under) {
+            // 切出（返回）：上层滑出去，底下那层原样回来。
             progress.snapTo(1f)
             progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
             top = null
             progress.snapTo(1f)
         } else {
-            // 切入：新页盖上来，底下那页退成 settled。
-            settled = top ?: settled
+            // 切入：新页盖上来，原来显示的那层退到 `under`。
+            under = top ?: under
             top = page
             progress.snapTo(0f)
             progress.animateTo(1f, tween(DURATION_MS, easing = EASE))
         }
     }
 
-    Box(modifier) {
-        val t = progress.value
+    // `fillMaxSize` 不能省：两个子层都是 `matchParentSize`，而 `matchParentSize`
+    // **不参与父级尺寸计算** —— 不显式撑满的话，这一层会塌成 0×0。
+    Box(modifier.fillMaxSize()) {
+        // 没有覆盖层时 progress 恒为 1，所以**压暗要以「有没有 top」为前提** ——
+        // 直接按 progress 算会让稳态下的页面一直是 0.6 透明度。
+        val t = if (top == null) 0f else progress.value
         // 底层：**只淡**（不位移，用户口径照 TG 原文）。压暗 0.4 是「盖住时压暗」那一档。
-        Box(Modifier.alpha(1f - DIM * t).matchParentSize()) { content(settled) }
+        Box(Modifier.alpha(1f - DIM * t).matchParentSize()) { content(under) }
         top?.let { over ->
             Box(
                 Modifier
-                    .alpha(t)
-                    .graphicsLayer { translationX = (1f - t) * 48 * density }
+                    .alpha(progress.value)
+                    .graphicsLayer { translationX = (1f - progress.value) * SLIDE_DP * density }
                     .matchParentSize(),
             ) {
                 content(over)
@@ -104,6 +114,9 @@ internal fun <T> ManagementTransition(
 }
 
 private const val DURATION_MS = 150
+
+/** 切入/切出的横向位移（TG `ActionBarLayout.java:1892` 的 `dp(48)`）。 */
+private const val SLIDE_DP = 48
 
 /** 底层页被盖住时压暗到 0.6（见 KDoc「底层页只淡、不位移」）。 */
 private const val DIM = 0.4f
