@@ -46,7 +46,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.ClipOp
@@ -1399,22 +1398,6 @@ private suspend fun captureFrame(view: View): ImageBitmap? {
 /** 抓帧的等待上限（见 [captureFrame]）：超了就退化成纯色底，不让按钮失灵。 */
 private const val FRAME_CAPTURE_TIMEOUT_MILLIS = 250L
 
-/**
- * 悬浮底栏收起/展开的时长。
- *
- * 180ms：比主题揭示（[THEME_REVEAL_MILLIS]）短一档 —— 这是"让开位置"的过渡，不是主角。
- * 再长会让人觉得"进了编辑器之后底栏还在慢慢往上卷"。
- */
-private const val TAB_BAR_HIDE_MILLIS = 180
-
-/**
- * 底栏收起到底时缩到原尺寸的多少。
- *
- * `0.55`：到位那一眼已经明显是"卷掉了"而不是"淡掉了"，又还没薄成一条线 —— 配
- * 180ms，最后几帧是"向上卷走 + 淡出"一起收尾。
- */
-private const val TAB_BAR_SHRINK = 0.45f
-
 /** 从任意一层 `ContextWrapper` 里找出宿主 Activity（PixelCopy 要它的 `window`）。 */
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -1500,16 +1483,10 @@ private fun MainShell(
 ) {
     // 悬浮底栏的临时隐藏开关：整屏面（脚本文本编辑器）进来时自己写 true、退出写回
     // false。开关建在这一层是因为**只有外壳能同时"供"和"读"它**（见 LocalTabBarHidden）。
+    //
+    // **收起/展开是瞬间的，没有过渡动画**（用户 2026-10-13 口径："不要加动画"）。
+    // 之前那 180ms 的位移/缩放/淡出整条删掉了 —— 进编辑页底栏立刻不见、退出立刻回来。
     val tabBarHidden = remember { mutableStateOf(false) }
-    // 收起进度 0（在）→ 1（收起）。在 layer 块里读，所以这段动画**一帧都不重组**；
-    // 只有 `tabBarHidden` 翻面时本函数重组一次（那是必要的，得知道往哪边跑）。
-    val tabBarShift = remember { Animatable(0f) }
-    LaunchedEffect(tabBarHidden.value) {
-        tabBarShift.animateTo(
-            targetValue = if (tabBarHidden.value) 1f else 0f,
-            animationSpec = tween(TAB_BAR_HIDE_MILLIS, easing = EaseInOutQuad),
-        )
-    }
     Column(modifier.fillMaxSize()) {
         // pager 占满整个屏高（**不留**底栏的那份）：底栏改成 TG 的悬浮胶囊后它不再
         // 是"占一行的一块版面"，而是浮在内容之上的一条 —— 与内容同层（Box），内容
@@ -1528,42 +1505,24 @@ private fun MainShell(
                     content(Modifier.fillMaxSize())
                 }
                 // 胶囊盖在内容之上：后画的在上层。它自己的 8dp 外边距让四周露出内容。
-                // **收起/展开是"向上卷走 / 向上撑出"而不是瞬间消失**（编辑器进来时那一下
-                // 最显眼）。收起的方向不许向下缩 —— 用户 2026-10-13 口径，替掉原来的
-                // "向下滑出去"。用 `graphicsLayer` 的缩放 + 透明度，不用 `AnimatedVisibility`：
-                // ① 这两个量在 **layer 块里**读，动画每帧只更新这一层，不重组底栏；
-                // ② `AnimatedVisibility` 在这个 `Column { Box { … } }` 里会被解析到
-                //    `ColumnScope` 那个重载上，当场编译不过（实测，不是风格问题）；
-                // ③ 位移把**触摸区一起挪走**，收起后不会留一条看不见却点得到的胶囊。
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .graphicsLayer {
-                            // 去向由 [LocalTabBarHidden] 的翻面定 —— 它只在每次收起/展开的
-                            // 起点翻一次，layer 块每帧读到的都是"本次动画的固定方向"。
-                            val hiding = tabBarHidden.value
-                            alpha = 1f - tabBarShift.value
-                            // **收起向上卷、展开向上撑**（用户 2026-10-13 口径）：
-                            // 收起的锚点钉在胶囊**顶边** —— 底边朝顶边压扁、整条向上卷走；
-                            // 展开的锚点钉在**底边** —— 顶边从底边向上撑出。两个方向的内容
-                            // 都向上走，收起时**不会**看到"向下缩"。
-                            transformOrigin = TransformOrigin(0.5f, if (hiding) 0f else 1f)
-                            val scale = 1f - TAB_BAR_SHRINK * tabBarShift.value
-                            scaleY = scale
-                            scaleX = scale
-                        },
-                ) {
-                    TabBar(
-                        // 四格恒为「项目 / 任务 / 管理 / 设置」（`MainActivity.Tab`）。**不挂徽标**：
-                        // 徽标在 TG 里是"未读"语义，与本仓的"在途 / 漏投 / 未结算"三种账都不是
-                        // 一回事，混上去等于造出第四种读法 —— 计数一律在各自屏内说。`TabItem`
-                        // 因此只有 label + glyph 两个字段，没有"留着将来用"的空槽位。
-                        tabs = MainActivity.Tab.entries.map {
-                            TabItem(label = it.short, glyph = it.glyph)
-                        },
-                        pagerState = pagerState,
-                        onSelect = onSelectTab,
-                    )
+                //
+                // **收起/展开不带过渡动画**：进编辑页那一下整条直接消失、退出直接回来
+                // （用户 2026-10-13 口径）。所以这里连 `graphicsLayer` 都不需要 ——
+                // 不画就没有触摸区，不存在"留一条看不见却点得到的胶囊"。
+                if (!tabBarHidden.value) {
+                    Box(Modifier.align(Alignment.BottomCenter)) {
+                        TabBar(
+                            // 四格恒为「项目 / 任务 / 管理 / 设置」（`MainActivity.Tab`）。**不挂徽标**：
+                            // 徽标在 TG 里是"未读"语义，与本仓的"在途 / 漏投 / 未结算"三种账都不是
+                            // 一回事，混上去等于造出第四种读法 —— 计数一律在各自屏内说。`TabItem`
+                            // 因此只有 label + glyph 两个字段，没有"留着将来用"的空槽位。
+                            tabs = MainActivity.Tab.entries.map {
+                                TabItem(label = it.short, glyph = it.glyph)
+                            },
+                            pagerState = pagerState,
+                            onSelect = onSelectTab,
+                        )
+                    }
                 }
             }
         }
