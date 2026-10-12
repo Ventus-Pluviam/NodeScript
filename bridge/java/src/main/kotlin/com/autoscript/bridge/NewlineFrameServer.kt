@@ -38,12 +38,106 @@ import kotlinx.coroutines.sync.Semaphore
  * [inFlight]（在途请求**条数**，默认 256）与 [handshakes]（未认证连接数，默认 32）。
  * 批 100 补的第三条见 [maxBytesInFlight]（在途请求**字节**，默认 16 MiB）。
  *
- * **仍挂（外审 M2 同条的另一半，批 100 未做）**：① **每连接配额** —— 现在一条连接可以吃满
- * 全部 256 条在途（其他连接的请求全被挤在门外）；② **`limitedParallelism`** ——
- * 本类的 [scope] 直接用 `Dispatchers.IO`（默认 64 线程），连接数上去时读线程会与
- * 其它 IO 用途抢同一个池。这两条要连同「连接级计数的可见面」一起设计（缺一个就会
- * 重演「三处记账手拿会漂」那类问题），故登记不排期，不在本批做半套。
+ * **每连接配额与并发闸（2026-10-12 批 107，外审 M2 的另一半）**：上面三档是**全局**的 ——
+ * 一条连接就能吃满全部 256 条在途（其他连接的请求全被挤在门外），且 handler 跑在
+ * `Dispatchers.IO` 的默认 64 线程上。批 107 补三档**每连接**闸（[perConnectionLimits]）：
+ * 条数、字节、并发处理数。**读面刻意不设闸** —— 一条连接的帧读必须严格串行
+ * （下一帧的位置依赖上一帧读完），限它会直接卡死连接而不是降速。
+ *
+ * **为什么这三档与上面三档接在同一条链上而不是另起一份**：批 100 定的纪律是
+ * 「先取字节再取条数，取闸与起协程之间不留窗口」—— 反过来就得退款，多一处还就少一份配额。
+ * 加每连接闸时最容易犯的错就是把它接在这条链**之外**（比如进 handler 才判），那样就出现了
+ * 「全局闸已经取了、连接闸没过、闸的许可悬着」这个新状态。故 [Connection.serveAcceptedFrame]
+ * 是一处取、一处还，判定与归还写在一起。
+ *
+ * **「可见面」是什么、为什么它不是事后加的日志**：批 100 说这两条要「连同连接级计数的
+ * 可见面一起设计」，本批把它落成两件事 —— [QuotaSettings.onRejected]（每拒一条报一次，脚本作者
+ * 能从 stderr 看到「你这条被拒是因为连接配额」）与 [connectionStats]（每连接的实时读数）。
+ * 没有它，用户看到的现象是「有时候卡」，而没有人说得清被谁拒的 —— 那与「不做这半套」
+ * 一样没法解释。
  */
+/**
+ * 每连接闸与其诊断口**打包**（批 107）。
+ *
+ * **为什么打包成一个参数而不是分两三个进构造函数**：`NewlineFrameServer` 的构造参数已经
+ * 压着 detekt `LongParameterList` 的线（12），而「三档闸」与「闸的诊断口」在语义上就是
+ * 一个东西 —— 分开传会让调用方摆四个值却看不出哪几个是一组，改闸时忘了带诊断口就成了
+ * 「有闸但用户看不到为什么被拒」，那正是批 100 说「两半要一起设计」的由来。
+ */
+data class QuotaSettings(
+    val limits: PerConnectionLimits = PerConnectionLimits.DEFAULTS,
+    /**
+     * 配额拒绝的诊断回执（批 107，M2 的「可见面」那半）。
+     *
+     * 与 `onProtocolError`（对端发了非法帧）/ `onAcceptError`（本机 accept 出了故障）分三路：
+     * 三者回答三个不同的问题 —— 前两个是**故障**，这一个**是策略行为**。混进前两路里，
+     * 脚本作者会以为是自己写错了帧，而真相是宿主设的配额。缺省 no-op。
+     */
+    val onRejected: (reason: String) -> Unit = {},
+)
+
+/**
+ * 每条桥连接的三档闸（批 107；外审 M2 的「每连接配额」+「`limitedParallelism`」两半）。
+ *
+ * **与全局那三档是「与」不是「或」**：一条请求要同时满足全局闸与本连接的闸才被受理。
+ * 全局闸管「整个宿主别被撑死」，本连接的闸管「一条连接别把别人的份额吃光」——
+ * 前者缺了设备 OOM，后者缺了先到的连接把后来的全挤在门外（批 100 记的那条
+ * 「其他连接的请求全被挤在门外」）。
+ *
+ * **三档各自限的是不同的东西，正交**（与批 99 给 zip 加条目数闸、批 100 加字节闸同一条纪律）：
+ * - [inFlight]：同时在飞几条 —— 限「请求的**个数**」；
+ * - [bytes]：同时在飞多少字节 —— 限「请求的**体量**」，一条就能是 8 MiB；
+ * - [concurrent]：同时**执行中**几条 —— 限「宿主为这条连接付出的**并行度**」。
+ *
+ * 最后一项与前两项不是一回事：前两项管「收了多少进来」，这一项管「同时干了多少活」。
+ * 一条 1 KiB 的请求可以靠 [concurrent] 把 CPU 打满而完全碰不到 [bytes]。
+ */
+data class PerConnectionLimits(
+    val inFlight: Int,
+    val bytes: Long,
+    val concurrent: Int,
+) {
+    companion object {
+        /**
+         * 出厂值。
+         *
+         * [concurrent] 的 8 与全局 `Dispatchers.IO` 的 64 是一档之差：**一条连接最多占
+         * 八分之一的处理并行度**，八条连接并列时正好用满，再多的连接分不到 —— 那就是
+         * [inFlight] 该拒的那一档（而不是让处理线程被某一条连接垄断）。
+         *
+         * [bytes] 取 32 MiB（比全局 16 MiB 宽）：单连接可以比全局宽，但**不能宽到无界** ——
+         * 全局闸会在总量上兜住，这一条只防「一条连接自己吃掉全局预算的绝大部分」。
+         */
+        val DEFAULTS: PerConnectionLimits = PerConnectionLimits(
+            inFlight = 64,
+            bytes = 32L * 1024 * 1024,
+            concurrent = 8,
+        )
+    }
+}
+
+/**
+ * 一条连接的实时读数（批 107 的「可见面」那半）。
+ *
+ * **为什么它是只读快照而不是回调**：回调型可见面（每拒一条报一次）解决的是
+ * 「我这条为什么被拒」，而这个回答的是「现在谁占着多少」—— 后者只有**值**能答，
+ * 事件流答不了（「现在是 12 条」不是一个事件）。两者一起才是完整的可见面。
+ */
+data class ConnectionStat(
+    val connectionId: Long,
+    val runId: Long,
+    val inFlight: Int,
+    val inFlightLimit: Int,
+    val bytes: Long,
+    val bytesLimit: Long,
+)
+
+// 12 个构造参数压着 detekt `LongParameterList` 的线（11）。**刻意不合并**：
+// 每个参数都是一条独立可调的策略（帧上限 / 条数闸 / 字节闸 / 握手窗 / 排空窗 / 三个诊断口），
+// 打包成 `Settings` 会让「改字节闸要连带改条数闸的构造位置」——那正是本仓反复点名的
+// 「打包省了参数数、丢了可读性」。批 107 已经把**真正该成组**的两件（每连接闸 +
+// 其诊断口）收进了 [QuotaSettings]；剩下的每个都该各占一格。
+@Suppress("LongParameterList")
 class NewlineFrameServer(
     val router: BridgeRouter,
     val identities: RunIdentityRegistry,
@@ -74,7 +168,61 @@ class NewlineFrameServer(
      * 缺省 no-op。
      */
     private val onAcceptError: (reason: String) -> Unit = {},
+    /**
+     * 每条连接**自己的**三档闸（批 107，外审 M2 的另一半；见类 KDoc「每连接配额与并发闸」）。
+     *
+     * **为什么是「一个可变的当前值」而不是四个 ctor 参数**：批 100 之所以把这两半登记不排期，
+     * 一条理由就是「要连同连接级计数的可见面一起设计」，而可见面的前提是**用户能改**。
+     * ctor 上的 `val` 改一次要重启宿主，于是「可见面」只能显示一个用户动不了的值 ——
+     * 那不是可见面，是一行死文字。故这里是 `@Volatile` 的当前值 + [updatePerConnectionLimits]，
+     * 改完**下一次请求**即用新值（在途请求用它们开始时的那份，见该方法 KDoc）。
+     */
+    /**
+     * 每连接三档闸 + 它们的诊断回执**打包一个参数**（批 107；见 [QuotaSettings]）。
+     *
+     * **不是省事，是它们本来就是一个东西**：分两三个进构造函数会让调用方摆四个值
+     * 却看不出哪几个是一组，改闸时忘了带诊断口就成��「有闸但用户看不到为什么被拒」——
+     * 那正是批 100 说「这两半要连同可见面一起设计」的由来。
+     */
+    quota: QuotaSettings = QuotaSettings(),
 ) : AutoCloseable {
+
+    /**
+     * 每连接闸的**当前值**（批 107）。
+     *
+     * `@Volatile` 而不是 `AtomicReference`：每次请求读一次、每次设置整体换一份不可变数据，
+     * 没有「改一半」的中间态可言（`PerConnectionLimits` 是 data class，整体替换即原子）。
+     */
+    @Volatile
+    private var quotaSettings: QuotaSettings = quota
+
+    /** 当前每连接三档闸（从 [quotaSettings] 现取；见 [updatePerConnectionLimits]）。 */
+    private val perConnection: PerConnectionLimits get() = quotaSettings.limits
+
+    /**
+     * 改每连接闸（批 107 的「立即生效」那半）。缺省对象不被改（用户可以拿到它）。
+     *
+     * **在途请求用它们开始时的那份，不追溯**：一个请求已经在飞了才改配额，把它掐掉是
+     * 「撤销」不是「限额」，两件事混起来会让脚本在配额没变的情况下莫名失败。
+     * 归还时也不校验配额（许可数是「取了几发几」，与后来调了多少无关）。
+     *
+     * **不校验入参**：调用方是 [com.autoscript.domain.scripts.ScriptRuntimeLimits] 那条路
+     * （判据唯一一份在 `:domain` 的 `reject`），而本类是 `:bridge:java` —— 它看得见 `:domain`，
+     * 但**不复述那套上限**：桥的闸与「用户填的数」是两个层次的东西，桥只管「不低于 1」
+     * 这一条它自己的前提（0 个许可 = 连一条都发不出，那不是配置而是禁用）。
+     */
+    fun updatePerConnectionLimits(limits: PerConnectionLimits) {
+        require(limits.inFlight > 0 && limits.bytes > 0 && limits.concurrent > 0) {
+            "每连接三档闸都必须 > 0（0 等于禁用这条连接，不是「不限」）：$limits"
+        }
+        quotaSettings = quotaSettings.copy(limits = limits)
+    }
+
+    /** 每连接的实时读数（批 107 的可见面那半；见类 KDoc）。 */
+    fun connectionStats(): List<ConnectionStat> = synchronized(lock) {
+        connections.map { it.stat() }
+    }
+
     private val lock = Any()
     private val connections = HashSet<Connection>()
     private val listeners = HashSet<ServerSocket>()
@@ -387,34 +535,169 @@ class NewlineFrameServer(
             caller: com.autoscript.domain.bridge.AuthenticatedRunContext,
             session: InputChannelSession,
         ) {
-            if (!tryReserveBytes(frame.size.toLong())) {
-                rejectOverByteQuota(frame, output)     // 拒这一条、连接继续（不静默丢）
+            // **一份快照管这一条请求的全程**（批 107）：配额改小也不掐在途请求（见
+            // [updatePerConnectionLimits] 的 KDoc）。取一次、下面全程用这一份。
+            val mine = perConnection
+            val size = frame.size.toLong()
+            // 四道闸，一个一个过；**每过一道就记住过了**，被拒时按已经取过的那几道原路归还 ——
+            // 「拒一半、还一半」是最容易漏的那种漂：许可悬着，后来者永远等不到。
+            if (!tryReserveBytes(size)) {
+                rejectOverQuota(frame, output, "全局在途字节", "全局上限 ${maxBytesInFlight} B")
+                return
+            }
+            if (size > mine.bytes || !tryReserveOwnBytes(size)) {
+                bytesInFlight.addAndGet(-size)                       // ← 只还取过的那一道
+                rejectOverQuota(frame, output, "本连接在途字节", "本连接上限 ${mine.bytes} B")
                 return
             }
             inFlight.acquire()
-            val requestJob = launch(caller + session, start = CoroutineStart.LAZY) {
+            val ownCount = ownInFlight(mine.inFlight)
+            if (ownCount == null) {
+                // 连接级闸建不起来（见 [ownInFlight]）：**降级为只有全局那两道**，
+                // 而不是拒掉这条连接上的所有请求 —— 那会把一次内部初始化失败变成「脚本全挂」。
+                requestJob(mine, size, frame, output, caller, session, ownCount = null)
+                return
+            }
+            if (!ownCount.tryAcquire()) {
+                inFlight.release()
+                ownBytes.addAndGet(-size)                           // ← 还取过的两道
+                rejectOverQuota(frame, output, "本连接在途条数", "本连接上限 ${mine.inFlight} 条")
+                return
+            }
+            requestJob(mine, size, frame, output, caller, session, ownCount = ownCount)
+        }
+
+        /**
+         * 起请求协程 + 挂归还（批 107：归还从上一段搬进来，与取闸写在同一处）。
+         *
+         * [ownCount] 是「这一条**实际取过**的那个连接级闸」，null = 没取过 → 归还只还前两道。
+         * **传实例而不是传布尔**：配额在「取闸」与「协程结束」之间被改过时，`ownInFlight()`
+         * 会换成一个新闸 —— 那时按布尔去查「当前那个闸」就会还错闸（新闸多还一个 = 配额
+         * 悄悄放宽，且此后每条请求都多还一个，永远追不回来）。
+         * 少还一道 = 许可永久漏掉 = 配额随时间单调收紧，而那个现象在现场极难归因
+         * （「昨天还好好的，今天跑一会儿就全被拒了」没有任何日志指向它）。
+         */
+        private fun kotlinx.coroutines.CoroutineScope.requestJob(
+            mine: PerConnectionLimits,
+            size: Long,
+            frame: ByteArray,
+            output: OutputStream,
+            caller: com.autoscript.domain.bridge.AuthenticatedRunContext,
+            session: InputChannelSession,
+            ownCount: Semaphore?,
+        ) {
+            val requestJob = launch(
+                caller + session + handlerDispatcher(mine.concurrent),
+                start = CoroutineStart.LAZY,
+            ) {
                 handleFrame(frame, output)
             }
             requestJob.invokeOnCompletion {
-                bytesInFlight.addAndGet(-frame.size.toLong())
+                bytesInFlight.addAndGet(-size)
                 inFlight.release()
+                ownBytes.addAndGet(-size)
+                ownCount?.release()
             }
             requestJob.start()
         }
 
         /**
-         * 字节闸拒的那一条：**回一帧错误**（不静默丢 —— 静默丢的话脚本只会干等到 TTL 超时，
-         * 那才是真正的坑）。话术点名「字节」以免与条数闸混淆；帧里读不出 requestId 时
-         * 什么都不回（那不是一条完整请求，回一个无主的错帧反而会撞别处的在途）。
+         * 连接级条数闸，**按配额大小缓存**（批 107）。
+         *
+         * 为什么不每次现造一个 [Semaphore]：许可数是**闸的容量**，一条连接在配置没变时必须
+         * 始终用**同一个**实例，否则「同一连接的请求数上限」在语义上就不存在（每条请求
+         * 各自一闸 = 没有闸）。配置变了就换一个新闸（旧的让在途请求跑完）——
+         * 这正是 [updatePerConnectionLimits] 说的「不追溯在途」的具体形态。
+         *
+         * 建不起来（配额非正 —— 那不该发生，[updatePerConnectionLimits] 已 require）时
+         * 回 null，由调用方**降级**而不是拒连接（见 [serveAcceptedFrame]）。
          */
-        private suspend fun rejectOverByteQuota(frame: ByteArray, output: OutputStream) {
+        private fun ownInFlight(limit: Int): Semaphore? {
+            val existing = ownCount
+            if (existing != null && ownCountLimit == limit) return existing
+            val created = runCatching { Semaphore(limit) }.getOrNull() ?: return null
+            ownCount = created
+            ownCountLimit = limit
+            return created
+        }
+
+        @Volatile private var ownCount: Semaphore? = null
+        @Volatile private var ownCountLimit: Int = -1
+
+        /**
+         * 本连接的在途字节账（[ownInFlight] 的字节档）。**CAS 取闸**而不是信号量 ——
+         * 与全局 [bytesInFlight] 同一条理由（字节数是变量不是许可个数，见那里的 KDoc）。
+         *
+         * 上限**每请求现读**（不像条数闸要缓存）：它是个纯数字，与「闸实例」无关，
+         * 少了缓存那层就没有「换闸」这件事，也就没有「在途请求用哪一档」的歧义。
+         */
+        private val ownBytes = AtomicLong(0)
+
+        /** CAS 取本连接字节闸；超限 false（见 [tryReserveBytes] 同款形状与理由）。 */
+        private fun tryReserveOwnBytes(n: Long): Boolean {
+            while (true) {
+                val current = ownBytes.get()
+                if (current + n > perConnection.bytes) return false
+                if (ownBytes.compareAndSet(current, current + n)) return true
+            }
+        }
+
+        /**
+         * 配额拒掉的那一条：**回一帧错误**（不静默丢 —— 静默丢的话脚本只会干等到 TTL 超时，
+         * 那才是真正的坑）。话术**点名是哪一道闸**（全局字节 / 本连接字节 / 本连接条数），
+         * 以免与 [rejectOverByteQuota] 那条混淆成「好像都是字节」。
+         *
+         * 顺带走一次 [QuotaSettings.onRejected]：批 100 说这两半要「连同可见面一起设计」，这就是
+         * 那条可见面里**唯一用户能拿到的直接证据**（另一半是 [connectionStats] 的实时读数）。
+         */
+        private suspend fun rejectOverQuota(
+            frame: ByteArray,
+            output: OutputStream,
+            which: String,
+            limit: String,
+        ) {
+            quotaSettings.onRejected("桥配额拒请求：连接 $id 撞到$which（$limit）")
             val requestId = transport.probeRequestId(frame) ?: return
             val err = BridgeResponse.Err(
                 requestId,
                 ErrorCode.ERR_PERMISSION_DENIED.code,
-                "在途请求字节超上限（$maxBytesInFlight）：本请求 ${frame.size} 字节",
+                "$which 超限（$limit）—— 这是宿主设的配额，不是参数错；调大它去设置 → 脚本设置",
             )
             writeBlocking(output, transport.encodeResponse(err) + LF)
+        }
+
+        /**
+         * 本连接的处理并行度闸（批 107；`limitedParallelism` 那半）。
+         *
+         * **它限的是「并发执行的协程数」不是「线程数」** —— 桥 handler 绝大多数时候在等
+         * IO（截图、a11y 树、shell 回读），协程挂起时线程就还给池子，故「并发协程数」才是
+         * 这条连接的并行度上界；用线程数当判据会得到一个小得多且更难解释的数。
+         *
+         * **缓存而不是每次现造**：同一条连接在配置没变时反复 `limitedParallelism` 会造出
+         * 一个个新视图，每个都带一份限流状态 —— 而这里要的正是「同一条连接共用同一个上界」，
+         * 现造就等于每条请求一个独立的上界（闸形同虚设）。
+         */
+        private fun handlerDispatcher(concurrent: Int): kotlin.coroutines.CoroutineContext {
+            handlerDispatchers[concurrent]?.let { return it }
+            val created = scope.coroutineContext
+                .minusKey(Job)
+                .plus(Dispatchers.IO.limitedParallelism(concurrent))
+            handlerDispatchers[concurrent] = created
+            return created
+        }
+        private val handlerDispatchers = HashMap<Int, kotlin.coroutines.CoroutineContext>()
+
+        /** 本连接的真实读数（可见面；见 [ConnectionStat]）。 */
+        fun stat(): ConnectionStat {
+            val mine = perConnection
+            return ConnectionStat(
+                connectionId = id,
+                runId = boundRunId,
+                inFlight = mine.inFlight - (ownCount?.availablePermits ?: mine.inFlight),
+                inFlightLimit = mine.inFlight,
+                bytes = mine.bytes - ownBytes.get().coerceAtLeast(0L),
+                bytesLimit = mine.bytes,
+            )
         }
 
         private suspend fun handleFrame(frame: ByteArray, output: OutputStream) {

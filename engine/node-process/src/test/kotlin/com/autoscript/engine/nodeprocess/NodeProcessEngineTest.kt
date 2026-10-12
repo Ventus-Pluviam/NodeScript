@@ -136,6 +136,12 @@ class NodeProcessEngineTest {
         return p
     }
 
+    /** 两个限额缝打包一个参数：这两个是同一件事（脚本资源限额），拆开只会让 `engine()` 顶破 detekt 的参数线。 */
+    private data class ScriptLimits(
+        val maxHeapMb: () -> Int? = { null },
+        val uvThreadPoolSize: () -> Int? = { null },
+    )
+
     /** 默认宿主 = 临时目录里的哑文件（绝对路径存在性预检要过；真起进程的是假缝）。 */
     private fun defaultHostBinary(): Path = files.resolve("host").resolve("libnoden.so")
 
@@ -147,8 +153,7 @@ class NodeProcessEngineTest {
         socket: String? = null,
         bridgeDist: Path? = null,
         scriptEnv: () -> Map<String, String> = { emptyMap() },
-        maxHeapMb: () -> Int? = { null },
-        uvThreadPoolSize: () -> Int? = { null },
+        limits: ScriptLimits = ScriptLimits(),
         grace: Long = 3_000,
     ): NodeProcessEngine {
         // 只有走默认才铺哑文件：预检缺位案显式传"不存在的路径"、PATH 名案传相对名 —— 都原样不动。
@@ -166,8 +171,8 @@ class NodeProcessEngineTest {
                 hostSocketName = socket,
                 bridgeDistPath = bridgeDist,
                 scriptEnv = scriptEnv,
-                maxHeapMb = maxHeapMb,
-                uvThreadPoolSize = uvThreadPoolSize,
+                maxHeapMb = limits.maxHeapMb,
+                uvThreadPoolSize = limits.uvThreadPoolSize,
                 stopGraceMillis = grace,
             ),
             launcher,
@@ -351,7 +356,7 @@ class NodeProcessEngineTest {
     fun `堆上限走 argv 且排在脚本路径之前`() {
         writeScript()
         val launcher = FakeLauncher()
-        val e = engine(launcher, maxHeapMb = { 96 })
+        val e = engine(launcher, limits = ScriptLimits(maxHeapMb = { 96 }))
         runBlocking { e.execute(request(args = listOf("x"))) }
 
         val cmd = launcher.lastCommand!!
@@ -368,7 +373,7 @@ class NodeProcessEngineTest {
     fun `IO 线程池走 env——Node 没有 argv 形式`() {
         writeScript()
         val launcher = FakeLauncher()
-        val e = engine(launcher, uvThreadPoolSize = { 16 })
+        val e = engine(launcher, limits = ScriptLimits(uvThreadPoolSize = { 16 }))
         runBlocking { e.execute(request()) }
         assertEquals(
             "16",
@@ -381,7 +386,7 @@ class NodeProcessEngineTest {
     fun `两个缝回 null 时一个标记都不加——缺省不得改变任何行为`() {
         writeScript()
         val launcher = FakeLauncher()
-        runBlocking { engine(launcher, maxHeapMb = { null }, uvThreadPoolSize = { null }).execute(request()) }
+        runBlocking { engine(launcher, limits = ScriptLimits(maxHeapMb = { null }, uvThreadPoolSize = { null })).execute(request()) }
 
         assertEquals(
             listOf(defaultHostBinary().toString(), files.resolve("scripts/p1/a.js").toString()),
@@ -400,7 +405,7 @@ class NodeProcessEngineTest {
         val launcher = FakeLauncher()
         var heap = 96
         var pool = 4
-        val e = engine(launcher, maxHeapMb = { heap }, uvThreadPoolSize = { pool })
+        val e = engine(launcher, limits = ScriptLimits(maxHeapMb = { heap }, uvThreadPoolSize = { pool }))
         runBlocking { e.execute(request()) }
         assertTrue("--max-old-space-size=96" in launcher.lastCommand!!)
 

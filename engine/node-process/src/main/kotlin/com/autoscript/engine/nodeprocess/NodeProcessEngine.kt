@@ -155,6 +155,36 @@ class NodeProcessEngine(
 
     @Volatile private var execution: Execution? = null
 
+    /**
+     * 脚本资源限额的注入面（批 107；§8.1）—— 单独成函数是为了让 [execute] 少两个分支
+     * （它正好压在 detekt `CyclomaticComplexMethod` 的线上）。
+     *
+     * 两项的落地形态不同，理由都在各自配置项的 KDoc 里：堆上限走 **argv**（`NODE_OPTIONS`
+     * 是「追加不覆盖」的别人的设置，而堆上限是策略），IO 线程池只能走 **env**
+     * （libuv 初始化时读，Node 没有 argv 形式）。
+     */
+    private fun applyRuntimeLimits(env: MutableMap<String, String>) {
+        config.uvThreadPoolSize()?.let { env[ENV_UV_THREADPOOL_SIZE] = it.toString() }
+    }
+
+    /**
+     * 拼 spawn 命令行：**堆上限标志位插在脚本路径之前**。
+     *
+     * 位置是契约不是排版：`main.cpp` 的 node_argv 形如
+     * `{node, [-- -e BOOTSTRAP --], script, args...}`，标志位落在 script 之后会被当成脚本的
+     * 第一个位置参数（§7.8 的 argv 契约）。没配堆上限时**一个标记都不加** ——
+     * 那不是「上限 0」而是完全交给 Node 的默认。
+     */
+    private fun spawnCommand(scriptAbs: Path, args: List<String>): List<String> {
+        val heapFlag = config.maxHeapMb()?.let { "--max-old-space-size=$it" }
+        return buildList {
+            add(config.hostBinary.toString())
+            if (heapFlag != null) add(heapFlag)
+            add(scriptAbs.toString())
+            addAll(args)
+        }
+    }
+
     /** 仅存活时给真 pid；receipt 中的启动快照不受此属性的变化影响。 */
     override val pid: Int?
         get() = execution?.process?.takeIf { it.isAlive }?.pid
@@ -235,20 +265,8 @@ class NodeProcessEngine(
                 env[ENV_RUN_ID] = runId.toString()
                 run.runNonce?.let { env[ENV_RUN_NONCE] = it }
 
-                // 堆上限走 argv（见 [maxHeapMb] 的 KDoc：NODE_OPTIONS 是「追加不覆盖」的
-                // 别人的设置，而堆上限是策略）。插在**脚本路径之前** —— `main.cpp` 的
-                // node_argv 是 `{node, [-- -e BOOTSTRAP --], script, args...}`，标志位必须在
-                // script 之前，否则被当成脚本的第一个位置参数（与 §7.8 的 argv 契约同一条）。
-                val heapFlag = config.maxHeapMb()?.let { "--max-old-space-size=$it" }
-                val command = buildList {
-                    add(config.hostBinary.toString())
-                    if (heapFlag != null) add(heapFlag)
-                    add(scriptAbs.toString())
-                    addAll(run.args)
-                }
-                // IO 线程池只能走 env（Node 无 argv 形式，见 [uvThreadPoolSize]）——
-                // 与 AUTOSCRIPT_* 宿主键同批写，宿主键那一族在它们之后，故顺序即契约。
-                config.uvThreadPoolSize()?.let { env[ENV_UV_THREADPOOL_SIZE] = it.toString() }
+                applyRuntimeLimits(env)
+                val command = spawnCommand(scriptAbs, run.args)
                 val cwd = ScriptPaths.projectRoot(config.filesDir, run.projectId)
                 // 在线必须与宿主同一本身份账；离线不签发、不凭空制造匿名桥身份。
                 // 授权快照由宿主一侧**上游**算好（RuntimeController.start → 池请求 → 本请求），

@@ -8,7 +8,11 @@ package com.autoscript.domain.scripts
  * | 档 | 字段 | 限的是谁 | 生效手段 |
  * |---|---|---|---|
  * | **单脚本** | [maxHeapMb] / [uvThreadPoolSize] | **这一个脚本进程**自己 | Node 的 `--max-old-space-size` / `UV_THREADPOOL_SIZE` |
- * | **桥** | [bridgeInFlightPerConnection] / [bridgeBytesPerConnectionMb] / [bridgeReadThreadsPerConnection] | **所有脚本合计**，按连接切 | `:bridge:java` 的每连接闸 + `limitedParallelism` |
+ * | **桥** | [bridgeInFlightPerConnection] / [bridgeBytesPerConnectionMb] / [bridgeReadThreadsPerConnection] | **所有脚本合计**，按连接切 | `:bridge:java` 每连接闸 |
+
+ * 桥那三项的名字后面都带 `PerConnection` —— 因为它们限的是「**一条连接**」，
+ * 不是「一个脚本」。这条命名纪律是本页存在的一半理由：设置页上五行并排，
+ * 没有名字前缀的话用户会把桥那三项当成「单脚本的内存/线程」。
  *
  * 混在一起是因为用户问的是同一个问题（「这个脚本最多能吃多少」），而它们**不是同一种资源**：
  * 把堆调到 64 MB 与把桥的在途字节调到 8 MiB 拒的是完全不同的请求。把两组分开做成两个页面
