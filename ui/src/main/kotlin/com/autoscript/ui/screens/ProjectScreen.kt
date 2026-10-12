@@ -81,6 +81,7 @@ import com.autoscript.ui.components.MenuGap
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalToast
+import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.ROW_MORE_DOTS_WEIGHT
 import com.autoscript.ui.components.RefreshableBox
 import com.autoscript.ui.components.RowMoreDotsSize
@@ -179,6 +180,9 @@ fun ProjectScreen(
     val longPressFeedback = rememberLongPressFeedback()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // 悬浮底栏的隐藏开关（外壳供，[LocalTabBarHidden]）。编辑面占整屏时要把它整条收掉 ——
+    // 写口在这一层而不是编辑面自己那一层，见 [openEditor] / [requestEditorClose] 的注释。
+    val tabBarHidden = LocalTabBarHidden.current
 
     // 正在编辑的文件（null = 不在编辑）。编辑面**盖在整页之上**而不是「换掉整页」——
     // TG 打开文档也是走 ActionBarLayout 那一层切换（`presentFragment`），底下那份列表
@@ -190,8 +194,17 @@ fun ProjectScreen(
     var editorAnimating by remember { mutableStateOf(false) }
     /** 开一个文件（动画期间吞掉，与面板入口同一口径）。 */
     fun openEditor(file: ScriptFileRowUi) {
-        if (!editorAnimating) editing = file
+        // 动画期间吞掉（与面板入口同一口径）。**底栏 flag 一起吞**：切出动画里 `editing`
+        // 已经归 null、flag 已经复位，此时若只写 flag，底栏会在没有编辑面的时候又收起来。
+        if (editorAnimating) return
+        editing = file
+        // 底栏整条收掉（用户口径）：编辑面占整屏。不在这写 true，退出编辑页的那一拍
+        // `tabBarHidden` 还是旧值 false，底栏会多留一帧 —— 就是「退出来底栏要等一会才
+        // 突然出现」。先置 true 再上编辑面，两件事同一帧发生；`requestEditorClose` 的
+        // 收尾会把这条 flag 复位成 false。
+        tabBarHidden.value = true
     }
+
     // 编辑面递出来的「能不能退」判定（含未保存拦截）。**侧缘手势的提交路径走
     // `ManagementTransition.onBackRequest`，不经过编辑器自己那颗 `BackHandler`** ——
     // 不接这道门的话，滑手回来会静默丢掉未保存的改动。
@@ -199,6 +212,11 @@ fun ProjectScreen(
     /** 关掉编辑面（有未保存改动时先问一句，与返回键、‹ 同一个判定）。 */
     fun requestEditorClose() {
         (editorCloseGuard ?: { editing = null }).invoke()
+        // 底栏复位，**与「编辑面消失」同一帧**：编辑态外壳已经不画底栏了，拖到 `finally`
+        // 或 `onDispose` 会把底栏的出现也拖进那 380ms 飞出动画 —— 退出来底栏还要等一会
+        // 才突然出现（用户 2026-10-13 报的那个）。只要编辑面开始关（无论手势、返回键、
+        // ‹、确认框），flag 当场翻回 false。
+        if (tabBarHidden.value) tabBarHidden.value = false
     }
 
     // 可见集 = 一层（[ProjectState.childrenOf]）→ 排序。**搜索时层裁剪让位**：

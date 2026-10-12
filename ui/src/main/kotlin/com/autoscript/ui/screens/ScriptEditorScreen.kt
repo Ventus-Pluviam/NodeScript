@@ -87,7 +87,6 @@ import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.LocalEditorHighlightHost
-import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.LocalToast
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.color
@@ -155,12 +154,12 @@ fun ScriptEditorScreen(
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     // **编辑面占整屏，底栏整条收掉**（用户口径）：编辑时那四个页签既点不到正文、又压着最后几行。
-    // 开关由外壳供（[LocalTabBarHidden]），只在进出时写它 —— 退出（含配置重建）自动还回去。
-    val tabBarHidden = LocalTabBarHidden.current
-    DisposableEffect(Unit) {
-        tabBarHidden.value = true
-        onDispose { tabBarHidden.value = false }
-    }
+    //
+    // **开关不在这里写**（原来是 `DisposableEffect` 进写 true、`onDispose` 写回 false，
+    // 已删）：`onDispose` 落在编辑面真正离开组合那一刻，而那是**切出动画走完**之后 ——
+    // 底栏于是要等那 380ms 飞出动画结束才突然冒出来（用户 2026-10-13 报的"等一会才突然
+    // 出现"）。现在归宿主 [ProjectScreen]：开编辑面时写 true（与 `editing` 同一拍），
+    // 关编辑面时写回 false（与"编辑面开始关"同一拍，不等动画）。
     // null = 还没读到（或正在读）：与「读到了但是空文件」（空串）必须区分开。
     //
     // 存的是 **TextFieldValue 而不是 String**：光标位置也是编辑器状态的一部分 ——
