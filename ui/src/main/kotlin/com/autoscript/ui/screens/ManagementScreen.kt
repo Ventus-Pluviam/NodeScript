@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.SettingIconColors
@@ -45,7 +48,13 @@ fun ManagementScreen(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
-        ActionBar(title = "管理面板", background = ThemeColors.surfaceMuted)
+        ActionBar(
+            title = "管理面板",
+            // 顶栏标题与任务中心同款 20sp Medium（TG `createTitleTextView` 的 portrait 档）
+            // —— 两个页签顶栏标题不同字号会读成两种语义：像一行里混了正文与标题。
+            titleStyle = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
+            background = ThemeColors.surfaceMuted,
+        )
         LazyColumn(
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(top = 8.dp, bottom = TabBarBottomClearance()),
