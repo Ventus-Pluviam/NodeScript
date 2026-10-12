@@ -47,7 +47,7 @@ interface EnginePool {                                // 实现在 :app-service:
 **所有脚本执行时注入脚本进程的 `process.env`**。契约住 `:domain`
 （`com.autoscript.domain.scripts.ScriptEnvStore` / `ScriptEnvEntry` / `ScriptEnvKeys`），
 落盘实现在 `:app-service:script-repo`（`core/FileScriptEnvStore`，jsonl 追加 + replay 收敛，
-`files/.autojs/script-env.jsonl`，与 `tasks.jsonl` 同族纪律）。
+`files/.ns/script-env.jsonl`，与 `tasks.jsonl` 同族纪律）。
 
 注入面只有一处：`NodeEngineConfig.scriptEnv: () -> Map<String, String>`，
 在 `NodeProcessEngine.execute` 构造子进程 env 时调用。三条口径：
@@ -80,7 +80,7 @@ interface EnginePool {                                // 实现在 :app-service:
 | 桥 | 每连接在途请求数 / 在途字节（MB）/ 并发处理数 | **所有脚本合计**，按连接切 | `:bridge:java` 的每连接闸 + `limitedParallelism`（§7.7） |
 
 契约住 `:domain`（`ScriptRuntimeLimits` 五项 + `reject` 唯一一份 + `ScriptLimitsStore`），
-落盘 `files/.autojs/script-limits.json`（`:app-service:script-repo` 的 `FileScriptLimitsStore`）。
+落盘 `files/.ns/script-limits.json`（`:app-service:script-repo` 的 `FileScriptLimitsStore`）。
 **刻意不是 jsonl**：这是「当前值」不是 append-only 账，append 只会让每次读都 replay；
 写入走 tmp + 同目录 `ATOMIC_MOVE`（直接 `TRUNCATE_EXISTING` 会在写到一半崩溃时留下半截 JSON，
 而它恰好是内存闸 —— 「配坏了所以不设限」比「配坏了所以启动失败」更危险）。**字段缺失回该项

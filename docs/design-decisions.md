@@ -12,6 +12,52 @@
 
 ---
 
+## 77. 存储面改名 `.autojs` → `.ns`、签名域内字符串去掉对标产品名，且不做旧版兼容（2026-10-12，批 108，D6 结案）
+
+维护者拍板：`.autojs` 存储目录改成 `.ns`，**不需要兼容旧版**。本批落地，第 18 项那两条
+「不改」理由随之作废（原文已就地标注并逐字保留）。同时把「发布用的 npm scope 归属」那条
+问号从待办里**直接删掉**（维护者口径：本项目不需要对外发布 npm 包）。
+
+### 77.1 为什么「不做兼容」在这里是安全的 —— 与第 18 项的分歧不在风险判断上
+
+第 18 项当时说的失败形态是对的：老设备上已签的 `lock.sig` 换个前缀就**全部验不过**，
+而「明明签过的 lock 被判未签」对安全锚是往危险方向退。**但那不是「这个改名不该做」的
+理由，是「改名要配迁移」的理由** —— 结论与前提被绑在一起，于是整件事被记成待办。
+维护者裁「不兼容」之后，剩下的实际后果只有一条，且是**如实可见**的那条：
+
+- **升级后首次装依赖会因验签失败被拒**（`ERR_PERMISSION_DENIED`），原文点名 lockfile 与
+  签名不匹配。用户看到的是一条明确报错，不是静默放行 —— 因为**验签失败方向本来就是
+  fail-closed**（`LockSigner.verifyOrThrow` 的既有纪律，本批未动）。加一条旧前缀的
+  fallback 才是真的危险：它会把「没签 / 错签」重新解释成「签过」。
+- `.ns` 内的历史台账（install-history / console-history / intent-log）**不迁移**，
+  旧数据留在旧目录里读不到。这是一次性的、**看得见**的代价，不是每次运行渗出的慢性故障。
+
+**判断与前提要分开记** —— 本批唯一的方法收获：把「结论」和「支撑结论的那条风险」焊在
+一个条目里，风险一旦被裁定为可接受，结论就会跟着一起卡住。
+
+### 77.2 顺手统一的两处同病相邻命名
+
+`autojs-lock-v1|` / `autojs-snapshot-v1|` 两个**签名输入前缀**带同一个对标产品名。它们和
+`.autojs` 是同一条病（拿 autojs 当自己的标识符），批 7 当时只扫了描述面、没扫到这两个
+域内字符串 —— 它们长得像「协议版本标签」，扫「npm scope」时容易以为已经扫干净了。故一并
+改成 `autoscript-lock-v1` / `autoscript-snapshot-v1`。
+
+**`.autojs.build.ignore`（打包排除规则文件名）一并改成 `.autoscript.build.ignore`** ——
+它是**项目根下用户自己建的**文件（§10.9 第 7 条），改名同样要用户跟着改，但它不是已落盘
+格式、也不参与任何签名，代价只有一个文件重命名。
+
+**逐字没改的三处**（它们不是「拿 autojs 当自己名字」，是别的东西）：
+- `AutoJsPro` 九处 —— **对标产品名**；
+- `docs/reference/autojspro-docs.txt` 与 `pro.autojs.run` —— 第三方站点地址；
+- 仓内 npm 包名 `@autoscript/bridge-js` —— 本来就不是 autojs。
+
+### 77.3 一个改名的连带面：`autojsDir` 这个形参会撞名
+
+`AppShellApplication` 里原本有两个局部 `val`：一个是 `nativeLibraryDir`（引擎 .so 的交付位）、
+一个是 `filesDir/.autojs`。批量改名把后者也成了 `nativeDir`，**当场与前者同名人遮蔽** ——
+Kotlin 不报错，只是后面 80 行全部指向错误的那个目录。这类「改名的碰撞」逐字符替换查不出来，
+只有编译器或一次读代码能抓。
+
 ## 74. 进程面抽成 `:platform:process`：消重复不等于塞进领域层（2026-10-12，批 105）
 
 批 95（npm 的 T1 杀树）与批 99（`:platform:system` 的 shell 收尸）各自落了一份
@@ -1069,7 +1115,7 @@ git 说明符拒收，每一样都得在两处各写一遍。故落的是 `HostS
 **背景**：§10.5-2 原话是「审计日志（approve/registry 变更/lock 重签）落 App **且可导出**」。
 实测复核发现前半截成立、后半截不成立，而且不是「导出没做」这一件事：
 
-- `InstallHistory` 一直在写（`files/.autojs/install-history.jsonl`，只追加、失败也记），
+- `InstallHistory` 一直在写（`files/.ns/install-history.jsonl`，只追加、失败也记），
   写点覆盖 install/ci/uninstall/prune/dedupe/registry/import/export 与 T1 三种放行动作；
 - 但 `PackageManagerFacade` **没有任何读口**，全仓 `InstallHistory` 的非测试引用只有
   `NpmShellKit` 那一处构造 —— **生产零消费方**。用户点过的每一次批准、每一次镜像源变更、
@@ -1372,7 +1418,7 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
 **拍板四条**：
 
 1. **shim 本体住 classpath 资源（`app-service/npm/src/main/resources/.../npm-spawn-gate.cjs`），
-   落位到 `filesDir/.autojs/`**。不随 npm 素材树：素材树受 `npm-manifest.json` 逐件摘要对账，
+   落位到 `filesDir/.ns/`**。不随 npm 素材树：素材树受 `npm-manifest.json` 逐件摘要对账，
    往里塞宿主自己的文件会让「清单与 APK 文件集合不一致」每次启动必红 —— 那是给别人的账本记自己的账。
    不写成 Kotlin 字符串常量：它是要被 Node 真加载的代码，落成真文件才有人读得懂、也才能被单测**真跑**。
 2. **注入走 `NODE_OPTIONS=--require=<落点>`，追加不覆盖**。父环境里那份是别人的设置，
@@ -1511,7 +1557,7 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
      脚本可绕开桥直接读写宿主私有目录、连别的 socket、杀别的进程。任何只写在
      `CapabilityMask` 上的「来源限制」都挡不住恶意脚本，只挡得住老实脚本。
      具体例：保守档 A 收走 `SCHEDULER_WRITE` 让脚本建不了定时任务，而任务注册表就是
-     `filesDir/.autojs/intent-log.jsonl`（启动即回放）—— 同 UID 脚本直接往那个文件追加一行即可绕过。
+     `filesDir/.ns/intent-log.jsonl`（启动即回放）—— 同 UID 脚本直接往那个文件追加一行即可绕过。
      （此例为原理推论，未实测。）
    - **它原本能买的两样都已另有来源**：① 审计归因 —— 已由 A10 的 `engineRunId → projectId` 覆盖，
      不需要来源档；② 保守缺省 —— 那是**缺省**的价值，单档（全量 + 保守缺省）同样具备。
@@ -1627,9 +1673,9 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
 
 2026-10-01 拍板（安全防线：本地状态不进系统备份；非 §18 编号项，原口径不涉）：
 
-16. **`files/.autojs/` 不参与系统备份与换机迁移 —— `allowBackup="false"`，契约侧登记为 §11.2 新增 T9**：
+16. **`files/.ns/` 不参与系统备份与换机迁移 —— `allowBackup="false"`，契约侧登记为 §11.2 新增 T9**：
     依 §11.4「新增/加强防线走 §18 决策台账，不在设计文档里悄悄添」，防线先在这里记账再落契约。
-    - **要守的是什么**：`.autojs/` 里没有可再生的用户数据，全是**信任锚与审计面** —— `lock.sig`（「这份 lock
+    - **要守的是什么**：`.ns/` 里没有可再生的用户数据，全是**信任锚与审计面** —— `lock.sig`（「这份 lock
       是本机签过的」§10.5-1）、审批台账（`pkg+versionHash` 的 APPROVED）、安装 journal/history、意图日志。
     - **为什么关**：默认（`allowBackup` 缺省 = true）它们进 Auto Backup / D2D 迁移，落到**另一个设备上下文**：
       `lock.sig` 在新机上验不过（密钥不出本机，Keystore 不随备份走），而审批台账与安装 history 会以
@@ -1653,10 +1699,10 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
     - **「等它长」已有征兆**：门禁面在长（`Capability` 九项），行为面（reader/launcher 两道缝）也在长。
     - 记这条是为了让下次再看到「91 行」时不必重查一遍。
 
-18. **命名统一到此为止：`.autojs` 目录与 `autojs-lock-v1` 前缀**保留**（backlog D6 的剩余部分）**：
+18. ~~**命名统一到此为止：`.autojs` 目录与 `autojs-lock-v1` 前缀保留**（backlog D6 的剩余部分）**~~ —— **本项结论已被推翻（2026-10-12，批 108），见第 77 项**：维护者拍板 `.autojs` → `.ns` 且**不做旧版兼容**，本条当时给出的两条「不改」理由（存储格式变更 / 安全锚验签回退）随之作废。原文逐字保留：
     描述面（9 处 `@autojs/*`）已按事实侧改成 `auto` / `bridge_native.node`（`AutoJsPro` 九处保留 —— 那是
     **对标产品名**）。但存储面两处**不改**，理由是它们不是命名而是**已落盘的格式**：
-    - `files/.autojs/` 是 §10.2 写进契约的存储布局（`lock.sig`/审批账/journal/history 的落位），实现与测试
+    - `files/.ns/` 是 §10.2 写进契约的存储布局（`lock.sig`/审批账/journal/history 的落位），实现与测试
       共 30+ 处一致使用；
     - `autojs-lock-v1|` 是 **lock 签名前缀**（§10.5-1 带外信任锚的输入串）。改它 = 旧设备上已签的
       `lock.sig` **全部验不过**，而失败形态是「明明签过的 lock 被判未签」—— 对一个安全锚来说是往危险方向退。

@@ -332,7 +332,7 @@ class AppShellNpmCliTest {
         assembleWith(source = null, nodeBin = null, lockKeys = keys).use { assembled ->
             val lock = writeLock("main", """{"lockfileVersion":3,"packages":{}}""")
             // 用同一把钥匙替执行体收尾时那次 sign（生产是 install 收尾写的）。
-            LockSigner(files.resolve(".autojs"), LockKeyStore.resolve(keys)).sign("main", lock)
+            LockSigner(files.resolve(".ns"), LockKeyStore.resolve(keys)).sign("main", lock)
             val (code, detail) = ciResult(assembled, "main")
             // 验签过了 → 进到重操作入队；没有执行体 → 如实 ERR_NOT_IMPLEMENTED。
             assertEquals("ERR_NOT_IMPLEMENTED", code, "验签已过，卡在没执行体上才是对的：$detail")
@@ -366,7 +366,7 @@ class AppShellNpmCliTest {
     fun `锁被换过：跨项目搬来的签名验不过（键绑 projectId 这条在装配面上活着）`() {
         val keys = MemKeys(present = memKey("bound"))
         assembleWith(source = null, nodeBin = null, lockKeys = keys).use { assembled ->
-            val signer = LockSigner(files.resolve(".autojs"), LockKeyStore.resolve(keys))
+            val signer = LockSigner(files.resolve(".ns"), LockKeyStore.resolve(keys))
             val lock = writeLock("main", """{"lockfileVersion":3,"packages":{}}""")
             signer.sign("main", lock)
             // 换个项目号重建同样的 lock：签名是给 "main" 的。

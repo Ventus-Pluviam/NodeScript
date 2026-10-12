@@ -20,7 +20,6 @@
     <ID>LoopWithTooManyJumpStatements:NpmSnapshotTest.kt$NpmSnapshotTest$while</ID>
     <ID>MaxLineLength:InstallCoordinatorTest.kt$InstallCoordinatorTest$"""{"dist-tags":{"latest":"$version"},"versions":{"$version":{"version":"$version","dist":{"tarball":"https://registry.example/axios/-/axios-$version.tgz","integrity":"$integrity"}}}}"""</ID>
     <ID>MaxLineLength:InstallCoordinatorTest.kt$InstallCoordinatorTest$private</ID>
-    <ID>MaxLineLength:InstallCoordinatorTest.kt$InstallCoordinatorTest$val signer = LockSigner(dir.resolve(".autojs"), LockSigner.KeyProvider { SecretKeySpec("test-app-key-32bytes-aaaaaaaaaaaa".toByteArray(), "HmacSHA256") })</ID>
     <ID>MaxLineLength:InstallCoordinatorTest.kt$InstallCoordinatorTest$writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/a":{"version":"1.0.0","integrity":"sha512-hit"},"node_modules/b":{"version":"2.0.0","integrity":"sha512-miss"},"node_modules/c":{"version":"3.0.0"}}}""")</ID>
     <ID>MaxLineLength:InstallCoordinatorTest.kt$InstallCoordinatorTest$writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0","integrity":"sha512-x"},"node_modules/dayjs":{"version":"1.11.0"}}}""")</ID>
     <ID>MaxLineLength:NpmSnapshotTest.kt$NpmSnapshotTest$Files.write(layout.lockfile(projectId), ("""{"lockfileVersion":3,"packages":{"":{},"node_modules/lodash":{"version":"4.17.21","integrity":"sha512-x"}}}""").toByteArray())</ID>

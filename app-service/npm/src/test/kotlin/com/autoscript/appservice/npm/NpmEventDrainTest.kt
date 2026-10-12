@@ -42,7 +42,7 @@ class NpmEventDrainTest {
     private fun coordinator(): InstallCoordinator = InstallCoordinator(
         services = NpmServices(
             layout = layout,
-            journal = InstallJournal(dir.resolve(".autojs")),
+            journal = InstallJournal(dir.resolve(".ns")),
             staging = InstallStaging(layout),
             cacheIndex = CacheIndex { false },
         ),
@@ -69,7 +69,7 @@ class NpmEventDrainTest {
         val c = InstallCoordinator(
             services = NpmServices(
                 layout = layout,
-                journal = InstallJournal(dir.resolve(".autojs")),
+                journal = InstallJournal(dir.resolve(".ns")),
                 staging = InstallStaging(layout),
                 cacheIndex = CacheIndex { false },
             ),

@@ -37,7 +37,7 @@ class PackagerCollectorTest {
     @Test
     fun `ignore 规则与描述文件本身被排除`() {
         write("main.js", "run()")
-        write(".autojs.build.ignore", "x")
+        write(".autoscript.build.ignore", "x")
         write("build.log", "noise")
         write("node_modules/axios/index.js", "axios")
         val spec = PackSpec(projectId = "p", appName = "P", ignoreRules = listOf("*.log"))

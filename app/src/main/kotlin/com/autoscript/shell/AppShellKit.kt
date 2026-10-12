@@ -50,7 +50,7 @@ import com.autoscript.platform.capabilities.CapabilityNamespaces
  * Android 侧装壳配方（docs §4.1 Composition Root 的**真调用点**）。
  *
  * 为什么单独一个文件而不是写在 [com.autoscript.AppShellApplication] 里：装壳要碰
- * `:app-service:*` 五个模块的目录约定（意图日志 / 运行档案 / npm 三份 `.autojs` 与
+ * `:app-service:*` 五个模块的目录约定（意图日志 / 运行档案 / npm 三份 `.ns` 与
  * `cacheDir` 布局）与三个注入缝（能力 handler、闹钟 provider、屏幕门禁）。这些是
  * **装配知识**，不是 Application 生命周期知识；分开之后 [AppShell.assemble] 的每个参数
  * 在这里都能指着一段可测代码，而不是散在 `onCreate` 的几十行里。
@@ -81,7 +81,7 @@ object AppShellKit {
     /**
      * 装配生产壳（§4.1）。
      *
-     * @param filesDir App 私有文件目录（`files/scripts/<projectId>`、`files/.autojs` 都在这下面，
+     * @param filesDir App 私有文件目录（`files/scripts/<projectId>`、`files/.ns` 都在这下面，
      *   §10.2 存储布局）；Android 侧传 `context.filesDir.toPath()`。
      * @param cacheDir 可被系统清理的缓存目录（npm cacache `cacheDir/npm-cache`，§10.2）；
      *   被清掉只是缓存缺口（`CacacheIndex` 如实报缺口），不是错误。
@@ -292,8 +292,8 @@ object AppShellKit {
          */
         capabilityMask: CapabilityMask? = null,
     ): AssembledShell {
-        val autojsDir = filesDir.resolve(".autojs")
-        Files.createDirectories(autojsDir)
+        val nsDir = filesDir.resolve(".ns")
+        Files.createDirectories(nsDir)
 
         // 装配期脚本补部署（§9.6）：排期/意向持久了但脚本内容可能已被清掉
         // （用户"清除数据"、系统回收空间、预装包升级），先补缺再装配 —— 否则装配出的壳
@@ -340,7 +340,7 @@ object AppShellKit {
         // `PlatformWiring.taskStore`（SQLite，含迁移），单测 = `InMemory*`/jsonl 面。
         // **无回落**（与 `intentStore` 同一条纪律，2026-10-08 裁定）：打不开就在
         // `PlatformWiring` 抛了，装配层据此判壳未就绪 —— 不拿「回落 jsonl」冒充「还能用」。
-        val (archive, tasks) = storesFactory?.invoke() ?: (FileRunArchive(autojsDir) to FileTaskStore(autojsDir))
+        val (archive, tasks) = storesFactory?.invoke() ?: (FileRunArchive(nsDir) to FileTaskStore(nsDir))
         // 注册表第三持久（§8.6）：意图日志管"已投递的意向"，这里管"还没到点的排期"。
         // Scheduler 经 [AppShell][com.autoscript.shell.AppShell] 的 `taskStore` 缝拿到它。
 

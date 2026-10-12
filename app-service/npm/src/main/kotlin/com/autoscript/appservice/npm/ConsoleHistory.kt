@@ -6,7 +6,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 /**
- * 控制台的**命令历史**（2026-10-10 批 90；`files/.autojs/console-history.jsonl`）。
+ * 控制台的**命令历史**（2026-10-10 批 90；`files/.ns/console-history.jsonl`）。
  *
  * 修的是一个很具体的体验缺口：控制台关掉再进来，敲过的命令就没了 ——
  * 而控制台的用处一半在"把上次那条改一改再跑"。

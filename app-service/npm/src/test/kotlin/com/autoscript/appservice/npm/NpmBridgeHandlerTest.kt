@@ -45,7 +45,7 @@ class NpmBridgeHandlerTest {
         InstallCoordinator(
             services = NpmServices(
                 layout = layout,
-                journal = InstallJournal(dir.resolve(".autojs")),
+                journal = InstallJournal(dir.resolve(".ns")),
                 staging = InstallStaging(layout),
                 cacheIndex = CacheIndex { false },
             ),

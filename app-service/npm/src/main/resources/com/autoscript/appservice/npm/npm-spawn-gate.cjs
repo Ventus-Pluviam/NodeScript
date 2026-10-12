@@ -5,7 +5,7 @@
  * 装法：宿主把它落盘后经 `NODE_OPTIONS=--require=<本文件>` 注入 npm 安装会话进程
  * （见 `NpmSpawnGate` / `HostNodeExecutor`）。**装在这里而不是随 npm 素材树**：
  * 素材树受 `npm-manifest.json` 逐件摘要对账，多一个文件就让「部署校验失败」每启动必红
- * —— 它是宿主自己的件，住 `files/.autojs/`（宿主内务目录，与 journal/lock.sig 同处）。
+ * —— 它是宿主自己的件，住 `files/.ns/`（宿主内务目录，与 journal/lock.sig 同处）。
  *
  * 拦的是什么：`--ignore-scripts` 只挡 lifecycle 脚本（版本无关，见 §10.12），挡不住
  * **非脚本** spawn —— npm 自己新增一条 `execFile` 路径、或某包在 `bin/` 里直接

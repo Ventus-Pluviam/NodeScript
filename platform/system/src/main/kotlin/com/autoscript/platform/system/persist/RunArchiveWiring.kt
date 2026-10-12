@@ -32,9 +32,9 @@ object RunArchiveWiring {
     /** jsonl 侧的文件名（与 `FileRunArchive` 同一份约定，这里只读不写）。 */
     private const val JSONL_NAME: String = "run-archive.jsonl"
 
-    fun open(context: Context, autojsDir: Path): RunArchive =
+    fun open(context: Context, nsDir: Path): RunArchive =
         SqliteRunArchive(AndroidSqliteRunner(context, AndroidSqliteRunner.DB_NAME_RUN_ARCHIVE)).also { store ->
-            migrate(store, autojsDir.resolve(JSONL_NAME))
+            migrate(store, nsDir.resolve(JSONL_NAME))
         }
 
     /**

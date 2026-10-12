@@ -202,7 +202,7 @@ class MainActivity : ComponentActivity() {
     private var npmState: NpmState by mutableStateOf(NpmState.NOT_LOADED)
 
     /**
-     * 环境变量页状态（批 82，§8.1）。读口**不依赖壳装配**（表住 `filesDir/.autojs`，
+     * 环境变量页状态（批 82，§8.1）。读口**不依赖壳装配**（表住 `filesDir/.ns`，
      * 与 `scriptFiles()` 同一条口径），故首帧就现读一次 —— 不等壳就绪那一档。
      */
     private var envState: ScriptEnvState by mutableStateOf(ScriptEnvState.NOT_LOADED)
@@ -215,7 +215,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 脚本设置子页状态（批 107，§8.1 脚本资源限额）。与 [registryState] 同一条口径：
-     * 读口不依赖壳装配（限额表住 `filesDir/.autojs`），首帧就现读一次。
+     * 读口不依赖壳装配（限额表住 `filesDir/.ns`），首帧就现读一次。
      */
     private var limitsState: ScriptLimitsState by mutableStateOf(ScriptLimitsState.NOT_LOADED)
 

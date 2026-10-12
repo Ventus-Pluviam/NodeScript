@@ -201,7 +201,7 @@ class AppShellApplication : Application(), HostSummary {
     private fun scriptEnvStoreOrNull(): FileScriptEnvStore? {
         scriptEnvStore?.let { return it }
         return synchronized(this) {
-            scriptEnvStore ?: runCatching { FileScriptEnvStore(filesDir.toPath().resolve(".autojs")) }
+            scriptEnvStore ?: runCatching { FileScriptEnvStore(filesDir.toPath().resolve(".ns")) }
                 .onFailure { HostLog.w(TAG, "脚本环境变量表打不开（本次读写如实失败，不伪造空表）：${it.message}") }
                 .getOrNull()
                 ?.also { scriptEnvStore = it }
@@ -211,7 +211,7 @@ class AppShellApplication : Application(), HostSummary {
     /**
      * 脚本资源限额表（批 107；§8.1「脚本资源限额」）。
      *
-     * **与 [scriptEnvStoreOrNull] 逐字同款的懒建形状**（同一 `.autojs` 目录、同一种
+     * **与 [scriptEnvStoreOrNull] 逐字同款的懒建形状**（同一 `.ns` 目录、同一种
      * 「建不出来如实 null」）：这两份表是同一个界面的两页（管理面板 → 环境变量 /
      * 设置 → 脚本设置），生命周期一样，故不发明第二种懒建写法。
      *
@@ -225,7 +225,7 @@ class AppShellApplication : Application(), HostSummary {
     private fun scriptLimitsStoreOrNull(): FileScriptLimitsStore? {
         scriptLimitsStore?.let { return it }
         return synchronized(this) {
-            scriptLimitsStore ?: runCatching { FileScriptLimitsStore(filesDir.toPath().resolve(".autojs")) }
+            scriptLimitsStore ?: runCatching { FileScriptLimitsStore(filesDir.toPath().resolve(".ns")) }
                 .onFailure { HostLog.w(TAG, "脚本限额表打不开（本次读写如实失败，不静默退回出厂值）：${it.message}") }
                 .getOrNull()
                 ?.also { scriptLimitsStore = it }
@@ -308,15 +308,15 @@ class AppShellApplication : Application(), HostSummary {
             // addon 仍 null = 不预载（脚本照跑，桥调用点如实 ERR_ENGINE_STOPPED，不悬挂）。
             // `Paths.get` 而不是 `Path.of`：后者在 Android 上 since=34（`api-versions.xml` 实查），
             // minSdk 26 下 lint 的 NewApi 会红 —— 全仓 main 源已统一回 `Paths.get`（since=26）。
-            val nativeDir = Paths.get(applicationInfo.nativeLibraryDir)
+            val nativeLibDir = Paths.get(applicationInfo.nativeLibraryDir)
             // §8.5 意图日志的存储引擎：SQLite（打开前做一次性迁移 jsonl → SQLite，
             // 带原 runId）。**打不开不回落**（2026-10-08 裁定）—— 异常直接冒到本函数的
             // catch，判本次装配失败：壳保持未就绪、闹钟走漏投记账，不拿一条锚点靠
             // 单写者假设撑着的降级路径冒充"调度还能用"。
             // 打开住 PlatformWiring（本类不 import 任何 com.autoscript.platform..，
             // ArchitectureTest「平台实现只许装配包碰」看住）。
-            val autojsDir = filesDir.resolve(".autojs")
-            val intentStore = PlatformWiring.intentStore(appContext, autojsDir)
+            val nsDir = filesDir.resolve(".ns")
+            val intentStore = PlatformWiring.intentStore(appContext, nsDir)
             // 运行档案与任务注册表（批 102 P4）：生产面换 SQLite，各带一次性 jsonl 迁移。
             // 与 intentStore 同一纪律 —— 打不开即抛（异常冒到本函数的失败分支：记日志、
             // 壳保持未就绪、闹钟走漏投记账），**不回落 jsonl**。
@@ -326,14 +326,14 @@ class AppShellApplication : Application(), HostSummary {
                 schedulerProvider = AlarmSchedulerProvider(port = port),
                 screenGate = screenGateOf(this),
                 intentStore = intentStore,
-                storesFactory = { PlatformWiring.stores(appContext, autojsDir) },
+                storesFactory = { PlatformWiring.stores(appContext, nsDir) },
                 engineFactory = { engineId, identities ->
                     NodeProcessEngine(
                         engineId,
                         NodeEngineConfig(
                             filesDir = filesDir,
-                            hostBinary = nativeDir.resolve("libnoden.so"),
-                            libnodePath = nativeDir.resolve("libnode.so"),
+                            hostBinary = nsDir.resolve("libnoden.so"),
+                            libnodePath = nsDir.resolve("libnode.so"),
                             hostSocketName = bridge?.socketName,
                             // facade 落位根（§12.4）：引擎按 bootstrap.js 在位与否决定
                             // 注入与否（选填纪律）—— 这里只给"应该在哪"，落位归 assemble。
@@ -383,7 +383,7 @@ class AppShellApplication : Application(), HostSummary {
                 npmCliSource = AssetsRead.npmCliSource(appContext.assets),
                 // npm 执行体的 Node 宿主 = 与脚本引擎同一个 noden（§19 交付位）：
                 // 设备上它就是 nativeLibraryDir/libnoden.so，ProcessBuilder 直接 exec。
-                npmNodeBin = nativeDir.resolve("libnoden.so").toString(),
+                npmNodeBin = nsDir.resolve("libnoden.so").toString(),
                 // 应用密钥（§10.5-1 T2 / §11.3 第 8 条）：lock 带外签名与快照签名的
                 // 密钥面 = Android Keystore（首次运行建一把，之后一直取那把）。
                 // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
@@ -1002,7 +1002,7 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun scriptEnv(): List<ScriptEnvEntry> =
         checkNotNull(scriptEnvStoreOrNull()) {
-            "脚本环境变量表打不开（files/.autojs/${FileScriptEnvStore.FILE_NAME}）：读不到就是读不到"
+            "脚本环境变量表打不开（files/.ns/${FileScriptEnvStore.FILE_NAME}）：读不到就是读不到"
         }.all()
 
     /**
@@ -1013,14 +1013,14 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun putScriptEnv(key: String, value: String) {
         checkNotNull(scriptEnvStoreOrNull()) {
-            "脚本环境变量表打不开（files/.autojs/${FileScriptEnvStore.FILE_NAME}）：写入无处落账"
+            "脚本环境变量表打不开（files/.ns/${FileScriptEnvStore.FILE_NAME}）：写入无处落账"
         }.put(key, value)
     }
 
     /** 删除一条脚本环境变量（[HostSummary] 的生产实现；幂等，见契约）。 */
     override suspend fun removeScriptEnv(key: String) {
         checkNotNull(scriptEnvStoreOrNull()) {
-            "脚本环境变量表打不开（files/.autojs/${FileScriptEnvStore.FILE_NAME}）：删除无处落账"
+            "脚本环境变量表打不开（files/.ns/${FileScriptEnvStore.FILE_NAME}）：删除无处落账"
         }.remove(key)
     }
 
@@ -1033,7 +1033,7 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun scriptLimits(): ScriptRuntimeLimits =
         checkNotNull(scriptLimitsStoreOrNull()) {
-            "脚本限额表打不开（files/.autojs/${FileScriptLimitsStore.FILE_NAME}）：读不到就是读不到"
+            "脚本限额表打不开（files/.ns/${FileScriptLimitsStore.FILE_NAME}）：读不到就是读不到"
         }.load()
 
     /**
@@ -1049,7 +1049,7 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun saveScriptLimits(limits: ScriptRuntimeLimits) {
         checkNotNull(scriptLimitsStoreOrNull()) {
-            "脚本限额表打不开（files/.autojs/${FileScriptLimitsStore.FILE_NAME}）：写入无处落账"
+            "脚本限额表打不开（files/.ns/${FileScriptLimitsStore.FILE_NAME}）：写入无处落账"
         }.save(limits)
         assembled?.shell?.frameServer?.let { BridgeQuotaWiring.apply(it, limits) }
     }

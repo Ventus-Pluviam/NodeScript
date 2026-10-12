@@ -42,7 +42,7 @@ class HostNodeNpmE2ETest {
         return InstallCoordinator(
             services = NpmServices(
                 layout = layout,
-                journal = InstallJournal(root.resolve(".autojs")),
+                journal = InstallJournal(root.resolve(".ns")),
                 staging = InstallStaging(layout),
                 cacheIndex = CacheIndex { false },
             ),
@@ -65,7 +65,7 @@ class HostNodeNpmE2ETest {
         val nm = layout.nodeModules("e2e")
         assertTrue(Files.isDirectory(nm.resolve("lodash")), "node_modules/lodash 必须存在")
         // journal begin+commit 成对
-        val journal = InstallJournal(root.resolve(".autojs"))
+        val journal = InstallJournal(root.resolve(".ns"))
         val states = journal.all().map { it.state }
         assertTrue(
             InstallJournal.State.COMMIT in states,

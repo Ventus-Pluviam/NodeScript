@@ -526,7 +526,7 @@ interface PackageManagerFacade {
 
     // —— 审计史（§10.5-2「审计日志落 App 且可导出」；2026-10-09 批 85）——
     /**
-     * 安装审计史（append-only，落盘 `files/.autojs/install-history.jsonl`）。
+     * 安装审计史（append-only，落盘 `files/.ns/install-history.jsonl`）。
      *
      * **为什么它是 `snapshot()` 之外的第二条读口**：两者问的是两件事，合并会让审计的
      * 时间范围被依赖面板的刷新节奏绑死。`snapshot()` 答「此刻装了什么」（一份**当前**事实，

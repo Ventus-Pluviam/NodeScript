@@ -32,7 +32,7 @@ import java.nio.file.Path
  *
  * 这里跑的是 [AppShellKit.assemble] —— 也就是 `AppShellApplication.onCreate` 走的那条路，
  * 所以它证明的是"真机上开机之后会发生什么"，而不是"挂载缝的形状"：
- * 1. 目录约定落位（`files/.autojs` 两个持久寄存器、`files/scripts` 项目根）；
+ * 1. 目录约定落位（`files/.ns` 两个持久寄存器、`files/scripts` 项目根）；
  * 2. `schedulerProvider` 来自调用方（闹钟真实现），`screenGate` 真是注入的那一个
  *    —— 门禁拒绝时**不投递**；
  * 3. 缺省 engineFactory（`UnavailableEngine`）下，一次触发如实落 `CRASHED` + 真原因，
@@ -98,7 +98,7 @@ class AppShellKitTest {
     @Test
     fun `装配落位目录约定并挂上四个命名空间`() {
         kit().use { assembled ->
-            assertTrue(Files.isDirectory(files.resolve(".autojs")), "§10.2：.autojs 是意图日志/档案/历史账本的家")
+            assertTrue(Files.isDirectory(files.resolve(".ns")), "§10.2：.ns 是意图日志/档案/历史账本的家")
             assertTrue(Files.isDirectory(files.resolve("scripts")), "§10.2：项目根 = files/scripts")
             assertNotNull(assembled.npmHandler, "npm 命名空间由配方自建并挂上")
         }
@@ -172,7 +172,7 @@ class AppShellKitTest {
         // 运行档案：**如实无记录** —— §8.5 纪律「link 为 null（门禁拒绝/排队超时/启动失败）
         // 绝不写孤儿档案」。启动从未成功 = 没有 engineRunId = 没有执行可归档；
         // 这次未执行的事实由意图日志那条 COMMIT 行（上面）承担，两处不重复记账。
-        val archive = FileRunArchive(files.resolve(".autojs"))
+        val archive = FileRunArchive(files.resolve(".ns"))
         try {
             assertTrue(
                 archive.recordsOfProject("p1").isEmpty(),
@@ -211,7 +211,7 @@ class AppShellKitTest {
             "注入的存储必须真的收到 START/COMMIT 行（缝接错 = 行落在别处）",
         )
         assertFalse(
-            Files.exists(files.resolve(".autojs").resolve("intent-log.jsonl")),
+            Files.exists(files.resolve(".ns").resolve("intent-log.jsonl")),
             "已删回落：任何路径都不该再建 jsonl 意图日志",
         )
         Unit
@@ -237,7 +237,7 @@ class AppShellKitTest {
             shell.scheduler.onTrigger("t9", TriggerSource.TIMED, System.currentTimeMillis())
         }
 
-        val archive = FileRunArchive(files.resolve(".autojs"))
+        val archive = FileRunArchive(files.resolve(".ns"))
         try {
             val rec = archive.recordsOfProject("p9").single()
             assertEquals(RunState.SUCCEEDED, rec.state, "脚本自退出 → Succeeded")
@@ -266,7 +266,7 @@ class AppShellKitTest {
             shell.scheduler.onTrigger("t2", TriggerSource.TIMED, System.currentTimeMillis())
         }
 
-        val archive = FileRunArchive(files.resolve(".autojs"))
+        val archive = FileRunArchive(files.resolve(".ns"))
         try {
             assertTrue(archive.recordsOfProject("p2").isEmpty(), "门禁拒绝 = 没有引擎执行 = 不写档案")
         } finally {

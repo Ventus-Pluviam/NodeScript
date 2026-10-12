@@ -46,8 +46,7 @@
 
 ### 仍挂（不因本批减少）
 
-typed ids、单一 actor 化（批 103 之后它剩下的收益只有「不再需要锁」）；D6 两小问
-（`.autojs` 改名 / npm scope 归属）仍等你拍板。`TrustTierResolver` 仍等维护者裁定
+typed ids、单一 actor 化（批 103 之后它剩下的收益只有「不再需要锁」）。`TrustTierResolver` 仍等维护者裁定
 「还要不要它」（A5 已裁定它不产生防护）。
 
 
@@ -118,7 +117,7 @@ stage 目录），压实要连「哪些 nonce 曾经存在过」一起答，那�
   其余 `platform.*` 三面仍零依赖（「进程面」不得变成「平台面」的入口）。
 - **仍挂**（不因本批减少）：B3 的压缩半边、M2 另两半（每连接配额 / `limitedParallelism`）、
   `BridgeRouter` 未知异常语义缝的另一半、`TrustTierResolver`、A13 保留期/清理、
-  结构性项（typed ids / actor 化 / D13）；D6 两小问仍等你拍板。
+  结构性项（typed ids / actor 化 / D13）。
 
 ## 2026-10-12 追记（批 103：P2 池记账重构 —— 拍板项做掉第二个）
 
@@ -805,7 +804,7 @@ stage 目录），压实要连「哪些 nonce 曾经存在过」一起答，那�
 
 | # | 事项 | 核实 | 成本 |
 |---|---|---|---|
-| **D6** | 命名不一致。**已做（2026-10-01 批 7）**：`@autojs/*` 这个 npm scope 在**描述面**的 9 处（`06-modules`/`07-bridge` ×3/`09-capabilities`/`12-js-api`/`CLAUDE.md`/`bridge/js/package.json`/`ImageAnalyzer.kt`）全部改成事实侧口径 —— 脚本侧导入名 `auto`（`filesDir/node_modules/auto`）与真实交付物名 `bridge_native.node`；**`AutoJsPro` 九处保留**（那是**对标产品名**，不是自己的名字）。**还剩两件**：① `.autojs` 存储目录与 `autojs-lock-v1` 签名前缀在契约正文（§10.2/§10.5）与全仓 30+ 处实现/测试里一致使用 —— 改它是**存储格式变更**（会读不出用户既有 lock 签名），须拍板并给迁移/兼容策略，不是命名顺手能改的；② **发布用的 npm scope 是否自己拥有**需你确认（`bridge/js` 标 `"private": true`、不发布，发布 scope 归属未核） | ✅ 2026-10-01（描述面 9 处已改；① 需拍板 / ② 需你确认） | S（①）/ 待你确认（②） |
+| **D6** | 命名不一致。**描述面已做（2026-10-01 批 7）**：`@autojs/*` 这个 npm scope 在**描述面**的 9 处（`06-modules`/`07-bridge` ×3/`09-capabilities`/`12-js-api`/`CLAUDE.md`/`bridge/js/package.json`/`ImageAnalyzer.kt`）全部改成事实侧口径 —— 脚本侧导入名 `auto`（`filesDir/node_modules/auto`）与真实交付物名 `bridge_native.node`；**`AutoJsPro` 九处保留**（那是**对标产品名**，不是自己的名字）。**存储面已做（2026-10-12 批 108）**：维护者拍板 `.autojs` → `.ns` 且**不做旧版兼容**，同批把两个签名域内前缀 `autojs-lock-v1` / `autojs-snapshot-v1` 一并改成 `autoscript-` 前缀。**发布用的 npm scope 一问已从本池删除**（维护者口径：本项目不对外发布 npm 包） | ✅ 2026-10-12（批 108，D6 全清） | — |
 
 ## E. 需要拍板（产品面，不是工程顺手能做）
 
@@ -817,7 +816,7 @@ stage 目录），压实要连「哪些 nonce 曾经存在过」一起答，那�
 全部划掉**」。那批划掉的行（B3 / B4 / B14 / D13 / E3 / A13）按**不再跟进**记账，不是
 「已完成」；**这一段接着把它们删掉** —— 依据与理由见 [`design-decisions.md`](design-decisions.md)
 第 73 项（划掉的行对读者仍是待办，删除线这个记号在本仓只用于「已完成 / 已裁定」两类）。
-连同此前一批划掉的共 31 行，A/C/E 三表现已清空，B 表只留 D 表的 D6 一行。
+连同此前一批划掉的共 31 行，A/C/E 三表现已清空；D 表的 D6 一行已于 2026-10-12 批 108 结案。
 外审登记表里那三条半成品（B3 压缩与流式读、M1 的 `TrustTierResolver` 读侧判据、
 M2 每连接配额与 `limitedParallelism`）与结构性长线项（typed ids / actor 化 / 文档重排）
 **保持原状，不在本次清池范围内** —— 它们没被裁定不做，划线即失真。
@@ -840,8 +839,8 @@ M2 每连接配额与 `limitedParallelism`）与结构性长线项（typed ids /
 
 **下一批**（2026-10-12 批 106 复核）：A–E 各表清空后，待做项只剩**外审登记表**里那几条半成品
 与「设计 / 结构 / 文档」小节的结构性长线项 —— 从那里挑，一次一批，每批跑完整 CI
-同源门（见 [`../CLAUDE.md`](../CLAUDE.md) 构建节）。D6 的两小问（`.autojs` 改名 /
-npm scope 归属）等你拍板，不算可自行开工的批次。
+同源门（见 [`../CLAUDE.md`](../CLAUDE.md) 构建节）。D6 已于 2026-10-12 批 108 全清（维护者拍板 `.autojs` → `.ns`、
+不对外发布 npm 包），不再是待办。
 
 **本段上一版列的「B3 / M1 / M2 三条半成品」已不准**（该段原文保留不删）：
 

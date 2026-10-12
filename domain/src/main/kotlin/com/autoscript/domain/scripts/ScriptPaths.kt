@@ -100,10 +100,10 @@ object ScriptPaths {
      * 1. **项目私有**：[projectRoot] 就是「项目私有目录」这条约定的唯一出口
      *    （`files/scripts/<projectId>/` 被 script-repo 部署、npm 布局、调度补部署四处共用），
      *    产物落在它下面 = 与脚本、`package.json`、`node_modules` 同一个归属；
-     * 2. **点开头**：项目根下已有的 `.npmrc` / `.autojs.build.ignore` 都是"项目内务文件"，
+     * 2. **点开头**：项目根下已有的 `.npmrc` / `.autoscript.build.ignore` 都是"项目内务文件"，
      *    点开头在脚本文件清单（`:app` 的 `ScriptFilesRead`）里**天然不入列表**
      *    （`isNoise`）—— 录屏是产物不是用户资产，不该混进编辑器的文件页；
-     * 3. **不落 `files/.autojs`**：那是**宿主内务**（意图日志/档案/历史账本），
+     * 3. **不落 `files/.ns`**：那是**宿主内务**（意图日志/档案/历史账本），
      *    按项目分账的东西混进去会让"清一个项目"变成"清宿主账"。
      *
      * 为什么这条约定必须住本对象：它是被**两处**读的路径 —— 语义层（`MediaProjectionRecorder`

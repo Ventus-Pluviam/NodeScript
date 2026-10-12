@@ -23,7 +23,7 @@ class NpmSnapshotTest {
     lateinit var dir: Path
 
     private val layout get() = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
-    private val ledgerDir get() = dir.resolve(".autojs")
+    private val ledgerDir get() = dir.resolve(".ns")
     private val key = LockSigner.KeyProvider { SecretKeySpec("snapshot-key-32bytesaaaaaaaaaaaa".toByteArray(), "HmacSHA256") }
     private val out get() = dir.resolve("snap.zip")
 

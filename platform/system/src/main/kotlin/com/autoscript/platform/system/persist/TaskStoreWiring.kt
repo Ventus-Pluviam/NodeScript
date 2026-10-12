@@ -37,11 +37,11 @@ object TaskStoreWiring {
      * 打开 Android 生产用的任务注册表存储，并在需要时先做一次性迁移。
      *
      * @param context Android 上下文（`SQLiteOpenHelper` 用）
-     * @param autojsDir `.autojs` 目录（老 jsonl 就在它下面 —— 与既有 `FileTaskStore` 同一处）
+     * @param nsDir `.ns` 目录（老 jsonl 就在它下面 —— 与既有 `FileTaskStore` 同一处）
      */
-    fun open(context: Context, autojsDir: Path): TaskStore =
+    fun open(context: Context, nsDir: Path): TaskStore =
         SqliteTaskStore(AndroidSqliteRunner(context, AndroidSqliteRunner.DB_NAME_TASK_REGISTRY)).also { store ->
-            migrate(store, autojsDir.resolve(JSONL_NAME))
+            migrate(store, nsDir.resolve(JSONL_NAME))
         }
 
     /**

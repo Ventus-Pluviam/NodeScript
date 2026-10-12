@@ -8,7 +8,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 /**
- * 安装审计史（docs §10.2 存储布局 · `files/.autojs/install-history`，
+ * 安装审计史（docs §10.2 存储布局 · `files/.ns/install-history`，
  * §10.5-2「审计日志（approve/registry 变更/lock 重签）落 App 且可导出」）。
  *
  * 与 [InstallJournal] 的分工（同为 jsonl + 追加 + fsync + 半行容忍，但用途不同）：

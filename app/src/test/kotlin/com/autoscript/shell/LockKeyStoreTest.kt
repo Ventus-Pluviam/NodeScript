@@ -75,7 +75,7 @@ class LockKeyStoreTest {
     fun `签名时刻的失败是响亮失败：验签拒绝且错误码是 ERR_PERMISSION_DENIED`() {
         // 这一条把「取钥失败」与「lock 被换过」在**诊断上**分开：前者抛原始异常（不是
         // AutojsException），后者是 LockSigner 的权限拒 —— 混成一条用户就分不清了。
-        val signer = LockSigner(dir.resolve(".autojs"), LockKeyStore.resolve(FakeKeys(present = key("a"))))
+        val signer = LockSigner(dir.resolve(".ns"), LockKeyStore.resolve(FakeKeys(present = key("a"))))
         val lock = dir.resolve("package-lock.json")
         Files.write(lock, ("""{"lockfileVersion":3}""").toByteArray())
         signer.sign("main", lock)

@@ -45,12 +45,12 @@ object IntentStoreWiring {
      * 打开 Android 生产用的意图日志存储，并在需要时先做一次性迁移。
      *
      * @param context Android 上下文（`SQLiteOpenHelper` 用）
-     * @param autojsDir `.autojs` 目录（老 jsonl 就在它下面 —— 与已退役的 jsonl 存储同一处）
+     * @param nsDir `.ns` 目录（老 jsonl 就在它下面 —— 与已退役的 jsonl 存储同一处）
      * @return 存储实例（调用方负责 close，随壳收口）
      */
-    fun open(context: Context, autojsDir: Path): IntentStore =
+    fun open(context: Context, nsDir: Path): IntentStore =
         SqliteIntentStore(AndroidSqliteRunner(context)).also { store ->
-            migrate(store, autojsDir.resolve(JournalName.FILE))
+            migrate(store, nsDir.resolve(JournalName.FILE))
         }
 
     /**

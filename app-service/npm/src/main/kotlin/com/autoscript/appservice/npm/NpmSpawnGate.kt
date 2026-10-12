@@ -18,7 +18,7 @@ import java.nio.file.StandardCopyOption
  * **为什么住本模块的 classpath 资源而不是随 npm 素材树**：素材树受
  * `npm-manifest.json` 逐件摘要对账（[NpmCliDeployer]），往里面塞一个宿主自己的文件会让
  * 「清单与 APK 文件集合不一致」**每次启动必红** —— 那是给别人的账本里记自己的账。
- * 本 shim 是宿主件，住 `filesDir/.autojs/`（宿主内务目录，与 journal / lock.sig 同处）。
+ * 本 shim 是宿主件，住 `filesDir/.ns/`（宿主内务目录，与 journal / lock.sig 同处）。
  *
  * **为什么 shim 本体是 `.cjs` 资源而不是 Kotlin 字符串常量**：它是要被 Node 真加载的
  * 代码，写进 Kotlin 字符串里就没有语法高亮、没有 lint、diff 里是一坨转义；落成真文件
@@ -36,7 +36,7 @@ import java.nio.file.StandardCopyOption
  */
 object NpmSpawnGate {
 
-    /** 落盘文件名（`filesDir/.autojs/` 下）。 */
+    /** 落盘文件名（`filesDir/.ns/` 下）。 */
     const val GATE_FILE_NAME: String = "npm-spawn-gate.cjs"
 
     /** classpath 资源路径（`src/main/resources/` 下，与包名同构）。 */
@@ -54,8 +54,8 @@ object NpmSpawnGate {
         data class Failed(val reason: String) : Deploy
     }
 
-    /** 门禁落点：`filesDir/.autojs/npm-spawn-gate.cjs`（宿主内务目录，见类 KDoc）。 */
-    fun gateFile(filesDir: Path): Path = filesDir.resolve(".autojs").resolve(GATE_FILE_NAME)
+    /** 门禁落点：`filesDir/.ns/npm-spawn-gate.cjs`（宿主内务目录，见类 KDoc）。 */
+    fun gateFile(filesDir: Path): Path = filesDir.resolve(".ns").resolve(GATE_FILE_NAME)
 
     /**
      * 把 shim 落到 [gateFile]（字节一致则不动盘）。装配期调一次，不与运行期并发，故无锁；

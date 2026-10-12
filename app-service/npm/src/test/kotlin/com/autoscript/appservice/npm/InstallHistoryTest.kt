@@ -17,7 +17,7 @@ class InstallHistoryTest {
     @TempDir
     lateinit var dir: Path
 
-    private fun history() = InstallHistory(dir.resolve(".autojs"))
+    private fun history() = InstallHistory(dir.resolve(".ns"))
 
     @Test
     fun `成功与失败都入史（审计不能只记成功）`() {
@@ -44,7 +44,7 @@ class InstallHistoryTest {
     fun `半行容忍：截断尾行不抛、完整行仍可用`() {
         val h = history()
         h.record(InstallHistory.Op.PRUNE, "p1", true, null)
-        val file = dir.resolve(".autojs/install-history.jsonl")
+        val file = dir.resolve(".ns/install-history.jsonl")
         assertTrue(Files.exists(file), "record 后文件必须已落盘")
         Files.write(file, ("{\"projectId\":\"p1\"").toByteArray(), java.nio.file.StandardOpenOption.APPEND)
         assertEquals(1, h.all().size)

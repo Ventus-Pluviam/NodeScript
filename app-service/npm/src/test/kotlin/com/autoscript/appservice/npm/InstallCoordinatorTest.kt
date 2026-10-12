@@ -47,7 +47,7 @@ class InstallCoordinatorTest {
     private val scriptOps = mutableListOf<ScriptOp>()
 
     private val layout get() = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
-    private val journal get() = InstallJournal(dir.resolve(".autojs"))
+    private val journal get() = InstallJournal(dir.resolve(".ns"))
     private val staging get() = InstallStaging(layout)
 
     /** 假执行体：在暂存目录写包内容，模拟 reify 产物。 */
@@ -86,7 +86,7 @@ class InstallCoordinatorTest {
             }
         }
 
-    private fun newHistory() = InstallHistory(dir.resolve(".autojs"))
+    private fun newHistory() = InstallHistory(dir.resolve(".ns"))
 
     /** 造一个 bundle zip：entries = (path, bytes)。 */
     private fun bundleZip(vararg entries: Pair<String, ByteArray>): Path {
@@ -114,7 +114,7 @@ class InstallCoordinatorTest {
     }
 
     private fun snapshots(key: LockSigner.KeyProvider = LockSigner.KeyProvider { SecretKeySpec("test-app-key-32bytes-aaaaaaaaaaaa".toByteArray(), "HmacSHA256") }) =
-        NpmSnapshot(layout, dir.resolve(".autojs"), key)
+        NpmSnapshot(layout, dir.resolve(".ns"), key)
 
     private fun coordinator(
         executor: HeavyOpExecutor = FakeExecutor(),
@@ -1003,7 +1003,7 @@ class InstallCoordinatorTest {
     fun `失败也入史：执行体失败与门禁拒绝两条路都留痕`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
         // ① 执行体自己失败（runHeavy 的 catch 分支）
-        val boomHistory = InstallHistory(dir.resolve(".autojs-boom"))
+        val boomHistory = InstallHistory(dir.resolve(".ns-boom"))
         val boom = coordinator(executor = FakeExecutor { error("npm 挂了") }, history = boomHistory)
         assertThrows(IllegalStateException::class.java) {
             runBlocking { boom.install("p1", listOf(PackageSpec("axios"))) }
@@ -1017,7 +1017,7 @@ class InstallCoordinatorTest {
         val nm = layout.nodeModules("full")
         Files.createDirectories(nm)
         java.io.RandomAccessFile(nm.resolve("blob").toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
-        val gateHistory = InstallHistory(dir.resolve(".autojs-gate"))
+        val gateHistory = InstallHistory(dir.resolve(".ns-gate"))
         val tight = coordinator(history = gateHistory)
         assertThrows(AutojsException::class.java) {
             runBlocking { tight.install("full", listOf(PackageSpec("axios"))) }
@@ -1203,10 +1203,10 @@ class InstallCoordinatorTest {
         val out = dir.resolve("out/snap2.zip")
         val snapper = snapshots()
         // 带锁签名器：install 成功后重签（harvest 写回了新 lock，旧签会让紧随的 ci 失败）
-        val signer = LockSigner(dir.resolve(".autojs"), LockSigner.KeyProvider { SecretKeySpec("test-app-key-32bytes-aaaaaaaaaaaa".toByteArray(), "HmacSHA256") })
+        val signer = LockSigner(dir.resolve(".ns"), LockSigner.KeyProvider { SecretKeySpec("test-app-key-32bytes-aaaaaaaaaaaa".toByteArray(), "HmacSHA256") })
         val c = coordinator(executor = exec, snapshots = snapper, lockSigner = signer)
         c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
-        assertTrue(Files.exists(dir.resolve(".autojs/lock.sig")), "install 后必须重签")
+        assertTrue(Files.exists(dir.resolve(".ns/lock.sig")), "install 后必须重签")
         c.exportSnapshot("p1", out.toString())
         val m = snapper.verify("p1", out)   // 不抛即过
         assertTrue(m.entries >= 2, "manifest + node_modules 至少各一条（实为 ${m.entries}）")
