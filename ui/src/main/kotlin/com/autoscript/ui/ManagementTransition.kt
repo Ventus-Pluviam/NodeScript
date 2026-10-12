@@ -60,6 +60,14 @@ import kotlin.math.min
  * 见「有意不等于 TG」第 3 条）。方向由 [netLayerX] 的符号给出，底层的裁剪区间与
  * 灰罩宽度随之镜像。
  *
+ * ## `innerTranslationX` 与窗口平移**是两个量**
+ *
+ * TG 里它们分开：`:1892` 的 `containerView.setTranslationX(dp(48)·(1-t))` 平移**窗口**，
+ * 而 `innerTranslationX` 只在 `:1573`（跟手）与 `:1611-1612`（飞出）被写，它喂的是
+ * **裁剪 / 遮罩 / 缩放**（`:1110` 那道 `translationX != 0` 的门）。
+ * 把两者混成一个量，进场第一帧 `innerTranslationX = 48dp ≠ 0` 就会把底层裁掉、盖上
+ * 灰罩、还给窗口套上非手势那条缩放 —— 看着就是「进入时闪一下」。
+ *
  * ## 底层那一层在手势期间**不裁**（`:1163-1166`）
  *
  * `newBackTransitions()` 为真时 `clipRight = width + getPaddingLeft()`：底层铺满全屏，
@@ -89,7 +97,7 @@ import kotlin.math.min
  * | 锚点 y | `predictiveBackY`（手指 Y）；非手势 `centerY()` | `:1133` |
  * | 起步死区 | `LAZY_START = 0.015f` | `LaunchActivity:786` |
  * | 切入/切出时长 | 150ms，`DecelerateInterpolator(1.5f)` | `:1830` / `:614` |
- * | 切入位移量 | `dp(48)·(1 - t)`（进 `translationX`，不是净位移） | `:1892` |
+ * | 切入位移量 | `dp(48)·(1 - t)`（**窗口自己的平移**，不进 `innerTranslationX`） | `:1892` |
  * | 飞出时长 | `max(200/width·dist, 380)` | `:1608` |
  *
  * ## 三处**有意不等**于 TG（写在 KDoc 里，不藏着）
@@ -288,13 +296,22 @@ internal fun <T> ManagementTransition(
         // - `backClipRight` ≡ TG 的 `clipRight`（两种情形不同，见文件头「底层不裁」）。
         //
         // 各写一遍必然漂，所以抽成 [topLayerX] / [netLayerX] 两个纯函数共用。
-        val innerTranslationX = topLayerX(progress.value, gesture.dx, dismiss.value, viewportWidth, density)
+        val innerTranslationX = topLayerX(gesture.dx, dismiss.value, viewportWidth, density)
         val predictive = gesture.hasProgress
         // 从哪一侧滑的 —— TG 的 `predictiveBackLeft`（`onBackStarted:1558` 用触点 X
         // 对中线判）。它决定两件事：**净位移的符号**（飞出方向）与**缩放锚点的左右**
         // （`:1133`）。缝隙在哪一侧完全由锚点决定，窗口往哪边退由符号决定。
         val fromLeft = gesture.edge == BackEventCompat.EDGE_LEFT
         val netX = netLayerX(innerTranslationX, density, fromLeft)
+        // 进出场的**窗口自身平移**（TG `:1892` 的 `containerView.setTranslationX(dp(48)·(1-t))`
+        // 与 `:1907` 的 `containerViewBack.setTranslationX(dp(48)·t)` —— 同一个表达式的
+        // 两个方向，进场 `t` 0→1、切出 `t` 1→0，于是都是 `(1 - progress)·dp(48)`）。
+        //
+        // **它与 [innerTranslationX] 是两回事**：这一个真的平移窗口，那一个只喂
+        // 裁剪/遮罩/缩放。TG 里 `innerTranslationX` 全程只在 `:1573` 与 `:1611-1612`
+        // 被写，从不参与进出场 —— 之前我把两者混成一个量，进场第一帧就把底层裁了、
+        // 盖上灰罩、还套上非手势那条缩放，看着就是「进入时闪一下」。
+        val slideX = (1f - progress.value) * SLIDE_DP * density
         // 底层的裁剪区间 —— TG 的 `clipLeft` / `clipRight`（`:1100-1104`、`:1163-1166`）。
         // 窗口往右退时露出左侧一段，往左退时露出右侧一段，所以两端都得算。
         val backClipLeft: Float
@@ -305,6 +322,8 @@ internal fun <T> ManagementTransition(
             backClipRight = viewportWidth
         } else if (netX >= 0f) {
             // 窗口往右退 → 露出左侧那一段（TG `clipRight = translationX + dp(1)`，`:1102`）。
+            // 进出场期间 `innerTranslationX` 恒 0（见 [topLayerX]），于是这里退化成
+            // 「不裁」—— 与 TG 一致：`translationX == 0` 时 `:1110` 那道门整块不画。
             backClipLeft = 0f
             backClipRight = innerTranslationX + density
         } else {
@@ -357,8 +376,9 @@ internal fun <T> ManagementTransition(
             // 窗口靠滑出屏幕消失（见 KDoc「飞出不淡出」）。
             .alpha(progress.value)
                     .graphicsLayer {
-                        // 净位移 ≡ TG `canvas.translate(-dx, 0)` 抵消之后的那份（`:1124`）。
-                        translationX = netX
+                        // 进场/切出的平移（`:1892`/`:1907`）+ 手势/飞出的净位移
+                        // （`:1124`）。两者在时间上互斥：进出场时手势量恒 0，反之亦然。
+                        translationX = slideX + netX
                         val sc = layerScale(innerTranslationX, predictive, density)
                         if (sc != 1f) {
                             scaleX = sc
@@ -506,17 +526,25 @@ private const val SCALE_SLIDE_MAX = 0.25f
 private const val SCALE_SLIDE_RATE = 0.05f
 
 /**
- * 切入/切出的 `translationX` 位移量，单位 dp（TG `:1892` 的 `dp(48)`）。
+ * 切入/切出的**窗口平移量**，单位 dp（TG `:1892` 的 `dp(48)`）。
  *
- * **注意它进的是 `translationX`（`innerTranslationX`）而不是净位移** —— 手势之外的
- * 编程式切换里 `translationX ≤ 48dp < dp(56)`，于是被 [netLayerX] 全额抵消，屏幕上
- * 看不到横向滑动，只剩缩放（见文件头那段「窗口横向根本不位移」）。
+ * 这是 `containerView` 自己的 `setTranslationX`，**与 [topLayerX] 那个
+ * `innerTranslationX` 是两回事** —— 前者让窗口真的横移 48dp，后者只喂裁剪/遮罩/缩放。
+ * 见 [topLayerX] 的 KDoc。
  */
 private const val SLIDE_DP = 48
 
 /**
- * TG 的 `innerTranslationX`（px），三段相加：
- * `(1 - progress)·dp(48) + gesture.dx + dismiss·(屏宽 + dp(56) - dx)`。
+ * TG 的 `innerTranslationX`（px）—— **只有手势与飞出两段**：
+ * `gesture.dx + dismiss·(屏宽 + dp(56) - dx)`。
+ *
+ * 进出场的位移**不在这里**：TG `:1892` 写的是 `containerView.setTranslationX(dp(48)·(1-t))`，
+ * 那是窗口**自己**的平移；`innerTranslationX` 全程只在 `:1573`（跟手）与
+ * `:1611-1612`（飞出）被写。两者在 TG 里是两个独立的量 —— 而 `innerTranslationX`
+ * 驱动的是裁剪 / 遮罩 / 缩放（`:1110` 那道 `translationX != 0` 的门）。
+ * 之前把进出场也塞进来，进场第一帧 `innerTranslationX = 48dp ≠ 0` 就把底层裁了、
+ * 盖上灰罩、还给窗口套上非手势那条缩放 —— 看着就是「进入时闪一下」（用户
+ * 2026-10-13 报的那个）。
  *
  * 飞出那一项的终点是 `屏宽 + dp(56)`：TG 的 `animateBackEndAnimation(false)` 把
  * `innerTranslationX` 送到 `measuredWidth`、同时把 `containerView` 自己的
@@ -524,15 +552,11 @@ private const val SLIDE_DP = 48
  * （`:1611-1612`）。
  */
 internal fun topLayerX(
-    progress: Float,
     dx: Float,
     dismiss: Float,
     viewportWidth: Float,
     density: Float,
-): Float =
-    (1f - progress) * SLIDE_DP * density +
-        dx +
-        dismiss * (viewportWidth + BACK_GESTURE_DP * density - dx)
+): Float = dx + dismiss * (viewportWidth + BACK_GESTURE_DP * density - dx)
 
 /**
  * 净位移（px）≡ TG 每帧那个 `canvas.translate(-dx, 0)` 抵消之后剩下的量（`:1123-1124`），

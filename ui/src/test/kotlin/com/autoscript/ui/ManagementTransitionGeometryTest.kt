@@ -62,17 +62,25 @@ class ManagementTransitionGeometryTest {
     }
 
     @Test
-    fun `切入位移进的是 translationX 而不是净位移——切出重进不漂`() {
-        // progress=0 表示刚要切入：translationX = dp(48)，净位移被全额抵消。
-        val x = topLayerX(progress = 0f, dx = 0f, dismiss = 0f, viewportWidth = width, density = density)
-        assertEquals(48 * density, x, 1e-3f)
-        assertEquals(0f, netLayerX(x, density, fromLeft = true), 1e-3f)
+    fun `进出场期间 innerTranslationX 恒为 0——它只被手势和飞出写`() {
+        // TG `:1573` / `:1611-1612` 是仅有的两处写入；`:1892` 那个 dp(48) 走的是
+        // `containerView` 自己的 setTranslationX，不是 innerTranslationX。混成一个量
+        // 就是「进入时闪一下」—— 底层被裁、盖上灰罩、还套上非手势那条缩放。
+        assertEquals(0f, topLayerX(dx = 0f, dismiss = 0f, viewportWidth = width, density = density), 1e-6f)
+    }
+
+    @Test
+    fun `没有手势时也没有净位移与遮罩`() {
+        val x = topLayerX(dx = 0f, dismiss = 0f, viewportWidth = width, density = density)
+        assertEquals(0f, netLayerX(x, density, fromLeft = true), 1e-6f)
+        assertEquals(0f, scrimOpacity(x, viewportWidth = width), 1e-6f)
     }
 
     @Test
     fun `飞出终点落在屏宽——TG 的 measuredWidth，两段一起抵消`() {
-        // dismiss=1 时 translationX = 屏宽 + dp(56)，减去钳在 dp(56) 的那部分正好是屏宽。
-        val x = topLayerX(progress = 0f, dx = 0f, dismiss = 1f, viewportWidth = width, density = density)
+        // dismiss=1 时 innerTranslationX = 屏宽 + dp(56)，减去钳在 dp(56) 的那部分
+        // 正好是屏宽（`:1611-1612`）。
+        val x = topLayerX(dx = 0f, dismiss = 1f, viewportWidth = width, density = density)
         assertEquals(width + full, x, 1e-3f)
         assertEquals(width, netLayerX(x, density, fromLeft = true), 1e-3f)
         // 右缘滑同一段动画落在另一侧 —— 幅度一样，符号镜像。
