@@ -1,5 +1,56 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-12 追记（批 107：脚本设置页 —— 线程与内存上限，两档全做）
+
+### 做掉的那半：外审 M2 全清 + 一页新设置
+
+用户口径：设置页在「权限列表」下面加一行**脚本设置**，用来设线程与内存上限。追问后
+定**两档全做**、且**立即生效**：
+
+| 档 | 限的是谁 | 落成 |
+|---|---|---|
+| **单脚本** | **这一个脚本进程**自己 | `--max-old-space-size`（argv）+ `UV_THREADPOOL_SIZE`（env） |
+| **桥**（M2 外审） | **所有脚本合计**、按连接切 | 每连接条数 / 字节 / `limitedParallelism` 三档闸 |
+
+**M2 之所以能在本批做掉**（它挂了三批，批 100 明写「不排期、不做半套」）：批 100 说的
+两条不做理由是「每连接配额定多少、每连接几条读线程」这两个数没人定 + 「可见面要一起设计」。
+本批把那几个数**交给用户在设置页自己定** —— 旋钮本身就是「要能改」这个要求的答案，
+那两条理由随之不成立。「可见面」也同期落地：诊断回执（每拒一条报一次，点名哪道闸）
++ `connectionStats()`（每连接实时读数，带上限与 runId）。
+
+**四条实现口径**（逐条都在代码 KDoc 里，此处只记判断）：
+- **三道每连接闸接在批 100 那条取闸链上**，不另起记账；**拒一条只还已取过的那几道**
+  —— 少还一道 = 配额随时间单调收紧而现场无日志（「昨天还好好的，今天跑一会儿就全被拒」）。
+- **`limitedParallelism` 限的是并发执行的协程、不是线程**，且**挂起的协程已把位子还回去**：
+  守卫第一版用 `delay` 观测 peak，观测到 5 而闸是 2，看起来「没生效」—— 真相是
+  delay 期间它不算占位。判据改用真阻塞（`CountDownLatch`），那才是桥 handler 的真实形态。
+- **不追溯在途**：掐掉在途请求是「撤销」不是「限额」。
+- **桥的闸要装填期推一次 + 保存时推一次** —— 闸是进程级对象里一份 `@Volatile` 当前值，
+  宿主不推它就一直用旧值而界面显示「已保存」（本仓反复点名的那类坑）。
+
+### 顺带被门抓住的两处
+
+- **`:app` 的 archUnit 抓住了一处越界**：「把设置推给桥」的调用点在 `AppShellApplication`
+  （根包），而那条门规定根包不许碰 `com.autoscript.bridge`。三条出路里选了**最窄的一条**：
+  收敛到一个逐字点名的 `BridgeQuotaWiring`，门上只多一条白名单，而不是对整个 `:app` 打开
+  （后者是把这条边界一笔勾销）。顺带记下 archUnit 的一个坑：`resideOutsideOfPackages`
+  **判不到同包的另一个类**，同包排除必须用 `doNotHaveSimpleName`。
+- **真 spawn 那条守卫第一版写错了**：写成「另起一个 `node` 跑脚本」，当场红 —— 那个进程走
+  测试自己的 argv，整条绕开了引擎的拼装，测的是「Node 认不认标志位」而不是「引擎有没有
+  拼对」。改成走引擎真 spawn、结果由脚本经 argv 回传；中途还踩了一次「第二次 spawn 读到
+  第一次的残留文件」。
+
+**验证**：CI 逐字同源 15 测试任务全绿零跳过；detekt 全模块绿（新增 `@Composable` 后
+`ui/detekt-baseline.xml` 用 detekt 自己的生成器重生成）。守卫新增 9 + 5 + 11 例，
+其中三处**先红后绿**实测（短路引擎的 argv 拼装 / 短路三道连接闸 / 改坏 `setDraft`）。
+
+### 仍挂（不因本批减少）
+
+typed ids、单一 actor 化（批 103 之后它剩下的收益只有「不再需要锁」）；D6 两小问
+（`.autojs` 改名 / npm scope 归属）仍等你拍板。`TrustTierResolver` 仍等维护者裁定
+「还要不要它」（A5 已裁定它不产生防护）。
+
+
 ## 2026-10-12 追记（批 106：B3 压实那半 + 三处「已裁定却仍列为仍挂」的矛盾订正）
 
 ### 做掉的那半：jsonl 压实
@@ -825,7 +876,7 @@ npm scope 归属）等你拍板，不算可自行开工的批次。
 | # | 外审条目 | 核实结论 | 状态 |
 |---|---|---|---|
 | **M1** | 路径未校验（`engines.exec` / `workManager.create` 只判空；`scriptPath` 越界会被执行；`cwd` 来自未校验 `projectId`） | **半成立**：`ScriptPaths.isValidProjectId`（无 `.`）/`DeployPath.resolveIn`（startsWith(root)）/`ScriptDeployRecovery.isSafeRelPath` **都已在**；外审设想的 `projectId="builtin"` 提权场景在「全部项目解析为 UNKNOWN」下**不成立**。**真问题**是 `ScriptPaths.scriptFile` 的 KDoc 说「越界只读不到」而 `NodeProcessEngine` **会执行它** —— KDoc 与实现矛盾 | ✅ **批 104 收口**：`scriptFile` 补读侧词法闸（projectId 过 `isValidProjectId`，scriptPath 拒绝对路径/`..`/`.`/空段/反斜杠，归一后要求严格在项目根之下），IAE 在引擎侧折 `ERR_INVALID_PARAM`；守卫 7 + 1（含「越界路径绝不进 argv」）。`TrustTierResolver` 是另一件事，不在 M1 内 |
-| **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | 🟡 批 100 做了字节加权信号量（`maxBytesInFlight`=16 MiB）；**每连接上限 + `limitedParallelism` 未做**（理由：前者要连同可见面一起设计，后者要先定每连接读线程配额；不做半套） |
+| **M2** | 桥资源限额：全局在途 256、无每连接配额、8MiB 帧 → 最坏约 2 GiB 堆；不读响应的脚本钉住许可与 IO 线程；wire `ttl` 不截断 | **TTL 部分成立**（已修，批 96）；**无每连接配额、无限 Parallelism 属实**（`NewlineFrameServer` 只有全局 `maxInFlight`） | ✅ **三件全做完**：TTL 截断（批 96）+ 全局字节加权（批 100，`maxBytesInFlight`=16 MiB）+ **每连接三档闸与「可见面」（批 107）** —— 条数 64 / 字节 32 MiB / `limitedParallelism` 8，诊断回执与 `connectionStats()` 同批落地。**两半一起做的原因**：批 100 说不做的理由正是「每连接要定几个数、可见面要一起设计」；批 107 把那几个数交给**用户在设置页自己定**，那两条理由就都不成立了 —— 旋钮本身就是「要能改」的答案 |
 | **M3** | accept 循环遇 `IOException` 直接 `break`，一次 `EMFILE` 桥就死且无日志无重启 | **成立**（`BridgeSocketListener:111`、`NewlineFrameServer:91`） | ✅ 批 98 已修（两处各退避重试 + 计数与回执，两条守卫先红后绿） |
 | **M4** | 错误映射：`BridgeRouter:104` 把一切 `Exception` 折成 `ERR_INVALID_PARAM` 并回显 `e.message`（内部 bug 伪装成参数错、路径泄露）；重复 requestId 回原请求 id | **成立**（且与 `RpcNamespaceHandler` KDoc「未知异常不接、照旧穿出」直接矛盾） | ✅ 批 97 已修（`ERR_INTERNAL` + 折叠两档，契约卷 §7.6 同步） |
 | **M5** | pid 绑定在 Android 8–12 失效（`Process.pid()` 需 API 33，minSdk 26；`spawn.pid` 为 null 时跳过防劫持检查） | **成立且已知**（`ProcessLauncher` 两级反射只取 `pid()` 方法，**无私有字段那级**——批 95 的 `ProcOps.pidOf` 已补上那一级，可复用） | ✅ 批 97 已修（`ProcessLauncher.pidOf` 补第二级 + `pidUnavailable` 计数） |
