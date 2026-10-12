@@ -157,6 +157,51 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 三档的取值**用户可改**（设置页 → 脚本设置），故是 `@Volatile` 当前值 + `updatePerConnectionLimits`，
 改完下一次请求即生效、**不追溯在途**。
 
+**取闸与归还时序（2026-10-12 批 111 补）—— 这张图钉住的是「顺序」与「只还取过的那几道」**：
+
+```
+  serveAcceptedFrame(frame)                    Connection（每连接一份）
+      │                                              │
+      │ 一份快照 mine = perConnection（全程用这一份）  │
+      │                                              │
+      │ tryReserveBytes(size)  ── 全局字节闸 ─────────►│  false → 只还 0 道，拒
+      │        │                                      │
+      │ size > mine.bytes || tryReserveOwnBytes ─────►│  false → **只还第 1 道**，拒
+      │        │                                      │
+      │ inFlight.acquire()  ─── 全局条数闸（阻塞点）    │
+      │        │                                      │
+      │ ownInFlight(mine.inFlight) ──────────────────►│  null = 建不起来
+      │        │                                      │    → **降级为只有全局那两道**，
+      │        │                                      │      不是拒掉这条连接的所有请求
+      │ ownCount.tryAcquire() ── 本连接条数闸 ────────►│  false → **只还前 3 道**，拒
+      │        │                                      │
+      ▼        ▼                                      │
+  launch(caller + session + handlerDispatcher(mine.concurrent), LAZY)
+      │        │  ← 取闸与起协程之间**不留窗口**
+      │        │
+      │   invokeOnCompletion {                       │
+      │       bytesInFlight -= size   （全局字节）      │
+      │       inFlight.release()     （全局条数）      │
+      │       ownBytes      -= size   （连接字节）      │
+      │       ownCount?.release()     （连接条数）      │
+      │   }   ← **成对归还四道，取过几道还几道**          │
+      ▼                                              ▼
+   requestJob.start()
+```
+
+**三条从图里读出来的口径**：
+
+- **顺序是「字节 → 字节 → 条数 → 条数」，不是任意排列**：两条字节闸排在两条条数闸之前
+  是因为条数闸有**阻塞点**（`inFlight.acquire()`）。反过来就要为「已取字节、卡在条数上」
+  这个中间态准备一套退款，而**少一处还就少一份配额**。
+- **拒一条只还已取过的那几道** —— 图里三处 `false` 分支各自写的归还集合就是判据。
+  漏还一道 = 许可永久漏掉 = 配额随时间单调收紧，现象是「昨天还好好的，今天跑一会儿就全被拒」
+  而**没有任何日志指向它**。
+- **`invokeOnCompletion` 而不是 `finally`**：它覆盖「`launch` 之后、首次调度之前就被取消」
+  这个窗口（`finally` 覆盖不到 —— 协程体一次都没进去过）。归还与取闸写在同一处，
+  不让归还在两个地方。
+
+
 ### 7.7 性能关键路径（数量级目标）
 | 链路 | 目标 | 设计 |
 |---|---|---|

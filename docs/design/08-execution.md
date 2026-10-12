@@ -109,6 +109,55 @@ interface EnginePool {                                // 实现在 :app-service:
 - **做**：进程池 + 每脚本一进程。并发上限=池容量；超载任务进入队列（清晰的产品化语义，而不是偷偷并发）。
 - 执行中的 slot 在 `:main` 持 FGS/绑定，池进程按内存采样动态缩容（占位 slot 空闲超时回收）。
 
+**槽位仲裁时序（2026-10-12 批 111 补）—— 这张图钉住的是「互斥」与「顺序即契约」两条**：
+
+```
+  acquire(request)                 FixedEnginePool                 lease
+      │                                │                            │
+      │ 记 epochAtEntry ──────────────►│                            │  ← 等槽期间可能与 killAll 并发
+      │                                │                            │
+      │                          idle.receive()  ◄── 槽在队列里       │
+      │                                │        （队列即全部：出队 = 被占）│
+      │  ◄── PoolSlot ─────────────────┤                            │
+      │                                │  epoch 变了？ ──► 还槽、不起进程 │
+      │                                │                            │
+      │                    markBusy + occupy                        │
+      │                    newLease(slot) ────────────────────────►│  登记进 leases
+      │                                │                            │
+      │                    slot.engine.execute(request)             │
+      │                                │   ← 夺槽在 execute 之前：     │
+      │                                │     execute 的启动耗时不是窗口期│
+      │                                │                            │
+      │                    epoch 又变了？ ─► killQuietly + forceReturn│
+      │  ◄── Granted(PoolHandle) ───────┤  否则 markRunning           │
+      │                                │                            │
+      │                                                                  │
+  release(handle) / 自然退出 / killAll ──►│ lease.release()             │
+                                       │   ├─ quiesce()（状态机落 STOPPED/CRASHED）
+                                       │   └─ returnOnce {           │
+                                       │       leases.remove(slot)    │  ← 唯一槽位回队口
+                                       │       inUse--               │
+                                       │       slot.markFree()       │
+                                       │       idle.trySend(slot) ───┼──► 回到队列
+                                       │     }                        │
+                                       ▼                            │
+                              一次归还，两条路径（自然退出 / 强释）走的是同一个 returnOnce
+```
+
+**两条不变式**：
+
+- **互斥**：一个槽位**要么在 `idle` 队列里、要么在某一份 `PoolLease` 手里**。
+  「归还是否发生过」由 `PoolLease.returnOnce` 的 CAS 保证 —— 于是「双重归还导致两个脚本
+  跑在同一引擎进程上」在**结构上**不可能，而不是靠检查拦。
+- **顺序即契约**：夺槽 → `execute` →（epoch 对表）→ `markRunning` →（回队）。中间任何一步
+  换序都会开出窗口期：夺槽晚于 `execute`，两个并发 acquire 会同时选中同一槽位。
+
+> **本节下一段的「记账不变量」四条已被 2026-10-12（批 103）取代**（原文保留）：那里描述的
+> 是「许可证（公平 `Semaphore`）+ FREE 槽位 1:1」的两套手拿同步记账。现在**空闲队列是全部**
+> —— 队列里就是可用的，出队就是被占，**没有第二套计数**。同样被取代的还有
+> `PoolSlot.generation` 作为归还判据（它现在**只剩诊断价值**：过期句柄的
+> `returnOnce` 恒为 no-op，压根到不了槽位）。
+
 **记账不变量（`FixedEnginePool` 强制，违反即池缩水）**：
 - 许可证（公平 `Semaphore`）与 FREE 槽位 **1:1**；夺槽必须在 `stateLock` 临界区内、且**先于** `engine.execute` —— 否则 execute 的启动耗时就是窗口期，并发 acquire 会选中同一槽位（同一进程跑两个脚本）。
 - 有证无槽 = 记账失真，立即还证返回失败，绝不吞证转死锁。
