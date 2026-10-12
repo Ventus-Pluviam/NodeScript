@@ -1,5 +1,6 @@
 package com.autoscript.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
@@ -10,10 +11,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.geometry.TransformOrigin
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
 
 /**
  * 管理页里「面板 ⇄ 子页 / 子页 ⇄ 子页」那一层切换的动画，**逐值复刻 Telegram**
@@ -74,6 +80,24 @@ internal fun <T> ManagementTransition(
     var top by remember { mutableStateOf<T?>(null) }
     // 1 = 上层完全就位（初值：首帧没有覆盖层，直接就位，不做进场动画）。
     val progress = remember { Animatable(1f) }
+    // 跟手返回手势的瞬时量（`ManagementBackGesture` 写、`graphicsLayer` 读）。
+    val gesture = remember { BackGestureState() }
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current.density
+    var viewportHeight by remember { mutableFloatStateOf(0f) }
+
+    // **返回键**这一路（侧缘滑动那一路在 `ManagementBackGesture` 里）。
+    // 走 `BackHandler` 而不是继续用外壳那个 `ManagementBackHandler`：后者在切页
+    // 动画期间会 `enabled = false`，而这里要保证「顶层开着就一定能退」。
+    // 侧缘滑动：手势期间只写 `gesture`（不重组），抬手后走与返回键同一条收尾路。
+    ManagementBackGesture(
+        state = gesture,
+        enabled = top != null,
+        onCommit = { closeTop(progress, gesture) { top = null } },
+    )
+    BackHandler(enabled = top != null) {
+        scope.launch { closeTop(progress, gesture) { top = null } }
+    }
 
     LaunchedEffect(page) {
         if (page == top) return@LaunchedEffect
@@ -90,11 +114,15 @@ internal fun <T> ManagementTransition(
             progress.snapTo(0f)
             progress.animateTo(1f, tween(DURATION_MS, easing = EASE))
         }
+        // 稳态下不留任何手势残留（TG 的 `animateBackEndAnimation` 收尾同样清零）。
+        gesture.reset()
     }
 
+    // 视口高（锚点退化时用）：`onSizeChanged` 给的是 px，与 `touchY` 同坐标系。
+    //
     // `fillMaxSize` 不能省：两个子层都是 `matchParentSize`，而 `matchParentSize`
     // **不参与父级尺寸计算** —— 不显式撑满的话，这一层会塌成 0×0。
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().onSizeChanged { viewportHeight = it.height.toFloat() }) {
         // 没有覆盖层时 progress 恒为 1，所以**压暗要以「有没有 top」为前提** ——
         // 直接按 progress 算会让稳态下的页面一直是 0.6 透明度。
         val t = if (top == null) 0f else progress.value
@@ -104,13 +132,49 @@ internal fun <T> ManagementTransition(
             Box(
                 Modifier
                     .alpha(progress.value)
-                    .graphicsLayer { translationX = (1f - progress.value) * SLIDE_DP * density }
+                    .graphicsLayer {
+                        // **两段相加**：进出场那一段（48dp·(1-progress)）与跟手那一段
+                        // （手势的 dx）互不干涉 —— 手势期间 `progress` 恒为 1，
+                        // 动画期间 `dx` 恒为 0（`gesture.reset()` 在稳态清零）。
+                        translationX = (1f - progress.value) * SLIDE_DP * density + gesture.dx
+                        // 缩放 + 锚点：TG `:1119`/`:1133`，锚点 x 固定在左缘 82dp，
+                        // y 取手指位置（没有触点时退到视口中线）。
+                        val sc = backGestureScale(gesture.dx, progress.value, density)
+                        if (sc != 1f) {
+                            val px = this.density
+                            scaleX = sc
+                            scaleY = sc
+                            transformOrigin = TransformOrigin(
+                                SCALE_ANCHOR_X.toPx(px) / size.width,
+                                if (viewportHeight > 0f) backGestureAnchorY(gesture.touchY, viewportHeight) / viewportHeight else 0.5f,
+                            )
+                        }
+                    }
                     .matchParentSize(),
             ) {
                 content(over)
             }
         }
     }
+}
+
+/**
+ * 顶层退场：播 150ms 收尾后把 `top` 清掉。
+ *
+ * **松手时不是这里调的** —— 侧缘滑动那条路由 [ManagementBackGesture] 的流收尾，
+ * 与 TG 一致（`animateBackEndAnimation`）。本函数是**返回键**与**编程切走**
+ * （`page` 变回 `under`）共用的那条路。
+ */
+private suspend fun <T> closeTop(
+    progress: Animatable<Float, *>,
+    gesture: BackGestureState,
+    clear: () -> Unit,
+) {
+    progress.snapTo(1f)
+    progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
+    clear()
+    progress.snapTo(1f)
+    gesture.reset()
 }
 
 private const val DURATION_MS = 150
