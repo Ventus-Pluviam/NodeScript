@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -239,15 +240,15 @@ class InstallCoordinatorTest {
         assertEquals(listOf(InstallJournal.State.BEGIN, InstallJournal.State.COMMIT), entries.map { it.state })
         assertTrue(journal.unfinished().isEmpty())
         // 产物已从 node_modules.part-* rename 到 node_modules
-        assertTrue(Files.exists(layout.nodeModules("p1").resolve("axios.js")))
+        assertTrue(Files.exists(layout.nodeModules(ProjectId("p1")).resolve("axios.js")))
         // 暂存目录不残留
-        assertFalse(Files.exists(layout.projectRoot("p1").resolve(entries.first().stageDir)))
+        assertFalse(Files.exists(layout.projectRoot(ProjectId("p1")).resolve(entries.first().stageDir)))
     }
 
     @Test
     fun `执行失败：journal fail + 暂存残骸清扫 + node_modules 不被污染`() = runBlocking {
-        Files.createDirectories(layout.nodeModules("p1"))
-        Files.write(layout.nodeModules("p1").resolve("old.js"), ("old").toByteArray())
+        Files.createDirectories(layout.nodeModules(ProjectId("p1")))
+        Files.write(layout.nodeModules(ProjectId("p1")).resolve("old.js"), ("old").toByteArray())
         val exec = FakeExecutor { throw RuntimeException("registry 502") }
         val c = coordinator(executor = exec)
 
@@ -257,9 +258,9 @@ class InstallCoordinatorTest {
         assertEquals(InstallJournal.State.FAIL, journal.all().last().state)
         assertTrue(journal.unfinished().isEmpty(), "fail 封口后不再是未完成事务")
         // 旧 node_modules 原样保留（墓碑回滚）
-        assertEquals("old", String(Files.readAllBytes(layout.nodeModules("p1").resolve("old.js")), Charsets.UTF_8))
+        assertEquals("old", String(Files.readAllBytes(layout.nodeModules(ProjectId("p1")).resolve("old.js")), Charsets.UTF_8))
         // 暂存目录被清扫
-        assertTrue(Files.list(layout.projectRoot("p1")).noneMatch { it.fileName.toString().startsWith("node_modules.part-") })
+        assertTrue(Files.list(layout.projectRoot(ProjectId("p1"))).noneMatch { it.fileName.toString().startsWith("node_modules.part-") })
     }
 
     @Test
@@ -637,8 +638,8 @@ class InstallCoordinatorTest {
         assertEquals("https://global.example.com", v1.asked.single().third, "项目 .npmrc 没有时用全局那层")
 
         // 第一层在场 → 项目赢（全局只做缺省，不顶掉项目级）
-        Files.createDirectories(layout.projectRoot("p1"))
-        Files.write(layout.npmrc("p1"), listOf("registry=https://project.example.com"))
+        Files.createDirectories(layout.projectRoot(ProjectId("p1")))
+        Files.write(layout.npmrc(ProjectId("p1")), listOf("registry=https://project.example.com"))
         val v2 = agreeingVerifier()
         coordinator(globalConfig = NpmGlobalConfig(dir), registryVerifier = v2)
             .install("p1", listOf(PackageSpec("dayjs", "1.11.23")))
@@ -701,7 +702,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec 纯 JS bin：进执行体，args 与 bin 名用 -- 分开`() = runBlocking {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         val pkg = root.resolve("node_modules/tooly")
         Files.createDirectories(pkg)
         Files.write(pkg.resolve("package.json"), ("""{"name":"tooly","version":"2.0.0","bin":"cli.js"}""").toByteArray())
@@ -716,7 +717,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec 简写 bin 的隐含命令名是包名（npm 口径，不是文件名）`() {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         val pkg = root.resolve("node_modules/tooly")
         Files.createDirectories(pkg)
         Files.write(pkg.resolve("package.json"), ("""{"name":"tooly","version":"2.0.0","bin":"cli.js"}""").toByteArray())
@@ -727,7 +728,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec 简写 bin 去掉 scope 前缀（@acme 下的 mytool 命令名是 mytool）`() {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         val pkg = root.resolve("node_modules/@acme/mytool")
         Files.createDirectories(pkg)
         Files.write(pkg.resolve("package.json"), ("""{"name":"@acme/mytool","version":"1.0.0","bin":"./run.js"}""").toByteArray())
@@ -737,7 +738,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec bin 未物化 ERR_FILE_NOT_FOUND（声明在 manifest 但文件不在）`() {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         val pkg = root.resolve("node_modules/tooly")
         Files.createDirectories(pkg)
         Files.write(pkg.resolve("package.json"), ("""{"name":"tooly","version":"2.0.0","bin":{"tooly":"./cli.js"}}""").toByteArray())
@@ -747,7 +748,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec 原生 bin ERR_NOT_SUPPORTED（W^X + 无编译器；给可操作话术）`() {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         val pkg = root.resolve("node_modules/nativey")
         Files.createDirectories(pkg.resolve("build/Release"))
         Files.write(
@@ -763,7 +764,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec 无后缀的纯 JS bin 放行（tsc 形态：bin 文件是 #! 脚本，不是二进制）`() {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         val pkg = root.resolve("node_modules/typescript")
         Files.createDirectories(pkg.resolve("bin"))
         Files.write(
@@ -779,7 +780,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec 把 ELF 改名成 _js 也拒（判据读文件内容，不是文件名）`() {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         val pkg = root.resolve("node_modules/sneaky")
         Files.createDirectories(pkg.resolve("bin"))
         Files.write(
@@ -796,7 +797,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `exec 多个包声明同名 bin → 拒绝并点名（不猜执行目标）`() {
-        val root = layout.projectRoot("p1")
+        val root = layout.projectRoot(ProjectId("p1"))
         for ((name, ver) in listOf("a1" to "1.0.0", "a2" to "2.0.0")) {
             val pkg = root.resolve("node_modules/" + name)
             Files.createDirectories(pkg)
@@ -937,7 +938,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `storage 冷缓存遍历算尺寸`() = runBlocking {
-        val nm = layout.nodeModules("p1")
+        val nm = layout.nodeModules(ProjectId("p1"))
         Files.createDirectories(nm.resolve("axios"))
         Files.write(nm.resolve("axios/index.js"), ByteArray(100))
         val c = coordinator()
@@ -948,7 +949,7 @@ class InstallCoordinatorTest {
     @Test
     fun `配额 80% 黄：Warning(DISK_QUOTA) 不拦安装`() = runBlocking {
         // 项目已有 node_modules ~ 430MB（> 512MB×80%=409.6MB）——用稀疏文件撑尺寸
-        val nm = layout.nodeModules("big")
+        val nm = layout.nodeModules(ProjectId("big"))
         Files.createDirectories(nm)
         val probe = nm.resolve("blob")
         java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(430L * 1024 * 1024) }
@@ -966,7 +967,7 @@ class InstallCoordinatorTest {
 
     @Test
     fun `配额 100% 拦 ERR_DISK_FULL`() = runBlocking {
-        val nm = layout.nodeModules("full")
+        val nm = layout.nodeModules(ProjectId("full"))
         Files.createDirectories(nm)
         val probe = nm.resolve("blob")
         java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
@@ -1014,7 +1015,7 @@ class InstallCoordinatorTest {
         assertEquals("npm 挂了", execFail.detail, "失败原因是原文，不是重编的一句话")
 
         // ② 磁盘/配额**预检**拒绝（在 handle 存在之前就抛，与 crossCheckRegistry 同一条口径）
-        val nm = layout.nodeModules("full")
+        val nm = layout.nodeModules(ProjectId("full"))
         Files.createDirectories(nm)
         java.io.RandomAccessFile(nm.resolve("blob").toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
         val gateHistory = InstallHistory(dir.resolve(".ns-gate"))
@@ -1057,7 +1058,7 @@ class InstallCoordinatorTest {
 
     /** 造一个项目 + 一份 lock（只写回收要用到的 packages 段）。 */
     private fun seedProjectLock(projectId: String, vararg entries: Pair<String, String?>) {
-        val proj = Files.createDirectories(layout.projectRoot(projectId))
+        val proj = Files.createDirectories(layout.projectRoot(ProjectId(projectId)))
         val pkgs = entries.joinToString(",") { (name, integ) ->
             val i = integ?.let { "\"integrity\":\"$it\"" } ?: "\"integrity\":null"
             "\"node_modules/$name\":{\"version\":\"1.0.0\",$i}"
@@ -1105,7 +1106,7 @@ class InstallCoordinatorTest {
         val orphan = seedCacheContent("orphan")
         // 半截 JSON：LockfileReader 不抛（手写解析尽力而为），故这里用「目录冒充 lockfile」
         // 制造真正的读失败 —— 用例要证明的是「读不到时不许当它不存在」。
-        val bad = Files.createDirectories(layout.lockfile("p2"))
+        val bad = Files.createDirectories(layout.lockfile(ProjectId("p2")))
         assertTrue(Files.isDirectory(bad))
         val h = newHistory()
 
@@ -1225,7 +1226,7 @@ class InstallCoordinatorTest {
         assertEquals(ErrorCode.ERR_TIMEOUT, ex.error, "超时必须 ERR_TIMEOUT，不能假装成功")
         assertEquals(InstallJournal.State.FAIL, journal.all().last().state, "超时也走 fail 封口")
         assertTrue(
-            Files.list(layout.projectRoot("p1")).noneMatch { it.fileName.toString().startsWith("node_modules.part-") },
+            Files.list(layout.projectRoot(ProjectId("p1"))).noneMatch { it.fileName.toString().startsWith("node_modules.part-") },
             "暂存残骸必须清扫",
         )
     }
@@ -1430,7 +1431,7 @@ class InstallCoordinatorTest {
         val v = FakeVerifier(
             mapOf("axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", false)),
         )
-        val rc = layout.npmrc("p1")
+        val rc = layout.npmrc(ProjectId("p1"))
         Files.createDirectories(rc.parent)
         // 两行 registry：config() 的写入语义是「先删后加」，故后者应覆盖前者
         Files.write(rc, listOf("registry=https://registry.npmjs.org", "registry=https://harbor.example.com/registry/"))
@@ -1447,7 +1448,7 @@ class InstallCoordinatorTest {
         val v = FakeVerifier(
             mapOf("axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", false)),
         )
-        val rc = layout.npmrc("p1")
+        val rc = layout.npmrc(ProjectId("p1"))
         Files.createDirectories(rc.parent)
         Files.write(rc, listOf("https-proxy=http://127.0.0.1:7890"))   // 有 npmrc 但没有 registry 行
         val c = coordinator(executor = FakeExecutor(), registryVerifier = v)
@@ -1685,7 +1686,7 @@ class InstallCoordinatorTest {
     @Test
     fun `控制台 npx 与 npm run：先落 ECHO 行再执行（不需要审批）`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"echo hi"}}""")
-        val pkg = layout.projectRoot("p1").resolve("node_modules/tooly")
+        val pkg = layout.projectRoot(ProjectId("p1")).resolve("node_modules/tooly")
         Files.createDirectories(pkg)
         Files.write(pkg.resolve("package.json"), ("""{"name":"tooly","version":"2.0.0","bin":"cli.js"}""").toByteArray())
         Files.write(pkg.resolve("cli.js"), "#!/usr/bin/env node\n".toByteArray())
@@ -1755,7 +1756,7 @@ class InstallCoordinatorTest {
     // —— helpers ——
 
     private fun writeLock(projectId: String, content: String) {
-        val f = layout.lockfile(projectId)
+        val f = layout.lockfile(ProjectId(projectId))
         Files.createDirectories(f.parent)
         Files.write(f, (content).toByteArray())
     }
@@ -1776,7 +1777,7 @@ class InstallCoordinatorTest {
     // —— P1 T1 helpers ——
 
     private fun writeManifest(projectId: String, json: String) {
-        val root = layout.projectRoot(projectId)
+        val root = layout.projectRoot(ProjectId(projectId))
         Files.createDirectories(root)
         Files.write(root.resolve("package.json"), json.toByteArray())
     }
@@ -1785,7 +1786,7 @@ class InstallCoordinatorTest {
     fun `node_modules 尺寸走缓存：TTL 内不重算，过期才重测`() = runBlocking {
         var clock = 1_000_000L
         val c = coordinator(now = { clock })
-        val nm = layout.nodeModules("p1")
+        val nm = layout.nodeModules(ProjectId("p1"))
         Files.createDirectories(nm)
         Files.write(nm.resolve("a.bin"), ByteArray(1000))
 

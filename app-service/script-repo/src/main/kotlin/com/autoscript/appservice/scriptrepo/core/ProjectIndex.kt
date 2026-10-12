@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scriptrepo.core
 
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.scripts.ScriptProject
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -15,20 +16,20 @@ class ProjectIndex(private val store: ProjectStore) {
 
     fun list(): List<ScriptProject> = store.listIds().mapNotNull(::read)
 
-    fun read(id: String): ScriptProject? {
+    fun read(id: ProjectId): ScriptProject? {
         if (!store.exists(id)) return null
         val root = store.rootFor(id)
         val attrs = Files.readAttributes(root, BasicFileAttributes::class.java)
         return ScriptProject(
-            id = id,
-            name = id,
+            id = id.value,
+            name = id.value,
             version = readVersion(root),
             mainScript = resolveMain(root),
             createdAtMillis = attrs.creationTime().toMillis(),
         )
     }
 
-    fun delete(id: String): Boolean {
+    fun delete(id: ProjectId): Boolean {
         if (!store.exists(id)) return false
         store.delete(id)
         return true

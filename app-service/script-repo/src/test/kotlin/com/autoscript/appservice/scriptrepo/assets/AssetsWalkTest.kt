@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scriptrepo.assets
 
+import com.autoscript.domain.scripts.RelPath
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -39,9 +40,9 @@ class AssetsWalkTest {
         val got = AssetsWalk.walk("scripts/demo", list) { ByteArrayInputStream(map[it]!!) as InputStream }
         assertEquals(
             listOf("lib/deep/deeper.js", "lib/util.js", "main.js"),
-            got.keys.sorted(),
+            got.keys.map { it.value }.sorted(),
         )
-        assertEquals("scripts/demo/lib/deep/deeper.js", got["lib/deep/deeper.js"]!!.decodeToString())
+        assertEquals("scripts/demo/lib/deep/deeper.js", got[RelPath("lib/deep/deeper.js")]!!.decodeToString())
     }
 
     @Test
@@ -55,7 +56,7 @@ class AssetsWalkTest {
             }
         }
         val got = AssetsWalk.walk("scripts/d", list) { ByteArrayInputStream(map[it]!!) }
-        assertEquals(listOf("lib/a.js"), got.keys.toList())
+        assertEquals(listOf("lib/a.js"), got.keys.map { it.value })
     }
 
     @Test
@@ -68,8 +69,8 @@ class AssetsWalkTest {
             }
         }
         val got = AssetsWalk.walk("scripts/d", list) { ByteArrayInputStream(map[it] ?: ByteArray(0)) }
-        assertEquals(listOf("empty.txt", "main.js"), got.keys.sorted())
-        assertTrue(got["empty.txt"]!!.isEmpty())
+        assertEquals(listOf("empty.txt", "main.js"), got.keys.map { it.value }.sorted())
+        assertTrue(got[RelPath("empty.txt")]!!.isEmpty())
     }
 
     @Test

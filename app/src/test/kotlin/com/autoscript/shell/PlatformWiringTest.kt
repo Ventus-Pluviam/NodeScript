@@ -1,6 +1,7 @@
 package com.autoscript.shell
 
 import com.autoscript.appservice.scheduler.core.InMemoryIntentLog
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
 import com.autoscript.appservice.scheduler.core.TriggerHandle
 import com.autoscript.domain.automation.ColorHit
@@ -604,7 +605,7 @@ class PlatformWiringTest {
                 // 期望值**现算**（与生产同一条 `ScriptPaths`），不写死绝对路径：
                 // 写死的那版在 CI 上因建不动 /data 而红，测的却不是接线。
                 val expectedDir = com.autoscript.domain.scripts.ScriptPaths
-                    .recordingsDir(dir, "demo")
+                    .recordingsDir(dir, ProjectId("demo"))
                 assertTrue(
                     payload.contains("$expectedDir/") && payload.contains(".mp4"),
                     "落点必须按 ScriptPaths.recordingsDir(filesDir, projectId) 算，实际 $payload",

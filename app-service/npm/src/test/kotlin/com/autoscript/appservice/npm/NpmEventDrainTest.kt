@@ -9,6 +9,7 @@ import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.json.DomainJson
 import kotlinx.coroutines.runBlocking
+import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -87,9 +88,9 @@ class NpmEventDrainTest {
             },
             freeSpaceProbe = { 10L * 1024 * 1024 * 1024 },
         )
-        Files.createDirectories(layout.projectRoot("p1"))
+        Files.createDirectories(layout.projectRoot(ProjectId("p1")))
         Files.write(
-            layout.projectRoot("p1").resolve("package.json"),
+            layout.projectRoot(ProjectId("p1")).resolve("package.json"),
             """{"name":"p1","version":"1.0.0"}""".toByteArray(),
         )
         c.install("p1", emptyList())

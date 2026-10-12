@@ -4,6 +4,7 @@ import javax.crypto.spec.SecretKeySpec
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.scripts.ScriptPaths
+import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -31,13 +32,13 @@ class NpmSnapshotTest {
 
     /** 造一个最小项目：package.json + lock + lock.sig + node_modules/{lodash,esbuild}。 */
     private fun seedProject(projectId: String = "p1") {
-        val root = layout.projectRoot(projectId)
+        val root = layout.projectRoot(ProjectId(projectId))
         Files.createDirectories(root)
         Files.write(root.resolve("package.json"), ("""{"name":"p1","version":"1.0.0"}""").toByteArray())
-        Files.write(layout.lockfile(projectId), ("""{"lockfileVersion":3,"packages":{"":{},"node_modules/lodash":{"version":"4.17.21","integrity":"sha512-x"}}}""").toByteArray())
+        Files.write(layout.lockfile(ProjectId(projectId)), ("""{"lockfileVersion":3,"packages":{"":{},"node_modules/lodash":{"version":"4.17.21","integrity":"sha512-x"}}}""").toByteArray())
         val signer = LockSigner(ledgerDir, key)
-        signer.sign(projectId, layout.lockfile(projectId))
-        val nm = layout.nodeModules(projectId)
+        signer.sign(projectId, layout.lockfile(ProjectId(projectId)))
+        val nm = layout.nodeModules(ProjectId(projectId))
         Files.createDirectories(nm.resolve("lodash"))
         Files.write(nm.resolve("lodash/package.json"), ("""{"name":"lodash","version":"4.17.21"}""").toByteArray())
         Files.write(nm.resolve("lodash/index.js"), ("module.exports = 1\n").toByteArray())
@@ -150,8 +151,8 @@ class NpmSnapshotTest {
 
     @Test
     fun `无 lock 的导出拒绝（给不出验签闭环快照）`() = runBlocking {
-        val root = layout.projectRoot("nolock")
-        Files.createDirectories(layout.nodeModules("nolock"))
+        val root = layout.projectRoot(ProjectId("nolock"))
+        Files.createDirectories(layout.nodeModules(ProjectId("nolock")))
         val e = assertThrows(AutojsException::class.java) { snapshot().export("nolock", out) }
         assertEquals(ErrorCode.ERR_FILE_NOT_FOUND.code, e.error.code)
     }

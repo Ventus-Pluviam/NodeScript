@@ -22,8 +22,15 @@ object ScriptPaths {
     /** App 私有文件目录下的项目根：`files/scripts`。 */
     fun projectsRoot(filesDir: Path): Path = filesDir.resolve(PROJECTS_DIR)
 
-    /** 某项目的目录：`files/scripts/<projectId>`（不校验存在性，也不校验 id 合法性 —— 校验归各模块入口）。 */
-    fun projectRoot(filesDir: Path, projectId: String): Path = projectsRoot(filesDir).resolve(projectId)
+    /**
+     * 某项目的目录：`files/scripts/<projectId>`。
+     *
+     * **收 [ProjectId] 而不是裸 `String`**（2026-10-12 批 109）：项目号的合法性在
+     * [ProjectId] 的 `init` 里判过一道，本方法因此**不再重复 `require`** ——
+     * 拿到类型就意味着过了判据，这正是值类存在的意义。仍**不校验存在性**
+     * （那是 [Path.exists] 的事，不是约定的）。
+     */
+    fun projectRoot(filesDir: Path, projectId: ProjectId): Path = projectsRoot(filesDir).resolve(projectId.value)
 
     /**
      * 项目号的合法形态（**唯一一份**判据）。
@@ -58,9 +65,9 @@ object ScriptPaths {
      * 决定），相对路径会解析到别处。
      *
      * **读侧判据（2026-10-12 补，外审 M1 收口；此前本方法一个字都不校验）**：
-     * [scriptPath] 与 [projectId] 都过词法闸 —— 绝对路径、`..`/`.`/空段段、反斜杠一律
-     * `require` 拒（[IllegalArgumentException]），归一后还要求目标**严格在**项目根之下
-     * （用 [Path.startsWith] 词法判据）。加这道闸的理由不是当下有可利用的漏洞
+     * 词法闸 —— 绝对路径、`..`/`.`/空段、反斜杠一律 `require` 拒（[IllegalArgumentException]），
+     * 归一后还要求目标**严格在**项目根之下（用 [Path.startsWith] 词法判据）。
+     * 加这道闸的理由不是当下有可利用的漏洞
      * （`scriptPath` 的来源是 [com.autoscript.domain.engine.EngineRunRequest]，即本 App
      * 自己的任务库与桥侧 `engines.exec`，跨 uid 越权要先进任务库，而写任务库的入口都过了
      * 校验），而是**这句话本身就是引擎执行面的入参**：`NodeProcessEngine` 拿它的结果直接
@@ -72,24 +79,18 @@ object ScriptPaths {
      * 且对符号链接要逐级解真实 inode。写入侧防符号链接是另一条线（见
      * `DeployPath.resolveIn` 的 KDoc，那里已如实分开记「判据不够强」与「当下可利用」）。
      *
-     * **与 [isValidProjectId] 的分工照旧**：那是判据（是/否），本方法是拼接；
-     * 这里复用它，所以项目号与项目内路径**同一份**正则口径（拼错的 id 也不会编译失败，
-     * 只会变成「写进去了但读不到」，同本对象开头那条教训）。
+     * **与 [isValidProjectId] 的分工（2026-10-12 批 109 调整）**：本方法的两个入参现在
+     * 是 [ProjectId] / [RelPath] —— 判据在**值的构造期**就过了（各自的 `init` 里各判一遍），
+     * 所以本方法只剩「归一后仍在项目根之下」这一条，它判的是**拼接结果**而不是**入参形态**。
+     * [isValidProjectId] 仍在（它是 [ProjectId.createOrNull] 与界面侧话术的判据来源），
+     * 但本方法不再直接调它。
      *
      * **不做的一件事**：不查存在性（[Path.exists] 的事，不是约定的）。
      */
-    fun scriptFile(filesDir: Path, projectId: String, scriptPath: String): Path {
-        require(isValidProjectId(projectId)) { "非法项目号: $projectId" }
-        require(scriptPath.isNotBlank()) { "脚本路径为空" }
-        require(!scriptPath.startsWith("/") && !scriptPath.startsWith("\\")) { "脚本路径必须是项目内相对路径: $scriptPath" }
-        for (seg in scriptPath.split('/')) {
-            require(seg != ".." && seg != "." && seg.isNotEmpty() && !seg.contains('\\')) {
-                "非法脚本路径: $scriptPath"
-            }
-        }
+    fun scriptFile(filesDir: Path, projectId: ProjectId, scriptPath: RelPath): Path {
         val root = projectRoot(filesDir, projectId).toAbsolutePath().normalize()
-        val target = root.resolve(scriptPath).normalize()
-        require(target.startsWith(root) && target != root) { "脚本路径越出项目目录: $scriptPath" }
+        val target = root.resolve(scriptPath.value).normalize()
+        require(target.startsWith(root) && target != root) { "脚本路径越出项目目录: ${scriptPath.value}" }
         return target
     }
 
@@ -116,7 +117,7 @@ object ScriptPaths {
      * `PackSpec.ignoreRules` 的缺省或打包器的排除面 —— 那是 `:app-service:packager` 的口径，
      * 不在本约定的管辖内。
      */
-    fun recordingsDir(filesDir: Path, projectId: String): Path =
+    fun recordingsDir(filesDir: Path, projectId: ProjectId): Path =
         projectRoot(filesDir, projectId).resolve(RECORDINGS_DIR)
 
     /** 录屏产物目录名（点开头 = 项目内务，见 [recordingsDir]）。 */

@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.scripts.ProjectId
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -156,7 +157,7 @@ class InstallStaging(private val layout: NpmProjectLayout) {
     fun commit(projectId: String, nonce: String) {
         val stage = stagePath(projectId, nonce)
         require(Files.isDirectory(stage)) { "暂存目录不存在: $stage" }
-        val target = layout.nodeModules(projectId)
+        val target = layout.nodeModules(ProjectId(projectId))
         val tombstone = target.resolveSibling("node_modules.tombstone-${System.nanoTime()}")
         if (Files.isDirectory(target)) {
             Files.move(target, tombstone, StandardCopyOption.ATOMIC_MOVE)
@@ -179,5 +180,5 @@ class InstallStaging(private val layout: NpmProjectLayout) {
     }
 
     fun stagePath(projectId: String, nonce: String): Path =
-        layout.projectRoot(projectId).resolve("node_modules.part-$nonce")
+        layout.projectRoot(ProjectId(projectId)).resolve("node_modules.part-$nonce")
 }

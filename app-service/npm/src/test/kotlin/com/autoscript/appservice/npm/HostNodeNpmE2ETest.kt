@@ -4,6 +4,7 @@ import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.PackageSpec
 import kotlinx.coroutines.runBlocking
+import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -57,12 +58,12 @@ class HostNodeNpmE2ETest {
         val layout = NpmProjectLayout(ScriptPaths.projectsRoot(root))
 
         // 项目根需要 package.json（npm install 的前置）
-        Files.createDirectories(layout.projectRoot("e2e"))
-        Files.write(layout.projectRoot("e2e").resolve("package.json"), ("""{"name":"e2e","version":"0.0.1"}""").toByteArray())
+        Files.createDirectories(layout.projectRoot(ProjectId("e2e")))
+        Files.write(layout.projectRoot(ProjectId("e2e")).resolve("package.json"), ("""{"name":"e2e","version":"0.0.1"}""").toByteArray())
 
         val handle = c.install("e2e", listOf(PackageSpec("lodash", "4.17.21")))
         // 产物落位
-        val nm = layout.nodeModules("e2e")
+        val nm = layout.nodeModules(ProjectId("e2e"))
         assertTrue(Files.isDirectory(nm.resolve("lodash")), "node_modules/lodash 必须存在")
         // journal begin+commit 成对
         val journal = InstallJournal(root.resolve(".ns"))
@@ -73,7 +74,7 @@ class HostNodeNpmE2ETest {
         )
         assertTrue(journal.unfinished().isEmpty())
         // lockfile 由执行体随成功事务写回项目根（失败不污染）
-        val lockInProject = layout.lockfile("e2e")
+        val lockInProject = layout.lockfile(ProjectId("e2e"))
         assertTrue(Files.exists(lockInProject), "package-lock.json 必须生成于项目根")
         // 轻操作直读：list 应能看到 lodash（lockfile v3 被 LockfileReader 解析）
         assertTrue(c.list("e2e", 0).any { it.name == "lodash" && it.version == "4.17.21" })
@@ -113,13 +114,13 @@ class HostNodeNpmE2ETest {
         val root = dir
         val c = coordinatorAt(root, root.resolve("npm-cache"))
         val layout = NpmProjectLayout(ScriptPaths.projectsRoot(root))
-        Files.createDirectories(layout.projectRoot("e2e2"))
-        Files.write(layout.projectRoot("e2e2").resolve("package.json"), ("""{"name":"e2e2","version":"0.0.1"}""").toByteArray())
+        Files.createDirectories(layout.projectRoot(ProjectId("e2e2")))
+        Files.write(layout.projectRoot(ProjectId("e2e2")).resolve("package.json"), ("""{"name":"e2e2","version":"0.0.1"}""").toByteArray())
 
         c.install("e2e2", listOf(PackageSpec("lodash", "4.17.21")))
         c.install("e2e2", listOf(PackageSpec("dayjs", "1.11.13")))
 
-        val nm = layout.nodeModules("e2e2")
+        val nm = layout.nodeModules(ProjectId("e2e2"))
         assertTrue(Files.isDirectory(nm.resolve("lodash")), "第一次安装产物必须保留")
         assertTrue(Files.isDirectory(nm.resolve("dayjs")), "第二次安装产物必须落位")
     }

@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -15,15 +16,15 @@ import java.nio.file.Path
  */
 class NpmProjectLayout(val projectsRoot: Path) {
 
-    /** 防路径逃逸（与 FsProjectStore 同规约）。判据在 [ScriptPaths.PROJECT_ID]（唯一一份）。 */
-    fun projectRoot(projectId: String): Path {
-        require(ScriptPaths.isValidProjectId(projectId)) { "非法 projectId: $projectId" }
-        return projectsRoot.resolve(projectId)
-    }
+    /**
+     * 防路径逃逸 —— 判据在 [ProjectId] 的 `init` 里（2026-10-12 批 109：判据收 `:domain`，
+     * 本仓**唯一一份**）。故本方法**不再重复 `require`**：拿到 [ProjectId] 就意味着过了判据。
+     */
+    fun projectRoot(projectId: ProjectId): Path = projectsRoot.resolve(projectId.value)
 
-    fun lockfile(projectId: String): Path = projectRoot(projectId).resolve("package-lock.json")
-    fun nodeModules(projectId: String): Path = projectRoot(projectId).resolve("node_modules")
-    fun npmrc(projectId: String): Path = projectRoot(projectId).resolve(".npmrc")
+    fun lockfile(projectId: ProjectId): Path = projectRoot(projectId).resolve("package-lock.json")
+    fun nodeModules(projectId: ProjectId): Path = projectRoot(projectId).resolve("node_modules")
+    fun npmrc(projectId: ProjectId): Path = projectRoot(projectId).resolve(".npmrc")
 
     companion object {
         /**

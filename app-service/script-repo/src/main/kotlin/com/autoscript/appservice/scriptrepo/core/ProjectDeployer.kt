@@ -1,5 +1,7 @@
 package com.autoscript.appservice.scriptrepo.core
 
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import java.nio.file.Path
 
 /**
@@ -8,13 +10,13 @@ import java.nio.file.Path
  */
 class ProjectDeployer(private val store: ProjectStore) {
 
-    private fun deployerFor(projectId: String): AtomicDeployer {
+    private fun deployerFor(projectId: ProjectId): AtomicDeployer {
         val root = store.rootFor(projectId)
         return AtomicDeployer(root, DeployJournal(root.resolve(".deploy.journal")))
     }
 
     /** 部署一组文件；返回部署成功的文件数。任一文件非法（路径逃逸/哈希不符）即抛。 */
-    fun deploy(projectId: String, files: Map<String, ByteArray>): Int {
+    fun deploy(projectId: ProjectId, files: Map<RelPath, ByteArray>): Int {
         if (!store.exists(projectId)) store.create(projectId)
         val deployer = deployerFor(projectId)
         // 两阶段提交：全部 stage 成功（写 stage 区 + sha256 登记）后才逐条 finalize。
@@ -32,5 +34,5 @@ class ProjectDeployer(private val store: ProjectStore) {
     }
 
     /** 启动恢复：补 journal 或回滚残留部署。返回回滚数（审计用）。 */
-    fun recover(projectId: String): Int = deployerFor(projectId).recover()
+    fun recover(projectId: ProjectId): Int = deployerFor(projectId).recover()
 }

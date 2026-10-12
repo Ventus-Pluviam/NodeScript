@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.npm.SnapshotRef
@@ -78,8 +79,8 @@ class NpmSnapshot(
      */
     fun export(projectId: String, out: Path): Build {
         // projectId 合法性先过（防路径逃逸），再谈内容
-        layout.projectRoot(projectId)
-        val lock = layout.lockfile(projectId)
+        layout.projectRoot(ProjectId(projectId))
+        val lock = layout.lockfile(ProjectId(projectId))
         if (!Files.isRegularFile(lock)) {
             throw AutojsException(ErrorCode.ERR_FILE_NOT_FOUND, "快照导出拒绝：项目无 lockfile（$lock）")
         }
@@ -179,7 +180,7 @@ class NpmSnapshot(
         fun add(rel: String, p: Path) {
             if (Files.isRegularFile(p)) out.add(rel to p)
         }
-        val root = layout.projectRoot(projectId)
+        val root = layout.projectRoot(ProjectId(projectId))
         add("package.json", root.resolve("package.json"))
         add("package-lock.json", root.resolve("package-lock.json"))
         if (ledgerDir != null) {
@@ -187,7 +188,7 @@ class NpmSnapshot(
             add("ledger/install-history.jsonl", ledgerDir.resolve("install-history.jsonl"))
             add("lock.sig", ledgerDir.resolve("lock.sig"))
         }
-        val nm = layout.nodeModules(projectId)
+        val nm = layout.nodeModules(ProjectId(projectId))
         if (Files.isDirectory(nm)) {
             Files.walk(nm).use { s ->
                 s.filter { Files.isRegularFile(it) }.forEach { p ->

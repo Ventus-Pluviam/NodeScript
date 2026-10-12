@@ -1,4 +1,6 @@
 package com.autoscript.appservice.runtime
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import com.autoscript.domain.bridge.generated.WireMethods
 
 import com.autoscript.domain.bridge.AuthenticatedRunContext
@@ -184,10 +186,19 @@ class EnginesNamespaceHandler(
 
     private fun parseExec(payload: String?): PoolAcquireRequest {
         val o = decodePayload(payload)
-        val projectId = requiredStr(o, "projectId")
-        val scriptPath = requiredStr(o, "scriptPath")
-        if (projectId.isBlank()) throw IllegalArgumentException("projectId 不得为空")
-        if (scriptPath.isBlank()) throw IllegalArgumentException("scriptPath 不得为空")
+        val rawProjectId = requiredStr(o, "projectId")
+        val rawScriptPath = requiredStr(o, "scriptPath")
+        if (rawProjectId.isBlank()) throw IllegalArgumentException("projectId 不得为空")
+        if (rawScriptPath.isBlank()) throw IllegalArgumentException("scriptPath 不得为空")
+        // **判据进值类**（2026-10-12 批 109，typed ids）：这两个值是**脚本给的**，而
+        // scriptPath 会一路进 `node <路径>` 的 argv。裸 String 传下去时，「这是个项目号」
+        // 与「这是个项目内相对路径」只靠下游各自的 require 兜着，而 `a/b` 对两者都合法 ——
+        // 换句话说，一次串错位既不会被类型拦下，也不会被下游的 require 拦下。
+        // 判不过在此就地折 ERR_INVALID_PARAM，**话术与既有那条非法参数保持同款**。
+        val projectId = ProjectId.createOrNull(rawProjectId)
+            ?: throw IllegalArgumentException("projectId 非法：$rawProjectId")
+        val scriptPath = RelPath.createOrNull(rawScriptPath)
+            ?: throw IllegalArgumentException("scriptPath 非法：$rawScriptPath")
         // 桥这条路的执行时限**必须显式给**（见方法表 `exec` 条）：拿到句柄就返回、没人 await
         // 终结，缺省值在这里没有诚实来源 —— 编一个（30s？5min？）等于替脚本决定它能跑多久，
         // 而且是静默的。与 §8.6 queueTimeoutMillis 传 0 视为漏配同一条纪律：响亮失败。
@@ -195,8 +206,10 @@ class EnginesNamespaceHandler(
             ?: throw IllegalArgumentException("exec 必须显式给 timeoutMillis（桥路径无人 await 终结，期限须由调用方声明；§8.6）")
         if (timeout <= 0) throw IllegalArgumentException("timeoutMillis 必须 > 0：$timeout")
         return PoolAcquireRequest(
-            projectId = projectId,
-            scriptPath = scriptPath,
+            // 解包回 String 是**DTO 边界**（批 109 的范围只到两端，DTO 字段仍是 String）：
+            // 判据已经在上面那道 `createOrNull` 过了，这里存的只是一个过了判据的值。
+            projectId = projectId.value,
+            scriptPath = scriptPath.value,
             args = optStrList(o, "args"),
             runNonce = optStr(o, "runNonce"),
             scriptTimeoutMillis = timeout,

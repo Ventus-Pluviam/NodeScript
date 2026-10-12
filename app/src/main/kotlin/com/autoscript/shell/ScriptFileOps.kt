@@ -3,6 +3,7 @@ package com.autoscript.shell
 import com.autoscript.appservice.scriptrepo.core.DeployPath
 import com.autoscript.domain.scripts.ScriptPaths
 import java.io.IOException
+import com.autoscript.domain.scripts.ProjectId
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
@@ -154,7 +155,7 @@ object ScriptFileOps {
             "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
                 "（relPath 是 files/scripts/ 之下的相对路径，首段应为项目名）"
         }
-        require(Files.isDirectory(ScriptPaths.projectRoot(filesDir, projectId))) { "项目不存在: $projectId" }
+        require(Files.isDirectory(ScriptPaths.projectRoot(filesDir, ProjectId(projectId)))) { "项目不存在: $projectId" }
         return target
     }
 
@@ -165,7 +166,7 @@ object ScriptFileOps {
         // `lib/main.js` 会穿过去、到 Files.createFile 才炸出 NoSuchFileException。
         require('/' !in name) { "名字不能含 /（要进子文件夹先建文件夹）" }
         require(DeployPath.isSafeRelPath(name)) { "名字含非法字符（.. 不允许）" }
-        val root = ScriptPaths.projectRoot(filesDir, projectId)
+        val root = ScriptPaths.projectRoot(filesDir, ProjectId(projectId))
         require(Files.isDirectory(root)) { "项目不存在: $projectId" }
         return root.resolve(name)
     }

@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scriptrepo.core
 
+import com.autoscript.domain.scripts.RelPath
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -20,7 +21,7 @@ class AtomicDeployerTest {
     @Test
     fun `部署后就位且 journal 落定无残留`(@TempDir tmp: Path) {
         val (d, j) = deployer(tmp)
-        val staged = d.stage("main.js", "console.log(1)".toByteArray())
+        val staged = d.stage(RelPath("main.js"), "console.log(1)".toByteArray())
 
         assertFalse(Files.exists(staged.target), "finalize 前不得出现半截目标文件")
 
@@ -35,7 +36,7 @@ class AtomicDeployerTest {
     @Test
     fun `篡改 stage 后 finalize 拒绝且不落盘`(@TempDir tmp: Path) {
         val (d, j) = deployer(tmp)
-        val staged = d.stage("main.js", "origin".toByteArray())
+        val staged = d.stage(RelPath("main.js"), "origin".toByteArray())
         Files.write(staged.stageFile, "tampered".toByteArray()) // 磁盘哈希与登记不符
         assertThrows(IllegalArgumentException::class.java) { d.finalize(staged) }
         assertFalse(Files.exists(staged.target), "哈希不符绝不写目标")
@@ -46,7 +47,7 @@ class AtomicDeployerTest {
     @Test
     fun `abort 清理 stage 与 journal`(@TempDir tmp: Path) {
         val (d, j) = deployer(tmp)
-        val staged = d.stage("a.js", "x".toByteArray())
+        val staged = d.stage(RelPath("a.js"), "x".toByteArray())
         d.abort(staged)
         assertFalse(Files.exists(staged.target))
         assertFalse(Files.exists(staged.stageFile))
@@ -56,7 +57,7 @@ class AtomicDeployerTest {
     @Test
     fun `崩溃恢复-目标未就位则回滚`(@TempDir tmp: Path) {
         val (d, j) = deployer(tmp)
-        val staged = d.stage("b.js", "data".toByteArray())
+        val staged = d.stage(RelPath("b.js"), "data".toByteArray())
         // 模拟 finalize 前崩溃：target 从未出现
         assertEquals(1, d.recover())
         assertFalse(Files.exists(tmp.resolve("b.js")))

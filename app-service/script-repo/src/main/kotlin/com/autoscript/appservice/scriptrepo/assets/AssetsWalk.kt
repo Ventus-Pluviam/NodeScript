@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scriptrepo.assets
 
+import com.autoscript.domain.scripts.RelPath
 import java.io.InputStream
 
 /**
@@ -24,13 +25,19 @@ object AssetsWalk {
      * @param list 列目录：返当前层条目（目录名可能带尾 '/'）；目录不存在返 null。
      * @param open 开文件流：由本函数负责关闭。
      * @return 相对 [root] 的路径（'/' 分隔，含子目录）→ 文件字节。
+     *
+     * **返回键是 [RelPath]**（2026-10-12 批 109，typed ids）：这条路径会被拿去拼
+     * `files/scripts/<projectId>/<rel>` 并写盘，而资产的相对路径在拼之前没有任何一处判过
+     * 合法性 —— 键类型让它在**产出时就过一遍**判据。判不过的条目**静默跳过**（不抛）：
+     * assets 是随包内容，一个名字怪的文件不该让整次补部署失败，而「它没被部署」这件事
+     * 由 [AndroidAssetsSource] 那侧照实记账。
      */
     fun walk(
         root: String,
         list: (String) -> Array<String>?,
         open: (String) -> InputStream,
-    ): Map<String, ByteArray> {
-        val out = LinkedHashMap<String, ByteArray>()
+    ): Map<RelPath, ByteArray> {
+        val out = LinkedHashMap<RelPath, ByteArray>()
         val dirs = ArrayDeque<String>()
         dirs.addLast(root)
         while (dirs.isNotEmpty()) {
@@ -48,7 +55,8 @@ object AssetsWalk {
                     dirs.addLast(path)
                     continue
                 }
-                out[rel] = open(path).use { it.readBytes() }
+                val key = RelPath.createOrNull(rel) ?: continue
+                out[key] = open(path).use { it.readBytes() }
             }
         }
         return out

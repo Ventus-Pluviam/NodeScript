@@ -1,6 +1,8 @@
 package com.autoscript.shell
 
 import com.autoscript.appservice.scheduler.core.RunOutcome
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.domain.scripts.ScreenGuarantee
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
@@ -73,9 +75,9 @@ class AppShellKitTest {
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
         systemHandlers: SystemHandlers? = null,
-        scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
-        scriptProjects: List<String> = emptyList(),
-        assetReader: ((String) -> Map<String, ByteArray>)? = null,
+        scriptSources: Map<ProjectId, Map<RelPath, ByteArray>> = emptyMap(),
+        scriptProjects: List<ProjectId> = emptyList(),
+        assetReader: ((ProjectId) -> Map<RelPath, ByteArray>)? = null,
         intentStore: IntentStore = this.intentStore,
     ): AssembledShell = AppShellKit.assemble(
         // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
@@ -342,8 +344,8 @@ class AppShellKitTest {
         // 先手写一个用户改过的脚本：补部署不得盖掉它
         val edited = files.resolve("scripts").resolve("p1").resolve("main.js")
         val sources = mapOf(
-            "p1" to mapOf("main.js" to "console.log(2)".toByteArray()),
-            "p2" to mapOf("a.js" to "console.log(9)".toByteArray()),
+            ProjectId("p1") to mapOf(RelPath("main.js") to "console.log(2)".toByteArray()),
+            ProjectId("p2") to mapOf(RelPath("a.js") to "console.log(9)".toByteArray()),
         )
         AppShellKit.assemble(
             // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
@@ -352,7 +354,7 @@ class AppShellKitTest {
             cacheDir = cache,
             intentStore = InMemoryIntentStore(),
             schedulerProvider = RecordingProvider(),
-            scriptSources = mapOf("p1" to mapOf("main.js" to "// 用户手改".toByteArray())),
+            scriptSources = mapOf(ProjectId("p1") to mapOf(RelPath("main.js") to "// 用户手改".toByteArray())),
         ).use { first ->
             assertEquals(
                 listOf("p1/main.js"),
@@ -422,13 +424,13 @@ class AppShellKitTest {
     fun `资产来源按项目补缺：显式优先、读失败跳过不炸`() {
         val requested = mutableListOf<String>()
         kit(
-            scriptSources = mapOf("p1" to mapOf("main.js" to "// 显式".toByteArray())),
-            scriptProjects = listOf("p1", "p2", "p3"),
+            scriptSources = mapOf(ProjectId("p1") to mapOf(RelPath("main.js") to "// 显式".toByteArray())),
+            scriptProjects = listOf(ProjectId("p1"), ProjectId("p2"), ProjectId("p3")),
             assetReader = { projectId ->
-                requested += projectId
-                when (projectId) {
-                    "p1" -> mapOf("main.js" to "// 资产（必须被显式盖住不读都行）".toByteArray())
-                    "p2" -> mapOf("a.js" to "// 资产补".toByteArray())
+                requested += projectId.value
+                when (projectId.value) {
+                    "p1" -> mapOf(RelPath("main.js") to "// 资产（必须被显式盖住不读都行）".toByteArray())
+                    "p2" -> mapOf(RelPath("a.js") to "// 资产补".toByteArray())
                     else -> throw java.io.IOException("p3 资产损坏")
                 }
             },
