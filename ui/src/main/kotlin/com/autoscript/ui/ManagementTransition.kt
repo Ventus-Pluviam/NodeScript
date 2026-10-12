@@ -2,6 +2,7 @@ package com.autoscript.ui
 
 import android.os.Build
 import android.view.View
+import androidx.activity.BackEventCompat
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
@@ -224,15 +225,21 @@ internal fun <T> ManagementTransition(
         // 底层：**只淡**（不位移，用户口径照 TG 原文）。压暗 0.4 是「盖住时压暗」那一档。
         Box(Modifier.alpha(1f - DIM * t).matchParentSize()) { content(under) }
         top?.let { over ->
+            // 从**哪一侧**滑的（`BackEventCompat.swipeEdge`）—— TG 的 `predictiveBackLeft`
+            //（`ActionBarLayout.onBackStarted:1548` 用触点 X 对中线判）只用来**镜像缩放锚点**
+            // 与被裁剪那一段矩形（`:1125-1133`）：窗口**永远朝右让**（`setTranslationX(+dx)`），
+            // 留出的间隙恒在左侧。之前我没记这一侧，右缘滑的时候锚点仍按「离左边 82dp」
+            // 取，缩放中心跑到窗口外面 —— 看着就是「右边留了一大片 + 窗口不对」。
+            val fromRight = gesture.edge == BackEventCompat.EDGE_RIGHT
             Box(
                 Modifier
                     .alpha(progress.value * (1f - dismiss.value))
                     .graphicsLayer {
-                        // 三段相加，互不干涉（见 KDoc「三个来源」）：
+                        // 三段相加，互不干涉（见 KDoc「三个来源」），**一律朝右**：
                         //   ① 进出场：(1-progress)·48dp
                         //   ② 跟手：gesture.dx
-                        //   ③ 提交后的飞出：dismiss·(屏宽 - dx) —— 终点正好是屏宽，
-                        //      与 TG 的 `TRANSLATION_X → measuredWidth` 一致。
+                        //   ③ 提交后的飞出：dismiss·(屏宽 - dx) —— 终点正好落在屏宽，
+                        //      与 TG 的 `TRANSLATION_X → measuredWidth` 同构。
                         translationX = (1f - progress.value) * SLIDE_DP * density +
                             gesture.dx +
                             dismiss.value * (viewportWidth - gesture.dx)
@@ -244,7 +251,11 @@ internal fun <T> ManagementTransition(
                             scaleX = sc
                             scaleY = sc
                             transformOrigin = TransformOrigin(
-                                SCALE_ANCHOR_X * density / size.width,
+                                // 锚点 X 是「**离手指那条边** dp(82)」，不是固定离左边 82dp
+                                // （TG `:1133`：左缘滑取 `rectTmp.right - dp(82)`，
+                                // 右缘滑取 `rectTmp.left + dp(82)`）。
+                                val anchorFromSwipeEdge = SCALE_ANCHOR_X * density / size.width
+                                if (fromRight) anchorFromSwipeEdge else 1f - anchorFromSwipeEdge,
                                 if (viewportHeight > 0f) {
                                     backGestureAnchorY(gesture.touchY, viewportHeight) / viewportHeight
                                 } else {
@@ -287,6 +298,9 @@ internal fun <T> ManagementTransition(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer {
+                        // 阴影恒在窗口**左缘外侧** `[x - shadowW, x]` —— 窗口朝右让，
+                        // 左边让出来的那一截就是它。TG 也只在这一侧画（`:1194-1201` 的
+                        // `child == containerView` 分支），右缘滑时不换边。
                         translationX = shadowX - EDGE_DP * density
                         alpha = if (shadowX != 0f) {
                             ((viewportWidth - shadowX) / (EDGE_ALPHA_DP * density)).coerceIn(0f, 1f)
@@ -295,8 +309,8 @@ internal fun <T> ManagementTransition(
                         }
                     }
                     .drawWithContent {
-                        // 渐变贴满这一层的宽，视觉上渐隐向右侧 —— 资源条水平铺开后正是
-                        // 这个形状（最右一格 ≈ 满 alpha，左移一格就开始淡）。
+                        // 渐变横向：从**窗口那一侧**透明、往**露出来那侧**渐深 ——
+                        // 资源条水平铺开后正是这个形状（最外一格 ≈ 满 alpha）。
                         drawRect(
                             brush = EDGE_BRUSH,
                             size = Size(EDGE_DP * density, size.height),

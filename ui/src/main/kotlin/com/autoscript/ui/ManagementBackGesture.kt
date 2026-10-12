@@ -1,5 +1,6 @@
 package com.autoscript.ui
 
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.runtime.Composable
@@ -71,6 +72,12 @@ internal fun ManagementBackGesture(
                 val p = (event.progress - LAZY_START).coerceAtLeast(0f) / (1f - LAZY_START)
                 state.dx = BACK_GESTURE_DP * density * BACK_EASE.transform(p)
                 state.touchY = event.touchY
+                // 从**哪一侧**滑的（`EDGE_LEFT`/`EDGE_RIGHT`）—— TG 的 `predictiveBackLeft`
+                // 用触点 X 对屏幕中线判（`ActionBarLayout.onBackStarted:1548`）。它**只**用来
+                // 镜像缩放锚点（`:1133`）：窗口恒朝右让（`setTranslationX(+dx)`），但锚点是
+                // 「离**手指那条边** dp(82)」—— 右缘滑时若仍按离左边 82dp 取，缩放中心会跑到
+                // 窗口外面，看着就是「右边空了一大片、窗也不对」。
+                state.edge = event.swipeEdge
             }
             // 流正常结束 = 手势被**提交**（松手时越过了返回阈值）。此时**不清 `dx`**：
             // 顶层要从当前位置飞出去，`closeTop` 的进度动画叠在它上面 —— 与 TG
@@ -102,10 +109,14 @@ internal class BackGestureState {
     /** 手指 Y（px）—— TG 的 `predictiveBackY`，缩放锚点用它（`:1133`）。 */
     var touchY by mutableFloatStateOf(Float.NaN)
 
+    /** 从哪一侧滑的（`BackEventCompat.EDGE_LEFT`/`EDGE_RIGHT`）。 */
+    var edge by mutableFloatStateOf(BackEventCompat.EDGE_LEFT)
+
     /** 松手/取消/进出切换后把瞬时量清零，回到稳态。 */
     fun reset() {
         dx = 0f
         touchY = Float.NaN
+        edge = BackEventCompat.EDGE_LEFT
     }
 }
 
