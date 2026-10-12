@@ -481,27 +481,33 @@ class MainActivity : ComponentActivity() {
                                 // 管理页分两种形态：某个子页在前台，或者面板本身在前台
                                 // （子屏那几档收在 [ManagementSubPageHost] 里 ——
                                 // onCreate 已贴着 detekt 的长函数线）。
-                                Tab.MANAGEMENT -> if (subPage == null) {
-                                    ManagementScreen(
-                                        onOpenConsole = { consoleOpen = true },
-                                        onOpenLogManagement = { logManagementOpen = true },
-                                        onOpenNpm = { npmOpen = true },
-                                        onOpenEnv = { envOpen = true },
-                                        onOpenRegistry = { registryOpen = true },
-                                        modifier = Modifier,
-                                    )
-                                } else {
-                                    ManagementSubPageHost(
-                                        page = subPage,
-                                        onCloseConsole = closeConsole,
-                                        onCloseNpm = closeNpm,
-                                        onCloseEnv = closeEnv,
-                                        onCloseRegistry = closeRegistry,
-                                        onCloseAudit = closeAudit,
-                                        onOpenAudit = { auditOpen = true },
-                                        onCloseLogManagement = closeLogManagement,
-                                        scope = scope,
-                                    )
+                                // 面板 ⇄ 子页 / 子页 ⇄ 子页 那一层切换走 TG 那套进场动画
+                                // （2026-10-12；`ManagementTransition` 里逐值对着
+                                // `ActionBarLayout.startLayoutAnimation`）。`page == null`
+                                // 就是面板本身 —— 它也占一个槽位，所以「返回」是同一条路径。
+                                Tab.MANAGEMENT -> ManagementTransition(page = subPage) { page ->
+                                    if (page == null) {
+                                        ManagementScreen(
+                                            onOpenConsole = { consoleOpen = true },
+                                            onOpenLogManagement = { logManagementOpen = true },
+                                            onOpenNpm = { npmOpen = true },
+                                            onOpenEnv = { envOpen = true },
+                                            onOpenRegistry = { registryOpen = true },
+                                            modifier = Modifier,
+                                        )
+                                    } else {
+                                        ManagementSubPageHost(
+                                            page = page,
+                                            onCloseConsole = closeConsole,
+                                            onCloseNpm = closeNpm,
+                                            onCloseEnv = closeEnv,
+                                            onCloseRegistry = closeRegistry,
+                                            onCloseAudit = closeAudit,
+                                            onOpenAudit = { auditOpen = true },
+                                            onCloseLogManagement = closeLogManagement,
+                                            scope = scope,
+                                        )
+                                    }
                                 }
                                 Tab.SETTINGS -> SettingsScreen(
                                     state = capabilityState,
