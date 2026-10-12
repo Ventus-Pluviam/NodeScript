@@ -71,7 +71,7 @@ fun RegistryScreen(
         ActionBar(
             title = "镜像源管理",
             onBack = onBack,
-            subtitle = status.text,
+            subtitle = status.hint,
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )

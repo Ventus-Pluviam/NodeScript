@@ -71,7 +71,7 @@ fun AuditScreen(
         ActionBar(
             title = "审计",
             onBack = onBack,
-            subtitle = status.text,
+            subtitle = status.hint,
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )

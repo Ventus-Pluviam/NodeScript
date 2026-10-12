@@ -130,7 +130,7 @@ fun LogManagementScreen(
         ActionBar(
             title = "日志管理",
             onBack = onBack,
-            subtitle = status.text,
+            subtitle = status.hint,
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )

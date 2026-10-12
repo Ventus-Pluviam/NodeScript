@@ -83,7 +83,7 @@ fun ScriptLimitsScreen(
         ActionBar(
             title = "脚本设置",
             onBack = onBack,
-            subtitle = status.text,
+            subtitle = status.hint,
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )

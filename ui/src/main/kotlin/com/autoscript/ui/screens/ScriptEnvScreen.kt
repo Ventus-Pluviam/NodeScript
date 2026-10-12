@@ -77,7 +77,7 @@ fun ScriptEnvScreen(
         ActionBar(
             title = "环境变量",
             onBack = onBack,
-            subtitle = status.text,
+            subtitle = status.hint,
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )

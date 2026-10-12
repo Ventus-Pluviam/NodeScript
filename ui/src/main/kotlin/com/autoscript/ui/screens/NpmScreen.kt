@@ -106,7 +106,7 @@ fun NpmScreen(
         ActionBar(
             title = "依赖管理",
             onBack = onBack,
-            subtitle = status.text,
+            subtitle = status.hint,
             subtitleTone = status.tone,
             actions = {
                 ActionBarAction("审计", onOpenAudit)
