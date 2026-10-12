@@ -14,7 +14,6 @@ import android.view.PixelCopy
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.Animatable
@@ -488,6 +487,20 @@ class MainActivity : ComponentActivity() {
                                 Tab.MANAGEMENT -> ManagementTransition(
                                     page = subPage,
                                     active = pagerState.currentPage == Tab.MANAGEMENT.ordinal,
+                                    // 手势提交后由 `ManagementTransition` 调一次：把子页关掉，
+                                    // `page` 随之退回 `under`，切出动画在那边的 `LaunchedEffect`
+                                    // 里按「是不是手势提交」选飞出还是滑出。
+                                    onBackRequest = {
+                                        when (subPage) {
+                                            ManagementPage.CONSOLE -> closeConsole()
+                                            ManagementPage.NPM -> closeNpm()
+                                            ManagementPage.ENV -> closeEnv()
+                                            ManagementPage.LOGS -> closeLogManagement()
+                                            ManagementPage.REGISTRY -> closeRegistry()
+                                            ManagementPage.AUDIT -> closeAudit()
+                                            null -> Unit
+                                        }
+                                    },
                                     content = { page ->
                                         if (page == null) {
                                             ManagementScreen(
@@ -532,7 +545,7 @@ class MainActivity : ComponentActivity() {
                         }
                 }
             // 管理子页的返回键与侧缘手势**整个交给 `ManagementTransition` 内部那个
-            // handler**（2026-10-12）。此前这里挂着一个 `ManagementBackHandler`，它组合在
+            // handler**（2026-10-12）。此前外壳挂着一个 `BackHandler`，它组合在
             // `ManagementTransition` **之后** —— `OnBackPressedDispatcher` 是 LIFO，
             // 后注册的优先，于是系统回退手势全被它吃掉，`PredictiveBackHandler`
             // 一次都收不到，跟手动画自然无从谈起（**不报错、静默不生效**）。

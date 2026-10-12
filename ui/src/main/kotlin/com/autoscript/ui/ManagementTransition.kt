@@ -79,12 +79,15 @@ import kotlinx.coroutines.launch
  * @param active 管理页是不是 pager 当前停稳的那一页。**预组合的邻页必须传 false** ——
  *   否则邻页里那个 `BackHandler` 会替前台页签吞掉返回键（pager 预组合两页，
  *   `BackHandler` 的 LIFO 顺序由组合顺序定，管不了「哪一页真在前台」）。
+ * @param onBackRequest 请宿主把当前子页关掉（把 `page` 置回上一层）。手势提交后由本组件
+ *   调一次 —— 本组件**不自己改 `top`**，否则 `top` 会与 `page` 脱节、上层凭空消失。
  * @param content 画一层。过渡期间会被调用两次（底 + 顶），**必须无副作用**。
  */
 @Composable
 internal fun <T> ManagementTransition(
     page: T,
     active: Boolean,
+    onBackRequest: () -> Unit,
     content: @Composable (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -101,10 +104,12 @@ internal fun <T> ManagementTransition(
     val dismiss = remember { Animatable(0f) }
     // 跟手返回手势的瞬时量（`ManagementBackGesture` 写、`graphicsLayer` 读）。
     val gesture = remember { BackGestureState() }
+    // 本次切出是不是「手势提交」造成的 —— 决定切出动画走 380ms 飞出还是 150ms 滑出。
+    // 不在组合里读，只在 `LaunchedEffect` 里读，所以不引发重组。
+    val committed = remember { mutableStateOf(false) }
     val density = LocalDensity.current.density
     var viewportHeight by remember { mutableFloatStateOf(0f) }
     var viewportWidth by remember { mutableFloatStateOf(0f) }
-    val scope = rememberCoroutineScope()
 
     // **返回键与侧缘手势合走一条路**：TG 也是一个 `OnBackAnimationCallback` 管
     // started / progressed / cancelled / invoked 四态（`LaunchActivity.java:736-818`）。
@@ -119,10 +124,24 @@ internal fun <T> ManagementTransition(
         state = gesture,
         enabled = active && top != null,
         onCommit = {
-            // 提交：从**手指当前的位置**继续飞到屏宽（TG 的 `distToMove =
-            // measuredWidth - x`），同时淡出。380ms 是 TG 在预测式返回下的下限
-            // （`:1608` 的 `newBackTransitions() ? 380 : 50`）。
-            scope.launch {
+            // **不在这里自己清 `top`**：那会让 `top` 与 `page` 脱节（`page` 还指着子页、
+            // `top` 已经是 null），下一帧的画面上层突然消失。改成「标一个旗标 + 请宿主
+            // 关掉子页」——`page` 随之变成 `under`，`LaunchedEffect` 走切出分支，
+            // 在那里按旗标选飞出还是 150ms 滑出。这与 TG「`animateBackEndAnimation`
+            // 动画结束后才 `onSlideAnimationEnd` 改栈」是同一种次序。
+            committed.value = true
+            onBackRequest()
+        },
+    )
+
+    LaunchedEffect(page) {
+        if (page == top) return@LaunchedEffect
+        if (page == under) {
+            // 切出。**手势提交**与**返回键**走两条不同的路：
+            if (committed.value) {
+                // 手势提交：从手指当前位置继续飞到屏宽 + 淡出，380ms
+                // （TG `animateBackEndAnimation(false)`，`:1606-1618`；
+                // `:1608` 的 `newBackTransitions() ? 380 : 50` 取 380）。
                 coroutineScope {
                     launch {
                         dismiss.snapTo(0f)
@@ -133,20 +152,11 @@ internal fun <T> ManagementTransition(
                         progress.animateTo(0f, tween(FLY_OUT_MS, easing = EASE))
                     }
                 }
-                top = null
-                gesture.reset()
-                dismiss.snapTo(0f)
+            } else {
+                // 返回键 / 编程切走：150ms 滑出（TG `startLayoutAnimation` 那一套）。
                 progress.snapTo(1f)
+                progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
             }
-        },
-    )
-
-    LaunchedEffect(page) {
-        if (page == top) return@LaunchedEffect
-        if (page == under) {
-            // 切出（返回键 / 编程切走）：上层滑出去，底下那层原样回来。
-            progress.snapTo(1f)
-            progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
             top = null
             progress.snapTo(1f)
         } else {
@@ -159,6 +169,7 @@ internal fun <T> ManagementTransition(
         // 稳态下不留任何手势残留（TG 的 `animateBackEndAnimation` 收尾同样清零）。
         gesture.reset()
         dismiss.snapTo(0f)
+        committed.value = false
     }
 
     // 视口尺寸：`onSizeChanged` 给的是 px，与 `touchY` 同坐标系。
