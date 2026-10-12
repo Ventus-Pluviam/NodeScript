@@ -40,19 +40,33 @@
 
 下表左列是本设计**认为会发生**的攻击面，右列是**当前实际生效**的防线与其落点。凡落点为空的行，见 §11.3 残余风险，不假装已覆盖。
 
-| # | 威胁（攻击者能力） | 攻击面 | 现行防线（落点） |
-|---|---|---|---|
-| T1 | **恶意/被污染的包在安装时执行任意代码**（lifecycle 脚本） | npm 安装 | 零 spawn 主路径：T0 全程 `--ignore-scripts`，安装脚本一个都没跑过，回执 `scripts-skipped`（`InstallCoordinator`，§10.5-3）。**残余**：让脚本真跑的那条路（spawn 桥）尚未落地，见 §11.3 |
-| T2 | **lockfile 投毒**（把包名指到别处，integrity 仍成立） | `npm ci` 重建 | `LockSigner` 对 lock 做 HMAC-SHA256 带外签名（`files/.ns/lock.sig`，键绑 `projectId` 防跨项目搬锁），`ci` 前验签；缺签名/错签名一律 `ERR_PERMISSION_DENIED`（TOFU 自签不算通过）。~~**接线现状（2026-10-01 核实）**：防线代码与单测都在，但**生产装配没接** —— `NpmShellKit.assembleHandler` 的 `lockKey` 缺省 `null` → 既不签也不验，全仓无 `KeyProvider` 实现。~~ **已接线（2026-10-08，批 79）**：`AppShellApplication` 递 `LockKeyStore.AndroidKeystore`（`AppShellKit` 经 `LockKeyStore.resolve` 做 get-or-create），`ci` 先验签、`install` 收尾重签、快照导出带 `snapshot.sig`。取钥失败**不外抛**：本次不装该防线、原因原文进 `AssembledShell.npmLockKeyFailure`（不吞）。见 §11.3 第 3/8 条 |
-| T3 | **单一镜像/注册表投毒** | registry 响应 | `NpmRegistryVerifier` 双运营主体交叉校验（第二意见必须与首选**不同运营主体**，同站即自比、自比一律拒）；取不到/非 https/无 integrity 锚点一律 `Verdict.Unverifiable` 由调用方显式告知，不折成「通过」。**首选来源三层链（2026-10-09 批 83）**：项目 `.npmrc` → 全局 `files/.npmrc` → 出厂官方，取自 `InstallCoordinator.resolveRegistry` —— 与实际安装用的**同一处读数**，否则交叉校验会退化成「拿 A 跟 B 比、装的是 C」 |
-| T4 | **冒名客户端抢绑桥 socket** | abstract unix socket | 桥监听与客户端 `main.cpp` 对称验 peer uid（`SO_PEERCRED`），凭据读不到即 fail-closed 拒收（`BridgeSocketListener`）；abstract 名带 uid 后缀，多实例互不抢绑。UID 通过后还须一次性 256-bit token 的 hello/ACK，绑定 engineRunId；双方 PID 可得时额外匹配。无票、重放、过期、已退出或撤销拒收；**同 UID 窃取其他执行凭据仍不在保证内** |
-| T5 | **未授权能力被调用**（脚本绕过能力授予） | 桥面 | **执行级 `CapabilityMask` 已在桥路由做 deny-by-default 过滤**（2026-10-08，A5 第一阶段；缺省保守档 A）；设备能力门禁仍独立：`PermissionCenter` 是唯一权限入口，读取异常诚实降级 `DEGRADED`（可用性未知即受限），绝不伪造 `GRANTED`。**残余**：来源分级经裁定不做（第 45 项），且掩码不拦 Node 内建 `fs`/`http` |
-| T6 | **脚本失控/僵死/赖活**（死循环、OOM、宿主与引擎状态分裂） | 引擎进程 | `EngineWatchdog` 按心跳/RSS/CPU 采样 + drift 连段裁决（`KillCause.DRIFT`）+ 执行期限（`KillCause.TIMEOUT`）；心跳 payload.runId 必须匹配认证连接，不能替其他执行刷新；看门狗只问不记账 |
-| T7 | **安装期互踩/打爆磁盘/恶意 git 依赖/无限挂起** | 安装会话 | per-project 锁 + 全局互斥、free ≥500MB 预检、项目 512MB 配额（80% 黄 / 100% 拦）、`git:` 依赖入口即拒 `ERR_NOT_SUPPORTED`、安装 TTL（`InstallCoordinator`） |
-| T8 | **审批票重放**（拿旧版本 APPROVED 装新版本） | 审批账本 | 审批键绑 `pkg + versionHash`，宿主从盘上重算版本哈希，命中 `APPROVED` 才放行（`ApprovalLedger` + `requestApprove`/`requestGateApproval`）；未获批自请入队 `PENDING` |
-| T9 | **本地状态被系统备份/换机迁移带到另一个设备上下文**（Auto Backup、D2D 迁移、`adb backup`） | 应用私有目录 `files/.ns/` | `AndroidManifest` 置 `android:allowBackup="false"`（`:app`）：信任锚与审计面不进备份 —— `lock.sig` 到新机验不过（密钥不出本机），而审批台账/安装 history/意图日志会以「已完成/已批准」的姿态跟着走，恢复出来的状态不可信也不可解释。代价如实说：换机不自动带走过往审批与历史，需重装/重批 |
+**第五列「守卫测试」是 2026-10-12（批 110）加的**：前三列记的是「我们认为有什么防线」，
+那一列记的是「**谁在守着它**」。加它的理由不是表格好看 —— 是**前三列回答不了「防线还在不在」**。
+一条防线被重构掉、判据被放宽、或者只是没人再碰那条代码，前三列**一个字都不会变**（它们记的是
+设计意图），只有第四列会空。**空着的行就是「以为有、其实没有」。**
+
+| # | 威胁（攻击者能力） | 攻击面 | 现行防线（落点） | 守卫测试 |
+|---|---|---|---|---|
+| T1 | **恶意/被污染的包在安装时执行任意代码**（lifecycle 脚本） | npm 安装 | 零 spawn 主路径：T0 全程 `--ignore-scripts`，安装脚本一个都没跑过，回执 `scripts-skipped`（`InstallCoordinator`，§10.5-3）。**残余**：让脚本真跑的那条路（spawn 桥）尚未落地，见 §11.3 | `InstallCoordinatorTest`（零 spawn / `scripts-skipped` 回执）+ `NpmSpawnGateMatrixTest`（spawn 闸矩阵，含 T1 的残余那条路） |
+| T2 | **lockfile 投毒**（把包名指到别处，integrity 仍成立） | `npm ci` 重建 | `LockSigner` 对 lock 做 HMAC-SHA256 带外签名（`files/.ns/lock.sig`，键绑 `projectId` 防跨项目搬锁），`ci` 前验签；缺签名/错签名一律 `ERR_PERMISSION_DENIED`（TOFU 自签不算通过）。~~**接线现状（2026-10-01 核实）**：防线代码与单测都在，但**生产装配没接** —— `NpmShellKit.assembleHandler` 的 `lockKey` 缺省 `null` → 既不签也不验，全仓无 `KeyProvider` 实现。~~ **已接线（2026-10-08，批 79）**：`AppShellApplication` 递 `LockKeyStore.AndroidKeystore`（`AppShellKit` 经 `LockKeyStore.resolve` 做 get-or-create），`ci` 先验签、`install` 收尾重签、快照导出带 `snapshot.sig`。取钥失败**不外抛**：本次不装该防线、原因原文进 `AssembledShell.npmLockKeyFailure`（不吞）。见 §11.3 第 3/8 条 | `LockSignerTest`、`LockKeyStoreTest`、`AppShellProductionWiringTest`（键真的接进装配层） |
+| T3 | **单一镜像/注册表投毒** | registry 响应 | `NpmRegistryVerifier` 双运营主体交叉校验（第二意见必须与首选**不同运营主体**，同站即自比、自比一律拒）；取不到/非 https/无 integrity 锚点一律 `Verdict.Unverifiable` 由调用方显式告知，不折成「通过」。**首选来源三层链（2026-10-09 批 83）**：项目 `.npmrc` → 全局 `files/.npmrc` → 出厂官方，取自 `InstallCoordinator.resolveRegistry` —— 与实际安装用的**同一处读数**，否则交叉校验会退化成「拿 A 跟 B 比、装的是 C」 | `NpmRegistryVerifierTest` |
+| T4 | **冒名客户端抢绑桥 socket** | abstract unix socket | 桥监听与客户端 `main.cpp` 对称验 peer uid（`SO_PEERCRED`），凭据读不到即 fail-closed 拒收（`BridgeSocketListener`）；abstract 名带 uid 后缀，多实例互不抢绑。UID 通过后还须一次性 256-bit token 的 hello/ACK，绑定 engineRunId；双方 PID 可得时额外匹配。无票、重放、过期、已退出或撤销拒收；**同 UID 窃取其他执行凭据仍不在保证内** | `BridgeSocketListenerTest`（peer uid 验不到即 fail-closed）+ `RunIdentityRegistryTest`（令牌重放/过期） |
+| T5 | **未授权能力被调用**（脚本绕过能力授予） | 桥面 | **执行级 `CapabilityMask` 已在桥路由做 deny-by-default 过滤**（2026-10-08，A5 第一阶段；缺省保守档 A）；设备能力门禁仍独立：`PermissionCenter` 是唯一权限入口，读取异常诚实降级 `DEGRADED`（可用性未知即受限），绝不伪造 `GRANTED`。**残余**：来源分级经裁定不做（第 45 项），且掩码不拦 Node 内建 `fs`/`http` | `RequestIsolationTest`（桥路由 deny-by-default）+ `PermissionCenterTest`（三态门不伪造 GRANTED） |
+| T6 | **脚本失控/僵死/赖活**（死循环、OOM、宿主与引擎状态分裂） | 引擎进程 | `EngineWatchdog` 按心跳/RSS/CPU 采样 + drift 连段裁决（`KillCause.DRIFT`）+ 执行期限（`KillCause.TIMEOUT`）；心跳 payload.runId 必须匹配认证连接，不能替其他执行刷新；看门狗只问不记账 | `EngineWatchdogTest`、`WatchdogPolicyTest`、`HeartbeatLedgerTest`（心跳不得跨执行刷新） |
+| T7 | **安装期互踩/打爆磁盘/恶意 git 依赖/无限挂起** | 安装会话 | per-project 锁 + 全局互斥、free ≥500MB 预检、项目 512MB 配额（80% 黄 / 100% 拦）、`git:` 依赖入口即拒 `ERR_NOT_SUPPORTED`、安装 TTL（`InstallCoordinator`） | `InstallCoordinatorTest`（per-project 锁 / 配额 / `git:` 拒）+ `DeployPathTest`（路径逃逸）+ `NpmCacheReclaimTest` |
+| T8 | **审批票重放**（拿旧版本 APPROVED 装新版本） | 审批账本 | 审批键绑 `pkg + versionHash`，宿主从盘上重算版本哈希，命中 `APPROVED` 才放行（`ApprovalLedger` + `requestApprove`/`requestGateApproval`）；未获批自请入队 `PENDING` | **无守卫 —— 见 §11.3**。⚠️ 本批逐条 grep 全部测试树**确认没有任何测试碰审批账本** |
+| T9 | **本地状态被系统备份/换机迁移带到另一个设备上下文**（Auto Backup、D2D 迁移、`adb backup`） | 应用私有目录 `files/.ns/` | `AndroidManifest` 置 `android:allowBackup="false"`（`:app`）：信任锚与审计面不进备份 —— `lock.sig` 到新机验不过（密钥不出本机），而审批台账/安装 history/意图日志会以「已完成/已批准」的姿态跟着走，恢复出来的状态不可信也不可解释。代价如实说：换机不自动带走过往审批与历史，需重装/重批 | **无守卫 —— 见 §11.3**。⚠️ 同上；`allowBackup=false` 只有 manifest 一行，无任何测试读它 |
 
 ### 11.3 残余风险（诚实缺口，未被上面任何一条覆盖）
+
+> **本节的两条是 2026-10-12（批 110）加的**，它们与上面 1–8 条不同类：1–8 是「设计上就没做」，
+> 这两条是「**做是做了，但没有任何测试在守**」。§11.2 新增的第五列第一次把这两条照出来
+> —— 在那之前，它们只以「现行防线」那一行的**散文**形式出现过，读起来像是有防护。
+>
+> **维护者裁断**：本批**只标注、不补测试**。补守卫要先读懂审批账本的版本哈希口径与
+> Android 备份规则，是独立一批的工作量；把它混进「文档面」这一批会让这一批的评审面变大，
+> 而它是纯文档批。**代价要说清**：这两条防线今天**可能已经被改坏了而没人知道**。
+
 
 1. **同 UID 同权，非沙箱** —— 见 §11.1 第 1 条。每脚本独立进程并不提供权限隔离，
    这是 §18 第 1 项不引入沙箱的直接后果。执行凭据只建立连接归属：同 UID 代码可能读取进程环境、
@@ -108,6 +122,16 @@
 
    即：**设计上写着「已接线」的那几道 npm 防线，截至 2026-10-09 只剩 `scriptExecutor`（T1
    执行面）未接**；这是接线缺口，不是设计缺口。
+
+9. **T8 审批票重放：无守卫测试**（批 110）—— 防线本身是实的（审批键绑 `pkg + versionHash`，
+   宿主从盘上重算版本哈希后才放行）。**但逐条 grep 全部测试树，没有任何测试碰审批账本** ——
+   「版本哈希重算」这条判据改了、或者「命中 `APPROVED` 才入队」那道闸被挪了，都不会红。
+   见 §11.2 T8 行。
+10. **T9 备份/迁移带状态：无守卫测试**（批 110）—— `AndroidManifest` 的 `allowBackup="false"`
+   是**唯一**的防线（外加 `fullBackupContent` 的排除清单）。**没有任何测试读它**，
+   而 manifest 恰恰是最容易被一次「合并冲突顺手删掉一行」改坏的文件 ——
+   删掉之后系统备份会把审批台账、安装 journal/history、意图日志整份带到另一台设备上，
+   **且不会有任何测试红**。见 §11.2 T9 行。
 
 ### 11.4 非目标
 
