@@ -323,12 +323,14 @@ private fun screenCornerRadiusPx(view: View): Float {
         null
     }
     if (display == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0f
+    // `getRoundedCorner(int)` 返回 `RoundedCorner?` —— 没圆角的屏/角返回 null，
+    // 安全调用取半径，null 当 0。
     return runCatching {
         maxOf(
-            display.getRoundedCorner(0).getRadius(),
-            display.getRoundedCorner(1).getRadius(),
-            display.getRoundedCorner(2).getRadius(),
-            display.getRoundedCorner(3).getRadius(),
+            display.getRoundedCorner(0)?.getRadius() ?: 0,
+            display.getRoundedCorner(1)?.getRadius() ?: 0,
+            display.getRoundedCorner(2)?.getRadius() ?: 0,
+            display.getRoundedCorner(3)?.getRadius() ?: 0,
         )
     }.getOrDefault(0).toFloat()
 }
