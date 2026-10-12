@@ -35,12 +35,12 @@ class ScriptLimitsStateTest {
         var saves = 0
 
         override suspend fun scriptLimits(): ScriptRuntimeLimits {
-            if (failRead) throw java.io.IOException("限额表打不开（模拟）")
+            if (failRead) require(false) { "限额表打不开（模拟）" }
             return value
         }
 
         override suspend fun saveScriptLimits(limits: ScriptRuntimeLimits) {
-            if (failWrite) throw IllegalArgumentException("堆上限 不得超过 1024（模拟）")
+            if (failWrite) require(false) { "堆上限 不得超过 1024（模拟）" }
             value = limits
             saves++
         }
