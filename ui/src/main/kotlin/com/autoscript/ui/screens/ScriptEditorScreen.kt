@@ -1,6 +1,5 @@
 package com.autoscript.ui.screens
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -192,8 +191,14 @@ fun ScriptEditorScreen(
         if (dirty) confirmDiscard = true else onClose()
     }
 
-    BackHandler { close() }
-    // 递出去给外层那条手势路径用（见 onRegisterCloseGuard 的 KDoc）。
+    // **不再挂 `BackHandler`**：它是普通 `OnBackPressedCallback`，注册在外层的
+    // `PredictiveBackHandler` 之后（`OnBackPressedDispatcher` 是 LIFO）—— 系统手势
+    // 导航的**预测式返回会整个退化成普通返回**，跟手动画就不存在了。非手势返回键
+    // 同样会触发 `PredictiveBackHandler` 的流结束（`handleOnBackPressed` → onCommit），
+    // 所以整条返回路径都归外层那个 handler，这里只把「能不能退」递出去。
+    //
+    // 上一版还挂着它，且 `onClose` 链回外层 `requestEditorClose` → 再调回 `close()`
+    // —— 没改动直接返回时会无限递归（栈溢出），表现就是「退出的时候直接软件都退出了」。
     DisposableEffect(Unit) {
         onRegisterCloseGuard(::close)
         onDispose { onRegisterCloseGuard(null) }

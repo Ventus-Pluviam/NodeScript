@@ -3,7 +3,6 @@ package com.autoscript.ui.screens
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -263,7 +262,6 @@ fun SettingsScreen(
                 SettingsSubPage.PERMISSIONS -> SettingsSubPageLayer(
                     title = page.title,
                     onBack = { subPage = SettingsSubPage.NONE },
-                    onBackRequest = { subPage = SettingsSubPage.NONE },
                 ) {
                     PermissionsPage(state, status, pageListState, onOpenSettings)
                 }
@@ -273,7 +271,6 @@ fun SettingsScreen(
                 SettingsSubPage.SCRIPT_LIMITS -> SettingsSubPageLayer(
                     title = page.title,
                     onBack = { subPage = SettingsSubPage.NONE },
-                    onBackRequest = { subPage = SettingsSubPage.NONE },
                 ) {
                     ScriptLimitsScreen(
                         state = limitsState,
@@ -291,25 +288,23 @@ fun SettingsScreen(
 }
 
 /**
- * 一个设置子页的外壳（批 115）：顶栏 + 本体，外加**它自己的返回键**。
+ * 一个设置子页的外壳（批 115）：顶栏 + 本体。
  *
- * 返回键仍要 `BackHandler` —— 与 [ManagementTransition] 那个不同：
- * - `ManagementTransition` 的 `PredictiveBackHandler` 管的是**跟手手势**（整页回退）；
- * - 这一颗管**顶栏 ‹ 之外的系统返回**。手势优先由 dispatcher 的 LIFO 决定：预测式
- *   回调在系统手势开始时被派发，非手势的返回键则落到还挂着的 `BackHandler` 上。
- *   两颗不冲突，且少了它，子页开着时系统返回会直接退出 Activity（跳过分层）。
+ * **不挂 `BackHandler`** —— 与 [ManagementTransition] 那个普通返回键同源：外壳的
+ * `PredictiveBackHandler` 在**非手势**返回键（系统三键/手势导航的返回按钮）上同样会
+ * 走流结束 → `onCommit`（`handleOnBackPressed`），所以子页返回键归外层那条。
+ * 这里若再挂一颗普通 `OnBackPressedCallback`，它排在 `PredictiveBackHandler` 之后
+ * （LIFO）就会把预测式手势**整条退化**成普通返回，跟手动画就不存在了 ——
+ * 这正是「设置页还是没有预返回动画」的原因之一。
  *
- * @param onBackRequest 顶栏 ‹ 与系统返回共用的那一条（把手势提交也交给
- *   [ManagementTransition] 后，子页的 `subPage` 归零只走这一条）。
+ * @param onBack 顶栏 ‹（立即关，不复查）。
  */
 @Composable
 private fun SettingsSubPageLayer(
     title: String,
     onBack: () -> Unit,
-    onBackRequest: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    BackHandler { onBackRequest() }
     Column(Modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
         ActionBar(title = title, onBack = onBack, background = ThemeColors.surfaceMuted)
         Box(Modifier.weight(1f)) {

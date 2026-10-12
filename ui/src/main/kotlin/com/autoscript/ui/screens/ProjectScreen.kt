@@ -452,7 +452,12 @@ fun ProjectScreen(
                     displayName = page.name,
                     onRead = onReadFile,
                     onSave = onSaveFile,
-                    onClose = ::requestEditorClose,
+                    // `onClose` = **立即关**（不复查）：确认框的「放弃修改」与「没改动直接回」
+                    // 走这条。`requestEditorClose` 只留给手势那条路 —— 它要过守卫（有未
+                    // 保存改动先问）。**别把两者接成一条**：`close()` → `onClose()` →
+                    // `requestEditorClose()` → 守卫（`close()`）会无限递归（栈溢出，
+                    // 表现就是「退出的时候直接软件都退出了」）。
+                    onClose = { editing = null },
                     onRegisterCloseGuard = { editorCloseGuard = it },
                     modifier = Modifier,
                 )
