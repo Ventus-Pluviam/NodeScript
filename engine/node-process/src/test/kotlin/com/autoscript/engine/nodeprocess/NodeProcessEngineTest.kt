@@ -147,6 +147,8 @@ class NodeProcessEngineTest {
         socket: String? = null,
         bridgeDist: Path? = null,
         scriptEnv: () -> Map<String, String> = { emptyMap() },
+        maxHeapMb: () -> Int? = { null },
+        uvThreadPoolSize: () -> Int? = { null },
         grace: Long = 3_000,
     ): NodeProcessEngine {
         // 只有走默认才铺哑文件：预检缺位案显式传"不存在的路径"、PATH 名案传相对名 —— 都原样不动。
@@ -164,6 +166,8 @@ class NodeProcessEngineTest {
                 hostSocketName = socket,
                 bridgeDistPath = bridgeDist,
                 scriptEnv = scriptEnv,
+                maxHeapMb = maxHeapMb,
+                uvThreadPoolSize = uvThreadPoolSize,
                 stopGraceMillis = grace,
             ),
             launcher,
@@ -339,6 +343,75 @@ class NodeProcessEngineTest {
         launcher.nextProcess = FakeProcess(pid = 4343)
         runBlocking { e.execute(request()) }
         assertEquals("v2", launcher.lastEnv!!["K"], "装配期定死会让这条红 —— 用户改完必须下次执行就生效")
+    }
+
+    // ── 脚本资源限额（批 107；§8.1）────────────────────────────────────────
+
+    @Test
+    fun `堆上限走 argv 且排在脚本路径之前`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        val e = engine(launcher, maxHeapMb = { 96 })
+        runBlocking { e.execute(request(args = listOf("x"))) }
+
+        val cmd = launcher.lastCommand!!
+        val flag = "--max-old-space-size=96"
+        val scriptAbs = files.resolve("scripts/p1/a.js").toString()
+        assertEquals(listOf(defaultHostBinary().toString(), flag, scriptAbs, "x"), cmd)
+        assertTrue(
+            cmd.indexOf(flag) < cmd.indexOf(scriptAbs),
+            "标志位必须在脚本路径**之前** —— 否则被当成脚本的第一个位置参数（§7.8 argv 契约）",
+        )
+    }
+
+    @Test
+    fun `IO 线程池走 env——Node 没有 argv 形式`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        val e = engine(launcher, uvThreadPoolSize = { 16 })
+        runBlocking { e.execute(request()) }
+        assertEquals(
+            "16",
+            launcher.lastEnv!![NodeProcessEngine.ENV_UV_THREADPOOL_SIZE],
+            "libuv 的线程池大小只由 env 决定（libuv 初始化时读），argv 无从表达",
+        )
+    }
+
+    @Test
+    fun `两个缝回 null 时一个标记都不加——缺省不得改变任何行为`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        runBlocking { engine(launcher, maxHeapMb = { null }, uvThreadPoolSize = { null }).execute(request()) }
+
+        assertEquals(
+            listOf(defaultHostBinary().toString(), files.resolve("scripts/p1/a.js").toString()),
+            launcher.lastCommand,
+            "没配堆上限 = 交给 Node 的默认，不是加一个 0",
+        )
+        assertTrue(
+            NodeProcessEngine.ENV_UV_THREADPOOL_SIZE !in launcher.lastEnv!!,
+            "没配线程池 = 交给 Node 的默认 4，显式写进 env 反而把「没配」与「配成 4」混成一样",
+        )
+    }
+
+    @Test
+    fun `两个缝每次 spawn 现读——两次 execute 之间改了设置，第二次拿到新值`() {
+        writeScript()
+        val launcher = FakeLauncher()
+        var heap = 96
+        var pool = 4
+        val e = engine(launcher, maxHeapMb = { heap }, uvThreadPoolSize = { pool })
+        runBlocking { e.execute(request()) }
+        assertTrue("--max-old-space-size=96" in launcher.lastCommand!!)
+
+        launcher.nextProcess.alive = false
+        launcher.nextProcess.exitCode = 0
+        launcher.nextProcess = FakeProcess(pid = 4344)
+        heap = 256
+        pool = 16
+        runBlocking { e.execute(request()) }
+        assertTrue("--max-old-space-size=256" in launcher.lastCommand!!, "改完必须下次执行就生效（不重启宿主）")
+        assertEquals("16", launcher.lastEnv!![NodeProcessEngine.ENV_UV_THREADPOOL_SIZE])
     }
 
     @Test

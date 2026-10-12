@@ -75,6 +75,35 @@ data class NodeEngineConfig(
      * 引擎侧仍不会被覆盖成"脚本去连别的 socket"。
      */
     val scriptEnv: () -> Map<String, String> = { emptyMap() },
+    /**
+     * **单脚本 JS 堆上限（MiB）**（§8.1「脚本资源限额」，批 107）：用户在设置页 → 脚本设置里
+     * 填的那个数，落成 `--max-old-space-size=<n>` 插在脚本路径**之前**。
+     *
+     * **是 `() -> Int?` 而不是 `Int`，且每次 execute 现读** —— 与 [scriptEnv] 同一条纪律
+     * （装配期定死 = 用户改完要重启 App 才生效，而「保存了却没生效」正是本仓反复点名的坑）。
+     *
+     * **回 null = 不加这个标记**：那不是「上限 0」，而是**完全交给 Node 的默认值**（设备上
+     * 约等于「按物理内存的一半取」）。区分二者是本参数的契约 —— `0` 传下去会让脚本一启动
+     * 就 OOM，而那与「不限制」相差几个数量级。
+     *
+     * **为什么走 argv 而不走 `NODE_OPTIONS`**：`NODE_OPTIONS` 是**父环境里别人的设置**，
+     * 本仓对它的既有纪律是「追加不覆盖」（`NpmSpawnGate.mergeNodeOptions`），而堆上限是
+     * **策略**不是增强 —— 追加到一个已存在的 `--max-old-space-size` 后面，Node 取最后一个，
+     * 「哪个赢」取决于父子环境谁带了它，那不是确定性。argv 是确定性的：谁设的谁赢。
+     * 生产实现捕获限额 store；缺省 `{ null }` = 不注入（本仓的离线/单测路径行为不变）。
+     */
+    val maxHeapMb: () -> Int? = { null },
+    /**
+     * **单脚本 libuv 后台线程池大小**（§8.1「脚本资源限额」，批 107）：落成
+     * `UV_THREADPOOL_SIZE` 环境变量。
+     *
+     * **为什么只能是环境变量**：Node 没有 argv 形式（`node --uv-threadpool-size` 不存在），
+     * libuv 的线程池大小在初始化时由 env 决定，argv 无从表达。
+     *
+     * 同 [maxHeapMb]：`() -> Int?` + 每次现读，null = 不注入 = **Node 自己的默认 4** ——
+     * 那一项的缺省与现状逐位相同（一份没配过的配置不该改变任何行为）。
+     */
+    val uvThreadPoolSize: () -> Int? = { null },
     /** 四步 quiesce 的排空窗口（§8.3）：`stop()` SIGTERM 后等这么久，未退则 TimedOut 交池 kill 兜底。 */
     val stopGraceMillis: Long = 3_000,
 )
@@ -206,7 +235,20 @@ class NodeProcessEngine(
                 env[ENV_RUN_ID] = runId.toString()
                 run.runNonce?.let { env[ENV_RUN_NONCE] = it }
 
-                val command = listOf(config.hostBinary.toString(), scriptAbs.toString()) + run.args
+                // 堆上限走 argv（见 [maxHeapMb] 的 KDoc：NODE_OPTIONS 是「追加不覆盖」的
+                // 别人的设置，而堆上限是策略）。插在**脚本路径之前** —— `main.cpp` 的
+                // node_argv 是 `{node, [-- -e BOOTSTRAP --], script, args...}`，标志位必须在
+                // script 之前，否则被当成脚本的第一个位置参数（与 §7.8 的 argv 契约同一条）。
+                val heapFlag = config.maxHeapMb()?.let { "--max-old-space-size=$it" }
+                val command = buildList {
+                    add(config.hostBinary.toString())
+                    if (heapFlag != null) add(heapFlag)
+                    add(scriptAbs.toString())
+                    addAll(run.args)
+                }
+                // IO 线程池只能走 env（Node 无 argv 形式，见 [uvThreadPoolSize]）——
+                // 与 AUTOSCRIPT_* 宿主键同批写，宿主键那一族在它们之后，故顺序即契约。
+                config.uvThreadPoolSize()?.let { env[ENV_UV_THREADPOOL_SIZE] = it.toString() }
                 val cwd = ScriptPaths.projectRoot(config.filesDir, run.projectId)
                 // 在线必须与宿主同一本身份账；离线不签发、不凭空制造匿名桥身份。
                 // 授权快照由宿主一侧**上游**算好（RuntimeController.start → 池请求 → 本请求），
@@ -341,6 +383,17 @@ class NodeProcessEngine(
         const val ENV_RUN_ID = "AUTOSCRIPT_RUN_ID"
         const val ENV_RUN_NONCE = "AUTOSCRIPT_RUN_NONCE"
         const val ENV_BRIDGE_DIST = "AUTOSCRIPT_BRIDGE_DIST"
+
+        /**
+         * `UV_THREADPOOL_SIZE`：libuv 后台线程池大小（§8.1「脚本资源限额」，批 107）。
+         *
+         * **刻意不是 `AUTOSCRIPT_` 前缀** —— 那一族是本仓与 `main.cpp` 的内部约定
+         * （[ScriptEnvKeys] 据此拒收用户同前缀的键，避免覆盖导致越权）。而这一条**本来就是
+         * Node 自己的环境变量**：叫 `UV_THREADPOOL_SIZE` 才能被 Node 读，加前缀等于
+         * 没人读。它不是「用户不能配」的那一族 —— 用户正是通过本仓的设置页配它，
+         * 只是不经过 `process.env` 那条自由输入的路。
+         */
+        const val ENV_UV_THREADPOOL_SIZE = "UV_THREADPOOL_SIZE"
 
         /** 强杀后的收尸等待：只防僵尸残留，不承担语义（语义在 kill 已发即完成）。 */
         private const val KILL_REAP_MILLIS = 1_000L
