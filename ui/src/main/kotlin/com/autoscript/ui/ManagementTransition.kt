@@ -22,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -173,6 +172,16 @@ internal fun <T> ManagementTransition(
 
     LaunchedEffect(page) {
         if (page == top) return@LaunchedEffect
+        // 只有**切出**走完才允许清掉覆盖层。切入走完后 `top` 要留着 —— 子页就位了、
+        // 还在前台。上一版 `finally` 无条件 `top = null`，每次点进子页都是
+        // 「闪一下动画然后自动退出」（切入动画播完 → finally → 顶层被清）。
+        var exitFinished = false
+        // **切入、切出都要置位**。上一版只在 `framed` 翻真时（也就是切入那一刻）喊过一次
+        // `true`，而 `finally` 在切入收尾就喊了 `false` —— 于是**切出期间 `animating` 是
+        // false**，面板入口全部可点，用户在退出动画里点新入口就又回到卡死那条路。
+        // TG 的 `animationInProgress` 在整个动画窗口内恒为真（`ActionBarLayout:1660` 设、
+        // 收尾清），这里对齐：进这段就置真、`finally` 里清。
+        onAnimatingChanged(true)
         try {
             if (page == under) {
                 // 切出。**手势提交**与**返回键**走两条不同的路：
@@ -196,6 +205,7 @@ internal fun <T> ManagementTransition(
                     progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
                 }
                 progress.snapTo(1f)
+                exitFinished = true
             } else {
                 // 切入：新页盖上来，原来显示的那层退到 `under`。
                 under = top ?: under
@@ -215,8 +225,13 @@ internal fun <T> ManagementTransition(
             // 与栈变更是**同一个 AnimatorSet**里的相邻步骤，不存在「动画被外力掐断、
             // 栈没跟上」这个中间态。这里用 `NonCancellable` 把两边焊在一起。
             withContext(NonCancellable) {
-                top = null
-                progress.snapTo(1f)
+                // 切出走完才清覆盖层（协程被取消也会顺路走到这：`page` 已经换了，
+                // 新的 `LaunchedEffect(page)` 会按新 `page` 重画）。切入走完不清 ——
+                // 否则就是「闪一下自动退出」。
+                if (exitFinished) {
+                    top = null
+                    progress.snapTo(1f)
+                }
                 // 稳态下不留任何手势残留（TG 的 `animateBackEndAnimation` 收尾同样清零）。
                 gesture.reset()
                 dismiss.snapTo(0f)
@@ -344,12 +359,6 @@ internal fun <T> ManagementTransition(
         // 就是一条线。这里用 Compose 横向渐变复刻那张资源：起点透明、终点
         // `0x33000000`（~51/255，与 xxhdpi 右缘 50 同量级）。
         if (framed) {
-            // 动画跑起来的**那一瞬间**就往上喊「开始动画」（`LaunchedEffect` 一进就设，
-            // 首帧也就位了）。用 `LaunchedEffect` 而不是靠 `onAnimatingChanged` 每帧调：
-            // 它只在 `framed` 翻成 true 时跑一次，不随进度重入。
-            LaunchedEffect(Unit) {
-                onAnimatingChanged(true)
-            }
             val shadowX = layerX
             Box(
                 Modifier
