@@ -63,6 +63,11 @@ import com.autoscript.domain.automation.ScreenConsentRequests
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.TaskRegistration
+import com.autoscript.ui.screens.ScriptLimitsDraft
+import com.autoscript.ui.state.resetScriptLimits
+import com.autoscript.ui.state.saveScriptLimits
+import com.autoscript.ui.state.loadScriptLimits
+import com.autoscript.ui.state.ScriptLimitsState
 import com.autoscript.ui.components.EaseInOutQuad
 import com.autoscript.ui.components.EditorHighlightHost
 import com.autoscript.ui.components.GlyphKind
@@ -207,6 +212,12 @@ class MainActivity : ComponentActivity() {
      * 壳装配（全局 `.npmrc` 住 `filesDir`），首帧就现读一次。
      */
     private var registryState: RegistryState by mutableStateOf(RegistryState.NOT_LOADED)
+
+    /**
+     * 脚本设置子页状态（批 107，§8.1 脚本资源限额）。与 [registryState] 同一条口径：
+     * 读口不依赖壳装配（限额表住 `filesDir/.autojs`），首帧就现读一次。
+     */
+    private var limitsState: ScriptLimitsState by mutableStateOf(ScriptLimitsState.NOT_LOADED)
 
     /**
      * 审计页状态（批 85，§10.5-2）。与 [registryState] 同一条口径：读口不依赖壳装配
@@ -498,6 +509,11 @@ class MainActivity : ComponentActivity() {
                                     // 与项目页 ⋮ 同一项：标签 = 目标模式（TG 日夜项同款口径）。
                                     themeSwitchLabel = themeSwitchLabel(dark),
                                     onSwitchTheme = themeSwitch.onSwitch,
+                                    limitsState = limitsState,
+                                    onLimitsRefresh = { reloadLimits() },
+                                    onLimitsDraft = { field, text -> limitsState = limitsState.setDraft(field, text) },
+                                    onLimitsSave = { scope.launch { limitsState = saveScriptLimits(hostSummary(), limitsState) } },
+                                    onLimitsReset = { scope.launch { limitsState = resetScriptLimits(hostSummary(), limitsState) } },
                                     modifier = Modifier,
                                 )
                         }
@@ -545,7 +561,10 @@ class MainActivity : ComponentActivity() {
                         ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog() }
                         null -> Unit
                     }
-                    Tab.SETTINGS -> reloadCapabilities()
+                    // 设置页两处都现取。限额表那句与「切页签即现取」同款：脚本设置是**设置页
+                    // 内的第二层**（`SettingsSubPage`），而本 effect 的 key 只有管理页的
+                    // `subPage` —— 开那一层不触发它，故在**进入设置页签**时就现读。
+                    Tab.SETTINGS -> { reloadCapabilities(); reloadLimits() }
                 }
                 }
             }
@@ -809,6 +828,10 @@ class MainActivity : ComponentActivity() {
      * 逻辑在 [loadScriptEnv]（`:ui` 的顶层函数）：那三段"拿读口算下一份状态"是纯的，
      * 放这里能用 `FakeHost` 直接测，而 `MainActivity` 在 JVM 单测里构造不出来。
      */
+    private suspend fun reloadLimits() {
+        limitsState = loadScriptLimits(hostSummary(), limitsState)
+    }
+
     private suspend fun reloadEnv() {
         envState = loadScriptEnv(hostSummary(), envState)
     }

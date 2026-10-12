@@ -94,16 +94,22 @@
     <ID>FunctionNaming:ScriptEnvScreen.kt$@Composable private fun AddRow( state: ScriptEnvState, onDraftKey: (String) -&gt; Unit, onDraftValue: (String) -&gt; Unit, onAdd: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:ScriptEnvScreen.kt$@Composable private fun EnvField(value: String, hint: String, modifier: Modifier, onChange: (String) -&gt; Unit)</ID>
     <ID>FunctionNaming:ScriptEnvScreen.kt$@Composable private fun EnvRow(row: ScriptEnvEntry, onRemove: (String) -&gt; Unit)</ID>
+    <ID>FunctionNaming:ScriptLimitsScreen.kt$@Composable fun ScriptLimitsScreen( state: ScriptLimitsState, onRefresh: suspend () -&gt; Unit, onDraft: (field: ScriptLimitsDraft, value: String) -&gt; Unit, onSave: () -&gt; Unit, onReset: () -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:ScriptLimitsScreen.kt$@Composable private fun GroupNote(text: String)</ID>
+    <ID>FunctionNaming:ScriptLimitsScreen.kt$@Composable private fun GroupTitle(title: String, subtitle: String)</ID>
+    <ID>FunctionNaming:ScriptLimitsScreen.kt$@Composable private fun LimitRow( title: String, unit: String, value: String, onChange: (String) -&gt; Unit, defaultHint: String, presets: List&lt;Int&gt; = emptyList(), )</ID>
+    <ID>FunctionNaming:ScriptLimitsScreen.kt$@Composable private fun NumberField(value: String, onChange: (String) -&gt; Unit, modifier: Modifier)</ID>
     <ID>FunctionNaming:SettingsCells.kt$@Composable internal fun SettingIconBlock(colors: SettingIconColors, glyph: GlyphKind)</ID>
     <ID>FunctionNaming:SettingsCells.kt$@Composable internal fun SettingsCard(content: @Composable () -&gt; Unit)</ID>
     <ID>FunctionNaming:SettingsCells.kt$@Composable internal fun SettingsCellRow( title: String, colors: SettingIconColors? = null, glyph: GlyphKind? = null, modifier: Modifier = Modifier, onClick: (() -&gt; Unit)? = null, trailing: (@Composable () -&gt; Unit)? = null, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable fun SettingsScreen( state: CapabilityCenterState, onOpenSettings: (Capability) -&gt; Unit, themeSwitchLabel: String, onSwitchTheme: (Offset) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun AppIcon()</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun CardCaptionRow(text: String, tone: StatusTone)</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun IdentityHeader()</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun PermissionRow(row: CapabilityRowState, onOpenSettings: (Capability) -&gt; Unit)</ID>
+    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun PermissionsPage( state: CapabilityCenterState, status: ScreenStatus, pageListState: LazyListState, onOpenSettings: (Capability) -&gt; Unit, )</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun SectionGap()</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun SettingsMenu(themeSwitchLabel: String, onSwitchTheme: (Offset) -&gt; Unit)</ID>
+    <ID>FunctionNaming:SettingsScreen.kt$@Suppress("LongParameterList") @Composable fun SettingsScreen( state: CapabilityCenterState, onOpenSettings: (Capability) -&gt; Unit, /** 脚本设置子页的状态与回调（批 107；§8.1）。本屏不持有读口，只透传。 */ limitsState: ScriptLimitsState, onLimitsRefresh: suspend () -&gt; Unit, onLimitsDraft: (field: ScriptLimitsDraft, value: String) -&gt; Unit, onLimitsSave: () -&gt; Unit, onLimitsReset: () -&gt; Unit, themeSwitchLabel: String, onSwitchTheme: (Offset) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:TaskCenterScreen.kt$@Composable private fun Card(content: @Composable () -&gt; Unit)</ID>
     <ID>FunctionNaming:TaskCenterScreen.kt$@Composable private fun Field( value: String, label: String, enabled: Boolean, modifier: Modifier = Modifier, onChange: (String) -&gt; Unit, )</ID>
     <ID>FunctionNaming:TaskCenterScreen.kt$@Composable private fun GroupHeader( title: String, expanded: Boolean, onClick: () -&gt; Unit, )</ID>

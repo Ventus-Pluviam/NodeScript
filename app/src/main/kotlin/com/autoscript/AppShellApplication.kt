@@ -27,6 +27,7 @@ import com.autoscript.domain.automation.MediaProjectionSessionState
 import com.autoscript.domain.permission.Capability
 import com.autoscript.domain.host.ScriptFilesSnapshot
 import com.autoscript.domain.scripts.ScriptEnvEntry
+import com.autoscript.domain.scripts.ScriptRuntimeLimits
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.engine.nodeprocess.NodeEngineConfig
@@ -59,6 +60,7 @@ import com.autoscript.shell.PlatformWiring
 import com.autoscript.shell.RecoverySnapshot
 import com.autoscript.shell.SchedulerAlarmRoute
 import com.autoscript.appservice.scriptrepo.core.FileScriptEnvStore
+import com.autoscript.appservice.scriptrepo.core.FileScriptLimitsStore
 import com.autoscript.shell.ScriptFileOps
 import com.autoscript.shell.ScriptFilesRead
 import com.autoscript.shell.ScreenGateAndroid
@@ -206,6 +208,30 @@ class AppShellApplication : Application(), HostSummary {
         }
     }
 
+    /**
+     * 脚本资源限额表（批 107；§8.1「脚本资源限额」）。
+     *
+     * **与 [scriptEnvStoreOrNull] 逐字同款的懒建形状**（同一 `.autojs` 目录、同一种
+     * 「建不出来如实 null」）：这两份表是同一个界面的两页（管理面板 → 环境变量 /
+     * 设置 → 脚本设置），生命周期一样，故不发明第二种懒建写法。
+     *
+     * **构造只读一个文件、不做 replay**，比环境变量表便宜 —— 但失败语义一样：
+     * 「盘读不出来」会让整份限额读不了，而它恰好是内存闸，宁可如实报错也不要悄悄退回
+     * 出厂值（那等于「闸被静默关掉」，正是「配坏了所以不设限」这个最坏结果的来源）。
+     */
+    @Volatile
+    private var scriptLimitsStore: FileScriptLimitsStore? = null
+
+    private fun scriptLimitsStoreOrNull(): FileScriptLimitsStore? {
+        scriptLimitsStore?.let { return it }
+        return synchronized(this) {
+            scriptLimitsStore ?: runCatching { FileScriptLimitsStore(filesDir.toPath().resolve(".autojs")) }
+                .onFailure { HostLog.w(TAG, "脚本限额表打不开（本次读写如实失败，不静默退回出厂值）：${it.message}") }
+                .getOrNull()
+                ?.also { scriptLimitsStore = it }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -326,6 +352,13 @@ class AppShellApplication : Application(), HostSummary {
                                     ?.associate { it.key to it.value }
                                     .orEmpty()
                             },
+                            // 脚本资源限额（批 107）：与 scriptEnv **同一条纪律** ——
+                            // 闭包捕获 store、每次 spawn 现读，改完下次执行即生效。
+                            // **建不出来回 null（不注入）**：那等于「交给 Node 的默认」，
+                            // 而这不是「闸被静默关掉」那种最坏结果 —— 脚本照跑，
+                            // 读口那边仍如实报错（用户看得见「限额不可读」）。
+                            maxHeapMb = { scriptLimitsStoreOrNull()?.load()?.maxHeapMb },
+                            uvThreadPoolSize = { scriptLimitsStoreOrNull()?.load()?.uvThreadPoolSize },
                         ),
                         identityIssuer = identities,
                     )
@@ -394,6 +427,14 @@ class AppShellApplication : Application(), HostSummary {
             bridge?.start(built.shell)
             install(built.shell)
             assembled = built
+            // 桥侧每连接闸**装填期现读一次**（批 107）：闸是宿主进程里的一份 `@Volatile`
+            // 当前值，不推它就一直用出厂档，而设置页会显示「已保存」—— 正是「保存了却没生效」。
+            // 单脚本那半不在这儿做（引擎每次 spawn 现读那条缝，装填期推反而多一份能漂的副本）。
+            // 读表失败**不掀翻装配**：限额表读不出来 ≠ 宿主起不来，而那一档的处理是
+            // 「脚本照跑 + 设置页如实报错」（与 npm 素材缺失不掀翻装配同一条纪律）。
+            runCatching { scriptLimitsStoreOrNull()?.load() }
+                .onSuccess { limits -> if (limits != null) BridgeQuotaWiring.apply(built.shell.frameServer, limits) }
+                .onFailure { HostLog.w(TAG, "桥侧每连接闸装填期读不到，先用出厂档（设置页会如实报错）：${it.message}") }
             // npm 接线照实记账（§10.2）：就位与未就位都留一行 —— 未接线时真机上
             // `auto.npm.install` 回 ERR_NOT_IMPLEMENTED，这行日志是排查的第一现场。
             val npmFail = built.npmCliFailure
@@ -981,6 +1022,36 @@ class AppShellApplication : Application(), HostSummary {
         checkNotNull(scriptEnvStoreOrNull()) {
             "脚本环境变量表打不开（files/.autojs/${FileScriptEnvStore.FILE_NAME}）：删除无处落账"
         }.remove(key)
+    }
+
+    /**
+     * 脚本资源限额读数（§8.1，批 107；[HostSummary] 的生产实现）。
+     *
+     * 表打不开**抛**（不返回出厂值）：出厂值长得很像「用户填的」，回它会把「盘读不出来」
+     * 画成「你的设置重置了」。而它恰好是内存闸 —— 静默退回出厂值 = **闸被静默关掉**，
+     * 那正是本条最该避免的结果。
+     */
+    override suspend fun scriptLimits(): ScriptRuntimeLimits =
+        checkNotNull(scriptLimitsStoreOrNull()) {
+            "脚本限额表打不开（files/.autojs/${FileScriptLimitsStore.FILE_NAME}）：读不到就是读不到"
+        }.load()
+
+    /**
+     * 保存脚本资源限额（§8.1，批 107；[HostSummary] 的生产实现）。
+     *
+     * 越界由落盘实现的 `ScriptRuntimeLimits.reject` **抛**（判据唯一一份在 `:domain`），
+     * 本类只转发，不另判一遍 —— 与 [putScriptEnv] 同一句理由。
+     *
+     * **保存后顺手把新闸推给桥**：单脚本那半下一次 spawn 自然生效（引擎现读），
+     * 桥那半要靠这一步 —— 桥的闸是**进程级对象**里的一份 `@Volatile` 当前值，
+     * 宿主不推它就一直用旧值，而页面上会显示「已保存」。不推 = 「保存了却没生效」，
+     * 正是本仓反复点名的那类坑。
+     */
+    override suspend fun saveScriptLimits(limits: ScriptRuntimeLimits) {
+        checkNotNull(scriptLimitsStoreOrNull()) {
+            "脚本限额表打不开（files/.autojs/${FileScriptLimitsStore.FILE_NAME}）：写入无处落账"
+        }.save(limits)
+        assembled?.shell?.frameServer?.let { BridgeQuotaWiring.apply(it, limits) }
     }
 
     /** 漏投账本（能力中心呈现「闹钟已响但调度未就绪」）。 */
