@@ -81,12 +81,6 @@ fun ScriptEnvScreen(
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
-        ToneText(
-            "对所有脚本生效：每次执行时注入脚本进程的 process.env（下次执行起生效）",
-            StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-        )
         // 读失败**保留**了上一次读到的表（见 ScriptEnvState.failed），故这里说的是
         // "这是上次读到的"，不是"没有变量" —— 两句话不能混。
         (state.load as? LoadState.Failed)?.let { failed ->

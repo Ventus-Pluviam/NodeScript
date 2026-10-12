@@ -75,12 +75,6 @@ fun RegistryScreen(
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
-        ToneText(
-            "所有项目共用的 npm 下载源；某个项目自己的 .npmrc 可以单独覆盖它",
-            StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-        )
         (state.load as? LoadState.Failed)?.let { failed ->
             ToneText(
                 text = "读取失败：${failed.reason}（下面显示的是上次读到的，可能已过期）",

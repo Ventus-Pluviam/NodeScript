@@ -123,14 +123,6 @@ fun ConsoleScreen(
             subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
-        ToneText(
-            text = "在这里跑 npm 命令（npm install / ci / ls / audit…）、依赖装好后提供的命令" +
-                "（npx <命令> / npm run <脚本>），以及 shell 命令 —— shell 要先敲 su（root）" +
-                "或 shizuku（adb）进特权模式，exit 退出。",
-            tone = StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-        )
         (state.load as? LoadState.Failed)?.let { failed ->
             ToneText(
                 text = "读取失败：${failed.reason}（下面显示的是上次读到的，可能已过期）",
