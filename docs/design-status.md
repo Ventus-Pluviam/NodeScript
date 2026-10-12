@@ -1,4 +1,15 @@
 # AutoScript 落地状态台账
+> **2026-10-12 · 批 106：jsonl 压实（外审 B3 末件）+ 台账三处矛盾订正** ——
+> [`FileScriptEnvStore`](../app-service/script-repo/src/main/kotlin/com/autoscript/appservice/scriptrepo/core/FileScriptEnvStore.kt)
+> 写后按 `Files.size` 判、超 **256 KiB** 就把**收敛视图**经 tmp + `ATOMIC_MOVE` 重写
+> （外审 B3 三件的最后一件；前两件是批 96 半行清盘与批 104 流式读）。**判据不是「格式像
+> 不像 jsonl」，是「读口问的是现状还是发生过什么」** —— 前者可压（`all()` 就是收敛视图的
+> 投影），后者不可（`install-history.jsonl` 的全量读口是刻意的，压缩过去就是删审计）。
+> 顺带订正台账**五处**「已裁定/已做却仍写『仍挂』或仍挂 🔶」的矛盾 —— 三处在顶部追记块
+> 的「仍挂」清单（M4 的「另一半」/ A13 / `TrustTierResolver`），一处是 F 节「下一批」那份
+> 逐批过期的清单，一处是结构小节的 🔶 四条（其中三条早已做完：池记账=批 103、
+> jsonl→SQLite=批 102、无 `ERR_INTERNAL`=批 97）。**五处全是逐条 grep 出来的**。
+> 叙事见 [`本日流水`](log/2026-10-11.md)。
 > **2026-10-12 · 批 105：两份 `ProcOps` 合并成 `:platform:process`** ——
 > [`ProcOps`](../platform/process/src/main/kotlin/com/autoscript/platform/process/ProcOps.kt)
 > + [`TreeOps`](../platform/process/src/main/kotlin/com/autoscript/platform/process/TreeOps.kt)
@@ -678,6 +689,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-12 | 16 | 批 106：**jsonl 压实**（外审 B3 末件）—— `FileScriptEnvStore` 写后按 `Files.size` 判、超 256 KiB 就把收敛视图 tmp+`ATOMIC_MOVE` 重写；**判据是「读口问现状还是问历史」**（前者可压、`install-history.jsonl` 那类审计事实不可）。阈值可注入是为让单测用小阈值走真代码（第一版守卫凑 256 KiB 直接假绿）。一条守卫抓到语义错误：压实是**每次写后判一次**，不是攒够再收拾（盘占用上界 = 阈值 + 一次写入）。`remove` 墓碑行为照旧但 KDoc 里那个理由已被压实压掉，两段互相点名。另订正三处台账矛盾（M4 / A13 / `TrustTierResolver`） | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 15 | 批 105：两份 `ProcOps` 合并成**新模块 `:platform:process`**（消掉批 95/99 留下的「手法逐字同款、代码两份」重复）。**落点选叶子模块而非塞 `:domain`** —— 它只用 `java.nio` + `Process` 桩面，塞领域层能消重复但消的是症状留的是根因（领域层不该知道 `/proc`）。**`:engine:node-process` 的 `ProcessLauncher.pidOf` 刻意留一份**：反向依赖即破 §6，那段纯反射不值得。顺带两处：`ProcTreeOps.alive` 改走注入的 procDir（原来写死 `DEFAULT_PROC`，合成树插不进去）+ 信号名表拆成 npm 侧的 `T1SignalNames.kt`（T1 exit 帧契约，只此一个调用方）。模块数 17→18 / 测试任务 14→15，冻结面五处同步（`ModuleGraphTest` 的计数门当场抓到 `build-logic/settings.gradle.kts` 漏改）。两侧 ArchitectureTest 黑名单**逐条改**，放行粒度到子包（`platform.process` 放行，其余 `platform.*` 三面仍零依赖）。守卫 7 + 1 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 14 | 批 104：外审 **M1 收口**（`scriptFile` 补读侧词法闸 —— 此前一个字都不校验，而返回值直接进 `node <路径>` 的 argv；`projectId` 复用 `isValidProjectId`，非法路径折 `ERR_INVALID_PARAM`）+ **B3 的流式读那半**（`FileScriptEnvStore.replay` 去 `readAllBytes`，改逐字节扫）。守卫新增 7 + 1 + 1 | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 13 | 待办池清池续：**划掉的 31 行直接删掉**（决策第 73 项）—— A–E 五张表里全部 31 条划掉的行已删除（只删条目行，结论不丢：已完成叙事在流水切片、裁定口径在决策记录）。上一轮那批判的是「不再跟进」不是「已完成」，划线等于往待办池塞一条**永远不会被领走的假待办**，下次列清单它又冒出来 —— **划线在本仓是「结论已定」的记号，不是「待办」的记号**；没结论的（外审 B3/M1/M2 三条半成品、结构性长线项）一条没动。**D6 是 A–E 唯一活着的行**（需拍板） | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |

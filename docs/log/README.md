@@ -1,5 +1,21 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-12，批 106：jsonl 压实 = 外审 B3 末件）
+
+- [2026-10-12 · jsonl 压实 + 台账三处矛盾订正](2026-10-11.md)：
+  [`FileScriptEnvStore`](../../app-service/script-repo/src/main/kotlin/com/autoscript/appservice/scriptrepo/core/FileScriptEnvStore.kt)
+  —— 外审 B3 列了三件（半行只在内存丢弃 / 全量 `readAllBytes` / 无压缩），批 96 与批 104
+  各修一件，本批修最后一件：写后按 `Files.size` 判、超 **256 KiB** 就把**收敛视图**
+  经 tmp + 同目录 `ATOMIC_MOVE` 重写。**本批唯一的判断是「这一份能不能压」**：
+  判据不是「格式像不像 jsonl」，是「**读口问的是现状还是发生过什么**」——
+  `all()` 就是收敛视图的投影，故无损；`install-history.jsonl` 的全量读口是刻意的
+  （按项目筛会让全局 `Op.REGISTRY` 从任何筛选里掉出去），压缩过去就是删审计。
+  没顺手做 `install.journal` / `.deploy.journal` 的理由也记在决策里。
+  **一条守卫抓到语义错误**：压实是每次写后判一次，不是攒够再收拾一次。
+  另订正台账**五处**「已裁定/已做却仍写『仍挂』或仍挂 🔶」的矛盾：三处在顶部追记块的
+  「仍挂」清单（M4 的「另一半」/ A13 / `TrustTierResolver`）、一处是 F 节「下一批」那份
+  逐批过期的清单、一处是结构小节的 🔶 四条（其中三条早已做完）。**五处全是逐条 grep 出来的**。
+
 ## 最新追记（2026-10-12，批 105：两份 ProcOps 合并成 :platform:process）
 
 - [2026-10-12 · 两份 `ProcOps` 合并成 `:platform:process`](2026-10-11.md)：
