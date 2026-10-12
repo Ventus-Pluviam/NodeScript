@@ -250,12 +250,12 @@ internal fun <T> ManagementTransition(
                         if (sc != 1f) {
                             scaleX = sc
                             scaleY = sc
+                            // 锚点 X 是「**离手指那条边** dp(82)」，不是固定离左边 82dp
+                            // （TG `:1133`：左缘滑取 `rectTmp.right - dp(82)`，
+                            // 右缘滑取 `rectTmp.left + dp(82)`）。
+                            val fromEdge = SCALE_ANCHOR_X * density / size.width
                             transformOrigin = TransformOrigin(
-                                // 锚点 X 是「**离手指那条边** dp(82)」，不是固定离左边 82dp
-                                // （TG `:1133`：左缘滑取 `rectTmp.right - dp(82)`，
-                                // 右缘滑取 `rectTmp.left + dp(82)`）。
-                                val anchorFromSwipeEdge = SCALE_ANCHOR_X * density / size.width
-                                if (fromRight) anchorFromSwipeEdge else 1f - anchorFromSwipeEdge,
+                                if (fromRight) fromEdge else 1f - fromEdge,
                                 if (viewportHeight > 0f) {
                                     backGestureAnchorY(gesture.touchY, viewportHeight) / viewportHeight
                                 } else {
@@ -322,17 +322,17 @@ internal fun <T> ManagementTransition(
     }
 }
 
+/** 盖层被遮住时的侧缘阴影终点色（TG `layer_shadow` 最右一格的黑）。 */
+private val EDGE = Color(0x33000000)
+
 /**
  * 侧缘阴影的渐变：TG `layer_shadow` webp 的横向 alpha 递增（xhdpi 8×4 是
- * 4→14→26→34→48，xxhdpi 12×6 是 4→14→26→36→50）。起点透明、终点 `0x33000000`
- * （约 51/255，与 xxhdpi 右缘 50 同量级）。
+ * 4→14→26→34→48，xxhdpi 12×6 是 4→14→26→36→50）。起点透明、终点 [EDGE]。
+ * **声明必须在 [EDGE] 之后** —— 顶层 `val` 按源码顺序初始化，反了就拿到未初始化的 0。
  */
 private val EDGE_BRUSH = Brush.horizontalGradient(
     colors = listOf(Color.Transparent, EDGE),
 )
-
-/** 盖层被遮住时的侧缘阴影终点色（TG `layer_shadow` 最右一格的黑）。 */
-private val EDGE = Color(0x33000000)
 
 /** 盖层侧缘阴影宽度（TG `layer_shadow` 的固有宽度）。 */
 private const val EDGE_DP = 8f

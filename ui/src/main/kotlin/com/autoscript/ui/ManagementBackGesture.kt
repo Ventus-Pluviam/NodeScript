@@ -6,6 +6,7 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
@@ -109,8 +110,9 @@ internal class BackGestureState {
     /** 手指 Y（px）—— TG 的 `predictiveBackY`，缩放锚点用它（`:1133`）。 */
     var touchY by mutableFloatStateOf(Float.NaN)
 
-    /** 从哪一侧滑的（`BackEventCompat.EDGE_LEFT`/`EDGE_RIGHT`）。 */
-    var edge by mutableFloatStateOf(BackEventCompat.EDGE_LEFT)
+    /** 从哪一侧滑的（`BackEventCompat.EDGE_LEFT`/`EDGE_RIGHT`）。**必须是 `Int`** ——
+     *  `swipeEdge` 是 Int，这里若用 `mutableFloatStateOf` 收，赋值处直接类型不匹配。 */
+    var edge by mutableIntStateOf(BackEventCompat.EDGE_LEFT)
 
     /** 松手/取消/进出切换后把瞬时量清零，回到稳态。 */
     fun reset() {

@@ -45,8 +45,22 @@ fun ManagementScreen(
     onOpenNpm: () -> Unit,
     onOpenEnv: () -> Unit,
     onOpenRegistry: () -> Unit,
+    /**
+     * 切入/切出动画进行中 —— **为 true 时所有入口点击都不响应**（TG `animationInProgress`：
+     * 退出动画没播完就点新入口，TG 里是什么都不发生，`:1952` 的
+     * `presentFragmentInternalRemoveOld` 直接 `return false`）。
+     *
+     * 不吞的话 `page` 在同一帧内两次变 → `LaunchedEffect(page)` 被取消，
+     * 被取消协程里 `top = null` 没执行完 → `top` 卡死。
+     */
+    entriesEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    // 一处包住全部入口：TG 是 `checkTransitionAnimation()` 在**进入栈的那一个方法**开头
+    // 统一判的，不是每个 fragment 各自判 —— 这里同理，六个回调共用一道门。
+    fun open(block: () -> Unit) {
+        if (entriesEnabled) block()
+    }
     Column(modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
         ActionBar(
             title = "管理面板",
@@ -66,25 +80,25 @@ fun ManagementScreen(
                         title = "依赖管理",
                         colors = DependencyColors,
                         glyph = GlyphKind.FILE_GENERIC,
-                        onClick = onOpenNpm,
+                        onClick = { open(onOpenNpm) },
                     )
                     SettingsCellRow(
                         title = "环境变量",
                         colors = EnvironmentColors,
                         glyph = GlyphKind.SETTINGS,
-                        onClick = onOpenEnv,
+                        onClick = { open(onOpenEnv) },
                     )
                     SettingsCellRow(
                         title = "日志管理",
                         colors = LogColors,
                         glyph = GlyphKind.FILE_DOC,
-                        onClick = onOpenLogManagement,
+                        onClick = { open(onOpenLogManagement) },
                     )
                     SettingsCellRow(
                         title = "镜像源管理",
                         colors = RegistryColors,
                         glyph = GlyphKind.FILE_HTML,
-                        onClick = onOpenRegistry,
+                        onClick = { open(onOpenRegistry) },
                     )
                 }
             }
@@ -94,7 +108,7 @@ fun ManagementScreen(
                         title = "控制台",
                         colors = ConsoleColors,
                         glyph = GlyphKind.CONSOLE,
-                        onClick = onOpenConsole,
+                        onClick = { open(onOpenConsole) },
                     )
                 }
             }

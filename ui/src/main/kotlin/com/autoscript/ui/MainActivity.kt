@@ -519,7 +519,7 @@ class MainActivity : ComponentActivity() {
                                                 onOpenNpm = { npmOpen = true },
                                                 onOpenEnv = { envOpen = true },
                                                 onOpenRegistry = { registryOpen = true },
-                                                onCloseAudit = { auditOpen = true },
+                                                entriesEnabled = !animating,
                                                 modifier = Modifier,
                                             )
                                         } else {
