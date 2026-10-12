@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import kotlinx.coroutines.launch
 
 /**
@@ -87,15 +88,14 @@ internal fun <T> ManagementTransition(
     val density = LocalDensity.current.density
     var viewportHeight by remember { mutableFloatStateOf(0f) }
 
-    // **返回键**这一路（侧缘滑动那一路在 `ManagementBackGesture` 里）。
-    // 走 `BackHandler` 而不是继续用外壳那个 `ManagementBackHandler`：后者在切页
-    // 动画期间会 `enabled = false`，而这里要保证「顶层开着就一定能退」。
     // 侧缘滑动：手势期间只写 `gesture`（不重组），抬手后走与返回键同一条收尾路。
     ManagementBackGesture(
         state = gesture,
         enabled = top != null,
         onCommit = { closeTop(progress, gesture) { top = null } },
     )
+    // **返回键**这一路。走 `BackHandler` 而不是继续用外壳那个 `ManagementBackHandler`：
+    // 后者在切页动画期间会 `enabled = false`，而这里要保证「顶层开着就一定能退」。
     BackHandler(enabled = top != null) {
         scope.launch { closeTop(progress, gesture) { top = null } }
     }
@@ -147,7 +147,7 @@ internal fun <T> ManagementTransition(
                             scaleX = sc
                             scaleY = sc
                             transformOrigin = TransformOrigin(
-                                SCALE_ANCHOR_X.toPx() / size.width,
+                                Density.toPx(SCALE_ANCHOR_X, density) / size.width,
                                 if (viewportHeight > 0f) {
                                     backGestureAnchorY(gesture.touchY, viewportHeight) / viewportHeight
                                 } else {
@@ -167,11 +167,15 @@ internal fun <T> ManagementTransition(
 /**
  * 顶层退场：播 150ms 收尾后把 `top` 清掉。
  *
+ * **无类型参数**：`T` 推不出来是因为这个函数根本不碰页面类型 —— 清空顶层由
+ * 调用点的闭包 `clear` 做。带着一个用不到的 `<T>` 只会让三个调用点全部 `Cannot
+ * infer type for T`。
+ *
  * **松手时不是这里调的** —— 侧缘滑动那条路由 [ManagementBackGesture] 的流收尾，
  * 与 TG 一致（`animateBackEndAnimation`）。本函数是**返回键**与**编程切走**
  * （`page` 变回 `under`）共用的那条路。
  */
-private suspend fun <T> closeTop(
+private suspend fun closeTop(
     progress: Animatable<Float, *>,
     gesture: BackGestureState,
     clear: () -> Unit,

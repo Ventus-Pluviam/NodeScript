@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 /**
  * 管理子页的**跟手返回手势** —— 逐值复刻 Telegram 的预测式返回
@@ -43,12 +44,14 @@ internal fun ManagementBackGesture(
     enabled: Boolean,
     onCommit: suspend () -> Unit,
 ) {
-    // `LocalDensity.current` 本身就是 `Density`，所以 `Dp.toPx()` 可直接调（无参版本）。
-    val density = LocalDensity.current
+    val density = LocalDensity.current.density
     PredictiveBackHandler(enabled = enabled) { flow ->
         flow.collect { event ->
             // 系统已判过 edge（`BackEventCompat.swipeEdge`），这里只取进度与触点。
-            state.dx = BACK_GESTURE_DP.toPx() * BACK_EASE.transform(event.progress)
+            // `Dp.toPx()` 是 `Density` 的**成员扩展**（javap: `Density.toPx-0680j_4(float)`
+            // 挂在接口上），所以不能写成 `dp.toPx()` —— 那要求一个 `Density` 接收者。
+            // 唯一免引用的写法是 `Density.toPx(dp, density)`。
+            state.dx = Density.toPx(BACK_GESTURE_DP, density) * BACK_EASE.transform(event.progress)
             state.touchY = event.touchY
             state.swiping = true
         }
