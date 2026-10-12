@@ -6,7 +6,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Density
 
 /**
  * 管理子页的**跟手返回手势** —— 逐值复刻 Telegram 的预测式返回
@@ -28,6 +27,11 @@ import androidx.compose.ui.unit.Density
  * `dpf2(x)` 就是 `density · x`（`AndroidUtilities.java:2740`）；`lerp(a,b,f)` 就是
  * `a + f·(b - a)`（`:5061`）。两处都在 [backGestureScale] 里展开成算术 —— 不引 TG 的工具类。
  *
+ * **dp 常量存的是裸 `Float` 而不是 `Dp`**：这条路径全程只在 px 之间算（`touchY` /
+ * `size.width` / `dx` 都是 px），不需要 `Dp` 类型带来的换算封装；真要用 `Dp` 就得引
+ * `Density.toPx` —— 它在 Kotlin 侧是**内联扩展**（javap 看到的是 `toPx-0680j_4` 那个
+ * 名字修饰的接口默认成员，顶层根本调不到）。存 `dp` 数、乘一次 `density`，更直白。
+ *
  * ## 与 [ManagementTransition] 的分工
  *
  * 那一位管**点返回键 / 子页之间互切**的 150ms 进出场；这里只管**侧缘滑动手势**，
@@ -48,10 +52,7 @@ internal fun ManagementBackGesture(
     PredictiveBackHandler(enabled = enabled) { flow ->
         flow.collect { event ->
             // 系统已判过 edge（`BackEventCompat.swipeEdge`），这里只取进度与触点。
-            // `Dp.toPx()` 是 `Density` 的**成员扩展**（javap: `Density.toPx-0680j_4(float)`
-            // 挂在接口上），所以不能写成 `dp.toPx()` —— 那要求一个 `Density` 接收者。
-            // 唯一免引用的写法是 `Density.toPx(dp, density)`。
-            state.dx = Density.toPx(BACK_GESTURE_DP, density) * BACK_EASE.transform(event.progress)
+            state.dx = BACK_GESTURE_DP * density * BACK_EASE.transform(event.progress)
             state.touchY = event.touchY
             state.swiping = true
         }
@@ -87,8 +88,8 @@ internal class BackGestureState {
     }
 }
 
-/** 跟手位移的满量程（TG `:1570` 的 `dp(56)`）。 */
-private val BACK_GESTURE_DP = androidx.compose.ui.unit.Dp(56f)
+/** 跟手位移的满量程，单位 dp（TG `:1570` 的 `dp(56)`）。 */
+private val BACK_GESTURE_DP = 56f
 
 /** `CubicBezierInterpolator.StandardDecelerate` = `PathInterpolator(0f, 0f, 0f, 1f)`。 */
 private val BACK_EASE = androidx.compose.animation.core.CubicBezierEasing(0f, 0f, 0f, 1f)
@@ -97,8 +98,8 @@ private val BACK_EASE = androidx.compose.animation.core.CubicBezierEasing(0f, 0f
 private const val SCALE_MID = 0.90f
 private const val SCALE_FAR = 0.85f
 
-/** 缩放锚点距左缘的距离（TG `:1133` 的 `dp(82)`）。 */
-internal val SCALE_ANCHOR_X = androidx.compose.ui.unit.Dp(82f)
+/** 缩放锚点距左缘的距离，单位 dp（TG `:1133` 的 `dp(82)`）。 */
+internal const val SCALE_ANCHOR_X = 82f
 
 /**
  * TG 的缩放公式（`ActionBarLayout.java:1119`）逐值展开：

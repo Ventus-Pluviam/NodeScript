@@ -20,7 +20,6 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Density
 import kotlinx.coroutines.launch
 
 /**
@@ -147,7 +146,7 @@ internal fun <T> ManagementTransition(
                             scaleX = sc
                             scaleY = sc
                             transformOrigin = TransformOrigin(
-                                Density.toPx(SCALE_ANCHOR_X, density) / size.width,
+                                SCALE_ANCHOR_X * density / size.width,
                                 if (viewportHeight > 0f) {
                                     backGestureAnchorY(gesture.touchY, viewportHeight) / viewportHeight
                                 } else {
