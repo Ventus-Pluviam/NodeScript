@@ -264,8 +264,11 @@ internal fun <T> ManagementTransition(
                     // **底层不位移，只裁**（TG：动的是 `containerView`，`containerViewBack`
                     // 原地不动、被 `clipRight = translationX + dp(1)` 裁出那一段）。
                     .drawWithContent {
+                        // `clipRect { }` 的接收者是 `DrawScope`，会把外层 `ContentDrawScope`
+                        // 的 `drawContent()` 遮住 —— 必须带显式接收者，否则报
+                        // 「cannot be called in this context with an implicit receiver」。
                         clipRect(right = layerX) {
-                            drawContent()
+                            this@drawWithContent.drawContent()
                             // 露出来的那一段铺满灰罩（TG `:1204-1212`），按让出的宽度走 ——
                             // TG 是 `120·clamp01(widthOffset/width)`、上限 0.8。
                             // `viewportWidth == 0` 时（首帧未布局）不画，避免 0/0 = NaN。
