@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
@@ -73,6 +74,9 @@ internal fun ManagementBackGesture(
                 val p = (event.progress - LAZY_START).coerceAtLeast(0f) / (1f - LAZY_START)
                 state.dx = BACK_GESTURE_DP * density * BACK_EASE.transform(p)
                 state.touchY = event.touchY
+                // TG `predictiveBackHasProgress = t > 0`（`:1572`），`newBackTransitions()`
+                // 靠它才成立（`:1591`）。
+                state.hasProgress = p > 0f
                 // 从**哪一侧**滑的（`EDGE_LEFT`/`EDGE_RIGHT`）—— TG 的 `predictiveBackLeft`
                 // 用触点 X 对屏幕中线判（`ActionBarLayout.onBackStarted:1548`）。它**只**用来
                 // 镜像缩放锚点（`:1133`）：窗口恒朝右让（`setTranslationX(+dx)`），但锚点是
@@ -114,11 +118,22 @@ internal class BackGestureState {
      *  `swipeEdge` 是 Int，这里若用 `mutableFloatStateOf` 收，赋值处直接类型不匹配。 */
     var edge by mutableIntStateOf(BackEventCompat.EDGE_LEFT)
 
+    /**
+     * 手势**已经推进过**（TG `predictiveBackHasProgress = t > 0`，`:1572`）。
+     *
+     * TG 用它 + `predictiveBackInProgress` 合出 `newBackTransitions()`（`:1591`），
+     * 而这个布尔**决定两件差很大的事**：走哪条缩放公式（`:1119` vs `:1121`）、底层
+     * 裁不裁（`:1163-1166`）。刚按下还没动的那一下 `t == 0`，此时 TG 用的仍是**旧的**
+     * 编程式那条路，所以不能只看「有没有在滑」。
+     */
+    var hasProgress by mutableStateOf(false)
+
     /** 松手/取消/进出切换后把瞬时量清零，回到稳态。 */
     fun reset() {
         dx = 0f
         touchY = Float.NaN
         edge = BackEventCompat.EDGE_LEFT
+        hasProgress = false
     }
 }
 
@@ -151,7 +166,3 @@ internal fun backGestureScale(dxPx: Float, alpha: Float, density: Float): Float 
     val inner = SCALE_MID + (SCALE_FAR - SCALE_MID) * (1f - alpha)
     return 1f + (inner - 1f) * t
 }
-
-/** 缩放锚点的 Y（px）：TG 用手指位置；没有触点时退到垂直居中。 */
-internal fun backGestureAnchorY(touchY: Float, viewportHeight: Float): Float =
-    if (touchY.isNaN()) viewportHeight / 2f else touchY

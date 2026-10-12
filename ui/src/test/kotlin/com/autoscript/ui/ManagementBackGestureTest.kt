@@ -5,10 +5,11 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * [backGestureScale] / [backGestureAnchorY] 的判据（批 115，跟手返回手势）。
+ * [backGestureScale] 的判据（批 115，跟手返回手势）。
  *
- * 这两个是纯函数 —— 手势那层只在绘制阶段读它们，没有 Composable 侧的守卫可依赖。
- * 抄的是 TG `ActionBarLayout.java:1119` / `:1133`，所以**用 TG 的那几个数**当断言值。
+ * 这是纯函数 —— 手势那层只在绘制阶段读它，没有别的守卫可依赖。抄的是 TG
+ * `ActionBarLayout.java:1119`，所以**用 TG 的那几个数**当断言值。锚点那一半
+ * （`:1133`）现在在 `ManagementTransitionGeometryTest`。
  */
 class ManagementBackGestureTest {
 
@@ -45,23 +46,6 @@ class ManagementBackGestureTest {
         // 系统给的 progress 本就 ≤1，但公式自己钳一道：多给一倍位移也不该继续缩。
         val s = backGestureScale(full * 2f, alpha = 1f, density)
         assertEquals(0.90f, s, 1e-6f)
-    }
-
-    @Test
-    fun `锚点用手指位置——TG 的 predictiveBackY`() {
-        assertEquals(1234f, backGestureAnchorY(1234f, viewportHeight = 2000f), 1e-6f)
-    }
-
-    @Test
-    fun `没有触点时锚点退到视口中线`() {
-        assertEquals(1000f, backGestureAnchorY(Float.NaN, viewportHeight = 2000f), 1e-6f)
-    }
-
-    @Test
-    fun `锚点落在屏幕外也不越界处理——TG 原样透传，只判 NaN`() {
-        // 手指按在状态栏上（y < 0）或导航栏上（y > h）是真实情况，TG 也不夹。
-        assertEquals(-50f, backGestureAnchorY(-50f, viewportHeight = 2000f), 1e-6f)
-        assertEquals(2100f, backGestureAnchorY(2100f, viewportHeight = 2000f), 1e-6f)
     }
 
     @Test
