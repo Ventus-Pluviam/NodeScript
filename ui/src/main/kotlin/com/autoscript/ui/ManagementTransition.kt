@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -249,7 +250,7 @@ internal fun <T> ManagementTransition(
         //
         // 之前只做了 `alpha` 压暗：底层满宽铺着、不裁也不画 scrim，所以看到的是
         // 「窗缩在一边、另一边一大片压暗的底」而不是「旁边一层灰罩」。
-        val underAlpha = 1f - DIM * t
+        val underAlpha = 1f - DIM * progress.value
         // 顶层在父坐标系里的 x —— 底层裁剪、顶层位移、侧缘阴影**三处共用同一个数**
         // （TG 里它们都源自同一个 `innerTranslationX`，各写一遍必然漂）。
         val layerX = topLayerX(progress.value, gesture.dx, dismiss.value, viewportWidth, density)
