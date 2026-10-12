@@ -1,45 +1,59 @@
 package com.autoscript.ui
 
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.CancellationException
 
 /**
  * 管理子页的**跟手返回手势** —— 逐值复刻 Telegram 的预测式返回
- * （`ActionBarLayout.onBackStarted` / `onBackProgress` / `draw`，v12.10.6）。
+ * （`LaunchActivity.OnBackAnimationCallback` → `ActionBarLayout.onBackStarted` /
+ * `onBackProgress` / `draw`，v12.10.6）。
  *
  * 用户 2026-10-12 口径：要**跟手**（手指滑动过程中窗口就变小），不是松手后才播动画。
  *
  * ## 抄的数
  *
- * | 维度 | 值 | 源（`ActionBarLayout.java`） |
+ * | 维度 | 值 | 源 |
  * |---|---|---|
- * | 跟手位移 | `dp(56) · StandardDecelerate(t)` | `:1570` |
+ * | 跟手位移 | `dp(56) · StandardDecelerate(t)` | `ActionBarLayout.java:1570` |
  * | `StandardDecelerate` | `PathInterpolator(0,0,0,1)` | `CubicBezierInterpolator.java:22` |
  * | 缩放 | `lerp(1.00, lerp(0.90, 0.85, 1 - alpha), clamp01(dx / dpf2(56)))` | `:1119` |
  * | 缩放锚点 x | 左缘 `dp(82)` | `:1133` |
- * | 缩放锚点 y | `predictiveBackY`（**手指按下的 Y**） | `:1133` |
- * | 启动门 | 栈深 > 1 且 `canBeginSlide()`，且当前无动画 | `:1526-1552` |
+ * | 缩放锚点 y | `predictiveBackY`（**手指的 Y**） | `:1133` |
+ * | 起步死区 | `LAZY_START = 0.015f`，之后按 `(p - 0.015) / 0.985` 重标 | `LaunchActivity.java:786-789` |
  *
  * `dpf2(x)` 就是 `density · x`（`AndroidUtilities.java:2740`）；`lerp(a,b,f)` 就是
  * `a + f·(b - a)`（`:5061`）。两处都在 [backGestureScale] 里展开成算术 —— 不引 TG 的工具类。
  *
  * **dp 常量存的是裸 `Float` 而不是 `Dp`**：这条路径全程只在 px 之间算（`touchY` /
- * `size.width` / `dx` 都是 px），不需要 `Dp` 类型带来的换算封装；真要用 `Dp` 就得引
- * `Density.toPx` —— 它在 Kotlin 侧是**内联扩展**（javap 看到的是 `toPx-0680j_4` 那个
- * 名字修饰的接口默认成员，顶层根本调不到）。存 `dp` 数、乘一次 `density`，更直白。
+ * `size.width` / `dx` 都是 px），不需要 `Dp` 类型的封装。真要用 `Dp` 就得引
+ * `Density.toPx` —— 它在 Kotlin 侧是内联扩展（javap 只看到名字修饰过的接口默认成员），
+ * 顶层根本调不到。存 dp 数、乘一次 `density`，更直白。
  *
  * ## 与 [ManagementTransition] 的分工
  *
- * 那一位管**点返回键 / 子页之间互切**的 150ms 进出场；这里只管**侧缘滑动手势**，
- * **只写状态，不碰动画时钟**。松手后的收尾仍由 `ManagementTransition` 播 150ms
+ * 那一位管**返回键 / 子页之间互切**的 150ms 进出场；这里只管**侧缘滑动手势**，
+ * **只写状态，不碰动画时钟**。松手后的收尾仍由 `ManagementTransition` 播
  * （TG 那边也是另算时长、不复用 `startLayoutAnimation`，见 `:1608`）。
  *
+ * ## 前置条件（缺一个就整个不生效）
+ *
+ * 1. `AndroidManifest` 的 `<application>` 要有 `android:enableOnBackInvokedCallback="true"`
+ *    —— TG 在 `TMessagesProj/src/main/AndroidManifest.xml:112` 正是这么写的。缺了它
+ *    应用走的是旧的 `onBackPressed` 通路，本文件一次都不会被回调（**不报错、静默不生效**）。
+ * 2. 系统导航方式必须是**手势导航**（三键导航没有预测式返回）。
+ * 3. 注册优先级：`OnBackPressedDispatcher` 是 LIFO，**后注册的优先**。所以外壳那个
+ *    `BackHandler` 必须排在 `ManagementTransition` 内部那个**之前**组合，否则它会把
+ *    手势整个吃掉 —— 见 `MainActivity` 里那段注释。
+ *
  * @param state 手势瞬时量，由 `ManagementTransition` `remember` 并传进来。
- * @param enabled 顶层有没有可退的那一层。
+ * @param enabled 顶层有可退的那一层，**且管理页在前台**（预组合的邻页不许吞返回）。
  * @param onCommit 抬手后调一次（挂起）——播 150ms 收尾并清掉顶层。
  */
 @Composable
@@ -50,41 +64,48 @@ internal fun ManagementBackGesture(
 ) {
     val density = LocalDensity.current.density
     PredictiveBackHandler(enabled = enabled) { flow ->
-        flow.collect { event ->
-            // 系统已判过 edge（`BackEventCompat.swipeEdge`），这里只取进度与触点。
-            state.dx = BACK_GESTURE_DP * density * BACK_EASE.transform(event.progress)
-            state.touchY = event.touchY
-            state.swiping = true
+        try {
+            flow.collect { event ->
+                // 系统已判过边缘（`BackEventCompat.swipeEdge`），这里只取进度与触点。
+                // 起步死区照 TG：前 1.5% 的进度丢掉再重标，避免刚碰到边缘就跳一下。
+                val p = (event.progress - LAZY_START).coerceAtLeast(0f) / (1f - LAZY_START)
+                state.dx = BACK_GESTURE_DP * density * BACK_EASE.transform(p)
+                state.touchY = event.touchY
+            }
+            // 流正常结束 = 手势被**提交**（松手时越过了返回阈值）。此时**不清 `dx`**：
+            // 顶层要从当前位置飞出去，`closeTop` 的进度动画叠在它上面 —— 与 TG
+            // `animateBackEndAnimation(false)` 从当前 `translationX` 飞到屏宽同构。
+            onCommit()
+        } catch (e: CancellationException) {
+            // 流被取消 = 手势**撤回**（没越过阈值就松手，或系统判负）。
+            // TG 这里播 320ms 回弹（`animateBackEndAnimation(true)`），本仓直接归零 ——
+            // 少一段回弹，但状态是对的；补回弹要在 `dx` 上再跑一条动画，见 KDoc「有意不等」。
+            state.reset()
+            throw e
         }
-        // 流结束 = 抬手。此后交给 `ManagementTransition` 的 150ms 收尾
-        // （TG 那边对应 `animateBackEndAnimation`，`:1596`），本文件不再写瞬时量。
-        state.swiping = false
-        onCommit()
     }
 }
 
 /**
- * 手势驱动的那几个瞬时量。由 `ManagementTransition` `remember` 一次，读进 `graphicsLayer`。
+ * 手势驱动的那几个瞬时量。由 `ManagementTransition` `remember` 一次，只被
+ * `graphicsLayer` 的 lambda 读。
  *
- * **`dx`/`touchY` 是普通 `var`，`swiping` 才是状态**：前两个每帧都改，改的是
- * `graphicsLayer` 的 lambda —— 绘制阶段重读即可，**不需要重组**。做成 `mutableStateOf`
- * 会让整页内容每帧重组一遍。
+ * **必须是 `mutableFloatStateOf` 而不是普通 `var`**：`graphicsLayer {}` 的 block 只在
+ * 它读到的快照状态变化时才重跑。普通 `var` 不产生失效通知 —— 手机会照常收到
+ * `onBackProgressed`、`dx` 也确实被写了，但**画面上什么都不动**（不报错、静默不生效）。
+ * 而只在这一个 lambda 里读它们，失效范围就只有那一层，**不会**让整页内容每帧重组。
  */
 internal class BackGestureState {
     /** 跟手位移（px），= `dp(56) · StandardDecelerate(t)`（TG `:1570`）。 */
-    var dx: Float = 0f
+    var dx by mutableFloatStateOf(0f)
 
     /** 手指 Y（px）—— TG 的 `predictiveBackY`，缩放锚点用它（`:1133`）。 */
-    var touchY: Float = Float.NaN
-
-    /** 手势进行中（流未结束）。稳态与收尾动画期间为 false。 */
-    var swiping by mutableStateOf(false)
+    var touchY by mutableFloatStateOf(Float.NaN)
 
     /** 松手/取消/进出切换后把瞬时量清零，回到稳态。 */
     fun reset() {
         dx = 0f
         touchY = Float.NaN
-        swiping = false
     }
 }
 
@@ -92,7 +113,10 @@ internal class BackGestureState {
 private val BACK_GESTURE_DP = 56f
 
 /** `CubicBezierInterpolator.StandardDecelerate` = `PathInterpolator(0f, 0f, 0f, 1f)`。 */
-private val BACK_EASE = androidx.compose.animation.core.CubicBezierEasing(0f, 0f, 0f, 1f)
+private val BACK_EASE = CubicBezierEasing(0f, 0f, 0f, 1f)
+
+/** 起步死区（TG `LaunchActivity.java:786` 的 `LAZY_START`）。 */
+private const val LAZY_START = 0.015f
 
 /** 缩放公式里的两个端点（TG `:1119` 的 `0.90f` / `0.85f`）。 */
 private const val SCALE_MID = 0.90f

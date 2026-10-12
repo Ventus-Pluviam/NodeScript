@@ -485,30 +485,34 @@ class MainActivity : ComponentActivity() {
                                 // （2026-10-12；`ManagementTransition` 里逐值对着
                                 // `ActionBarLayout.startLayoutAnimation`）。`page == null`
                                 // 就是面板本身 —— 它也占一个槽位，所以「返回」是同一条路径。
-                                Tab.MANAGEMENT -> ManagementTransition(page = subPage, content = { page ->
-                                    if (page == null) {
-                                        ManagementScreen(
-                                            onOpenConsole = { consoleOpen = true },
-                                            onOpenLogManagement = { logManagementOpen = true },
-                                            onOpenNpm = { npmOpen = true },
-                                            onOpenEnv = { envOpen = true },
-                                            onOpenRegistry = { registryOpen = true },
-                                            modifier = Modifier,
-                                        )
-                                    } else {
-                                        ManagementSubPageHost(
-                                            page = page,
-                                            onCloseConsole = closeConsole,
-                                            onCloseNpm = closeNpm,
-                                            onCloseEnv = closeEnv,
-                                            onCloseRegistry = closeRegistry,
-                                            onCloseAudit = closeAudit,
-                                            onOpenAudit = { auditOpen = true },
-                                            onCloseLogManagement = closeLogManagement,
-                                            scope = scope,
-                                        )
-                                    }
-                                })
+                                Tab.MANAGEMENT -> ManagementTransition(
+                                    page = subPage,
+                                    active = pagerState.currentPage == Tab.MANAGEMENT.ordinal,
+                                    content = { page ->
+                                        if (page == null) {
+                                            ManagementScreen(
+                                                onOpenConsole = { consoleOpen = true },
+                                                onOpenLogManagement = { logManagementOpen = true },
+                                                onOpenNpm = { npmOpen = true },
+                                                onOpenEnv = { envOpen = true },
+                                                onOpenRegistry = { registryOpen = true },
+                                                modifier = Modifier,
+                                            )
+                                        } else {
+                                            ManagementSubPageHost(
+                                                page = page,
+                                                onCloseConsole = closeConsole,
+                                                onCloseNpm = closeNpm,
+                                                onCloseEnv = closeEnv,
+                                                onCloseRegistry = closeRegistry,
+                                                onCloseAudit = closeAudit,
+                                                onOpenAudit = { auditOpen = true },
+                                                onCloseLogManagement = closeLogManagement,
+                                                scope = scope,
+                                            )
+                                        }
+                                    },
+                                )
                                 Tab.SETTINGS -> SettingsScreen(
                                     state = capabilityState,
                                     onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
@@ -527,20 +531,13 @@ class MainActivity : ComponentActivity() {
                     }
                         }
                 }
-            ManagementBackHandler(pagerState, subPage != null) {
-                // 每个枚举都显式列出：留 `else` 会在加新子页时静默吞掉返回键
-                // （新页按返回 = 把日志管理关了，而不是关自己）。
-                when (subPage) {
-                    ManagementPage.CONSOLE -> closeConsole()
-                    ManagementPage.NPM -> closeNpm()
-                    ManagementPage.ENV -> closeEnv()
-                    ManagementPage.LOGS -> closeLogManagement()
-                    ManagementPage.REGISTRY -> closeRegistry()
-                    ManagementPage.AUDIT -> closeAudit()
-                    // 面板本身不是子页：返回键让位给页签滑动（本 handler 只在子页开着时拦截）。
-                    null -> Unit
-                }
-            }
+            // 管理子页的返回键与侧缘手势**整个交给 `ManagementTransition` 内部那个
+            // handler**（2026-10-12）。此前这里挂着一个 `ManagementBackHandler`，它组合在
+            // `ManagementTransition` **之后** —— `OnBackPressedDispatcher` 是 LIFO，
+            // 后注册的优先，于是系统回退手势全被它吃掉，`PredictiveBackHandler`
+            // 一次都收不到，跟手动画自然无从谈起（**不报错、静默不生效**）。
+            //
+            // 「不替别的页签吞返回」那条纪律改由 `ManagementTransition(active = …)` 承担。
             // 键里带页签和管理子页：进入控制台即现取，而不是显示上次离开时的快照。
             // 用 **settledPage** 而不是 currentPage：横划跨多页时 currentPage 会途经
             // 中间每一页，那样划一次会连读三遍；settledPage 只在停稳后变一次。
@@ -1579,22 +1576,6 @@ private fun HomeRetryEffect(state: () -> HomeState, onReload: () -> Unit) {
             onReload()
         }
     }
-}
-
-/**
- * 管理子页（控制台 / 日志管理）的系统返回，和各自顶栏共用同一个关闭动作。
- *
- * pager 会预组合邻页：只看子页是否打开会在其他页签吞返回。可见且停稳在管理页才启用，
- * 切页动画期间也退让。单开 Composable 读 pager，避免每次滚动把整个外壳重组。
- */
-@Composable
-private fun ManagementBackHandler(pagerState: PagerState, subPageOpen: Boolean, onBack: () -> Unit) {
-    val managementPage = MainActivity.Tab.MANAGEMENT.ordinal
-    BackHandler(
-        enabled = subPageOpen && !pagerState.isScrollInProgress &&
-            pagerState.currentPage == managementPage && pagerState.settledPage == managementPage,
-        onBack = onBack,
-    )
 }
 
 /**

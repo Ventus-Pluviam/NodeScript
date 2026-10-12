@@ -1,6 +1,5 @@
 package com.autoscript.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
@@ -12,7 +11,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -20,6 +18,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -60,15 +59,32 @@ import kotlinx.coroutines.launch
  * 顶层 alpha = progress ，translationX = (1 - progress) * 48dp
  * ```
  *
+ * ## 顶层位移的三个来源（互不干涉，直接相加）
+ *
+ * | 来源 | 表达式 | 什么时候非零 |
+ * |---|---|---|
+ * | 进出场 | `(1 - progress) · 48dp` | 切入 / 返回键切出 |
+ * | 跟手 | `gesture.dx` | 侧缘滑动期间 |
+ * | 提交后飞出 | `dismiss · (屏宽 - dx)` | 手势越过阈值松手后 |
+ *
+ * 三者不会同时非零：跟手期间 `progress` 恒为 1、`dismiss` 恒为 0；进出场期间
+ * `dx` 与 `dismiss` 都是 0。飞出那一项减掉 `dx`，终点正好落在屏宽 —— 与 TG
+ * `animateBackEndAnimation(false)` 里 `TRANSLATION_X → measuredWidth` 同构
+ * （`:1607` 的 `distToMove = measuredWidth - x`）。
+ *
  * 深度不超过两层（面板 → 子页 → 子页，子页里没有第三层），所以两个槽位够用；
  * 真要三层，`under`/`top` 得换成栈。
  *
  * @param page 要显示的那一层。**动画的输入，不是状态**。
+ * @param active 管理页是不是 pager 当前停稳的那一页。**预组合的邻页必须传 false** ——
+ *   否则邻页里那个 `BackHandler` 会替前台页签吞掉返回键（pager 预组合两页，
+ *   `BackHandler` 的 LIFO 顺序由组合顺序定，管不了「哪一页真在前台」）。
  * @param content 画一层。过渡期间会被调用两次（底 + 顶），**必须无副作用**。
  */
 @Composable
 internal fun <T> ManagementTransition(
     page: T,
+    active: Boolean,
     content: @Composable (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -81,28 +97,54 @@ internal fun <T> ManagementTransition(
     var top by remember { mutableStateOf<T?>(null) }
     // 1 = 上层完全就位（初值：首帧没有覆盖层，直接就位，不做进场动画）。
     val progress = remember { Animatable(1f) }
+    // 手势提交后「飞出去」的进度 0→1（TG `animateBackEndAnimation(false)`，`:1606-1618`）。
+    val dismiss = remember { Animatable(0f) }
     // 跟手返回手势的瞬时量（`ManagementBackGesture` 写、`graphicsLayer` 读）。
     val gesture = remember { BackGestureState() }
-    val scope = rememberCoroutineScope()
     val density = LocalDensity.current.density
     var viewportHeight by remember { mutableFloatStateOf(0f) }
+    var viewportWidth by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
 
-    // 侧缘滑动：手势期间只写 `gesture`（不重组），抬手后走与返回键同一条收尾路。
+    // **返回键与侧缘手势合走一条路**：TG 也是一个 `OnBackAnimationCallback` 管
+    // started / progressed / cancelled / invoked 四态（`LaunchActivity.java:736-818`）。
+    // `PredictiveBackHandler` 的流在「手势提交」与「普通返回键」两种情况下都会结束，
+    // 所以**不要再挂一个 `BackHandler`** —— 它排在后面注册就会把手势整个吃掉
+    // （`OnBackPressedDispatcher` 是 LIFO，后注册的优先）。这正是本批修的主因：
+    // 外壳那个 `ManagementBackHandler` 组合在 `ManagementTransition` 之后，
+    // 于是 `PredictiveBackHandler` 一次都没被回调过。
+    //
+    // `active` 这道门不能省：pager 预组合邻页，邻页里这个 handler 会替前台页签吞返回。
     ManagementBackGesture(
         state = gesture,
-        enabled = top != null,
-        onCommit = { closeTop(progress, gesture) { top = null } },
+        enabled = active && top != null,
+        onCommit = {
+            // 提交：从**手指当前的位置**继续飞到屏宽（TG 的 `distToMove =
+            // measuredWidth - x`），同时淡出。380ms 是 TG 在预测式返回下的下限
+            // （`:1608` 的 `newBackTransitions() ? 380 : 50`）。
+            scope.launch {
+                coroutineScope {
+                    launch {
+                        dismiss.snapTo(0f)
+                        dismiss.animateTo(1f, tween(FLY_OUT_MS, easing = EASE))
+                    }
+                    launch {
+                        progress.snapTo(1f)
+                        progress.animateTo(0f, tween(FLY_OUT_MS, easing = EASE))
+                    }
+                }
+                top = null
+                gesture.reset()
+                dismiss.snapTo(0f)
+                progress.snapTo(1f)
+            }
+        },
     )
-    // **返回键**这一路。走 `BackHandler` 而不是继续用外壳那个 `ManagementBackHandler`：
-    // 后者在切页动画期间会 `enabled = false`，而这里要保证「顶层开着就一定能退」。
-    BackHandler(enabled = top != null) {
-        scope.launch { closeTop(progress, gesture) { top = null } }
-    }
 
     LaunchedEffect(page) {
         if (page == top) return@LaunchedEffect
         if (page == under) {
-            // 切出（返回）：上层滑出去，底下那层原样回来。
+            // 切出（返回键 / 编程切走）：上层滑出去，底下那层原样回来。
             progress.snapTo(1f)
             progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
             top = null
@@ -116,13 +158,21 @@ internal fun <T> ManagementTransition(
         }
         // 稳态下不留任何手势残留（TG 的 `animateBackEndAnimation` 收尾同样清零）。
         gesture.reset()
+        dismiss.snapTo(0f)
     }
 
-    // 视口高（锚点退化时用）：`onSizeChanged` 给的是 px，与 `touchY` 同坐标系。
+    // 视口尺寸：`onSizeChanged` 给的是 px，与 `touchY` 同坐标系。
     //
     // `fillMaxSize` 不能省：两个子层都是 `matchParentSize`，而 `matchParentSize`
     // **不参与父级尺寸计算** —— 不显式撑满的话，这一层会塌成 0×0。
-    Box(modifier.fillMaxSize().onSizeChanged { viewportHeight = it.height.toFloat() }) {
+    Box(
+        modifier
+            .fillMaxSize()
+            .onSizeChanged {
+                viewportHeight = it.height.toFloat()
+                viewportWidth = it.width.toFloat()
+            },
+    ) {
         // 没有覆盖层时 progress 恒为 1，所以**压暗要以「有没有 top」为前提** ——
         // 直接按 progress 算会让稳态下的页面一直是 0.6 透明度。
         val t = if (top == null) 0f else progress.value
@@ -131,18 +181,21 @@ internal fun <T> ManagementTransition(
         top?.let { over ->
             Box(
                 Modifier
-                    .alpha(progress.value)
+                    .alpha(progress.value * (1f - dismiss.value))
                     .graphicsLayer {
-                        // **两段相加**：进出场那一段（48dp·(1-progress)）与跟手那一段
-                        // （手势的 dx）互不干涉 —— 手势期间 `progress` 恒为 1，
-                        // 动画期间 `dx` 恒为 0（`gesture.reset()` 在稳态清零）。
-                        translationX = (1f - progress.value) * SLIDE_DP * density + gesture.dx
-                        // 缩放 + 锚点：TG `:1119`/`:1133`，锚点 x 固定在左缘 82dp，
-                        // y 取手指位置（没有触点时退到视口中线）。
-                        val sc = backGestureScale(gesture.dx, progress.value, density)
+                        // 三段相加，互不干涉（见 KDoc「三个来源」）：
+                        //   ① 进出场：(1-progress)·48dp
+                        //   ② 跟手：gesture.dx
+                        //   ③ 提交后的飞出：dismiss·(屏宽 - dx) —— 终点正好是屏宽，
+                        //      与 TG 的 `TRANSLATION_X → measuredWidth` 一致。
+                        translationX = (1f - progress.value) * SLIDE_DP * density +
+                            gesture.dx +
+                            dismiss.value * (viewportWidth - gesture.dx)
+                        // 缩放：TG 在预测式返回期间 `containerView.getAlpha()` 恒为 1
+                        // （`:1119` 的内层 `lerp(0.90, 0.85, 1 - alpha)` 因此取 0.90），
+                        // 所以这里 alpha 传常量 1，不跟 `progress`/`dismiss` 走。
+                        val sc = backGestureScale(gesture.dx, alpha = 1f, density)
                         if (sc != 1f) {
-                            // 锚点用 `graphicsLayer` 作用域里的 `this`：这里 `density` 是
-                            // `Density`，`size` 是该层像素尺寸 —— 与 `touchY` 同坐标系。
                             scaleX = sc
                             scaleY = sc
                             transformOrigin = TransformOrigin(
@@ -163,30 +216,10 @@ internal fun <T> ManagementTransition(
     }
 }
 
-/**
- * 顶层退场：播 150ms 收尾后把 `top` 清掉。
- *
- * **无类型参数**：`T` 推不出来是因为这个函数根本不碰页面类型 —— 清空顶层由
- * 调用点的闭包 `clear` 做。带着一个用不到的 `<T>` 只会让三个调用点全部 `Cannot
- * infer type for T`。
- *
- * **松手时不是这里调的** —— 侧缘滑动那条路由 [ManagementBackGesture] 的流收尾，
- * 与 TG 一致（`animateBackEndAnimation`）。本函数是**返回键**与**编程切走**
- * （`page` 变回 `under`）共用的那条路。
- */
-private suspend fun closeTop(
-    progress: Animatable<Float, *>,
-    gesture: BackGestureState,
-    clear: () -> Unit,
-) {
-    progress.snapTo(1f)
-    progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
-    clear()
-    progress.snapTo(1f)
-    gesture.reset()
-}
-
 private const val DURATION_MS = 150
+
+/** 手势提交后的飞出时长（TG `ActionBarLayout.java:1608` 的 `newBackTransitions() ? 380`）。 */
+private const val FLY_OUT_MS = 380
 
 /** 切入/切出的横向位移（TG `ActionBarLayout.java:1892` 的 `dp(48)`）。 */
 private const val SLIDE_DP = 48
