@@ -12,6 +12,76 @@
 
 ---
 
+## 78. typed ids：值类只落两端，判据收一份（含一次行为变更的如实记账）（2026-10-12，批 109）
+
+外审长线建议里唯一「仍是活的、且批 103 的结论不反对」的一条。维护者裁断三点：
+**边界收口不动 DTO**、**第三份正则统一到 `ScriptPaths.PROJECT_ID`**、
+**盘上读回一律跳过而不是抛**。
+
+### 78.1 为什么值类只落两端
+
+`projectId` / `relPath` 此前是裸 `String`，散在 105 个 main 文件里。但真正的问题不是
+「字段没类型」，而是**这两个概念长得一模一样**：`projectRoot(dir, projectId)` 与
+`projectRoot(dir, scriptPath)` 调用处看不出区别，而 `a/b` 对**两者都合法** —— 一次串错位
+既不会被类型拦下，也不会被下游的 `require` 拦下（`resolve("a/b")` 恰好仍在项目根之下，
+`startsWith` 一路放行）。这类错误**编译得过、测试也未必覆盖**，因为拼出来的路径是有效的。
+
+值类落在两端：**不可信输入进的那一步**（`NpmBridgeHandler` 的 `projectId`、
+`EnginesNamespaceHandler` 的 `engines.exec` 两个 ingress）、**拼路径出的那一步**
+（`ScriptPaths` / `DeployPath` / `NpmProjectLayout` / `ProjectStore`）。
+中间的 DTO 字段仍是 `String`。
+
+**代价照实记**：DTO 边界上仍然可能把项目号塞进相对路径字段，编译器不拦。那条缝要等
+DTO 本身也类型化才关得上 —— 本批不假装已经关上了。铺开到 105 个文件换来的只是「更多
+地方多一次编译期检查」，代价是几乎全部签名搬运加每处读点显式 `.value`。
+
+### 78.2 判据收一份是本批一半的价值（而类型只是另一半）
+
+引入值类之前，本仓有**三份**项目内相对路径判据（`DeployPath.isSafeRelPath`、
+`ScriptPaths.scriptFile` 内联的那份、`ScriptDeployRecovery` 的私有副本）与**两份**项目号
+判据（`ScriptPaths.PROJECT_ID`、`FsProjectStore.idPattern`）。抄在一起必然漂，漂的方向
+最坏是「放行的一侧比拒收的一侧宽」—— 于是界面能敲出来的项目号落盘时被拒，用户看到的是
+「执行失败」而不是「这个项目号不合法」。
+
+**`ScriptDeployRecovery` 那份副本是被架构门禁逼出来的**（scheduler 禁依赖同级
+app-service），而 `:domain` 是允许的依赖 —— 所以副本删得掉，不是「懒得删」。
+
+### 78.3 一次行为变更，含两处要钉住的判据变化
+
+统一到 `ScriptPaths.PROJECT_ID`（`[A-Za-z0-9_-]+`）不是零变更，**两条**行为变了：
+
+- **含 `.` 的项目号**（`my.project`）不再出现在 `listIds()`、也无法 `rootFor`。理由是
+  `ScriptPaths` 侧早就论证过「项目号里的 `.` 没有真实用途」，而含点的 id 恰恰与项目根下的
+  `.stage` / `.deploy.journal` 冲突。设备上已存在的这类目录将不再出现 —— 用户要自己改名。
+- **`"a".repeat(65)` 不再被拒**：限长 64 是被删掉那份 `idPattern` 的规则，`ScriptPaths`
+  侧从来没有长度上限。
+
+两条都由 `ProjectStoreTest` 新增的正/负向用例钉住。
+
+### 78.4 盘上读回一律跳过而不是抛
+
+SQLite 的 `project_id` 列、journal 的 `project` 字段、`FsProjectStore.listIds()` 的目录名
+—— 读回的值**没过判据**。统一处置是 `createOrNull` 判不过就**跳过**，理由是这一侧面对的
+是**别人留下的目录**：抛异常会让「打开项目列表」整个失败，一个叫 `my.project` 的旧目录
+不该让整个列表打不开。
+
+**对照的那一侧**（用户敲的 id）仍然是响亮失败 —— `create`/`rootFor` 走到构造 `ProjectId`
+就会抛。**同一个判据，两种失败方向**，因为两侧的「谁来负责」不同。
+
+### 78.5 签名域一个字节都没动
+
+`LockSigner.bodyOf` / `NpmSnapshot.signBody` 把 projectId 折进**签名体**。本批**刻意没碰**
+那两处：判据在值类构造期已经过了，下游拿到的一定是合法 id，签名字节序列必然逐字相同 ——
+改它等于在一条**签名域**上冒「改坏」的零收益风险。既有 `LockSignerTest` +
+`NpmSnapshotTest` 全绿即证。
+
+### 78.6 一个类型系统的小坑：`Stream` + 值类要装箱
+
+`FsProjectStore.listIds` 原先是一条 `Stream` 链。改成 `.map { createOrNull(...) }` 后
+编译器给不出唯一重载（`filter { it != null }` 上的 `it` 推断不出类型），三处报错都指向
+「Unresolved reference」而不是「类型不对」。改成显式循环 + 事后排序 —— 排的是几十个目录名，
+不是热路径。
+
 ## 77. 存储面改名 `.autojs` → `.ns`、签名域内字符串去掉对标产品名，且不做旧版兼容（2026-10-12，批 108，D6 结案）
 
 维护者拍板：`.autojs` 存储目录改成 `.ns`，**不需要兼容旧版**。本批落地，第 18 项那两条
