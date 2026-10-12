@@ -273,15 +273,15 @@ internal fun <T> ManagementTransition(
         // - `backClipRight` ≡ TG 的 `clipRight`（两种情形不同，见文件头「底层不裁」）。
         //
         // 各写一遍必然漂，所以抽成 [topLayerX] / [netLayerX] 两个纯函数共用。
-        val translationX = topLayerX(progress.value, gesture.dx, dismiss.value, viewportWidth, density)
+        val innerTranslationX = topLayerX(progress.value, gesture.dx, dismiss.value, viewportWidth, density)
         val predictive = gesture.hasProgress
-        val netX = netLayerX(translationX, density)
+        val netX = netLayerX(innerTranslationX, density)
         val backClipRight = if (predictive) {
             // `newBackTransitions()`：底层铺满全屏（`:1163-1166`）。
             viewportWidth
         } else {
             // 编程式切换才裁到 `translationX + dp(1)`（`:1102`）。
-            translationX + density
+            innerTranslationX + density
         }
 
         if (top == null) {
@@ -301,7 +301,7 @@ internal fun <T> ManagementTransition(
                             // `viewportWidth == 0` 时（首帧未布局）不画，避免 0/0 = NaN。
                             val width = viewportWidth
                             if (width > 0f) {
-                                val widthOffset = (width - translationX).coerceAtLeast(0f)
+                                val widthOffset = (width - innerTranslationX).coerceAtLeast(0f)
                                 val opacity = (widthOffset / width).coerceIn(0f, SCRIM_MAX_OPACITY)
                                 if (opacity > 0f) {
                                     drawRect(color = SCRIM.copy(alpha = SCRIM_ALPHA * opacity))
@@ -324,19 +324,18 @@ internal fun <T> ManagementTransition(
                     .graphicsLayer {
                         // 净位移 ≡ TG `canvas.translate(-dx, 0)` 抵消之后的那份（`:1124`）。
                         translationX = netX
-                        val sc = layerScale(translationX, predictive, density)
+                        val sc = layerScale(innerTranslationX, predictive, density)
                         if (sc != 1f) {
                             scaleX = sc
                             scaleY = sc
-                            val anchor = layerAnchor(
-                                fromLeft = fromLeft,
-                                predictive = predictive,
-                                touchY = gesture.touchY,
-                                width = size.width,
-                                height = if (viewportHeight > 0f) viewportHeight else size.height,
-                                density = density,
+                            transformOrigin = TransformOrigin(
+                                anchorPivotX(fromLeft, predictive, size.width, density),
+                                anchorPivotY(
+                                    predictive = predictive,
+                                    touchY = gesture.touchY,
+                                    height = if (viewportHeight > 0f) viewportHeight else size.height,
+                                ),
                             )
-                            transformOrigin = anchor
                         }
                     }
                     .matchParentSize(),
@@ -401,24 +400,34 @@ internal fun layerScale(translationX: Float, predictive: Boolean, density: Float
 }
 
 /**
- * 缩放锚点（TG `:1133`）：
- * `predictiveBackLeft ? rect.right - dp(82) : rect.left + dp(82)`，y 取手指位置。
- * **非手势时锚点回到中线/垂直居中** —— TG 那一刻 `rectTmp` 仍是满屏，按中线取等价。
+ * 缩放锚点的 x（TG `:1133`）：
+ * `predictiveBackLeft ? rect.right - dp(82) : rect.left + dp(82)`。
  *
- * @param fromLeft 手指从**左边**滑的（TG `predictiveBackLeft`）：锚点靠右 → 左边留缝。
+ * **这一处就是「缝在哪一侧」的全部原因**：左缘滑 → 锚点靠右 → 窗向右缩 → 左边留缝；
+ * 右缘滑 → 锚点靠左 → 右边留缝。窗口本身**不左右平移**（见 [netLayerX]）。
+ *
+ * 非手势时回到中线 —— TG 那一刻 `rectTmp` 仍是满屏，按中线取等价。视口没量出来
+ * （`width <= 0`）也回中线：不拿 0 当分母。
+ *
+ * @param fromLeft 手指从**左边**滑的（TG `predictiveBackLeft`）。
  */
-internal fun layerAnchor(
+internal fun anchorPivotX(
     fromLeft: Boolean,
     predictive: Boolean,
-    touchY: Float,
     width: Float,
-    height: Float,
     density: Float,
-): TransformOrigin {
-    if (!predictive || width <= 0f || height <= 0f) return TransformOrigin(0.5f, 0.5f)
+): Float {
+    if (!predictive || width <= 0f) return 0.5f
     val fromEdge = SCALE_ANCHOR_X * density / width
-    val y = if (touchY.isNaN()) 0.5f else (touchY / height).coerceIn(0f, 1f)
-    return TransformOrigin(if (fromLeft) 1f - fromEdge else fromEdge, y)
+    return if (fromLeft) 1f - fromEdge else fromEdge
+}
+
+/**
+ * 缩放锚点的 y（TG `:1133` 的 `predictiveBackY`）—— 手指位置；没有触点时退到垂直居中。
+ */
+internal fun anchorPivotY(predictive: Boolean, touchY: Float, height: Float): Float {
+    if (!predictive || height <= 0f || touchY.isNaN()) return 0.5f
+    return (touchY / height).coerceIn(0f, 1f)
 }
 
 /** 灰遮罩的峰值 alpha（TG `:1206` 的 `120`）。 */
@@ -432,11 +441,8 @@ private const val DURATION_MS = 150
 /** 手势提交后的飞出时长（TG `ActionBarLayout.java:1608` 的 `newBackTransitions() ? 380`）。 */
 private const val FLY_OUT_MS = 380
 
-/** 跟手位移的满量程与缩放公式的分母，单位 dp（TG `:1571` 的 `dp(56)`）。 */
-private const val BACK_GESTURE_DP = 56f
-
-/** 缩放锚点距**手指那条边**的距离，单位 dp（TG `:1133` 的 `dp(82)`）。 */
-private const val SCALE_ANCHOR_X = 82f
+// `BACK_GESTURE_DP`（dp(56)）在 `ManagementBackGesture.kt` 里那一份 —— 同名同值，
+// 别在这里再抄一遍（重复顶层声明直接编译错）。
 
 /** 非手势缩放的两个系数（TG `:1121` 的 `min(0.25f, 0.05f · x / dp(56))`）。 */
 private const val SCALE_SLIDE_MAX = 0.25f

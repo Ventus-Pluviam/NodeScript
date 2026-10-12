@@ -5,9 +5,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * [topLayerX] / [netLayerX] / [layerScale] / [layerAnchor] 的判据 —— 逐条对着 TG
- * `ActionBarLayout.java`：`innerTranslationX`（`:1571`）、`canvas.translate(-dx, 0)`
- * （`:1123-1124`）、两条缩放公式（`:1119` / `:1121`）、锚点镜像（`:1133`）。
+ * [topLayerX] / [netLayerX] / [layerScale] / [anchorPivotX] / [anchorPivotY] 的判据 ——
+ * 逐条对着 TG `ActionBarLayout.java`：`innerTranslationX`（`:1571`）、
+ * `canvas.translate(-dx, 0)`（`:1123-1124`）、两条缩放公式（`:1119` / `:1121`）、
+ * 锚点镜像（`:1133`）。
  *
  * 这几个是纯函数 —— 绘制层只在组合里读，没有别的守卫可依赖。
  *
@@ -74,80 +75,46 @@ class ManagementTransitionGeometryTest {
     }
 
     @Test
-    fun `左缘滑锚点靠右 82dp 右边留缝——TG 的 predictiveBackLeft 分支`() {
-        val anchor = layerAnchor(
-            fromLeft = true,
-            predictive = true,
-            touchY = 1000f,
-            width = width,
-            height = 2000f,
-            density = density,
-        )
-        assertEquals(1f - 82 * density / width, anchor.pivotFractionX, 1e-6f)
-        assertEquals(0.5f, anchor.pivotFractionY, 1e-6f)
+    fun `左缘滑锚点靠右 82dp 左边留缝——TG 的 predictiveBackLeft 分支`() {
+        val pivot = anchorPivotX(fromLeft = true, predictive = true, width = width, density = density)
+        assertEquals(1f - 82 * density / width, pivot, 1e-6f)
     }
 
     @Test
-    fun `右缘滑锚点靠左 82dp 左边留缝——TG 的 else 分支`() {
-        val anchor = layerAnchor(
-            fromLeft = false,
-            predictive = true,
-            touchY = 1000f,
-            width = width,
-            height = 2000f,
-            density = density,
-        )
-        assertEquals(82 * density / width, anchor.pivotFractionX, 1e-6f)
+    fun `右缘滑锚点靠左 82dp 右边留缝——TG 的 else 分支`() {
+        val pivot = anchorPivotX(fromLeft = false, predictive = true, width = width, density = density)
+        assertEquals(82 * density / width, pivot, 1e-6f)
     }
 
     @Test
-    fun `没有触点或不在手势中时锚点回中线`() {
-        val noTouch = layerAnchor(
-            fromLeft = true,
-            predictive = true,
-            touchY = Float.NaN,
-            width = width,
-            height = 2000f,
-            density = density,
+    fun `非手势时锚点回中线`() {
+        assertEquals(
+            0.5f,
+            anchorPivotX(fromLeft = true, predictive = false, width = width, density = density),
+            1e-6f,
         )
-        assertEquals(0.5f, noTouch.pivotFractionY, 1e-6f)
+    }
 
-        val notPredictive = layerAnchor(
-            fromLeft = true,
-            predictive = false,
-            touchY = 1000f,
-            width = width,
-            height = 2000f,
-            density = density,
-        )
-        assertEquals(0.5f, notPredictive.pivotFractionX, 1e-6f)
+    @Test
+    fun `视口没量出来时锚点回中线——不拿 0 当分母`() {
+        assertEquals(0.5f, anchorPivotX(fromLeft = true, predictive = true, width = 0f, density = density), 1e-6f)
+        assertEquals(0.5f, anchorPivotY(predictive = true, touchY = 1000f, height = 0f), 1e-6f)
     }
 
     @Test
     fun `锚点 y 用手指位置——TG 的 predictiveBackY`() {
-        val anchor = layerAnchor(
-            fromLeft = true,
-            predictive = true,
-            touchY = 1500f,
-            width = width,
-            height = 2000f,
-            density = density,
-        )
-        assertEquals(0.75f, anchor.pivotFractionY, 1e-6f)
+        assertEquals(0.75f, anchorPivotY(predictive = true, touchY = 1500f, height = 2000f), 1e-6f)
     }
 
     @Test
-    fun `视口还没量出来时锚点回中线——不拿 0 当分母`() {
-        val anchor = layerAnchor(
-            fromLeft = true,
-            predictive = true,
-            touchY = 1000f,
-            width = 0f,
-            height = 0f,
-            density = density,
-        )
-        assertEquals(0.5f, anchor.pivotFractionX, 1e-6f)
-        assertEquals(0.5f, anchor.pivotFractionY, 1e-6f)
+    fun `没有触点时锚点 y 退到中线`() {
+        assertEquals(0.5f, anchorPivotY(predictive = true, touchY = Float.NaN, height = 2000f), 1e-6f)
+    }
+
+    @Test
+    fun `锚点不越出视口——手指按在状态栏或导航栏上是真实情况`() {
+        assertEquals(0f, anchorPivotY(predictive = true, touchY = -50f, height = 2000f), 1e-6f)
+        assertEquals(1f, anchorPivotY(predictive = true, touchY = 2100f, height = 2000f), 1e-6f)
     }
 
     @Test
