@@ -175,66 +175,70 @@ fun SettingsScreen(
                         },
                     )
                     Box(Modifier.weight(1f)) {
-                        if (page == SettingsSubPage.NONE) {
-                            RefreshableBox(Modifier.fillMaxSize()) {
-                                LazyColumn(
-                                    state = topListState,
-                                    // 顶部不留：头部区自己让 26dp；底部让出悬浮底栏与导航 inset。
-                                    contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
-                                ) {
-                                    item { IdentityHeader() }
-                                    item {
-                                        // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
-                                        // 全部纯文字（批 49：无图标、无副标题）。
-                                        SettingsCard {
-                                            SettingsCellRow(
-                                                title = "权限列表",
-                                                onClick = { open(SettingsSubPage.PERMISSIONS) },
-                                            )
-                                            SettingsCellRow(
-                                                title = "脚本设置",
-                                                onClick = { open(SettingsSubPage.SCRIPT_LIMITS) },
-                                            )
-                                            SettingsCellRow(
-                                                title = "语言切换",
-                                                onClick = { toast?.show("语言切换尚未开放") },
-                                            )
-                                            SettingsCellRow(
-                                                title = "帮助文档",
-                                                onClick = { toast?.show("帮助文档尚未开放") },
-                                            )
-                                        }
+                        // **列表全程都画**，子页盖住时也不省 —— 离场/入场动画期间底下这份
+                        // **就是参照物**：48dp 的横移、淡入与圆角缩放都得有个东西在底下才
+                        // 看得出层次。之前「被盖住就不画」，底下只剩一张同色空底，动画看着
+                        // 「一点效果都没有」。TG `:1170` 同款：
+                        // `if (!isTransitionAnimationInProgress()) canvas.clipRect(...)`
+                        // —— 切换动画期间底层**根本不裁**。
+                        RefreshableBox(Modifier.fillMaxSize()) {
+                            LazyColumn(
+                                state = topListState,
+                                // 顶部不留：头部区自己让 26dp；底部让出悬浮底栏与导航 inset。
+                                contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
+                            ) {
+                                item { IdentityHeader() }
+                                item {
+                                    // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
+                                    // 全部纯文字（批 49：无图标、无副标题）。
+                                    SettingsCard {
+                                        SettingsCellRow(
+                                            title = "权限列表",
+                                            onClick = { open(SettingsSubPage.PERMISSIONS) },
+                                        )
+                                        SettingsCellRow(
+                                            title = "脚本设置",
+                                            onClick = { open(SettingsSubPage.SCRIPT_LIMITS) },
+                                        )
+                                        SettingsCellRow(
+                                            title = "语言切换",
+                                            onClick = { toast?.show("语言切换尚未开放") },
+                                        )
+                                        SettingsCellRow(
+                                            title = "帮助文档",
+                                            onClick = { toast?.show("帮助文档尚未开放") },
+                                        )
                                     }
+                                }
+                                item { SectionGap() }
+                                item {
+                                    // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
+                                    SettingsCard {
+                                        SettingsCellRow(
+                                            title = "反馈",
+                                            onClick = { toast?.show("反馈尚未开放") },
+                                        )
+                                        SettingsCellRow(
+                                            title = "关于",
+                                            onClick = { toast?.show("关于尚未开放") },
+                                        )
+                                        SettingsCellRow(
+                                            title = "检查更新",
+                                            onClick = { toast?.show("检查更新尚未开放") },
+                                        )
+                                    }
+                                }
+                                if (state.degradedAlarmTaskIds.isNotEmpty()) {
                                     item { SectionGap() }
                                     item {
-                                        // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
+                                        // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
+                                        // 排期**可能偏差**（§8.6 的承诺）。它是任务的账，不进权限子页。
                                         SettingsCard {
-                                            SettingsCellRow(
-                                                title = "反馈",
-                                                onClick = { toast?.show("反馈尚未开放") },
+                                            CardCaptionRow(
+                                                text = "以下定时任务已降级（可能偏差）：" +
+                                                    state.degradedAlarmTaskIds.joinToString("、"),
+                                                tone = StatusTone.ATTENTION,
                                             )
-                                            SettingsCellRow(
-                                                title = "关于",
-                                                onClick = { toast?.show("关于尚未开放") },
-                                            )
-                                            SettingsCellRow(
-                                                title = "检查更新",
-                                                onClick = { toast?.show("检查更新尚未开放") },
-                                            )
-                                        }
-                                    }
-                                    if (state.degradedAlarmTaskIds.isNotEmpty()) {
-                                        item { SectionGap() }
-                                        item {
-                                            // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
-                                            // 排期**可能偏差**（§8.6 的承诺）。它是任务的账，不进权限子页。
-                                            SettingsCard {
-                                                CardCaptionRow(
-                                                    text = "以下定时任务已降级（可能偏差）：" +
-                                                        state.degradedAlarmTaskIds.joinToString("、"),
-                                                    tone = StatusTone.ATTENTION,
-                                                )
-                                            }
                                         }
                                     }
                                 }

@@ -262,11 +262,14 @@ fun ProjectScreen(
         else -> null
     }
 
-    // 底下那份：顶栏 + 文件列表 + FAB + 底部面板 + 创建对话框。**编辑面开着时它照旧
-    // 组合** —— 离场动画要求旧页在动画期间仍在树上；只有内容被 `showContent` 藏起来
-    // （它被整页盖住了，白组合一遍纯浪费）。
+    // 底下那份：顶栏 + 搜索栏 + 文件列表 + FAB + 底部面板 + 创建对话框。
+    // **编辑面开着时它整份照旧组合** —— 进出动画期间底下这份就是参照物（见里面
+    // `RefreshableBox` 那段注释与 TG `:1170`）。
+    //
+    // @param showOverlays 只管**浮在上面那几个**（FAB、底部操作面板、创建对话框）——
+    //   它们盖在内容之上，编辑期间不该还能点；顶栏/搜索栏/列表是要参与动画的那部分。
     @Composable
-    fun FileListLayer(showContent: Boolean) {
+    fun FileListLayer(showOverlays: Boolean) {
             Column(Modifier.fillMaxSize().background(ThemeColors.background)) {
                 if (selectionMode) {
                     // 选择模式顶栏（TG 的 action mode）：✕ 退出 / 已选计数 / 那一格是**同一个
@@ -312,15 +315,18 @@ fun ProjectScreen(
                         },
                     )
                 }
-                if (showContent) {
-                    SearchField(
-                        query = query,
-                        onChange = { query = it },
-                    )
-                }
+                // 搜索栏与列表同进同出 —— 编辑面盖住时也留着，回退那一下不会看到布局跳变。
+                SearchField(
+                    query = query,
+                    onChange = { query = it },
+                )
                 Box(Modifier.weight(1f)) {
-                    // 编辑面开着时列表不画：它被整页盖住了，白组合一遍纯浪费。
-                    if (showContent) RefreshableBox(Modifier.fillMaxSize()) {
+                    // **列表全程都画**，编辑面盖住时也不省 —— 进出动画期间底下这份就是
+                    // 参照物（48dp 横移 + 淡入 + 圆角缩放，都要有东西在底下才看得出层次）。
+                    // TG `:1170` 同款：`if (!isTransitionAnimationInProgress()) canvas.clipRect(...)`
+                    // —— 切换动画期间底层**根本不裁**。之前「被盖住就不画」，底下只剩一张
+                    // 同色空底，动画看着「一点效果都没有」。
+                    RefreshableBox(Modifier.fillMaxSize()) {
                         LazyColumn(
                             state = listState,
                             contentPadding = PaddingValues(top = 4.dp, bottom = TabBarBottomClearance()),
@@ -365,7 +371,7 @@ fun ProjectScreen(
                         }
                     }
                     ScrollToTopButton(
-                        visible = showContent && rememberScrollToTopVisible(listState),
+                        visible = rememberScrollToTopVisible(listState),
                         onClick = { scope.launch { listState.animateScrollToItem(0) } },
                         modifier = Modifier.align(Alignment.BottomEnd)
                             .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 64.dp)),
@@ -373,7 +379,7 @@ fun ProjectScreen(
                     // FAB（TG FragmentFloatingButton：48dp 圆、品牌蓝、白铅笔）+ 展开的两个子项。
                     // 选择模式下收起：TG 的 action mode 里没有"新建"这一档，留着会和"已选 N 项"
                     // 的顶栏说两件不同的事。
-                    if (!selectionMode && showContent) {
+                    if (!selectionMode && showOverlays) {
                         CreateFab(
                             onCreateFile = { creatingKind = ProjectState.CreationKind.FILE },
                             onCreateFolder = { creatingKind = ProjectState.CreationKind.FOLDER },
@@ -387,7 +393,7 @@ fun ProjectScreen(
         // **只放今天真能做的**：复制路径（本屏自己就能做）+ 进文件夹（目录行才有）。
         // 运行/重命名/删除要宿主侧读口（`HostSummary` 目前只有 `createEntry`），
         // 没有的口不摆成按钮 —— 摆了就是点了没反应。
-        if (showContent) sheetTarget?.let { target ->
+        if (showOverlays) sheetTarget?.let { target ->
             ActionBottomSheet(
                 title = target.name,
                 onDismiss = { sheetTarget = null },
@@ -414,7 +420,7 @@ fun ProjectScreen(
             }
     }
         // 创建对话框在屏幕级（不在 Box 里 —— 它盖全屏，不该被列表的裁剪裁到）。
-        CreateEntryDialogs(
+        if (showOverlays) CreateEntryDialogs(
             creating = creatingKind,
             targetProject = targetProject,
             onDismiss = { creatingKind = null },
@@ -438,7 +444,7 @@ fun ProjectScreen(
         // 显式写 `content =`：尾随 lambda 只能绑到**签名里最后一个**形参，而这里最后
         // 一个是 `modifier`（不是函数类型）—— 写尾随 lambda 会被判成「实参过多」。
         content = { page ->
-            FileListLayer(showContent = page == null)
+            FileListLayer(showOverlays = page == null)
             if (page != null) {
                 ScriptEditorScreen(
                     projectId = page.projectId,

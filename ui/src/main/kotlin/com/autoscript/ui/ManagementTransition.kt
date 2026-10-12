@@ -316,21 +316,34 @@ internal fun <T> ManagementTransition(
         // 窗口往右退时露出左侧一段，往左退时露出右侧一段，所以两端都得算。
         val backClipLeft: Float
         val backClipRight: Float
-        if (predictive) {
-            // `newBackTransitions()`：底层铺满全屏，灰罩才盖得住整段（`:1163-1166`）。
+        if (predictive || netX == 0f) {
+            // 两种情形底层都**铺满全屏**：
+            //
+            // - `predictive` = TG 的 `newBackTransitions()`，`:1163-1166` 那一支
+            //   `clipRight = width + getPaddingLeft()`。
+            // - `netX == 0` = **进出场**。照抄 `:1102` 的 `clipRight = translationX + dp(1)`
+            //   会把底层裁到只剩 1dp —— 因为进出场期间 `translationX` 恒 0。后果是进出场
+            //   那一帧底下**什么都没有**，新页从 alpha 0 淡进来，观感就是「闪一下」。
+            //   TG 真正挡住这件事的是 `:1170` 那道门：
+            //   `if (!isTransitionAnimationInProgress()) canvas.clipRect(...)` ——
+            //   **切换动画期间底层根本不裁**。这里按同一口径：进出场期间不裁。
+            //
+            // 于是点按切换时底层那份**全程可见**（列表、顶栏都在），新页带**圆角 +
+            // 缩放**从 48dp 处滑入 —— 那才是 TG 点进去看到的一幕。
             backClipLeft = 0f
             backClipRight = viewportWidth
         } else if (netX >= 0f) {
-            // 窗口往右退 → 露出左侧那一段（TG `clipRight = translationX + dp(1)`，`:1102`）。
-            // 进出场期间 `innerTranslationX` 恒 0（见 [topLayerX]），于是这里退化成
-            // 「不裁」—— 与 TG 一致：`translationX == 0` 时 `:1110` 那道门整块不画。
+            // 往右退 → 露出左侧那一段（TG `clipRight = translationX + dp(1)`，`:1102`）。
             backClipLeft = 0f
             backClipRight = innerTranslationX + density
         } else {
-            // 窗口往左退 → 露出右侧那一段，镜像 `clipRight` 那一支。
+            // 往左退 → 露出右侧那一段，镜像 `clipRight` 那一支。
             backClipLeft = viewportWidth + netX - density
             backClipRight = viewportWidth
         }
+        // 灰罩只跟**露出那一段**走，且 TG 的整块（`:1180`）有 `translationX != 0` 的门：
+        // 切出已经结束（`top` 归位前那一瞬 `innerTranslationX` 归 0）就不该再压暗。
+        val scrimOn = predictive || innerTranslationX != 0f
 
         if (top == null) {
             Box(Modifier.matchParentSize()) { content(under) }
@@ -358,7 +371,11 @@ internal fun <T> ManagementTransition(
                             //
                             // 右缘滑时 `innerTranslationX` 仍是正的（TG 那边恒正，
                             // `:1571`），所以公式不用改。
-                            val opacity = scrimOpacity(innerTranslationX, viewportWidth)
+                            val opacity = if (scrimOn) {
+                                scrimOpacity(innerTranslationX, viewportWidth)
+                            } else {
+                                0f
+                            }
                             if (opacity > 0f) {
                                 drawRect(color = SCRIM.copy(alpha = opacity))
                             }
