@@ -46,6 +46,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.ClipOp
@@ -1402,9 +1403,17 @@ private const val FRAME_CAPTURE_TIMEOUT_MILLIS = 250L
  * 悬浮底栏收起/展开的时长。
  *
  * 180ms：比主题揭示（[THEME_REVEAL_MILLIS]）短一档 —— 这是"让开位置"的过渡，不是主角。
- * 再长会让人觉得"进了编辑器之后底栏还在慢慢往下爬"。
+ * 再长会让人觉得"进了编辑器之后底栏还在慢慢往上卷"。
  */
 private const val TAB_BAR_HIDE_MILLIS = 180
+
+/**
+ * 底栏收起到底时缩到原尺寸的多少。
+ *
+ * `0.55`：到位那一眼已经明显是"卷掉了"而不是"淡掉了"，又还没薄成一条线 —— 配
+ * 180ms，最后几帧是"向上卷走 + 淡出"一起收尾。
+ */
+private const val TAB_BAR_SHRINK = 0.45f
 
 /** 从任意一层 `ContextWrapper` 里找出宿主 Activity（PixelCopy 要它的 `window`）。 */
 private tailrec fun Context.findActivity(): Activity? = when (this) {
@@ -1519,8 +1528,9 @@ private fun MainShell(
                     content(Modifier.fillMaxSize())
                 }
                 // 胶囊盖在内容之上：后画的在上层。它自己的 8dp 外边距让四周露出内容。
-                // **收起/展开是滑出去而不是瞬间消失**（编辑器进来时那一下最显眼）。
-                // 用 `graphicsLayer` 的位移 + 透明度，不用 `AnimatedVisibility`：
+                // **收起/展开是"向上卷走 / 向上撑出"而不是瞬间消失**（编辑器进来时那一下
+                // 最显眼）。收起的方向不许向下缩 —— 用户 2026-10-13 口径，替掉原来的
+                // "向下滑出去"。用 `graphicsLayer` 的缩放 + 透明度，不用 `AnimatedVisibility`：
                 // ① 这两个量在 **layer 块里**读，动画每帧只更新这一层，不重组底栏；
                 // ② `AnimatedVisibility` 在这个 `Column { Box { … } }` 里会被解析到
                 //    `ColumnScope` 那个重载上，当场编译不过（实测，不是风格问题）；
@@ -1529,8 +1539,18 @@ private fun MainShell(
                     Modifier
                         .align(Alignment.BottomCenter)
                         .graphicsLayer {
-                            translationY = tabBarShift.value * size.height
+                            // 去向由 [LocalTabBarHidden] 的翻面定 —— 它只在每次收起/展开的
+                            // 起点翻一次，layer 块每帧读到的都是"本次动画的固定方向"。
+                            val hiding = tabBarHidden.value
                             alpha = 1f - tabBarShift.value
+                            // **收起向上卷、展开向上撑**（用户 2026-10-13 口径）：
+                            // 收起的锚点钉在胶囊**顶边** —— 底边朝顶边压扁、整条向上卷走；
+                            // 展开的锚点钉在**底边** —— 顶边从底边向上撑出。两个方向的内容
+                            // 都向上走，收起时**不会**看到"向下缩"。
+                            transformOrigin = TransformOrigin(0.5f, if (hiding) 0f else 1f)
+                            val scale = 1f - TAB_BAR_SHRINK * tabBarShift.value
+                            scaleY = scale
+                            scaleX = scale
                         },
                 ) {
                     TabBar(
