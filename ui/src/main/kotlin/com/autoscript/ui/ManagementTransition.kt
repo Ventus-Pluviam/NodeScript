@@ -100,6 +100,8 @@ import kotlinx.coroutines.launch
 internal fun <T> ManagementTransition(
     page: T,
     active: Boolean,
+    /** 动画进行中（切入/切出）—— TG `animationInProgress`，面板侧用它吞新入口点击。 */
+    onAnimatingChanged: (Boolean) -> Unit = {},
     onBackRequest: () -> Unit,
     content: @Composable (T) -> Unit,
     modifier: Modifier = Modifier,
@@ -201,6 +203,7 @@ internal fun <T> ManagementTransition(
         gesture.reset()
         dismiss.snapTo(0f)
         committed.value = false
+        onAnimatingChanged(false)
     }
 
     // 视口尺寸：`onSizeChanged` 给的是 px，与 `touchY` 同坐标系。
@@ -272,6 +275,12 @@ internal fun <T> ManagementTransition(
         // 就是一条线。这里用 Compose 横向渐变复刻那张资源：起点透明、终点
         // `0x33000000`（~51/255，与 xxhdpi 右缘 50 同量级）。
         if (framed) {
+            // 动画跑起来的**那一瞬间**就往上喊「开始动画」（`LaunchedEffect` 一进就设，
+            // 首帧也就位了）。用 `LaunchedEffect` 而不是靠 `onAnimatingChanged` 每帧调：
+            // 它只在 `framed` 翻成 true 时跑一次，不随进度重入。
+            LaunchedEffect(Unit) {
+                onAnimatingChanged(true)
+            }
             val shadowX = (1f - progress.value) * SLIDE_DP * density + gesture.dx +
                 dismiss.value * (viewportWidth - gesture.dx)
             Box(

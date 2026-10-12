@@ -384,6 +384,11 @@ class MainActivity : ComponentActivity() {
             // 日志与游标仍属于 consoleState，返回面板只关闭子页，不清读取结果。
             var consoleOpen by rememberSaveable { mutableStateOf(false) }
             val closeConsole = { consoleOpen = false }
+            // 切入/切出动画进行中（`ManagementTransition` 汇报）—— 面板侧吞新入口点击，
+            // 不然退出动画没播完就点新入口，`page` 两次变会把 `top`/`under` 卡死
+            // （TG `animationInProgress`：动画期间 `startLayoutAnimation`/`onBackPressed`
+            // 直接 return）。
+            var animating by rememberSaveable { mutableStateOf(false) }
             var logManagementOpen by rememberSaveable { mutableStateOf(false) }
             val closeLogManagement = { logManagementOpen = false }
             // 依赖管理子页（批 81）：与日志管理同一层级（pager 外，切页不丢）。
@@ -487,6 +492,11 @@ class MainActivity : ComponentActivity() {
                                 Tab.MANAGEMENT -> ManagementTransition(
                                     page = subPage,
                                     active = pagerState.currentPage == Tab.MANAGEMENT.ordinal,
+                                    // 动画进行中吞掉面板上的新入口点击（TG `animationInProgress`：
+                                    // 退出动画没播完就点新入口，TG 是什么都不发生）。面板是
+                                    // `page == null` 那一支 —— `animating` 在它**下面**组合，
+                                    // 它的 `ManagementScreen` 拿到的是同一个快照。
+                                    onAnimatingChanged = { animating = it },
                                     // 手势提交后由 `ManagementTransition` 调一次：把子页关掉，
                                     // `page` 随之退回 `under`，切出动画在那边的 `LaunchedEffect`
                                     // 里按「是不是手势提交」选飞出还是滑出。
@@ -509,6 +519,7 @@ class MainActivity : ComponentActivity() {
                                                 onOpenNpm = { npmOpen = true },
                                                 onOpenEnv = { envOpen = true },
                                                 onOpenRegistry = { registryOpen = true },
+                                                onCloseAudit = { auditOpen = true },
                                                 modifier = Modifier,
                                             )
                                         } else {
