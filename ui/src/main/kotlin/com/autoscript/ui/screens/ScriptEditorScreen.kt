@@ -138,6 +138,15 @@ fun ScriptEditorScreen(
     onRead: suspend (projectId: String, relPath: String) -> String,
     onSave: suspend (projectId: String, relPath: String, content: String) -> Unit,
     onClose: () -> Unit,
+    /**
+     * 把本屏那条「能不能退」的判定（含未保存拦截）交给外层。批 115：外层包了一层
+     * [com.autoscript.ui.ManagementTransition]，**预测式手势的提交路径走的是它的
+     * `onBackRequest`**，不经本屏那颗 `BackHandler` —— 于是「有未保存改动先问一句」
+     * 那道门必须从这儿递出去，否则侧缘滑回来会**静默丢改动**。
+     *
+     * 用 `DisposableEffect` 注册：编辑器挂上树时把判定递出去，退出组合时收回。
+     */
+    onRegisterCloseGuard: ((() -> Unit)?) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
@@ -178,12 +187,17 @@ fun ScriptEditorScreen(
         loadError = read.error
     }
 
-    /** 退回上一层（返回键与 ‹ 共用）：有未保存改动先问一句，不静默丢。 */
+    /** 退回上一层（返回键、‹、跟手手势三者共用）：有未保存改动先问一句，不静默丢。 */
     fun close() {
         if (dirty) confirmDiscard = true else onClose()
     }
 
     BackHandler { close() }
+    // 递出去给外层那条手势路径用（见 onRegisterCloseGuard 的 KDoc）。
+    DisposableEffect(Unit) {
+        onRegisterCloseGuard(::close)
+        onDispose { onRegisterCloseGuard(null) }
+    }
 
     // 局部 val：`value` 是可变的，下面 when 的分支里要的是"读到了"那一档的非空值。
     val loaded = value

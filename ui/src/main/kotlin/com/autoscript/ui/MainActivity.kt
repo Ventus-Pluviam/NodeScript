@@ -548,6 +548,9 @@ class MainActivity : ComponentActivity() {
                                     onLimitsDraft = { field, text -> limitsState = limitsState.setDraft(field, text) },
                                     onLimitsSave = { scope.launch { limitsState = saveScriptLimits(hostSummary(), limitsState) } },
                                     onLimitsReset = { scope.launch { limitsState = resetScriptLimits(hostSummary(), limitsState) } },
+                                    // 邻页预组合时它那个手势返回处理器会替前台页签吞返回键
+                                    // （`OnBackPressedDispatcher` 是 LIFO）。
+                                    active = pagerState.currentPage == Tab.SETTINGS.ordinal,
                                     modifier = Modifier,
                                 )
                         }
