@@ -2,6 +2,7 @@ package com.autoscript.domain.host
 
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.editor.SyntaxHighlighter
+import com.autoscript.domain.scripts.ScriptRuntimeLimits
 import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
@@ -236,6 +237,27 @@ interface HostSummary {
      * 删除一条脚本环境变量。**幂等**（与 [cancelTask] 同口径）：从未设过的 key 照样返回。
      */
     suspend fun removeScriptEnv(key: String)
+
+    /**
+     * 脚本资源限额读数（§8.1「脚本资源限额」，批 107；设置页 → 脚本设置）。
+     *
+     * 与 [scriptEnv] **同一套纪律**：读不到**抛**不返回出厂值 —— 出厂值长得像「用户填的」，
+     * 回它会把「盘读不出来」画成「你的设置重置了」（另见 `AppShellApplication` 的
+     * 「壳未装配」那条）。未设过一份 = 出厂值是**实现**的合法回答（文件不存在），
+     * 不是这条口在撒谎。
+     */
+    suspend fun scriptLimits(): ScriptRuntimeLimits
+
+    /**
+     * 保存脚本资源限额（§8.1，批 107）。
+     *
+     * 不过 [ScriptRuntimeLimits.reject] 时**抛** [IllegalArgumentException]，原文点名
+     * 是哪个字段越界 —— 判据唯一一份在 `:domain`，本口只转发，`:ui` 与落盘实现都不另判一遍。
+     *
+     * **立即生效**（与 [putScriptEnv] 同款：改完下次执行即用新值，不重启宿主）：
+     * 单脚本那半在每次 spawn 现读，桥那半在每次请求现读。
+     */
+    suspend fun saveScriptLimits(limits: ScriptRuntimeLimits)
 
     /**
      * 全局镜像源读数（§10.9 第 8 条；管理面板 → 镜像源管理）。

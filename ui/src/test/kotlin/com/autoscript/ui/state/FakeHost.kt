@@ -18,6 +18,7 @@ import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmRegistrySnapshot
 import com.autoscript.domain.permission.Capability
+import com.autoscript.domain.scripts.ScriptRuntimeLimits
 import com.autoscript.domain.scripts.ScriptEnvEntry
 
 /**
@@ -85,6 +86,12 @@ open class FakeHost(
 
     override suspend fun removeScriptEnv(key: String): Unit =
         throw UnsupportedOperationException("本替身未提供 removeScriptEnv（用例按需覆盖）")
+
+    override suspend fun scriptLimits(): ScriptRuntimeLimits =
+        throw UnsupportedOperationException("本替身未提供 scriptLimits（用例按需覆盖）")
+
+    override suspend fun saveScriptLimits(limits: ScriptRuntimeLimits): Unit =
+        throw UnsupportedOperationException("本替身未提供 saveScriptLimits（用例按需覆盖）")
 
     override suspend fun npmRegistry(): NpmRegistrySnapshot =
         throw UnsupportedOperationException("本替身未提供 npmRegistry（用例按需覆盖）")

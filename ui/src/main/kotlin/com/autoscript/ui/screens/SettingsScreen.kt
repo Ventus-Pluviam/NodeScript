@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -65,6 +66,8 @@ import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 import com.autoscript.domain.permission.Capability
+import com.autoscript.ui.state.ScreenStatus
+import com.autoscript.ui.state.ScriptLimitsState
 import kotlinx.coroutines.launch
 
 /**
@@ -96,18 +99,31 @@ import kotlinx.coroutines.launch
  * 刷新钮不设（批 41/47 同一口径）：`TabReloadEffect` 在切页签 / 回前台现取，
  * 子页开着时回前台同样现取（授权返回后的重读走这一条）。
  */
+// 10 个参数压着 detekt `LongParameterList` 的线（9）。**刻意不打包**：五个限额回调本来
+// 就已收成一个 [ScriptLimitsDraft] 回调（见 [ScriptLimitsScreen.onDraft]），再往上打���
+// `LimitsCallbacks` 只会让「改一个回调要开另一个类型的定义」——那正是本仓点名的
+// 「打包省了参数数、丢了可读性」。
+@Suppress("LongParameterList")
 @Composable
 fun SettingsScreen(
     state: CapabilityCenterState,
     onOpenSettings: (Capability) -> Unit,
+    /** 脚本设置子页的状态与回调（批 107；§8.1）。本屏不持有读口，只透传。 */
+    limitsState: ScriptLimitsState,
+    onLimitsRefresh: suspend () -> Unit,
+    onLimitsDraft: (field: ScriptLimitsDraft, value: String) -> Unit,
+    onLimitsSave: () -> Unit,
+    onLimitsReset: () -> Unit,
     themeSwitchLabel: String,
     onSwitchTheme: (Offset) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 子页开着时先吃掉系统返回。横划到别的页签时本屏不在组合里，BackHandler 随之卸下，
     // 不会替别的页签拦返回键（与 ProjectScreen 各子态同一口径）。
-    var permissionsOpen by rememberSaveable { mutableStateOf(false) }
-    BackHandler(enabled = permissionsOpen) { permissionsOpen = false }
+    // 两个子页，故用**枚举而不是 Boolean**：布尔只能表示「开着哪个」，而本页已有两个里页，
+    // 用布尔就得再加一个互斥判据 —— 那正是「按下去发现两个同时开着」那类 bug 的形状。
+    var subPage by rememberSaveable { mutableStateOf(SettingsSubPage.NONE) }
+    BackHandler(enabled = subPage != SettingsSubPage.NONE) { subPage = SettingsSubPage.NONE }
 
     // 读态三态分派走 Status（`LoadState` 的纪律：界面不自己 when 它）。
     // 顶页不再挂它（批 49 去掉标题下的小字）—— 只在子页没读到 / 读失败时如实说。
@@ -122,10 +138,10 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
 
     Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted)) {
-        if (permissionsOpen) {
+        if (subPage != SettingsSubPage.NONE) {
             ActionBar(
-                title = "权限列表",
-                onBack = { permissionsOpen = false },
+                title = subPage.title,
+                onBack = { subPage = SettingsSubPage.NONE },
                 background = ThemeColors.surfaceMuted,
             )
         } else {
@@ -139,29 +155,22 @@ fun SettingsScreen(
         }
         Box(Modifier.weight(1f)) {
             RefreshableBox(Modifier.fillMaxSize()) {
-                if (permissionsOpen) {
-                    LazyColumn(
-                        state = pageListState,
-                        // 子页第一张卡离顶栏一小段灰（管理面板同款 8dp）。
-                        contentPadding = PaddingValues(top = 8.dp, bottom = TabBarBottomClearance()),
-                    ) {
-                        if (state.rows.isNotEmpty()) {
-                            item {
-                                SettingsCard {
-                                    // 全部权限同一张卡、行间无分隔线（TG `SettingCell`
-                                    // 的 `Factory.bindView` 本就不传 divider）。
-                                    state.rows.forEach { row -> PermissionRow(row, onOpenSettings) }
-                                }
-                            }
-                        } else {
-                            // 没读到 / 读失败：卡里如实说一句，不冒充「一个权限都没有」。
-                            item {
-                                SettingsCard { CardCaptionRow(text = status.text, tone = status.tone) }
-                            }
-                        }
-                    }
-                } else {
-                    LazyColumn(
+                when (subPage) {
+                    SettingsSubPage.PERMISSIONS ->
+                        PermissionsPage(state, status, pageListState, onOpenSettings)
+                    // 脚本设置子页（批 107；§8.1 脚本资源限额）：状态与回调整份从外面进来，
+                    // 本屏不持有读口 —— 设置页此前只收 `CapabilityCenterState`，接第一个
+                    // 持久化读口时把那份 `HostSummary` 依赖挡在外面（`:ui` 只依赖 `:domain`）。
+                    SettingsSubPage.SCRIPT_LIMITS -> ScriptLimitsScreen(
+                        state = limitsState,
+                        onRefresh = onLimitsRefresh,
+                        onDraft = onLimitsDraft,
+                        onSave = onLimitsSave,
+                        onReset = onLimitsReset,
+                        onBack = { subPage = SettingsSubPage.NONE },
+                        modifier = Modifier,
+                    )
+                    SettingsSubPage.NONE -> LazyColumn(
                         state = topListState,
                         // 顶部不留：头部区自己让 26dp；底部让出悬浮底栏与导航 inset。
                         contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
@@ -173,7 +182,11 @@ fun SettingsScreen(
                             SettingsCard {
                                 SettingsCellRow(
                                     title = "权限列表",
-                                    onClick = { permissionsOpen = true },
+                                    onClick = { subPage = SettingsSubPage.PERMISSIONS },
+                                )
+                                SettingsCellRow(
+                                    title = "脚本设置",
+                                    onClick = { subPage = SettingsSubPage.SCRIPT_LIMITS },
                                 )
                                 SettingsCellRow(
                                     title = "语言切换",
@@ -220,7 +233,7 @@ fun SettingsScreen(
                     }
                 }
             }
-            val listState = if (permissionsOpen) pageListState else topListState
+            val listState = if (subPage != SettingsSubPage.NONE) pageListState else topListState
             ScrollToTopButton(
                 visible = rememberScrollToTopVisible(listState),
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
@@ -228,6 +241,42 @@ fun SettingsScreen(
                 modifier = Modifier.align(Alignment.BottomEnd)
                     .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
             )
+        }
+    }
+}
+
+/**
+ * 权限子页本体（批 107 自 [SettingsScreen] 抽出）。
+ *
+ * **为什么抽**：加了脚本设置子页后 [SettingsScreen] 顶到 detekt `LongMethod` 的线，而那一段
+ * 是**另一个页的完整实现** —— 顶页只做「选哪个子页」，各子页各画各的。留在里面会让
+ * 「改权限行」的人得在一个混着两个子页的函数里找。
+ */
+@Composable
+private fun PermissionsPage(
+    state: CapabilityCenterState,
+    status: ScreenStatus,
+    pageListState: LazyListState,
+    onOpenSettings: (Capability) -> Unit,
+) {
+    LazyColumn(
+        state = pageListState,
+        // 子页第一张卡离顶栏一小段灰（管理面板同款 8dp）。
+        contentPadding = PaddingValues(top = 8.dp, bottom = TabBarBottomClearance()),
+    ) {
+        if (state.rows.isNotEmpty()) {
+            item {
+                SettingsCard {
+                    // 全部权限同一张卡、行间无分隔线（TG `SettingCell`
+                    // 的 `Factory.bindView` 本就不传分隔线）。
+                    state.rows.forEach { row -> PermissionRow(row, onOpenSettings) }
+                }
+            }
+        } else {
+            // 没读到 / 读失败：卡里如实说一句，不冒充「一个权限都没有」。
+            item {
+                SettingsCard { CardCaptionRow(text = status.text, tone = status.tone) }
+            }
         }
     }
 }
@@ -422,3 +471,25 @@ private fun Capability.glyph(): GlyphKind = when (this) {
     Capability.ADB_INPUT -> GlyphKind.CONSOLE
     Capability.USAGE_ACCESS -> GlyphKind.CHART
 }
+
+
+/**
+ * 设置页的两个子页（批 107；此前只有一个「权限列表」，用 Boolean 表示）。
+ *
+ * **改成枚举是因为多了一个子页**：布尔只能表示「开着没有」，第二个子页就得再加一个互斥
+ * 判据 —— 那正是「按下去两个同时开着」那类 bug 的形状。`NONE` 显式存在而不是靠「两个都
+ * false」表示顶页：`when` 穷举到它，新增子页时漏一个分支**编译期**就红。
+ */
+enum class SettingsSubPage(val title: String) {
+    NONE(""),
+    PERMISSIONS("权限列表"),
+    SCRIPT_LIMITS("脚本设置"),
+}
+
+/**
+ * 五个草稿里是哪一个（批 107）。
+ *
+ * 五个 [String] 字段用「位置」传是错的（编译器不检查顺序），用 `copy` 又要在 `MainActivity`
+ * 里抄五遍字段名 —— 那正是「加一项要改六处」的形状。枚举让 `copy` 的选择在一个地方做完。
+ */
+enum class ScriptLimitsDraft { HEAP, UV, INFLIGHT, BYTES, THREADS }

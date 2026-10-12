@@ -47,12 +47,23 @@ class NodeProcessEngineRealSpawnTest {
         return p
     }
 
-    private fun engine(grace: Long = 5_000) = NodeProcessEngine(
+    private fun engine(
+        grace: Long = 5_000,
+        maxHeapMb: () -> Int? = { null },
+        uvThreadPoolSize: () -> Int? = { null },
+    ) = NodeProcessEngine(
         EngineId(0),
-        NodeEngineConfig(filesDir = files, hostBinary = Path.of("node"), stopGraceMillis = grace),
+        NodeEngineConfig(
+            filesDir = files,
+            hostBinary = Path.of("node"),
+            maxHeapMb = maxHeapMb,
+            uvThreadPoolSize = uvThreadPoolSize,
+            stopGraceMillis = grace,
+        ),
     )
 
-    private fun request() = EngineRunRequest(projectId = "p1", scriptPath = "s.js")
+    private fun request(args: List<String> = emptyList()) =
+        EngineRunRequest(projectId = "p1", scriptPath = "s.js", args = args)
 
     /** 轮询到期望状态（真进程有启动/退出时延；超时回最后观测值，由断言面报真实状态）。 */
     private suspend fun awaitStatus(e: NodeProcessEngine, want: EngineStatus, timeoutMillis: Long = 15_000): EngineStatus {
@@ -209,6 +220,58 @@ class NodeProcessEngineRealSpawnTest {
         assertEquals(EngineStatus.CRASHED, runBlocking { awaitStatus(e, EngineStatus.CRASHED, 5_000) })
         assertNull(e.pid)
     }
+
+    /**
+     * **真 spawn 验「堆上限真被 Node 读了」** —— 假缝的 `lastCommand` 断言只证明「标志位拼对了」，
+     * 这条证明「Node 读了它」：脚本自己把 `v8.getHeapStatistics().heap_size_limit` 写进文件。
+     *
+     * **走的是引擎的真 spawn**（`ProcessBuilderLauncher`），不是另起一个 `node` 跑脚本 ——
+     * 第一版那样写的当场红：另起的进程走测试自己的 argv，**整条绕开了引擎的拼装**，
+     * 于是测的是「Node 认不认这个标志位」，而这与「引擎有没有把它拼对」是两件事。
+     * 后者才有契约价值，它已由假缝那四条钉住位置与顺序；这条钉另一半。
+     *
+     * **结果通过脚本参数回传**（`process.argv[2]` 是本测试塞的临时文件路径）而不是读引擎的
+     * stdout：那条路要依赖「引擎把子进程 stdout 收集到哪里」这个实现细节，而本条要验的是
+     * 堆上限，掺进一条与被测无关的间接依赖只会让它在别处变红时说不清。
+     *
+     * **判据用比值而不是绝对值**：V8 的堆上限不是被请求的那个数（实测 `--max-old-space-size=192`
+     * 给出 240MB，受老生代/新生代比例与 V8 版本影响），拿绝对值钉会随 Node 版本一起红。
+     * 「同一个脚本、只差这一个开关」的对拍是稳定的：开与关必须差出一个数量级。
+     */
+    @Test
+    fun `堆上限真的压住了 Node 的堆——真 spawn 里脚本自己读到的那份`() {
+        val out = dir.resolve("heap-out.txt")
+        writeScript(
+            """
+            const fs = require('node:fs');
+            const mb = Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576);
+            fs.writeFileSync(process.argv[2], String(mb));
+            process.exit(0);
+            """.trimIndent(),
+        )
+        val args = listOf(out.toString())
+        Files.deleteIfExists(out)   // 两次 spawn 各读自己那一份（第一版忘了删，第二次读的是第一次的残留）
+        val unbounded = runBlocking { heapMbSeenByScript(engine(), args) }
+        Files.deleteIfExists(out)
+        val bounded = runBlocking { heapMbSeenByScript(engine(maxHeapMb = { 192 }), args) }
+        assertTrue(
+            bounded * 8 < unbounded,
+            "开=$unbounded MB 关=$bounded MB —— 两者若接近，说明引擎没把标志位拼对（假缝那四条会先红）" +
+                "或者 Node 没读它（这条才抓得到）",
+        )
+    }
+
+    /** 真 spawn 一次，读回脚本自己看到的堆上限（MiB）。 */
+    private suspend fun heapMbSeenByScript(e: NodeProcessEngine, args: List<String>): Long {
+        e.execute(request(args = args))
+        val deadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < deadline && !Files.exists(outOf(args))) delay(25)
+        val text = runCatching { String(Files.readAllBytes(outOf(args)), Charsets.UTF_8) }.getOrDefault("")
+        return text.trim().toLongOrNull()
+            ?: error("脚本没写回堆上限（node 不在 PATH 或脚本没跑起来）：'$text'")
+    }
+
+    private fun outOf(args: List<String>): Path = Path.of(args[0])
 
     @Test
     fun `PATH 名宿主缺位——spawn IOException 折叠 ERR_IO 点名 cmd`() {

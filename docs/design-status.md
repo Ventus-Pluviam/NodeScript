@@ -1,4 +1,14 @@
 # AutoScript 落地状态台账
+> **2026-10-12 · 批 107：脚本设置页（线程与内存上限，两档全做）+ 外审 M2 结案** ——
+> 设置页「权限列表」下面加一行**脚本设置**（用户口径）。**单脚本**那档落
+> `--max-old-space-size`（argv）+ `UV_THREADPOOL_SIZE`（env）；**桥**那档（外审 M2）
+> 落**每连接条数 / 字节 / `limitedParallelism`** 三档闸，接在批 100 的取闸链上，
+> 「可见面」同期落地（诊断回执 + `connectionStats()`）。两档都**立即生效**（改完下次
+> 执行 / 下一次请求起），**不追溯在途** —— 掐在途是「撤销」不是「限额」。
+> **M2 挂了三批、这一批结案**：批 100 的两条不做理由都建立在「这个数必须由我们定」
+> 之上，而用户要的恰是一个可改的旋钮 —— **旋钮本身就是「要能改」的答案**。
+> 契约见 §8.1「脚本资源限额」与新增的 §7.6.1。叙事见 [`本日流水`](log/2026-10-11.md)。
+>
 > **2026-10-12 · 批 106：jsonl 压实（外审 B3 末件）+ 台账三处矛盾订正** ——
 > [`FileScriptEnvStore`](../app-service/script-repo/src/main/kotlin/com/autoscript/appservice/scriptrepo/core/FileScriptEnvStore.kt)
 > 写后按 `Files.size` 判、超 **256 KiB** 就把**收敛视图**经 tmp + `ATOMIC_MOVE` 重写
@@ -689,6 +699,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-12 | 17 | 批 107：**脚本设置页**（用户口径：权限列表下面加一行）—— 单脚本档（堆 `--max-old-space-size` argv + `UV_THREADPOOL_SIZE` env）与桥档（外审 **M2 结案**：每连接条数 64 / 字节 32 MiB / `limitedParallelism` 8，三档接在批 100 的取闸链上）两档全做、立即生效。**M2 挂了三批、这一批能结案**：批 100 的两条不做理由都建立在「这个数必须由我们定」之上，用户要的恰是可改的旋钮 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 16 | 批 106：**jsonl 压实**（外审 B3 末件）—— `FileScriptEnvStore` 写后按 `Files.size` 判、超 256 KiB 就把收敛视图 tmp+`ATOMIC_MOVE` 重写；**判据是「读口问现状还是问历史」**（前者可压、`install-history.jsonl` 那类审计事实不可）。阈值可注入是为让单测用小阈值走真代码（第一版守卫凑 256 KiB 直接假绿）。一条守卫抓到语义错误：压实是**每次写后判一次**，不是攒够再收拾（盘占用上界 = 阈值 + 一次写入）。`remove` 墓碑行为照旧但 KDoc 里那个理由已被压实压掉，两段互相点名。另订正三处台账矛盾（M4 / A13 / `TrustTierResolver`） | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 15 | 批 105：两份 `ProcOps` 合并成**新模块 `:platform:process`**（消掉批 95/99 留下的「手法逐字同款、代码两份」重复）。**落点选叶子模块而非塞 `:domain`** —— 它只用 `java.nio` + `Process` 桩面，塞领域层能消重复但消的是症状留的是根因（领域层不该知道 `/proc`）。**`:engine:node-process` 的 `ProcessLauncher.pidOf` 刻意留一份**：反向依赖即破 §6，那段纯反射不值得。顺带两处：`ProcTreeOps.alive` 改走注入的 procDir（原来写死 `DEFAULT_PROC`，合成树插不进去）+ 信号名表拆成 npm 侧的 `T1SignalNames.kt`（T1 exit 帧契约，只此一个调用方）。模块数 17→18 / 测试任务 14→15，冻结面五处同步（`ModuleGraphTest` 的计数门当场抓到 `build-logic/settings.gradle.kts` 漏改）。两侧 ArchitectureTest 黑名单**逐条改**，放行粒度到子包（`platform.process` 放行，其余 `platform.*` 三面仍零依赖）。守卫 7 + 1 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 14 | 批 104：外审 **M1 收口**（`scriptFile` 补读侧词法闸 —— 此前一个字都不校验，而返回值直接进 `node <路径>` 的 argv；`projectId` 复用 `isValidProjectId`，非法路径折 `ERR_INVALID_PARAM`）+ **B3 的流式读那半**（`FileScriptEnvStore.replay` 去 `readAllBytes`，改逐字节扫）。守卫新增 7 + 1 + 1 | [`docs/log/2026-10-11.md`](log/2026-10-11.md) |
