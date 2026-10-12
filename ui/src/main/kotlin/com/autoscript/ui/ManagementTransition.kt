@@ -213,6 +213,11 @@ internal fun <T> ManagementTransition(
 
     LaunchedEffect(page) {
         if (page == top) return@LaunchedEffect
+        // 稳态兜底：`page` 回到 `under` 且本来就没有盖层 → 无事可做。
+        // 覆盖两个时间点：**首帧**（page == under，top 还是 null）与**切出完成**。
+        // 没有这一行的话，首帧会把 base 页自己设成 `top` 演一遍假进场 ——
+        // 设置页那种「初始页非空」的宿主（page = NONE）就会在挂载时自切一场。
+        if (page == under && top == null) return@LaunchedEffect
         // 只有**切出**走完才允许清掉覆盖层。切入走完后 `top` 要留着 —— 子页就位了、
         // 还在前台。`finally` 无条件 `top = null` 的话，每次点进子页都是
         // 「闪一下动画然后自动退出」。
