@@ -7,7 +7,6 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -129,12 +128,14 @@ internal fun <T> ManagementTransition(
     // 圆角半径（px）—— TG 在 `drawChild` 里取屏幕四角 `RoundedCorner` 半径做 round-rect
     // 裁剪（`ActionBarLayout.java:1136-1155`），这是**屏幕圆角**不是我们自己定的数。
     // 布局跑过一遍之后（`viewportWidth` 非 0）用真实半径；布局没到先 0 兜底，
-    // 布局一到 `remember` 换 key 重算。
+    // 布局一到 `remember` 换 key 重算。`LocalView.current` 是 @Composable 取子，
+    // 必须在 `remember` **外面**读（里面调用会报「只能在 @Composable 上下文里调」）。
+    val localView = LocalView.current
     val cornerShape = remember(viewportWidth, viewportHeight, density) {
         val r = if (viewportWidth <= 0f || viewportHeight <= 0f) {
             0f
         } else {
-            screenCornerRadiusPx(LocalView.current)
+            screenCornerRadiusPx(localView)
         }
         // `CornerSize(float)` 是 **PxCornerSize**（像素，不是 dp）—— `toPx` 原样返回。
         RoundedCornerShape(CornerSize(r))
@@ -311,8 +312,9 @@ private val EASE = CubicBezierEasing(0f, 0f, 0.2f, 1f)
 /**
  * 屏幕四角的系统圆角半径（px）。TG 的裁剪用的就是
  * `insets.getRoundedCorner(POSITION_*)`（`ActionBarLayout.java:1136`）—— 这是
- * **设备的物理圆角**，不是我们自定数。API 31+ 才能问 `Display.getRoundedCornerSize`，
- * 旧版本与拿不到 Display 时按 0 兜底（无圆角屏）。
+ * **设备的物理圆角**，不是我们自定数。API 31+ 才能问
+ * `Display.getRoundedCorner(POSITION_).getRadius()`（比 `getRoundedCornerSize`
+ * 更稳：窗口不在前台时那个 API 会抛），旧版本与拿不到 Display 时按 0 兜底。
  */
 private fun screenCornerRadiusPx(view: View): Float {
     val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -323,10 +325,10 @@ private fun screenCornerRadiusPx(view: View): Float {
     if (display == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0f
     return runCatching {
         maxOf(
-            display.getRoundedCornerSize(0),
-            display.getRoundedCornerSize(1),
-            display.getRoundedCornerSize(2),
-            display.getRoundedCornerSize(3),
+            display.getRoundedCorner(0).getRadius(),
+            display.getRoundedCorner(1).getRadius(),
+            display.getRoundedCorner(2).getRadius(),
+            display.getRoundedCorner(3).getRadius(),
         )
     }.getOrDefault(0).toFloat()
 }
