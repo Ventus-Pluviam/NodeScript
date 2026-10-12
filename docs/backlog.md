@@ -805,6 +805,7 @@ stage 目录），压实要连「哪些 nonce 曾经存在过」一起答，那�
 
 | # | 事项 | 核实 | 成本 |
 |---|---|---|---|
+| **D14** | **CI 依赖升级：`actions/setup-java` v4 → v6.0.1**（Dependabot PR [#55](https://github.com/Ventus-Pluviam/NodeScript/pull/55)，2026-10-12 维护者**关掉**）。**不是安全问题**：那个 PR 同时更新了 commit SHA，守住「actions 一律钉 SHA」的纪律（`ci.yml` 注释即此口径）。关掉的真正理由是**升法不对** —— v6.0.0 是跨两个大版本的跃迁，内部有 Zulu → Azul Metadata API 迁移、ESM 迁移、输入项改名 `jdkFile` → `jdk-file`；本仓只用 `distribution` + `java-version`，两项改名不碰我们，**但这需要有人真读一遍**，而不是让一个开了四天没人推的 PR 在清单里当背景噪音。要升请**单独一批**做（连带复核 `actions/checkout` 与 node-runtime-build 管线的钉法）。版本仍然有效，随时可重开 | 🔶 待排期（**维护者已裁：不走 dependabot 顺手，单独一批**） | M |
 | **D6** | 命名不一致。**描述面已做（2026-10-01 批 7）**：`@autojs/*` 这个 npm scope 在**描述面**的 9 处（`06-modules`/`07-bridge` ×3/`09-capabilities`/`12-js-api`/`CLAUDE.md`/`bridge/js/package.json`/`ImageAnalyzer.kt`）全部改成事实侧口径 —— 脚本侧导入名 `auto`（`filesDir/node_modules/auto`）与真实交付物名 `bridge_native.node`；**`AutoJsPro` 九处保留**（那是**对标产品名**，不是自己的名字）。**存储面已做（2026-10-12 批 108）**：维护者拍板 `.autojs` → `.ns` 且**不做旧版兼容**，同批把两个签名域内前缀 `autojs-lock-v1` / `autojs-snapshot-v1` 一并改成 `autoscript-` 前缀。**发布用的 npm scope 一问已从本池删除**（维护者口径：本项目不对外发布 npm 包） | ✅ 2026-10-12（批 108，D6 全清） | — |
 
 ## E. 需要拍板（产品面，不是工程顺手能做）
