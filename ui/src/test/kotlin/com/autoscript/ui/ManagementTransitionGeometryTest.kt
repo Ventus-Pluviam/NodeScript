@@ -23,10 +23,11 @@ class ManagementTransitionGeometryTest {
     private val full = 56 * density
 
     @Test
-    fun `手势期间净位移恒为 0——TG 每帧先 translate(-dx) 把 innerTranslationX 抵消掉`() {
+    fun `跟手期间净位移恒为 0——TG 每帧先 translate(-dx) 把 innerTranslationX 抵消掉`() {
         var dx = 0f
         while (dx <= full) {
-            assertEquals(0f, netLayerX(dx, density), 1e-3f)
+            assertEquals(0f, netLayerX(dx, density, fromLeft = true), 1e-3f)
+            assertEquals(0f, netLayerX(dx, density, fromLeft = false), 1e-3f)
             dx += 1f
         }
     }
@@ -34,13 +35,27 @@ class ManagementTransitionGeometryTest {
     @Test
     fun `超过满量程之后净位移才开始把窗口推出屏幕`() {
         // TG `:1123` 的 `dx = Utilities.clamp(translationX, dp(56), 0)` —— 钳在 dp(56)。
-        assertEquals(full, netLayerX(full, density), 1e-3f)
-        assertEquals(400f - full, netLayerX(400f, density), 1e-3f)
+        assertEquals(full, netLayerX(full, density, fromLeft = true), 1e-3f)
+        assertEquals(400f - full, netLayerX(400f, density, fromLeft = true), 1e-3f)
     }
 
     @Test
-    fun `净位移不钳 0 以下——负的 translationX 原样透出`() {
-        assertEquals(-20f, netLayerX(-20f, density), 1e-3f)
+    fun `左缘滑时窗口往右滑出`() {
+        assertTrue(netLayerX(400f, density, fromLeft = true) > 0f)
+    }
+
+    @Test
+    fun `右缘滑时窗口往左滑出`() {
+        // 2026-10-13 口径。TG 只有右一个方向（`:1571` 恒 `setTranslationX(+dx)`），
+        // 这里是本项目有意加的镜像。
+        assertTrue(netLayerX(400f, density, fromLeft = false) < 0f)
+    }
+
+    @Test
+    fun `两向幅度相同，只有符号相反`() {
+        val left = netLayerX(500f, density, fromLeft = true)
+        val right = netLayerX(500f, density, fromLeft = false)
+        assertEquals(-left, right, 1e-3f)
     }
 
     @Test
@@ -48,7 +63,7 @@ class ManagementTransitionGeometryTest {
         // progress=0 表示刚要切入：translationX = dp(48)，净位移被全额抵消。
         val x = topLayerX(progress = 0f, dx = 0f, dismiss = 0f, viewportWidth = width, density = density)
         assertEquals(48 * density, x, 1e-3f)
-        assertEquals(0f, netLayerX(x, density), 1e-3f)
+        assertEquals(0f, netLayerX(x, density, fromLeft = true), 1e-3f)
     }
 
     @Test
@@ -56,7 +71,9 @@ class ManagementTransitionGeometryTest {
         // dismiss=1 时 translationX = 屏宽 + dp(56)，减去钳在 dp(56) 的那部分正好是屏宽。
         val x = topLayerX(progress = 0f, dx = 0f, dismiss = 1f, viewportWidth = width, density = density)
         assertEquals(width + full, x, 1e-3f)
-        assertEquals(width, netLayerX(x, density), 1e-3f)
+        assertEquals(width, netLayerX(x, density, fromLeft = true), 1e-3f)
+        // 右缘滑同一段动画落在另一侧 —— 幅度一样，符号镜像。
+        assertEquals(-width, netLayerX(x, density, fromLeft = false), 1e-3f)
     }
 
     @Test

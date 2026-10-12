@@ -33,13 +33,14 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.absoluteValue
 import kotlin.math.min
 
 /**
  * 管理页里「面板 ⇄ 子页 / 子页 ⇄ 子页」那一层切换动画，**逐值复刻 Telegram**
  * （`ActionBarLayout.drawChild` + `onBackStarted/onBackProgress`，v12.10.6）。
  *
- * ## 这件事最容易搞反的一点：**窗口横向根本不位移**
+ * ## 这件事最容易搞反的一点：**跟手时窗口横向根本不位移**
  *
  * TG 每一帧都在画 `containerView` 之前 `canvas.translate(-dx, 0)`，其中
  * `dx = Utilities.clamp(translationX, dp(56), 0)`（`:1123`，注意 TG 的
@@ -56,7 +57,11 @@ import kotlin.math.min
  *
  * 左缘滑 → 锚点 `rect.right - dp(82)`（靠右）→ 窗向右缩 → **左边**留缝；
  * 右缘滑 → 锚点 `rect.left + dp(82)`（靠左）→ **右边**留缝。
- * 本文件 [topLayerX] 的净额与 TG 的 `-dx` 抵消后逐项对齐（见 [netLayerX]）。
+ *
+ * **只有松手后的飞出阶段**净位移才真正起作用（`translationX > dp(56)`），本文件按你
+ * 2026-10-13 的口径给它加上方向：**左缘滑往右飞出、右缘滑往左飞出**（TG 恒往右，
+ * 见「有意不等于 TG」第 3 条）。方向由 [netLayerX] 的符号给出，底层的裁剪区间与
+ * 灰罩宽度随之镜像。
  *
  * ## 底层那一层在手势期间**不裁**（`:1163-1166`）
  *
@@ -90,11 +95,15 @@ import kotlin.math.min
  * | 切入位移量 | `dp(48)·(1 - t)`（进 `translationX`，不是净位移） | `:1892` |
  * | 飞出时长 | `max(200/width·dist, 380)` | `:1608` |
  *
- * ## 两处**有意不等**于 TG（写在 KDoc 里，不藏着）
+ * ## 三处**有意不等**于 TG（写在 KDoc 里，不藏着）
  *
  * 1. **插值用 Bezier 近似**而非 `DecelerateInterpolator(1.5f)` 本身 —— View 体系的
  *    `Interpolator` 在 Compose 侧无对等物，`(0f, 0f, 0.2f, 1f)` 是它的三次曲线近似。
  * 2. **不做 TG 的逐帧 `dt` 钳制**（`:1824-1828`）。那是 View 体系手搓动画循环时的保护。
+ * 3. **飞出方向按手指那一侧镜像**（2026-10-13 你给的口径：「手势在左边时，窗口往右边
+ *    滑动消失；手势在右边时，窗口往左边滑动消失」）。TG 只有右一个方向 —— 它恒
+ *    `setTranslationX(+dx)`（`:1571`），右缘滑也往右退。跟手阶段两者一致（净位移恒 0），
+ *    只有松手后的飞出阶段不同。
  *
  * ## 为什么是两层而不是一层
  *
@@ -275,13 +284,27 @@ internal fun <T> ManagementTransition(
         // 各写一遍必然漂，所以抽成 [topLayerX] / [netLayerX] 两个纯函数共用。
         val innerTranslationX = topLayerX(progress.value, gesture.dx, dismiss.value, viewportWidth, density)
         val predictive = gesture.hasProgress
-        val netX = netLayerX(innerTranslationX, density)
-        val backClipRight = if (predictive) {
-            // `newBackTransitions()`：底层铺满全屏（`:1163-1166`）。
-            viewportWidth
+        // 从哪一侧滑的 —— TG 的 `predictiveBackLeft`（`onBackStarted:1558` 用触点 X
+        // 对中线判）。它决定两件事：**净位移的符号**（飞出方向）与**缩放锚点的左右**
+        // （`:1133`）。缝隙在哪一侧完全由锚点决定，窗口往哪边退由符号决定。
+        val fromLeft = gesture.edge == BackEventCompat.EDGE_LEFT
+        val netX = netLayerX(innerTranslationX, density, fromLeft)
+        // 底层的裁剪区间 —— TG 的 `clipLeft` / `clipRight`（`:1100-1104`、`:1163-1166`）。
+        // 窗口往右退时露出左侧一段，往左退时露出右侧一段，所以两端都得算。
+        val backClipLeft: Float
+        val backClipRight: Float
+        if (predictive) {
+            // `newBackTransitions()`：底层铺满全屏，灰罩才盖得住整段（`:1163-1166`）。
+            backClipLeft = 0f
+            backClipRight = viewportWidth
+        } else if (netX >= 0f) {
+            // 窗口往右退 → 露出左侧那一段（TG `clipRight = translationX + dp(1)`，`:1102`）。
+            backClipLeft = 0f
+            backClipRight = innerTranslationX + density
         } else {
-            // 编程式切换才裁到 `translationX + dp(1)`（`:1102`）。
-            innerTranslationX + density
+            // 窗口往左退 → 露出右侧那一段，镜像 `clipRight` 那一支。
+            backClipLeft = viewportWidth + netX - density
+            backClipRight = viewportWidth
         }
 
         if (top == null) {
@@ -294,14 +317,15 @@ internal fun <T> ManagementTransition(
                         // `clipRect { }` 的接收者是 `DrawScope`，会把外层 `ContentDrawScope`
                         // 的 `drawContent()` 遮住 —— 必须带显式接收者，否则报
                         // 「cannot be called in this context with an implicit receiver」。
-                        clipRect(right = backClipRight) {
+                        clipRect(left = backClipLeft, right = backClipRight) {
                             this@drawWithContent.drawContent()
                             // 裁出来的这段铺灰罩（TG `scrimPaint`，`:1204-1208`）：
                             // `Color.argb(120 · clamp(widthOffset / width, 0, 0.8), 0, 0, 0)`。
+                            // `widthOffset` 是**窗口让出的宽度**，两向都取绝对值。
                             // `viewportWidth == 0` 时（首帧未布局）不画，避免 0/0 = NaN。
                             val width = viewportWidth
                             if (width > 0f) {
-                                val widthOffset = (width - innerTranslationX).coerceAtLeast(0f)
+                                val widthOffset = netX.absoluteValue.coerceAtMost(width)
                                 val opacity = (widthOffset / width).coerceIn(0f, SCRIM_MAX_OPACITY)
                                 if (opacity > 0f) {
                                     drawRect(color = SCRIM.copy(alpha = SCRIM_ALPHA * opacity))
@@ -314,10 +338,6 @@ internal fun <T> ManagementTransition(
             }
         }
         top?.let { over ->
-            // 从**哪一侧**滑的 —— TG 的 `predictiveBackLeft`（`onBackStarted:1558` 用触点 X
-            // 对中线判）。它**只**用来镜像缩放锚点（`:1133`）：间隙在哪一侧完全由锚点决定，
-            // 左缘滑锚点靠右 → 左边留缝，右缘滑锚点靠左 → 右边留缝。
-            val fromLeft = gesture.edge == BackEventCompat.EDGE_LEFT
             Box(
                 Modifier
                     .alpha(progress.value * (1f - dismiss.value))
@@ -478,18 +498,28 @@ internal fun topLayerX(
         dismiss * (viewportWidth + BACK_GESTURE_DP * density - dx)
 
 /**
- * 净位移（px）≡ TG 每帧那个 `canvas.translate(-dx, 0)` 抵消之后剩下的量（`:1123-1124`）：
+ * 净位移（px）≡ TG 每帧那个 `canvas.translate(-dx, 0)` 抵消之后剩下的量（`:1123-1124`），
+ * **再按滑动那一侧取符号**：
  *
  * ```
  * dx = Utilities.clamp(translationX, dp(56), 0)     // 注意 TG 的 clamp 是 (value, 上限, 下限)
- * 净位移 = translationX - dx
+ * 幅度 = translationX - dx
+ * 净位移 = (左缘滑 ? +1 : -1) · 幅度
  * ```
  *
- * 手势期间 `translationX ≤ dp(56)`，所以净位移恒为 **0** —— 窗口不左右动，只缩放。
- * 切出飞行阶段 `translationX > dp(56)`，净位移才开始真正把窗口推出屏幕。
+ * 手势期间 `translationX ≤ dp(56)`，所以幅度恒为 **0** —— 跟手时窗口不左右动，只缩放
+ * （与 TG 一致）。切出飞行阶段 `translationX > dp(56)`，幅度才增长，符号把它送向手指
+ * 那一侧：**左缘滑 → 往右滑出屏；右缘滑 → 往左滑出屏**（用户 2026-10-13 口径）。
+ *
+ * TG 只有一个方向 —— 它恒 `setTranslationX(+dx)`（`:1571`），右缘滑也一样往右退；
+ * 那是 TG 自己的取舍。见文件头「有意不等于 TG」第 3 条。
+ *
+ * @param fromLeft 手指从**左边**滑的（TG `predictiveBackLeft` 的镜像语义）。
  */
-internal fun netLayerX(translationX: Float, density: Float): Float =
-    translationX - translationX.coerceIn(0f, BACK_GESTURE_DP * density)
+internal fun netLayerX(translationX: Float, density: Float, fromLeft: Boolean): Float {
+    val magnitude = translationX - translationX.coerceIn(0f, BACK_GESTURE_DP * density)
+    return if (fromLeft) magnitude else -magnitude
+}
 
 /** 露出那段的灰遮罩色（TG `scrimPaint` 的 `0x00000000`，即纯黑）。 */
 private val SCRIM = Color.Black
