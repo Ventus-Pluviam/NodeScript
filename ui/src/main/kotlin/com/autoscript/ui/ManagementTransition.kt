@@ -9,15 +9,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.geometry.TransformOrigin
 import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.launch
 
@@ -141,12 +142,17 @@ internal fun <T> ManagementTransition(
                         // y 取手指位置（没有触点时退到视口中线）。
                         val sc = backGestureScale(gesture.dx, progress.value, density)
                         if (sc != 1f) {
-                            val px = this.density
+                            // 锚点用 `graphicsLayer` 作用域里的 `this`：这里 `density` 是
+                            // `Density`，`size` 是该层像素尺寸 —— 与 `touchY` 同坐标系。
                             scaleX = sc
                             scaleY = sc
                             transformOrigin = TransformOrigin(
-                                SCALE_ANCHOR_X.toPx(px) / size.width,
-                                if (viewportHeight > 0f) backGestureAnchorY(gesture.touchY, viewportHeight) / viewportHeight else 0.5f,
+                                SCALE_ANCHOR_X.toPx() / size.width,
+                                if (viewportHeight > 0f) {
+                                    backGestureAnchorY(gesture.touchY, viewportHeight) / viewportHeight
+                                } else {
+                                    0.5f
+                                },
                             )
                         }
                     }

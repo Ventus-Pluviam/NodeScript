@@ -3,14 +3,9 @@ package com.autoscript.ui
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.flow.collect
 
 /**
  * 管理子页的**跟手返回手势** —— 逐值复刻 Telegram 的预测式返回
@@ -25,18 +20,18 @@ import kotlinx.coroutines.flow.collect
  * | 跟手位移 | `dp(56) · StandardDecelerate(t)` | `:1570` |
  * | `StandardDecelerate` | `PathInterpolator(0,0,0,1)` | `CubicBezierInterpolator.java:22` |
  * | 缩放 | `lerp(1.00, lerp(0.90, 0.85, 1 - alpha), clamp01(dx / dpf2(56)))` | `:1119` |
- * | 缩放锚点 x | `rectTmp.left + dp(82)` | `:1133` |
- * | 缩放锚点 y | `predictiveBackY`（**手指按下时的 Y**） | `:1133` |
- * | 跟手启动门 | 栈深 > 1 且 `canBeginSlide()`，且当前无动画 | `:1526-1552` |
+ * | 缩放锚点 x | 左缘 `dp(82)` | `:1133` |
+ * | 缩放锚点 y | `predictiveBackY`（**手指按下的 Y**） | `:1133` |
+ * | 启动门 | 栈深 > 1 且 `canBeginSlide()`，且当前无动画 | `:1526-1552` |
  *
  * `dpf2(x)` 就是 `density · x`（`AndroidUtilities.java:2740`）；`lerp(a,b,f)` 就是
  * `a + f·(b - a)`（`:5061`）。两处都在 [backGestureScale] 里展开成算术 —— 不引 TG 的工具类。
  *
  * ## 与 [ManagementTransition] 的分工
  *
- * 那一位管**点返回键 / 子页之间互切**的 150ms 进出场；这里只管**侧边滑动手势**。
- * 松手后的收尾动画仍由 `ManagementTransition` 播（150ms；TG 那边也是另算时长，
- * 不复用 `startLayoutAnimation`，见 `:1608`）。所以本文件**只写状态**，不碰动画时钟。
+ * 那一位管**点返回键 / 子页之间互切**的 150ms 进出场；这里只管**侧缘滑动手势**，
+ * **只写状态，不碰动画时钟**。松手后的收尾仍由 `ManagementTransition` 播 150ms
+ * （TG 那边也是另算时长、不复用 `startLayoutAnimation`，见 `:1608`）。
  *
  * @param state 手势瞬时量，由 `ManagementTransition` `remember` 并传进来。
  * @param enabled 顶层有没有可退的那一层。
@@ -48,11 +43,12 @@ internal fun ManagementBackGesture(
     enabled: Boolean,
     onCommit: suspend () -> Unit,
 ) {
-    val density = LocalDensity.current.density
+    // `LocalDensity.current` 本身就是 `Density`，所以 `Dp.toPx()` 可直接调（无参版本）。
+    val density = LocalDensity.current
     PredictiveBackHandler(enabled = enabled) { flow ->
         flow.collect { event ->
             // 系统已判过 edge（`BackEventCompat.swipeEdge`），这里只取进度与触点。
-            state.dx = BACK_GESTURE_DP.toPx(density) * BACK_EASE.transform(event.progress)
+            state.dx = BACK_GESTURE_DP.toPx() * BACK_EASE.transform(event.progress)
             state.touchY = event.touchY
             state.swiping = true
         }
@@ -66,8 +62,8 @@ internal fun ManagementBackGesture(
 /**
  * 手势驱动的那几个瞬时量。由 `ManagementTransition` `remember` 一次，读进 `graphicsLayer`。
  *
- * **两个字段是普通 `var`，`swiping` 是状态**：`dx`/`touchY` 每帧都改，改的是
- * `graphicsLayer` 的 lambda —— 绘制阶段重读即可，不需要重组。用 `mutableStateOf`
+ * **`dx`/`touchY` 是普通 `var`，`swiping` 才是状态**：前两个每帧都改，改的是
+ * `graphicsLayer` 的 lambda —— 绘制阶段重读即可，**不需要重组**。做成 `mutableStateOf`
  * 会让整页内容每帧重组一遍。
  */
 internal class BackGestureState {
@@ -80,7 +76,7 @@ internal class BackGestureState {
     /** 手势进行中（流未结束）。稳态与收尾动画期间为 false。 */
     var swiping by mutableStateOf(false)
 
-    /** 松手/取消后把瞬时量清零，回到稳态。 */
+    /** 松手/取消/进出切换后把瞬时量清零，回到稳态。 */
     fun reset() {
         dx = 0f
         touchY = Float.NaN
@@ -89,7 +85,7 @@ internal class BackGestureState {
 }
 
 /** 跟手位移的满量程（TG `:1570` 的 `dp(56)`）。 */
-private val BACK_GESTURE_DP: Dp = 56.dp
+private val BACK_GESTURE_DP = androidx.compose.ui.unit.Dp(56f)
 
 /** `CubicBezierInterpolator.StandardDecelerate` = `PathInterpolator(0f, 0f, 0f, 1f)`。 */
 private val BACK_EASE = androidx.compose.animation.core.CubicBezierEasing(0f, 0f, 0f, 1f)
@@ -99,7 +95,7 @@ private const val SCALE_MID = 0.90f
 private const val SCALE_FAR = 0.85f
 
 /** 缩放锚点距左缘的距离（TG `:1133` 的 `dp(82)`）。 */
-internal val SCALE_ANCHOR_X: Dp = 82.dp
+internal val SCALE_ANCHOR_X = androidx.compose.ui.unit.Dp(82f)
 
 /**
  * TG 的缩放公式（`ActionBarLayout.java:1119`）逐值展开：
