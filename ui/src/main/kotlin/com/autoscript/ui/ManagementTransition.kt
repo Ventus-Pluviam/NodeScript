@@ -30,8 +30,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.min
 
@@ -108,6 +106,13 @@ import kotlin.math.min
  *
  * 离场动画要求旧页在动画期间仍在树上。常驻两层：[under] 是底下那页，[top] 是盖在
  * 上面那页（`null` = 没有覆盖层），`progress` 是盖层的**在场程度**（0 → 1）。
+ *
+ * ## 飞出不淡出
+ *
+ * TG `animateBackEndAnimation(false)`（`:1606-1618`）的 AnimatorSet 里只有两路：
+ * `containerView.TRANSLATION_X` 与 `innerTranslationX`，**没有 alpha**（收尾还专门
+ * `setAlpha(1.0f)`，`:1651`）。窗口靠滑出屏幕消失。本文件照此 —— 顶层透明度只跟
+ * `progress`（那是 150ms 切入/返回键那条路），飞出段不动它。
  *
  * ## 深度不超过两层
  *
@@ -212,18 +217,20 @@ internal fun <T> ManagementTransition(
         try {
             if (page == under) {
                 if (committed.value) {
-                    // 手势提交：从手指当前位置继续飞到屏宽、淡出，380ms
+                    // 手势提交：从手指当前位置继续飞出，380ms
                     // （TG `animateBackEndAnimation(false)`，`:1606-1618`）。
-                    coroutineScope {
-                        launch {
-                            dismiss.snapTo(0f)
-                            dismiss.animateTo(1f, tween(FLY_OUT_MS, easing = EASE_OUT_QUINT))
-                        }
-                        launch {
-                            progress.snapTo(1f)
-                            progress.animateTo(0f, tween(FLY_OUT_MS, easing = EASE_OUT_QUINT))
-                        }
-                    }
+                    //
+                    // **只动 `dismiss`，不碰 `progress`** —— TG 的那个 AnimatorSet 里只有
+                    // 两路：`containerView.TRANSLATION_X` 与 `innerTranslationX`（`:1611-1612`），
+                    // **没有 alpha**（收尾时它还专门 `setAlpha(1.0f)`，`:1651`）。窗口是
+                    // 「滑出屏幕」消失的，不是「淡出」消失的。
+                    //
+                    // 上一版两条一起跑、alpha 又写成 `progress * (1 - dismiss)`，等于透明度
+                    // 被折了两次 —— 视觉上就是「消失得太快」（用户 2026-10-13 报的那个）。
+                    // 顺带一提：`progress` 若在这段归零，`layerScale` / `backClipRight`
+                    // 也会跟着走偏，而 TG 那两路在这段是**冻结**的。
+                    dismiss.snapTo(0f)
+                    dismiss.animateTo(1f, tween(FLY_OUT_MS, easing = EASE_OUT_QUINT))
                 } else {
                     // 返回键 / 编程切走：150ms（TG `startLayoutAnimation` 那一套）。
                     progress.snapTo(1f)
@@ -345,7 +352,10 @@ internal fun <T> ManagementTransition(
         top?.let { over ->
             Box(
                 Modifier
-                    .alpha(progress.value * (1f - dismiss.value))
+                    // 透明度只跟 `progress`（切入/返回键那条 150ms 路径用）。手势提交的飞出
+            // 段**不淡出** —— TG `animateBackEndAnimation(false)` 根本没有 alpha 那一路，
+            // 窗口靠滑出屏幕消失（见 KDoc「飞出不淡出」）。
+            .alpha(progress.value)
                     .graphicsLayer {
                         // 净位移 ≡ TG `canvas.translate(-dx, 0)` 抵消之后的那份（`:1124`）。
                         translationX = netX
@@ -479,7 +489,13 @@ private const val SCRIM_MAX_OPACITY = 0.8f
 
 private const val DURATION_MS = 150
 
-/** 手势提交后的飞出时长（TG `ActionBarLayout.java:1608` 的 `newBackTransitions() ? 380`）。 */
+/**
+ * 手势提交后的飞出时长，ms。
+ *
+ * TG `:1608` 是 `max((int)(200f / measuredWidth · distToMove), newBackTransitions() ? 380 : 50)`。
+ * `newBackTransitions()` 为真时那 380 是**恒定的下限** —— 第一项最大也只有 200
+ * （`distToMove ≤ measuredWidth`），钳不住。所以这里直接写死 380。
+ */
 private const val FLY_OUT_MS = 380
 
 // `BACK_GESTURE_DP`（dp(56)）在 `ManagementBackGesture.kt` 里那一份 —— 同名同值，
