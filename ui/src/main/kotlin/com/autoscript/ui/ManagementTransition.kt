@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Fill
@@ -264,6 +265,12 @@ internal fun <T> ManagementTransition(
         // （`x == 0`）时不画（TG 的 `translationX != 0` 门）。**画在两层之后**，
         // 与 TG「`super.drawChild` 之后画 shadow」同序。全程只在 graphicsLayer 的
         // lambda 里读瞬时量 —— 图层级失效，不引发重组。
+        //
+        // **为什么是「一条线」**：上一版把 `layer_shadow` 当成「一条不透明的灰条」画。
+        // TG 的资源其实是**一张横向从透明渐到不透明的窄条**（webp：xhdpi 8×4 的
+        // alpha 是 4→14→26→34→48，xxhdpi 12×6 是 4→14→26→36→50），单色实条画出来
+        // 就是一条线。这里用 Compose 横向渐变复刻那张资源：起点透明、终点
+        // `0x33000000`（~51/255，与 xxhdpi 右缘 50 同量级）。
         if (framed) {
             val shadowX = (1f - progress.value) * SLIDE_DP * density + gesture.dx +
                 dismiss.value * (viewportWidth - gesture.dx)
@@ -279,14 +286,29 @@ internal fun <T> ManagementTransition(
                         }
                     }
                     .drawWithContent {
-                        drawRect(color = EDGE, size = Size(EDGE_DP * density, size.height), style = Fill)
+                        // 渐变贴满这一层的宽，视觉上渐隐向右侧 —— 资源条水平铺开后正是
+                        // 这个形状（最右一格 ≈ 满 alpha，左移一格就开始淡）。
+                        drawRect(
+                            brush = EDGE_BRUSH,
+                            size = Size(EDGE_DP * density, size.height),
+                            style = Fill,
+                        )
                     },
             )
         }
     }
 }
 
-/** 盖层被遮住时的侧缘阴影（TG `layer_shadow` 的角色：遮在页面外缘）。 */
+/**
+ * 侧缘阴影的渐变：TG `layer_shadow` webp 的横向 alpha 递增（xhdpi 8×4 是
+ * 4→14→26→34→48，xxhdpi 12×6 是 4→14→26→36→50）。起点透明、终点 `0x33000000`
+ * （约 51/255，与 xxhdpi 右缘 50 同量级）。
+ */
+private val EDGE_BRUSH = Brush.horizontalGradient(
+    colors = listOf(Color.Transparent, EDGE),
+)
+
+/** 盖层被遮住时的侧缘阴影终点色（TG `layer_shadow` 最右一格的黑）。 */
 private val EDGE = Color(0x33000000)
 
 /** 盖层侧缘阴影宽度（TG `layer_shadow` 的固有宽度）。 */
