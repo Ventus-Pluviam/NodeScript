@@ -159,128 +159,131 @@ fun SettingsScreen(
         onAnimatingChanged = { animating = it },
         onBackRequest = { subPage = SettingsSubPage.NONE },
         modifier = modifier,
-    ) { page ->
-        // 底下那份 = 顶栏 + 列表 + 回顶钮。**子页开着时它照旧组合** —— 离场动画要求旧页
-        // 在动画期间仍在树上；列表本身不画（被盖住了，白组合一遍纯浪费）。
-        @Composable
-        fun TopLevel() {
-            Column(Modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
-                ActionBar(
-                    title = null,
-                    background = ThemeColors.surfaceMuted,
-                    actions = {
-                        SettingsMenu(themeSwitchLabel = themeSwitchLabel, onSwitchTheme = onSwitchTheme)
-                    },
-                )
-                Box(Modifier.weight(1f)) {
-                    if (page == SettingsSubPage.NONE) {
-                        RefreshableBox(Modifier.fillMaxSize()) {
-                            LazyColumn(
-                                state = topListState,
-                                // 顶部不留：头部区自己让 26dp；底部让出悬浮底栏与导航 inset。
-                                contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
-                            ) {
-                                item { IdentityHeader() }
-                                item {
-                                    // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
-                                    // 全部纯文字（批 49：无图标、无副标题）。
-                                    SettingsCard {
-                                        SettingsCellRow(
-                                            title = "权限列表",
-                                            onClick = { open(SettingsSubPage.PERMISSIONS) },
-                                        )
-                                        SettingsCellRow(
-                                            title = "脚本设置",
-                                            onClick = { open(SettingsSubPage.SCRIPT_LIMITS) },
-                                        )
-                                        SettingsCellRow(
-                                            title = "语言切换",
-                                            onClick = { toast?.show("语言切换尚未开放") },
-                                        )
-                                        SettingsCellRow(
-                                            title = "帮助文档",
-                                            onClick = { toast?.show("帮助文档尚未开放") },
-                                        )
+        // 显式写 `content =`：尾随 lambda 只能绑到**签名里最后一个**形参，而这里最后
+        // 一个是 `modifier`（不是函数类型）—— 写尾随 lambda 会被判成「实参过多」。
+        content = { page ->
+            // 底下那份 = 顶栏 + 列表 + 回顶钮。**子页开着时它照旧组合** —— 离场动画要求旧页
+            // 在动画期间仍在树上；列表本身不画（被盖住了，白组合一遍纯浪费）。
+            @Composable
+            fun TopLevel() {
+                Column(Modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
+                    ActionBar(
+                        title = null,
+                        background = ThemeColors.surfaceMuted,
+                        actions = {
+                            SettingsMenu(themeSwitchLabel = themeSwitchLabel, onSwitchTheme = onSwitchTheme)
+                        },
+                    )
+                    Box(Modifier.weight(1f)) {
+                        if (page == SettingsSubPage.NONE) {
+                            RefreshableBox(Modifier.fillMaxSize()) {
+                                LazyColumn(
+                                    state = topListState,
+                                    // 顶部不留：头部区自己让 26dp；底部让出悬浮底栏与导航 inset。
+                                    contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
+                                ) {
+                                    item { IdentityHeader() }
+                                    item {
+                                        // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
+                                        // 全部纯文字（批 49：无图标、无副标题）。
+                                        SettingsCard {
+                                            SettingsCellRow(
+                                                title = "权限列表",
+                                                onClick = { open(SettingsSubPage.PERMISSIONS) },
+                                            )
+                                            SettingsCellRow(
+                                                title = "脚本设置",
+                                                onClick = { open(SettingsSubPage.SCRIPT_LIMITS) },
+                                            )
+                                            SettingsCellRow(
+                                                title = "语言切换",
+                                                onClick = { toast?.show("语言切换尚未开放") },
+                                            )
+                                            SettingsCellRow(
+                                                title = "帮助文档",
+                                                onClick = { toast?.show("帮助文档尚未开放") },
+                                            )
+                                        }
                                     }
-                                }
-                                item { SectionGap() }
-                                item {
-                                    // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
-                                    SettingsCard {
-                                        SettingsCellRow(
-                                            title = "反馈",
-                                            onClick = { toast?.show("反馈尚未开放") },
-                                        )
-                                        SettingsCellRow(
-                                            title = "关于",
-                                            onClick = { toast?.show("关于尚未开放") },
-                                        )
-                                        SettingsCellRow(
-                                            title = "检查更新",
-                                            onClick = { toast?.show("检查更新尚未开放") },
-                                        )
-                                    }
-                                }
-                                if (state.degradedAlarmTaskIds.isNotEmpty()) {
                                     item { SectionGap() }
                                     item {
-                                        // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
-                                        // 排期**可能偏差**（§8.6 的承诺）。它是任务的账，不进权限子页。
+                                        // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
                                         SettingsCard {
-                                            CardCaptionRow(
-                                                text = "以下定时任务已降级（可能偏差）：" +
-                                                    state.degradedAlarmTaskIds.joinToString("、"),
-                                                tone = StatusTone.ATTENTION,
+                                            SettingsCellRow(
+                                                title = "反馈",
+                                                onClick = { toast?.show("反馈尚未开放") },
                                             )
+                                            SettingsCellRow(
+                                                title = "关于",
+                                                onClick = { toast?.show("关于尚未开放") },
+                                            )
+                                            SettingsCellRow(
+                                                title = "检查更新",
+                                                onClick = { toast?.show("检查更新尚未开放") },
+                                            )
+                                        }
+                                    }
+                                    if (state.degradedAlarmTaskIds.isNotEmpty()) {
+                                        item { SectionGap() }
+                                        item {
+                                            // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
+                                            // 排期**可能偏差**（§8.6 的承诺）。它是任务的账，不进权限子页。
+                                            SettingsCard {
+                                                CardCaptionRow(
+                                                    text = "以下定时任务已降级（可能偏差）：" +
+                                                        state.degradedAlarmTaskIds.joinToString("、"),
+                                                    tone = StatusTone.ATTENTION,
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        // 回顶钮跟着当前这一层走：顶页在时看顶页列表，子页在时看子页列表。
+                        val listState = if (page == SettingsSubPage.NONE) topListState else pageListState
+                        ScrollToTopButton(
+                            visible = rememberScrollToTopVisible(listState),
+                            onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                            // 回顶钮抬到悬浮底栏上方（胶囊占位 + 导航 inset，另加 8dp 呼吸）。
+                            modifier = Modifier.align(Alignment.BottomEnd)
+                                .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
+                        )
                     }
-                    // 回顶钮跟着当前这一层走：顶页在时看顶页列表，子页在时看子页列表。
-                    val listState = if (page == SettingsSubPage.NONE) topListState else pageListState
-                    ScrollToTopButton(
-                        visible = rememberScrollToTopVisible(listState),
-                        onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                        // 回顶钮抬到悬浮底栏上方（胶囊占位 + 导航 inset，另加 8dp 呼吸）。
-                        modifier = Modifier.align(Alignment.BottomEnd)
-                            .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
+                }
+            }
+
+            when (page) {
+                // `NONE` = 面板本身（它也占一个槽位，见 `ManagementTransition` 的 KDoc）。
+                SettingsSubPage.NONE -> TopLevel()
+                SettingsSubPage.PERMISSIONS -> SettingsSubPageLayer(
+                    title = page.title,
+                    onBack = { subPage = SettingsSubPage.NONE },
+                    onBackRequest = { subPage = SettingsSubPage.NONE },
+                ) {
+                    PermissionsPage(state, status, pageListState, onOpenSettings)
+                }
+                // 脚本设置子页（批 107；§8.1 脚本资源限额）：状态与回调整份从外面进来，
+                // 本屏不持有读口 —— 设置页此前只收 `CapabilityCenterState`，接第一个
+                // 持久化读口时把那份 `HostSummary` 依赖挡在外面（`:ui` 只依赖 `:domain`）。
+                SettingsSubPage.SCRIPT_LIMITS -> SettingsSubPageLayer(
+                    title = page.title,
+                    onBack = { subPage = SettingsSubPage.NONE },
+                    onBackRequest = { subPage = SettingsSubPage.NONE },
+                ) {
+                    ScriptLimitsScreen(
+                        state = limitsState,
+                        onRefresh = onLimitsRefresh,
+                        onDraft = onLimitsDraft,
+                        onSave = onLimitsSave,
+                        onReset = onLimitsReset,
+                        onBack = { subPage = SettingsSubPage.NONE },
+                        modifier = Modifier,
                     )
                 }
             }
-        }
-
-        when (page) {
-            // `NONE` = 面板本身（它也占一个槽位，见 `ManagementTransition` 的 KDoc）。
-            SettingsSubPage.NONE -> TopLevel()
-            SettingsSubPage.PERMISSIONS -> SettingsSubPageLayer(
-                title = page.title,
-                onBack = { subPage = SettingsSubPage.NONE },
-                onBackRequest = { subPage = SettingsSubPage.NONE },
-            ) {
-                PermissionsPage(state, status, pageListState, onOpenSettings)
-            }
-            // 脚本设置子页（批 107；§8.1 脚本资源限额）：状态与回调整份从外面进来，
-            // 本屏不持有读口 —— 设置页此前只收 `CapabilityCenterState`，接第一个
-            // 持久化读口时把那份 `HostSummary` 依赖挡在外面（`:ui` 只依赖 `:domain`）。
-            SettingsSubPage.SCRIPT_LIMITS -> SettingsSubPageLayer(
-                title = page.title,
-                onBack = { subPage = SettingsSubPage.NONE },
-                onBackRequest = { subPage = SettingsSubPage.NONE },
-            ) {
-                ScriptLimitsScreen(
-                    state = limitsState,
-                    onRefresh = onLimitsRefresh,
-                    onDraft = onLimitsDraft,
-                    onSave = onLimitsSave,
-                    onReset = onLimitsReset,
-                    onBack = { subPage = SettingsSubPage.NONE },
-                    modifier = Modifier,
-                )
-            }
-        }
-    }
+        },
+    )
 }
 
 /**

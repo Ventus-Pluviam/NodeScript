@@ -435,21 +435,24 @@ fun ProjectScreen(
         onAnimatingChanged = { editorAnimating = it },
         onBackRequest = ::requestEditorClose,
         modifier = modifier,
-    ) { page ->
-        FileListLayer(showContent = page == null)
-        if (page != null) {
-            ScriptEditorScreen(
-                projectId = page.projectId,
-                relPath = page.relPath,
-                displayName = page.name,
-                onRead = onReadFile,
-                onSave = onSaveFile,
-                onClose = ::requestEditorClose,
-                onRegisterCloseGuard = { editorCloseGuard = it },
-                modifier = Modifier,
-            )
-        }
-    }
+        // 显式写 `content =`：尾随 lambda 只能绑到**签名里最后一个**形参，而这里最后
+        // 一个是 `modifier`（不是函数类型）—— 写尾随 lambda 会被判成「实参过多」。
+        content = { page ->
+            FileListLayer(showContent = page == null)
+            if (page != null) {
+                ScriptEditorScreen(
+                    projectId = page.projectId,
+                    relPath = page.relPath,
+                    displayName = page.name,
+                    onRead = onReadFile,
+                    onSave = onSaveFile,
+                    onClose = ::requestEditorClose,
+                    onRegisterCloseGuard = { editorCloseGuard = it },
+                    modifier = Modifier,
+                )
+            }
+        },
+    )
 }
 
 /** 主页品牌蓝（TG `key_telegram_color_dialogsLogo` 默认值 #168BDB；深浅主题同值）。 */
