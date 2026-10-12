@@ -1,5 +1,6 @@
 package com.autoscript.appservice.scriptrepo.core
 
+import com.autoscript.domain.scripts.RelPath
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -12,15 +13,16 @@ import java.security.MessageDigest
  */
 object DeployPath {
 
-    /** relPath 合法：非空、相对、段内无 `..`/`.`/空段/反斜杠。 */
-    fun isSafeRelPath(relPath: String): Boolean {
-        if (relPath.isBlank()) return false
-        if (relPath.startsWith("/") || relPath.startsWith("\\")) return false
-        for (seg in relPath.split('/')) {
-            if (seg == ".." || seg == "." || seg.isEmpty() || seg.contains('\\')) return false
-        }
-        return true
-    }
+    /**
+     * relPath 合法：非空、相对、段内无 `..`/`.`/空段/反斜杠。
+     *
+     * **判据已上提到 [RelPath.isSafe]**（2026-10-12 批 109，typed ids）：本仓此前有**三份**
+     * 逐字相同的实现 —— 本方法、`ScriptPaths.scriptFile` 内联的那份、以及
+     * `ScriptDeployRecovery` 的私有副本（它是被架构门禁逼着抄的，见那处的 KDoc）。
+     * 三份意味着以后改判据要记得改三处；本方法保留是因为**外部调用方仍收裸 `String`**
+     * （`AtomicDeployer.stage(relPath: String)` 等），但它现在只是转调，不再是定义处。
+     */
+    fun isSafeRelPath(relPath: String): Boolean = RelPath.isSafe(relPath)
 
     /**
      * 解析到 root 之下并做二次校验（**纯词法**：防边界绕行，**不防符号链接**）。
@@ -44,6 +46,19 @@ object DeployPath {
         val base = root.toAbsolutePath().normalize()
         val target = base.resolve(relPath).normalize()
         require(target.startsWith(base)) { "路径逃逸拒绝: $relPath" }
+        return target
+    }
+
+    /**
+     * 已拿到 [RelPath] 的那一步（批 109 起）：**不再判入参**，只判拼接结果是否仍在 root 之下。
+     *
+     * 与 [resolveIn] 的差别只剩入参那一道闸 —— 而那道闸现在在 [RelPath] 的 `init` 里，
+     * 于构造时就已经过了。留两条口是因为调用方形态不同（裸 `String` 的写入侧还在）。
+     */
+    fun resolveIn(root: Path, relPath: RelPath): Path {
+        val base = root.toAbsolutePath().normalize()
+        val target = base.resolve(relPath.value).normalize()
+        require(target.startsWith(base)) { "路径逃逸拒绝: ${relPath.value}" }
         return target
     }
 

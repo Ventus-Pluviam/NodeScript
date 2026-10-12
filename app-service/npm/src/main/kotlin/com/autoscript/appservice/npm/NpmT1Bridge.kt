@@ -73,7 +73,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object NpmT1Bridge {
 
-    /** 会话侧 shim 的落盘文件名（`filesDir/.autojs/` 下，与门禁 shim 同处）。 */
+    /** 会话侧 shim 的落盘文件名（`filesDir/.ns/` 下，与门禁 shim 同处）。 */
     const val SHIM_FILE_NAME: String = "npm-t1-bridge.cjs"
 
     /** classpath 资源路径（`src/main/resources/` 下，与包名同构）。 */
@@ -108,7 +108,7 @@ object NpmT1Bridge {
     }
 
     /**
-     * 把 shim 落到 `filesDir/.autojs/npm-t1-bridge.cjs`。
+     * 把 shim 落到 `filesDir/.ns/npm-t1-bridge.cjs`。
      *
      * 与门禁 shim 共用 [NpmSpawnGate.deployResource]（原子写、字节一致不动盘、空文件拒收）——
      * 那三条对两份 shim 的要求逐字相同，各写一遍迟早只改一份。
@@ -117,7 +117,7 @@ object NpmT1Bridge {
         NpmSpawnGate.deployResource(SHIM_RESOURCE_PATH, shimFile(filesDir), "T1 桥 shim")
 
     /** shim 落点（宿主内务目录，与 journal / lock.sig / 门禁 shim 同处）。 */
-    fun shimFile(filesDir: Path): Path = filesDir.resolve(".autojs").resolve(SHIM_FILE_NAME)
+    fun shimFile(filesDir: Path): Path = filesDir.resolve(".ns").resolve(SHIM_FILE_NAME)
 
     /**
      * 把 T1 桥的两个 env 写进会话进程的环境。

@@ -39,10 +39,10 @@ class NpmSpawnGateTest {
     fun `落位到宿主内务目录，且重复落位字节一致时不动盘`() {
         val first = NpmSpawnGate.deploy(files)
         val ready = assertInstanceOf(NpmSpawnGate.Deploy.Ready::class.java, first)
-        assertEquals(NpmSpawnGate.gateFile(files), ready.file, "落点 = files/.autojs/npm-spawn-gate.cjs")
+        assertEquals(NpmSpawnGate.gateFile(files), ready.file, "落点 = files/.ns/npm-spawn-gate.cjs")
         assertTrue(Files.isRegularFile(ready.file), "shim 必须真落盘")
         assertTrue(
-            ready.file.parent.fileName.toString() == ".autojs",
+            ready.file.parent.fileName.toString() == ".ns",
             "住宿主内务目录（与 journal / lock.sig 同处），不混进 npm 素材树：${ready.file}",
         )
         val mtime = Files.getLastModifiedTime(ready.file)

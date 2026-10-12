@@ -1,4 +1,5 @@
 package com.autoscript.appservice.npm
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.bridge.generated.WireMethods
 
 import com.autoscript.domain.bridge.BridgeRequest
@@ -66,12 +67,17 @@ class NpmBridgeHandler(
 
     private suspend fun payload(request: BridgeRequest): String? {
         val f = DomainJson.decodeObject(requirePayload(request))
-        val projectId = when (val v = f["projectId"]) {
+        // 判据进 [ProjectId]（批 109）：本方法是 npm 桥面的**唯一入口**，脚本给的
+        // projectId 从这里一路拼到 `files/scripts/<id>/` 落盘。判不过就地折
+        // ERR_INVALID_PARAM，三种非法形态各有各的话术（照旧，只把最后一种收窄）。
+        val rawProjectId = when (val v = f["projectId"]) {
             null, is DomainJson.Value.Null -> DEFAULT_PROJECT_ID
             is DomainJson.Value.S -> v.v.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("projectId 不得为空串")
             else -> throw IllegalArgumentException("projectId 必须是字符串")
         }
+        val projectId = ProjectId.createOrNull(rawProjectId)
+            ?: throw IllegalArgumentException("projectId 非法：$rawProjectId")
         return when (request.method) {
             "install" -> {
                 val spec = DomainJson.reqStr(f, "spec")
@@ -80,7 +86,7 @@ class NpmBridgeHandler(
                 val timeout = DomainJson.optLong(f, "timeout") ?: 60_000L
                 val (name, version) = parseSpec(spec)
                 val handle = facade.install(
-                    projectId,
+                    projectId.value,
                     listOf(com.autoscript.domain.npm.PackageSpec(name, version)),
                     com.autoscript.domain.npm.InstallFlags(offline = offline, save = save, timeoutMillis = timeout),
                 )
@@ -98,12 +104,12 @@ class NpmBridgeHandler(
             "remove" -> {
                 val spec = DomainJson.reqStr(f, "spec")
                 val (name, _) = parseSpec(spec)
-                facade.uninstall(projectId, name)
+                facade.uninstall(projectId.value, name)
                 null
             }
             "ci" -> {
                 val offline = DomainJson.optBool(f, "offline") ?: true
-                facade.ci(projectId, offline)
+                facade.ci(projectId.value, offline)
                 null
             }
             "list" -> {
@@ -112,18 +118,18 @@ class NpmBridgeHandler(
                 // 的字节数 = 声称「这个包占 0 字节」，比不给这个字段更糟——脚本会拿它算
                 // 「还要下多少」然后得到 0。尺寸的两条真来源：offlineGap（缺失清单）、
                 // storage（node_modules 目录实测）。
-                DomainJson.encode(facade.list(projectId, depth).map {
+                DomainJson.encode(facade.list(projectId.value, depth).map {
                     mapOf("name" to it.name, "version" to it.version)
                 })
             }
-            "prune" -> { facade.prune(projectId); null }
-            "dedupe" -> { facade.dedupe(projectId); null }
+            "prune" -> { facade.prune(projectId.value); null }
+            "dedupe" -> { facade.dedupe(projectId.value); null }
             "offlineGap" -> DomainJson.encode(
-                facade.offlineGap(projectId).map { mapOf("name" to it.name, "version" to it.version, "size" to it.sizeBytes) },
+                facade.offlineGap(projectId.value).map { mapOf("name" to it.name, "version" to it.version, "size" to it.sizeBytes) },
             )
             "audit" -> {
                 val offline = DomainJson.optBool(f, "offline") ?: true
-                val r = facade.audit(projectId, offline)
+                val r = facade.audit(projectId.value, offline)
                 DomainJson.encode(
                     mapOf(
                         // 键名 vulns：JS facade 的 AuditReport.vulns 直接读它，§10.8 文档同形。
@@ -143,22 +149,22 @@ class NpmBridgeHandler(
                 // JS facade 的 setRegistry(registry, {scope}) 会带此字段；不认就是静默丢弃
                 // 用户显式声明的作用域（比报错更糟），故在此如实落地而非忽略。
                 val scope = DomainJson.optStr(f, "scope")?.takeIf { it.isNotBlank() }
-                facade.config(projectId, com.autoscript.domain.npm.NpmConfigKey.REGISTRY, registry, scope)
+                facade.config(projectId.value, com.autoscript.domain.npm.NpmConfigKey.REGISTRY, registry, scope)
                 null
             }
             "importOfflineBundle" -> {
-                facade.importOfflineBundle(projectId, DomainJson.reqStr(f, "uri"))
+                facade.importOfflineBundle(projectId.value, DomainJson.reqStr(f, "uri"))
                 null
             }
             "importTarball" -> {
-                facade.importTarball(projectId, DomainJson.reqStr(f, "path"))
+                facade.importTarball(projectId.value, DomainJson.reqStr(f, "path"))
                 null
             }
             "events" -> {
                 val sinceSeq = DomainJson.optLong(f, "sinceSeq") ?: 0L
                 val batch = (DomainJson.optLong(f, "batch") ?: 32L).toInt()
                 if (batch <= 0) throw IllegalArgumentException("batch 必须 > 0")
-                val got = facade.drainEvents(projectId, sinceSeq, batch)
+                val got = facade.drainEvents(projectId.value, sinceSeq, batch)
                 DomainJson.encode(
                     mapOf(
                         "first" to got.firstSeq,

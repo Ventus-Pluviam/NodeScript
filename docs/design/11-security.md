@@ -43,14 +43,14 @@
 | # | 威胁（攻击者能力） | 攻击面 | 现行防线（落点） |
 |---|---|---|---|
 | T1 | **恶意/被污染的包在安装时执行任意代码**（lifecycle 脚本） | npm 安装 | 零 spawn 主路径：T0 全程 `--ignore-scripts`，安装脚本一个都没跑过，回执 `scripts-skipped`（`InstallCoordinator`，§10.5-3）。**残余**：让脚本真跑的那条路（spawn 桥）尚未落地，见 §11.3 |
-| T2 | **lockfile 投毒**（把包名指到别处，integrity 仍成立） | `npm ci` 重建 | `LockSigner` 对 lock 做 HMAC-SHA256 带外签名（`files/.autojs/lock.sig`，键绑 `projectId` 防跨项目搬锁），`ci` 前验签；缺签名/错签名一律 `ERR_PERMISSION_DENIED`（TOFU 自签不算通过）。~~**接线现状（2026-10-01 核实）**：防线代码与单测都在，但**生产装配没接** —— `NpmShellKit.assembleHandler` 的 `lockKey` 缺省 `null` → 既不签也不验，全仓无 `KeyProvider` 实现。~~ **已接线（2026-10-08，批 79）**：`AppShellApplication` 递 `LockKeyStore.AndroidKeystore`（`AppShellKit` 经 `LockKeyStore.resolve` 做 get-or-create），`ci` 先验签、`install` 收尾重签、快照导出带 `snapshot.sig`。取钥失败**不外抛**：本次不装该防线、原因原文进 `AssembledShell.npmLockKeyFailure`（不吞）。见 §11.3 第 3/8 条 |
+| T2 | **lockfile 投毒**（把包名指到别处，integrity 仍成立） | `npm ci` 重建 | `LockSigner` 对 lock 做 HMAC-SHA256 带外签名（`files/.ns/lock.sig`，键绑 `projectId` 防跨项目搬锁），`ci` 前验签；缺签名/错签名一律 `ERR_PERMISSION_DENIED`（TOFU 自签不算通过）。~~**接线现状（2026-10-01 核实）**：防线代码与单测都在，但**生产装配没接** —— `NpmShellKit.assembleHandler` 的 `lockKey` 缺省 `null` → 既不签也不验，全仓无 `KeyProvider` 实现。~~ **已接线（2026-10-08，批 79）**：`AppShellApplication` 递 `LockKeyStore.AndroidKeystore`（`AppShellKit` 经 `LockKeyStore.resolve` 做 get-or-create），`ci` 先验签、`install` 收尾重签、快照导出带 `snapshot.sig`。取钥失败**不外抛**：本次不装该防线、原因原文进 `AssembledShell.npmLockKeyFailure`（不吞）。见 §11.3 第 3/8 条 |
 | T3 | **单一镜像/注册表投毒** | registry 响应 | `NpmRegistryVerifier` 双运营主体交叉校验（第二意见必须与首选**不同运营主体**，同站即自比、自比一律拒）；取不到/非 https/无 integrity 锚点一律 `Verdict.Unverifiable` 由调用方显式告知，不折成「通过」。**首选来源三层链（2026-10-09 批 83）**：项目 `.npmrc` → 全局 `files/.npmrc` → 出厂官方，取自 `InstallCoordinator.resolveRegistry` —— 与实际安装用的**同一处读数**，否则交叉校验会退化成「拿 A 跟 B 比、装的是 C」 |
 | T4 | **冒名客户端抢绑桥 socket** | abstract unix socket | 桥监听与客户端 `main.cpp` 对称验 peer uid（`SO_PEERCRED`），凭据读不到即 fail-closed 拒收（`BridgeSocketListener`）；abstract 名带 uid 后缀，多实例互不抢绑。UID 通过后还须一次性 256-bit token 的 hello/ACK，绑定 engineRunId；双方 PID 可得时额外匹配。无票、重放、过期、已退出或撤销拒收；**同 UID 窃取其他执行凭据仍不在保证内** |
 | T5 | **未授权能力被调用**（脚本绕过能力授予） | 桥面 | **执行级 `CapabilityMask` 已在桥路由做 deny-by-default 过滤**（2026-10-08，A5 第一阶段；缺省保守档 A）；设备能力门禁仍独立：`PermissionCenter` 是唯一权限入口，读取异常诚实降级 `DEGRADED`（可用性未知即受限），绝不伪造 `GRANTED`。**残余**：来源分级经裁定不做（第 45 项），且掩码不拦 Node 内建 `fs`/`http` |
 | T6 | **脚本失控/僵死/赖活**（死循环、OOM、宿主与引擎状态分裂） | 引擎进程 | `EngineWatchdog` 按心跳/RSS/CPU 采样 + drift 连段裁决（`KillCause.DRIFT`）+ 执行期限（`KillCause.TIMEOUT`）；心跳 payload.runId 必须匹配认证连接，不能替其他执行刷新；看门狗只问不记账 |
 | T7 | **安装期互踩/打爆磁盘/恶意 git 依赖/无限挂起** | 安装会话 | per-project 锁 + 全局互斥、free ≥500MB 预检、项目 512MB 配额（80% 黄 / 100% 拦）、`git:` 依赖入口即拒 `ERR_NOT_SUPPORTED`、安装 TTL（`InstallCoordinator`） |
 | T8 | **审批票重放**（拿旧版本 APPROVED 装新版本） | 审批账本 | 审批键绑 `pkg + versionHash`，宿主从盘上重算版本哈希，命中 `APPROVED` 才放行（`ApprovalLedger` + `requestApprove`/`requestGateApproval`）；未获批自请入队 `PENDING` |
-| T9 | **本地状态被系统备份/换机迁移带到另一个设备上下文**（Auto Backup、D2D 迁移、`adb backup`） | 应用私有目录 `files/.autojs/` | `AndroidManifest` 置 `android:allowBackup="false"`（`:app`）：信任锚与审计面不进备份 —— `lock.sig` 到新机验不过（密钥不出本机），而审批台账/安装 history/意图日志会以「已完成/已批准」的姿态跟着走，恢复出来的状态不可信也不可解释。代价如实说：换机不自动带走过往审批与历史，需重装/重批 |
+| T9 | **本地状态被系统备份/换机迁移带到另一个设备上下文**（Auto Backup、D2D 迁移、`adb backup`） | 应用私有目录 `files/.ns/` | `AndroidManifest` 置 `android:allowBackup="false"`（`:app`）：信任锚与审计面不进备份 —— `lock.sig` 到新机验不过（密钥不出本机），而审批台账/安装 history/意图日志会以「已完成/已批准」的姿态跟着走，恢复出来的状态不可信也不可解释。代价如实说：换机不自动带走过往审批与历史，需重装/重批 |
 
 ### 11.3 残余风险（诚实缺口，未被上面任何一条覆盖）
 
@@ -86,7 +86,7 @@
      `install` 收尾重签（失败即中止本次安装并如实报错）、`exportSnapshot` 带 `snapshot.sig`。
    - **`scriptExecutor` 仍 `Unavailable`**（T1 门禁过了也跑不起来，spawn 桥属 P1）。
    - **`child_process` 拦截 shim 已接线（2026-10-09）**：`NpmSpawnGate` 把
-     `npm-spawn-gate.cjs`（classpath 资源）落到 `files/.autojs/`，`HostNodeExecutor` 经
+     `npm-spawn-gate.cjs`（classpath 资源）落到 `files/.ns/`，`HostNodeExecutor` 经
      `NODE_OPTIONS=--require=<它>` 注入安装会话进程，`child_process` 七个入口一律抛错；
      被拦时按 shim 播报折成 `ERR_NPM_SPAWN_BLOCKED` / `ERR_PERMISSION_DENIED`（`detached:true`）/
      `ERR_NOT_IMPLEMENTED`（`fork`）。**落位失败 → 不注入安装执行体**（P0 承诺面，

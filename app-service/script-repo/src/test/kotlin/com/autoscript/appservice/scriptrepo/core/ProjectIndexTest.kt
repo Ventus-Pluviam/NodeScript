@@ -1,5 +1,7 @@
 package com.autoscript.appservice.scriptrepo.core
 
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -14,12 +16,12 @@ class ProjectIndexTest {
     @Test
     fun `从仓库布局派生项目元数据`(@TempDir tmp: Path) {
         val store = FsProjectStore(tmp)
-        val root = store.create("demo")
+        val root = store.create(ProjectId("demo"))
         Files.write(root.resolve("package.json"), """{"name":"demo","version":"2","main":"src/index.js"}""".toByteArray(StandardCharsets.UTF_8))
         Files.createDirectories(root.resolve("src"))
         Files.write(root.resolve("src/index.js"), "console.log(1)".toByteArray(StandardCharsets.UTF_8))
 
-        val proj = ProjectIndex(store).read("demo")!!
+        val proj = ProjectIndex(store).read(ProjectId("demo"))!!
         assertEquals("demo", proj.id)
         assertEquals(2, proj.version)
         assertEquals("src/index.js", proj.mainScript)
@@ -30,20 +32,20 @@ class ProjectIndexTest {
     // 注：Kotlin 反引号函数名不允许含 '.'，故不写成 package.json
     fun `缺 package 元数据时回退 main 猜测`(@TempDir tmp: Path) {
         val store = FsProjectStore(tmp)
-        val root = store.create("legacy")
+        val root = store.create(ProjectId("legacy"))
         Files.write(root.resolve("main.js"), "x".toByteArray(StandardCharsets.UTF_8))
         Files.write(root.resolve("index.js"), "y".toByteArray(StandardCharsets.UTF_8))
 
-        val proj = ProjectIndex(store).read("legacy")!!
+        val proj = ProjectIndex(store).read(ProjectId("legacy"))!!
         assertEquals("main.js", proj.mainScript, "main.js 优先于 index.js")
         assertEquals(1, proj.version)
-        assertNull(ProjectIndex(store).read("missing"))
+        assertNull(ProjectIndex(store).read(ProjectId("missing")))
     }
 
     @Test
     fun `list 只返回已存在项目`(@TempDir tmp: Path) {
         val store = FsProjectStore(tmp)
-        store.create("a")
+        store.create(ProjectId("a"))
         assertEquals(listOf("a"), ProjectIndex(store).list().map { it.id })
     }
 }

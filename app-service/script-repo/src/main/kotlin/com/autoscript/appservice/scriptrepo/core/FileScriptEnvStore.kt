@@ -16,7 +16,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 
 /**
- * 脚本环境变量的落盘实现（docs §8.1 · `files/.autojs/script-env.jsonl`）。
+ * 脚本环境变量的落盘实现（docs §8.1 · `files/.ns/script-env.jsonl`）。
  *
  * 存储纪律与 [com.autoscript.appservice.scheduler.persist.FileTaskStore]（`tasks.jsonl`）
  * 逐条同款，不另立一套：
@@ -216,7 +216,7 @@ class FileScriptEnvStore(
     private fun q(s: String): String = DomainJson.encode(s)
 
     companion object {
-        /** 落盘文件名（`files/.autojs/` 下，与 `tasks.jsonl` / `approve-ledger.jsonl` 同族）。 */
+        /** 落盘文件名（`files/.ns/` 下，与 `tasks.jsonl` / `approve-ledger.jsonl` 同族）。 */
         const val FILE_NAME: String = "script-env.jsonl"
 
         /**

@@ -1,6 +1,7 @@
 package com.autoscript.appservice.scriptrepo.core
 
 import java.nio.file.Files
+import com.autoscript.domain.scripts.RelPath
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
@@ -27,17 +28,23 @@ class AtomicDeployer(
         val sha256: String,
     )
 
-    /** 阶段 1：写入 stage 区并登记 journal（STAGED）。 */
-    fun stage(relPath: String, bytes: ByteArray): Staged {
+    /**
+     * 阶段 1：写入 stage 区并登记 journal（STAGED）。
+     *
+     * **收 [RelPath]**（批 109）：入参形态已在值类的 `init` 里判过，故这里**不再判**；
+     * 而 [Staged.relPath] 仍是 `String` —— journal 是**线式文本**（`DeployJournal` 按行记
+     * 原始路径供回滚重放），那是序列化边界，解包成字符串是那一刻的职责，不是丢掉了类型。
+     */
+    fun stage(relPath: RelPath, bytes: ByteArray): Staged {
         val target = DeployPath.resolveIn(root, relPath)
         val nonce = UUID.randomUUID().toString()
-        val stageFile = root.resolve(".stage").resolve(nonce).resolve(relPath)
+        val stageFile = root.resolve(".stage").resolve(nonce).resolve(relPath.value)
         Files.createDirectories(stageFile.parent)
         Files.write(stageFile, bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
         DeployPath.fsyncDirectory(stageFile.parent)
         val hash = DeployPath.sha256(bytes)
-        journal.begin(nonce, relPath, hash)
-        return Staged(nonce, relPath, stageFile, target, hash)
+        journal.begin(nonce, relPath.value, hash)
+        return Staged(nonce, relPath.value, stageFile, target, hash)
     }
 
     /** 阶段 2：校验 + fsync + 原子 rename 就位 + journal commit。 */

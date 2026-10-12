@@ -248,7 +248,7 @@ class NodeProcessSpawnE2ETest {
         }
 
         // ④ 档案：锚点 runId = 档案 engineRunId = 同一次执行；SUCCEEDED + 双 id 关联 + 无悬挂
-        val archive = FileRunArchive(files.resolve(".autojs"))
+        val archive = FileRunArchive(files.resolve(".ns"))
         try {
             val rec = archive.recordsOfProject("p9").single()
             assertEquals(engineRunId, rec.id, "锚点 runId 与档案记录必须是同一次执行")

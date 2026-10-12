@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.AuditReport
@@ -142,7 +143,7 @@ class InstallCoordinator(
 
     /** 项目 `.npmrc` 的 registry=（§10.2 第一层；缺文件/缺键/空值 → null，不猜镜像）。 */
     private fun readRegistryFromNpmrc(projectId: String): String? {
-        val rc = layout.npmrc(projectId)   // projectId 合法性由 NpmProjectLayout 把着
+        val rc = layout.npmrc(ProjectId(projectId))   // projectId 合法性由 NpmProjectLayout 把着
         return NpmrcFile.readKey(rc, NpmGlobalConfig.REGISTRY_KEY)
     }
 
@@ -216,7 +217,7 @@ class InstallCoordinator(
      * 条目数 = 见过的项目数（每个一条小记录，随项目数有界，不随安装次数增长）——
      * 与 [projectLocks] 的逐出不同，这里**不能**用完即摘：摘了就等于每次都重算。
      */
-    private val sizeCache = ConcurrentHashMap<String, MeasuredSize>()
+    private val sizeCache = ConcurrentHashMap<ProjectId, MeasuredSize>()
 
     private data class MeasuredSize(val bytes: Long, val atMillis: Long)
 
@@ -325,7 +326,7 @@ class InstallCoordinator(
     override suspend fun ci(projectId: String, offline: Boolean): InstallHandle {
         // §10.5-1：npm ci 严格按 lock 重建，故 ci 前必须验签——lock 被改/被换/跨项目搬运
         // 一律 ERR_PERMISSION_DENIED，绝不「没签就跳过」（TOFU 自签正是被批判的形态）。
-        lockSigner?.verifyOrThrow(projectId, layout.lockfile(projectId))
+        lockSigner?.verifyOrThrow(projectId, layout.lockfile(ProjectId(projectId)))
         return enqueueHeavy(projectId, listOf("ci") + if (offline) listOf("--prefer-offline") else emptyList())
     }
 
@@ -354,7 +355,7 @@ class InstallCoordinator(
             ErrorCode.ERR_NOT_IMPLEMENTED,
             "离线 bundle 导入未接线（NpmOfflineBundleImporter 未注入）：无法把 $uri 合入 npm 缓存",
         )
-        val root = layout.projectRoot(projectId)   // projectId 合法性先过（防路径逃逸）
+        val root = layout.projectRoot(ProjectId(projectId))   // projectId 合法性先过（防路径逃逸）
         val src = Paths.get(uri)
         if (!Files.isRegularFile(src)) {
             throw AutojsException(ErrorCode.ERR_FILE_NOT_FOUND, "离线 bundle 不存在：$uri（SAF 副本是否已落地？）")
@@ -465,17 +466,20 @@ class InstallCoordinator(
     // ══════════ 轻操作（Kotlin 直读，零 Node 进程） ══════════
 
     override suspend fun list(projectId: String, depth: Int): List<PkgNode> {
-        val locked = LockfileReader.readLocked(layout.lockfile(projectId))
+        val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
         return locked.map { PkgNode(name = it.name, version = it.version) }
     }
 
     override suspend fun offlineGap(projectId: String): List<MissingPkg> =
-        LockfileReader.readLocked(layout.lockfile(projectId))
+        LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
             .filter { it.integrity == null || !cacheIndex.has(it.integrity) }
             .map { MissingPkg(it.name, it.version, it.resolvedSize) }
 
     override suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String?) {
-        val npmrc = layout.npmrc(projectId ?: throw AutojsException(ErrorCode.ERR_INVALID_PARAM, "projectId 必填"))
+        val npmrc = layout.npmrc(
+            ProjectId.createOrNull(projectId ?: throw AutojsException(ErrorCode.ERR_INVALID_PARAM, "projectId 必填"))
+                ?: throw AutojsException(ErrorCode.ERR_INVALID_PARAM, "projectId 非法：$projectId"),
+        )
         val k = when (key) {
             NpmConfigKey.REGISTRY -> "registry"
             NpmConfigKey.PROXY -> "https-proxy"
@@ -603,8 +607,10 @@ class InstallCoordinator(
         if (Files.isDirectory(layout.projectsRoot)) {
             Files.list(layout.projectsRoot).use { s ->
                 s.filter { Files.isDirectory(it) }.forEach { proj ->
-                    val id = proj.fileName.toString()
-                    val lock = layout.lockfile(id)
+                    // 盘上读回的目录名：判不过判据就跳过（与 `storage()` 同款纪律 ——
+                    // 一个别人留下的怪目录不该让「回收缓存」整个失败）。
+                    val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
+                    val lock = layout.lockfile(pid)
                     // 没 lockfile = 「这个项目还没装过」，正常，不点名；
                     // lockfile **在**但读不出来（目录冒充、损坏到读不动、半路被删）= 点名：
                     // 那种项目不是「不需要保护」，是「想保护但保护不了」，用户有权知道。
@@ -612,7 +618,7 @@ class InstallCoordinator(
                     val locked = try {
                         LockfileReader.readLocked(lock)
                     } catch (e: Exception) {
-                        unreadable += id
+                        unreadable += pid.value
                         return@forEach
                     }
                     locked.mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
@@ -649,12 +655,12 @@ class InstallCoordinator(
         val out = LinkedHashMap<String, NodeModulesStats>()
         Files.list(layout.projectsRoot).use { s ->
             s.filter { Files.isDirectory(it) }.forEach { proj ->
-                val id = proj.fileName.toString()
-                val pkgs = LockfileReader.readLocked(layout.lockfile(id)).size
-                out[id] = NodeModulesStats(
-                    projectId = id,
+                val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
+                val pkgs = LockfileReader.readLocked(layout.lockfile(pid)).size
+                out[pid.value] = NodeModulesStats(
+                    projectId = pid.value,
                     pkgCount = pkgs,
-                    totalBytes = nodeModulesBytes(id),
+                    totalBytes = nodeModulesBytes(pid),
                 )
             }
         }
@@ -810,7 +816,7 @@ class InstallCoordinator(
      */
     private suspend fun runLightConsoleCommand(projectId: String, cmd: NpmConsoleCommand.Npm) {
         val at = now()
-        val root = layout.projectRoot(projectId)
+        val root = layout.projectRoot(ProjectId(projectId))
         if (!Files.isDirectory(root)) {
             consoleLine(
                 projectId,
@@ -825,7 +831,7 @@ class InstallCoordinator(
         }
         val text = when (cmd.sub) {
             "ls", "list" -> {
-                val locked = LockfileReader.readLocked(layout.lockfile(projectId))
+                val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
                 if (locked.isEmpty()) "（没有已装的依赖：package-lock.json 不存在或为空）"
                 else locked.sortedBy { it.name }.joinToString("\n") { "${it.name}@${it.version}" }
             }
@@ -870,7 +876,7 @@ class InstallCoordinator(
     // ══════════ P1 T1 lifecycle 脚本（§18 第 7 项口径：安装时让用户自己选） ══════════
 
     override suspend fun runScript(projectId: String, name: String, args: List<String>): InstallHandle {
-        val root = layout.projectRoot(projectId)   // projectId 合法性先过（防路径逃逸）
+        val root = layout.projectRoot(ProjectId(projectId))   // projectId 合法性先过（防路径逃逸）
         val s = NpmScriptResolver.projectScripts(root, projectId) ?: throw AutojsException(
             ErrorCode.ERR_FILE_NOT_FOUND,
             "项目 $projectId 没有 package.json（$root），无 lifecycle 脚本可跑",
@@ -889,7 +895,7 @@ class InstallCoordinator(
     }
 
     override suspend fun exec(projectId: String, bin: String, args: List<String>): InstallHandle {
-        val root = layout.projectRoot(projectId)
+        val root = layout.projectRoot(ProjectId(projectId))
         // 纯 JS 白名单在解析层就拒（ERR_NOT_SUPPORTED），不在这里另写一份判据。
         val b = NpmScriptResolver.binTarget(root, bin) ?: throw AutojsException(
             ErrorCode.ERR_NOT_FOUND,
@@ -943,7 +949,7 @@ class InstallCoordinator(
             pkg = pkg,
             what = what,
             args = args,
-            projectRoot = layout.projectRoot(projectId),
+            projectRoot = layout.projectRoot(ProjectId(projectId)),
             npmArgs = npmArgs,
             versionHash = versionHash,
             timeoutMillis = SCRIPT_TIMEOUT_MILLIS,
@@ -1032,8 +1038,8 @@ class InstallCoordinator(
             ErrorCode.ERR_NOT_IMPLEMENTED,
             "快照导出未接线（NpmSnapshot 未注入，缺应用密钥接缝）",
         )
-        val root = layout.projectRoot(projectId)
-        if (!Files.isDirectory(layout.nodeModules(projectId))) {
+        val root = layout.projectRoot(ProjectId(projectId))
+        if (!Files.isDirectory(layout.nodeModules(ProjectId(projectId)))) {
             throw AutojsException(
                 ErrorCode.ERR_FILE_NOT_FOUND,
                 "项目 $projectId 无 node_modules，无可导出的快照（先 install/ci）",
@@ -1063,7 +1069,7 @@ class InstallCoordinator(
     }
 
     /** 项目 node_modules 尺寸：缓存优先，过期才真遍历（见 [sizeCache]；只服务配额预检与 [storage]）。 */
-    private fun nodeModulesBytes(projectId: String): Long {
+    private fun nodeModulesBytes(projectId: ProjectId): Long {
         val at = now()
         sizeCache[projectId]?.let { if (at - it.atMillis < SIZE_CACHE_TTL_MILLIS) return it.bytes }
         return DirSizer.sizeBytes(layout.nodeModules(projectId)).also {
@@ -1082,7 +1088,7 @@ class InstallCoordinator(
         args: List<String>,
         timeoutMillis: Long = 120_000,
     ): InstallHandle {
-        val root = layout.projectRoot(projectId)   // projectId 合法性在此校验（防路径逃逸）
+        val root = layout.projectRoot(ProjectId(projectId))   // projectId 合法性在此校验（防路径逃逸）
         val free = freeSpaceProbe(root)
         if (free < config.minFreeBytes) {
             val why = "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装"
@@ -1093,7 +1099,7 @@ class InstallCoordinator(
             history?.record(opName(args), projectId, false, why)
             throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
-        val used = nodeModulesBytes(projectId)
+        val used = nodeModulesBytes(ProjectId(projectId))
         if (used >= config.projectQuotaBytes) {
             val why = "项目 node_modules 已达配额 ${config.projectQuotaBytes / 1024 / 1024}MB"
             history?.record(opName(args), projectId, false, why)
@@ -1155,7 +1161,7 @@ class InstallCoordinator(
             var streamed = false
             val outcome = withTimeoutOrNull(timeoutMillis) {
                 executor.execute(
-                    HeavyOp(nonce, projectId, args, layout.projectRoot(projectId), stageDir, timeoutMillis),
+                    HeavyOp(nonce, projectId, args, layout.projectRoot(ProjectId(projectId)), stageDir, timeoutMillis),
                     // 执行体报的阶段**必须经 `emit`**（2026-10-10 批 90 修）：
                     // 原来这里是 `events.tryEmit(ev)` —— 只喂了那条 SharedFlow，
                     // 而 `installEventRing`（`drainEvents` 读的就是它）与 `consoleRing`
@@ -1189,7 +1195,7 @@ class InstallCoordinator(
             // 用旧签会导致紧随其后的 ci 验签失败。签名失败 = 不谎称成功（回滚太重，
             // 改为中止本次安装：journal 已 commit 但 UI 拿到的是失败事件，用户可重试）。
             try {
-                lockSigner?.sign(projectId, layout.lockfile(projectId))
+                lockSigner?.sign(projectId, layout.lockfile(ProjectId(projectId)))
             } catch (e: Exception) {
                 history?.record(opName(args), projectId, false, "lock 签名失败: ${e.message}")
                 emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = "lock 签名失败: ${e.message}"))

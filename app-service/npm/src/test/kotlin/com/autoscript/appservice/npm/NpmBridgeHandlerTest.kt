@@ -6,6 +6,7 @@ import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.json.DomainJson
 import kotlinx.coroutines.runBlocking
+import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -45,7 +46,7 @@ class NpmBridgeHandlerTest {
         InstallCoordinator(
             services = NpmServices(
                 layout = layout,
-                journal = InstallJournal(dir.resolve(".autojs")),
+                journal = InstallJournal(dir.resolve(".ns")),
                 staging = InstallStaging(layout),
                 cacheIndex = CacheIndex { false },
             ),
@@ -156,7 +157,7 @@ class NpmBridgeHandlerTest {
         h.handle(req("setRegistry", json("projectId" to "p1", "registry" to "https://registry.npmjs.org")))
         assertEquals(
             listOf("registry=https://registry.npmjs.org"),
-            Files.readAllLines(layout.npmrc("p1")),
+            Files.readAllLines(layout.npmrc(ProjectId("p1"))),
             "npmrc 单行就位（无尾行/空行）",
         )
     }
@@ -168,7 +169,7 @@ class NpmBridgeHandlerTest {
         h.handle(req("setRegistry", json("projectId" to "p1", "registry" to "https://registry.npmmirror.com", "scope" to "@my")))
         assertEquals(
             listOf("@my:registry=https://registry.npmmirror.com"),
-            Files.readAllLines(layout.npmrc("p1")),
+            Files.readAllLines(layout.npmrc(ProjectId("p1"))),
             "scope 须映射 npm 官方 `<scope>:registry` 键形",
         )
     }
@@ -179,7 +180,7 @@ class NpmBridgeHandlerTest {
         h.handle(req("setRegistry", json("projectId" to "p1", "registry" to "https://registry.npmjs.org", "scope" to "")))
         assertEquals(
             listOf("registry=https://registry.npmjs.org"),
-            Files.readAllLines(layout.npmrc("p1")),
+            Files.readAllLines(layout.npmrc(ProjectId("p1"))),
             "空串 scope 退化为全局键（与 JS 侧 opts.scope ?? null 同义）",
         )
     }
@@ -222,8 +223,8 @@ class NpmBridgeHandlerTest {
     }
 
     private fun writeLock(projectId: String, content: String) {
-        Files.createDirectories(layout.projectRoot(projectId))
-        Files.write(layout.lockfile(projectId), (content).toByteArray())
+        Files.createDirectories(layout.projectRoot(ProjectId(projectId)))
+        Files.write(layout.lockfile(ProjectId(projectId)), (content).toByteArray())
     }
 }
 

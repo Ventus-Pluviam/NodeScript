@@ -28,6 +28,8 @@ import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
 import com.autoscript.appservice.scriptrepo.core.BridgeAddonDeploy
 import com.autoscript.appservice.scriptrepo.core.BridgeDistDeploy
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import com.autoscript.domain.bridge.NamespaceHandler
 import com.autoscript.domain.engine.RunIdentityIssuer
 import com.autoscript.domain.engine.EngineId
@@ -50,7 +52,7 @@ import com.autoscript.platform.capabilities.CapabilityNamespaces
  * Android 侧装壳配方（docs §4.1 Composition Root 的**真调用点**）。
  *
  * 为什么单独一个文件而不是写在 [com.autoscript.AppShellApplication] 里：装壳要碰
- * `:app-service:*` 五个模块的目录约定（意图日志 / 运行档案 / npm 三份 `.autojs` 与
+ * `:app-service:*` 五个模块的目录约定（意图日志 / 运行档案 / npm 三份 `.ns` 与
  * `cacheDir` 布局）与三个注入缝（能力 handler、闹钟 provider、屏幕门禁）。这些是
  * **装配知识**，不是 Application 生命周期知识；分开之后 [AppShell.assemble] 的每个参数
  * 在这里都能指着一段可测代码，而不是散在 `onCreate` 的几十行里。
@@ -81,7 +83,7 @@ object AppShellKit {
     /**
      * 装配生产壳（§4.1）。
      *
-     * @param filesDir App 私有文件目录（`files/scripts/<projectId>`、`files/.autojs` 都在这下面，
+     * @param filesDir App 私有文件目录（`files/scripts/<projectId>`、`files/.ns` 都在这下面，
      *   §10.2 存储布局）；Android 侧传 `context.filesDir.toPath()`。
      * @param cacheDir 可被系统清理的缓存目录（npm cacache `cacheDir/npm-cache`，§10.2）；
      *   被清掉只是缓存缺口（`CacacheIndex` 如实报缺口），不是错误。
@@ -209,14 +211,14 @@ object AppShellKit {
          * 生产提供方之一是 `script-repo` 的 `AndroidAssetsSource`（首批内置脚本），
          * 但补部署的判据与来源无关 —— 只补缺、绝不覆盖已有文件。
          */
-        scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
+        scriptSources: Map<ProjectId, Map<RelPath, ByteArray>> = emptyMap(),
         /**
          * 装配期脚本补部署的来源清单（`assets/scripts/` 下的 projectId 枚举；§9.6）。
          * 缺省空表 = 不枚举（`scriptSources` 有货照样补）。生产由 Application 传
          * `AssetLister` 的枚举结果 —— 本配方不直连 AssetManager（`:app` 测试源集
          * 无 android 桩之外的资产能力，且配方保持纯 JVM 可测）。
          */
-        scriptProjects: List<String> = emptyList(),
+        scriptProjects: List<ProjectId> = emptyList(),
         /**
          * 按 projectId 读资产（`assets/scripts/<projectId>/` → 相对路径 → 字节；§9.6）。
          * 缺省 null = 无资产来源（只用 [scriptSources]）。生产实现两行：
@@ -224,7 +226,7 @@ object AppShellKit {
          * —— 不能写进本文件（`:app-service:script-repo` 的 assets 包直连
          * `android.content.res.AssetManager`，配方保持纯 JVM 可测），故由 Application 喂。
          */
-        assetReader: ((String) -> Map<String, ByteArray>)? = null,
+        assetReader: ((ProjectId) -> Map<RelPath, ByteArray>)? = null,
         /**
          * 装配期 facade dist 落位的来源（`assets/bridge-dist/` 扁平文件名 → 字节；§12.4）。
          * 缺省空映射 = 本次没货（`bridgeDistReport.changed == false`），**不粉饰成"已部署"**。
@@ -292,8 +294,8 @@ object AppShellKit {
          */
         capabilityMask: CapabilityMask? = null,
     ): AssembledShell {
-        val autojsDir = filesDir.resolve(".autojs")
-        Files.createDirectories(autojsDir)
+        val nsDir = filesDir.resolve(".ns")
+        Files.createDirectories(nsDir)
 
         // 装配期脚本补部署（§9.6）：排期/意向持久了但脚本内容可能已被清掉
         // （用户"清除数据"、系统回收空间、预装包升级），先补缺再装配 —— 否则装配出的壳
@@ -301,7 +303,7 @@ object AppShellKit {
         // 只补缺不覆盖：用户手改过的脚本原样留着（见 ScriptDeployRecovery KDoc 三条诚实边界）。
         // 资产来源合并（§9.6）：显式传入的 scriptSources 优先，assets 按 projectId 补齐缺的
         // 项目 —— 合并只做"缺项目补"，同项目同文件以调用方显式传入为准（不覆盖、不合并文件级）。
-        val mergedSources: Map<String, Map<String, ByteArray>> =
+        val mergedSources: Map<ProjectId, Map<RelPath, ByteArray>> =
             if (assetReader == null || scriptProjects.isEmpty()) scriptSources
             else {
                 val merged = HashMap(scriptSources)
@@ -340,7 +342,7 @@ object AppShellKit {
         // `PlatformWiring.taskStore`（SQLite，含迁移），单测 = `InMemory*`/jsonl 面。
         // **无回落**（与 `intentStore` 同一条纪律，2026-10-08 裁定）：打不开就在
         // `PlatformWiring` 抛了，装配层据此判壳未就绪 —— 不拿「回落 jsonl」冒充「还能用」。
-        val (archive, tasks) = storesFactory?.invoke() ?: (FileRunArchive(autojsDir) to FileTaskStore(autojsDir))
+        val (archive, tasks) = storesFactory?.invoke() ?: (FileRunArchive(nsDir) to FileTaskStore(nsDir))
         // 注册表第三持久（§8.6）：意图日志管"已投递的意向"，这里管"还没到点的排期"。
         // Scheduler 经 [AppShell][com.autoscript.shell.AppShell] 的 `taskStore` 缝拿到它。
 

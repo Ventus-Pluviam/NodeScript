@@ -15,7 +15,7 @@ import javax.crypto.Mac
 import javax.crypto.SecretKey
 
 /**
- * lockfile 带外签名（docs §10.5-1 · `files/.autojs/lock.sig`）。
+ * lockfile 带外签名（docs §10.5-1 · `files/.ns/lock.sig`）。
  *
  * 防的是什么：npm 的 lock integrity 只锁**注册表内容**（tarball sha512），锁不住
  * 「这份 lock 是不是本机认可的」——第三方/市场项目塞一份把包名指到别处的 lock，
@@ -68,7 +68,7 @@ class LockSigner(
      * **「防跨项目搬锁」这个说法此前写在这里，它只对了一半**（2026-10-12 订正，外审 M9；
      * 本条经维护者裁定**不做**，这里只订正事实、不改行为）：待签体 `bodyOf` 确实带了
      * `projectId`，所以「拿 A 的 lock 去 B 项目验签」会**验不过** —— 这一点成立。
-     * 但落盘只有**一个** `files/.autojs/lock.sig`（路径里没有项目维度，见 [file]），
+     * 但落盘只有**一个** `files/.ns/lock.sig`（路径里没有项目维度，见 [file]），
      * 于是「签 B 废 A」：给任一项目签名都覆盖同一份文件，之后对**其他**项目验签必然失败。
      * 可用性代价真实存在，且随项目数增长（多项目共存时只能签一个、其余全拒）。
      * 彻底解是「每项目一份 `lock.sig`」，属行为变更、需重新拍板。
@@ -125,7 +125,7 @@ class LockSigner(
     /** 待签体 = 算法标签 + projectId + lock 内容（顺序固定，防拼接歧义）。 */
     private fun bodyOf(projectId: String, lockfile: Path): ByteArray {
         val lock = Files.readAllBytes(lockfile)
-        val pre = ("autojs-lock-v1|" + projectId + "|").toByteArray(StandardCharsets.UTF_8)
+        val pre = ("autoscript-lock-v1|" + projectId + "|").toByteArray(StandardCharsets.UTF_8)
         return pre + MessageDigest.getInstance("SHA-256").let { md ->
             md.update(lock); md.digest()
         }

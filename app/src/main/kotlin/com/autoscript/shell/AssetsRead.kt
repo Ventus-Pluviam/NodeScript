@@ -1,6 +1,9 @@
 package com.autoscript.shell
 
 import android.content.res.AssetManager
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.appservice.npm.AssetTreeCliSource
 import com.autoscript.appservice.scriptrepo.assets.AndroidAssetsSource
 
@@ -28,8 +31,10 @@ object AssetsRead {
      * projectId 枚举。枚举失败 = 空表（无资产来源），不炸装配 —— 补部署报告如实为空，
      * 不会被读成"已恢复"。
      */
-    fun scriptProjects(assets: AssetManager): List<String> = try {
-        assets.list("scripts")?.toList() ?: emptyList()
+    fun scriptProjects(assets: AssetManager): List<ProjectId> = try {
+        assets.list(ScriptPaths.PROJECTS_DIR)
+            ?.mapNotNull { ProjectId.createOrNull(it.trimEnd('/')) }
+            .orEmpty()
     } catch (_: Exception) {
         emptyList()
     }
@@ -41,7 +46,7 @@ object AssetsRead {
      * "projectId → 资产根" 的转接。读失败由 `AssetsWalk` 自己按"该文件读不到"处理
      * （`open` 抛则整次补部署失败并如实记账），这里不吞。
      */
-    fun scriptsOf(assets: AssetManager, projectId: String): Map<String, ByteArray> =
+    fun scriptsOf(assets: AssetManager, projectId: ProjectId): Map<RelPath, ByteArray> =
         AndroidAssetsSource(assets, projectId).readScripts()
 
     /**

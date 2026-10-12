@@ -17,8 +17,13 @@ import org.junit.jupiter.api.io.TempDir
  */
 class ScriptPathsScriptFileTest {
 
+    /**
+     * 收 [RelPath] —— 构造失败即「判据拒了这条路径」，与判据在 `ScriptPaths.scriptFile`
+     * 里是同一套（批 109 起它就在 [RelPath] 的 `init` 里，故本 helper 抛的正是同一个 IAE）。
+     * 下面那些「被拒」用例测的是**判据本身**，不再测拼装处还有没有第二道闸。
+     */
     private fun f(filesDir: Path, p: String): Path =
-        ScriptPaths.scriptFile(filesDir, "p1", p)
+        ScriptPaths.scriptFile(filesDir, ProjectId("p1"), RelPath(p))
 
     @Test
     fun `正常路径拼在项目根之下`(@TempDir filesDir: Path) {
@@ -60,16 +65,20 @@ class ScriptPathsScriptFileTest {
         assertThrows(IllegalArgumentException::class.java) { f(filesDir, "a//b.js") }
     }
 
+    /**
+     * 非法路径**在构造期**就被拒（批 109 把判据搬进了值类的 `init`）：这里断言的是
+     * [RelPath] 的构造，而不是 `scriptFile` 里还有没有闸 —— 同一个 IAE，位置换了。
+     */
     @Test
-    fun `项目号非法被拒——同一份正则口径`(@TempDir filesDir: Path) {
+    fun `非法相对路径在值类构造期即被拒`(@TempDir filesDir: Path) {
         assertThrows(IllegalArgumentException::class.java) {
-            ScriptPaths.scriptFile(filesDir, "..", "main.js")
+            ScriptPaths.scriptFile(filesDir, ProjectId(".."), RelPath("main.js"))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            ScriptPaths.scriptFile(filesDir, "p.1", "main.js")
+            ScriptPaths.scriptFile(filesDir, ProjectId("p.1"), RelPath("main.js"))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            ScriptPaths.scriptFile(filesDir, "p 1", "main.js")
+            ScriptPaths.scriptFile(filesDir, ProjectId("p 1"), RelPath("main.js"))
         }
     }
 }

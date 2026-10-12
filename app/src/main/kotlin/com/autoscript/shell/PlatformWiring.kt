@@ -264,14 +264,14 @@ object PlatformWiring {
      * `AppShellKit` 的纪律是**纯 JVM 可测**（只收 :domain 缝类型，不 import `android.`）。
      * 本类已经是「唯一碰 Android 的那一步」（`of(context)` 同址）。
      */
-    fun intentStore(context: Context, autojsDir: Path): IntentStore =
-        IntentStoreWiring.open(context.applicationContext, autojsDir)
+    fun intentStore(context: Context, nsDir: Path): IntentStore =
+        IntentStoreWiring.open(context.applicationContext, nsDir)
 
     /**
      * **其余两份存储的生产打开**（批 102 P4；§8.5 运行档案 + §8.6 任务注册表）：
      * 各开 SQLite 并在之前做一次性 jsonl 迁移。
      *
-     * **为什么合成一个入口**：它们是同一件事的两面（同一 `.autojs` 目录、同一套迁移纪律、
+     * **为什么合成一个入口**：它们是同一件事的两面（同一 `.ns` 目录、同一套迁移纪律、
      * 同一个「打不开即抛、不回落」的口径），调用点也是同一个地方 —— 拆成两个入口只会让
      * `PlatformWiring` 的函数数越限（`TooManyFunctions`），而这里真正需要被看见的是
      * 「**这三份存储是同一套纪律**」这件事。[intentStore] 同理，它也在这个纪律里
@@ -281,10 +281,10 @@ object PlatformWiring {
      */
     fun stores(
         context: Context,
-        autojsDir: Path,
+        nsDir: Path,
     ): Pair<com.autoscript.domain.scripts.RunArchive, com.autoscript.domain.scripts.TaskStore> =
-        RunArchiveWiring.open(context.applicationContext, autojsDir) to
-            TaskStoreWiring.open(context.applicationContext, autojsDir)
+        RunArchiveWiring.open(context.applicationContext, nsDir) to
+            TaskStoreWiring.open(context.applicationContext, nsDir)
 
     /**
      * 生产入口：`Context` → [SystemSpis.of] 十件 + DialogHost 构造（本类是唯一同时

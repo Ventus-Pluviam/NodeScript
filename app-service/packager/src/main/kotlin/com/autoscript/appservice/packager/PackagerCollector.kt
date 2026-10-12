@@ -18,7 +18,7 @@ import java.security.MessageDigest
  *
  * 遍历项目目录产出 [PackManifest]：`node_modules` 默认入包（§10.11 打包向导联动，
  * `includeNodeModules=false` 仅用于最小调试包）；[BuildIgnore] 规则 + 构建描述文件
- * 本身（`.autojs.build.ignore`）一律排除；入口脚本缺失直接拒绝（早失败，不产出坏包）。
+ * 本身（`.autoscript.build.ignore`）一律排除；入口脚本缺失直接拒绝（早失败，不产出坏包）。
  *
  * AXML/ARSC 改写与签名调用是后续 Android 实现，本类只做"哪些文件进包 + 清单摘要"。
  * [plan] 由清单组装模板改写计划（改写前凭 planDigest 复验，防清单错配）。
@@ -90,6 +90,6 @@ class PackagerCollector {
     }
 
     companion object {
-        const val IGNORE_FILE = ".autojs.build.ignore"
+        const val IGNORE_FILE = ".autoscript.build.ignore"
     }
 }

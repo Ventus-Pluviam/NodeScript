@@ -29,7 +29,7 @@ class NpmGlobalConfigTest {
         val c = NpmGlobalConfig(dir)
         c.writeRegistry("https://registry.npmmirror.com")
         assertEquals("https://registry.npmmirror.com", c.readRegistry())
-        assertEquals(dir.resolve(".npmrc"), c.file(), "全局 .npmrc 在 files 根，不在 .autojs 也不在 npm/")
+        assertEquals(dir.resolve(".npmrc"), c.file(), "全局 .npmrc 在 files 根，不在 .ns 也不在 npm/")
     }
 
     @Test

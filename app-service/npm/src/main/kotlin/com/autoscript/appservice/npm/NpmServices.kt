@@ -30,7 +30,7 @@ data class NpmServices(
     val lockSigner: LockSigner? = null,
     val snapshots: NpmSnapshot? = null,
     /**
-     * 控制台**命令历史**（2026-10-10 批 90；`files/.autojs/console-history.jsonl`）。
+     * 控制台**命令历史**（2026-10-10 批 90；`files/.ns/console-history.jsonl`）。
      *
      * 收在这里而不是 [InstallCoordinator] 的构造参数上：那个构造面已经贴着 detekt
      * `LongParameterList` 的构造阈值（12），而本类正是为「协作者太多」而生的那一层。

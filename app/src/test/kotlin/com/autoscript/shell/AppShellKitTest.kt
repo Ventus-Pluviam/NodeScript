@@ -1,6 +1,8 @@
 package com.autoscript.shell
 
 import com.autoscript.appservice.scheduler.core.RunOutcome
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.domain.scripts.ScreenGuarantee
 import com.autoscript.appservice.scheduler.core.SchedulerProvider
@@ -32,7 +34,7 @@ import java.nio.file.Path
  *
  * 这里跑的是 [AppShellKit.assemble] —— 也就是 `AppShellApplication.onCreate` 走的那条路，
  * 所以它证明的是"真机上开机之后会发生什么"，而不是"挂载缝的形状"：
- * 1. 目录约定落位（`files/.autojs` 两个持久寄存器、`files/scripts` 项目根）；
+ * 1. 目录约定落位（`files/.ns` 两个持久寄存器、`files/scripts` 项目根）；
  * 2. `schedulerProvider` 来自调用方（闹钟真实现），`screenGate` 真是注入的那一个
  *    —— 门禁拒绝时**不投递**；
  * 3. 缺省 engineFactory（`UnavailableEngine`）下，一次触发如实落 `CRASHED` + 真原因，
@@ -73,9 +75,9 @@ class AppShellKitTest {
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
         systemHandlers: SystemHandlers? = null,
-        scriptSources: Map<String, Map<String, ByteArray>> = emptyMap(),
-        scriptProjects: List<String> = emptyList(),
-        assetReader: ((String) -> Map<String, ByteArray>)? = null,
+        scriptSources: Map<ProjectId, Map<RelPath, ByteArray>> = emptyMap(),
+        scriptProjects: List<ProjectId> = emptyList(),
+        assetReader: ((ProjectId) -> Map<RelPath, ByteArray>)? = null,
         intentStore: IntentStore = this.intentStore,
     ): AssembledShell = AppShellKit.assemble(
         // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
@@ -98,7 +100,7 @@ class AppShellKitTest {
     @Test
     fun `装配落位目录约定并挂上四个命名空间`() {
         kit().use { assembled ->
-            assertTrue(Files.isDirectory(files.resolve(".autojs")), "§10.2：.autojs 是意图日志/档案/历史账本的家")
+            assertTrue(Files.isDirectory(files.resolve(".ns")), "§10.2：.ns 是意图日志/档案/历史账本的家")
             assertTrue(Files.isDirectory(files.resolve("scripts")), "§10.2：项目根 = files/scripts")
             assertNotNull(assembled.npmHandler, "npm 命名空间由配方自建并挂上")
         }
@@ -172,7 +174,7 @@ class AppShellKitTest {
         // 运行档案：**如实无记录** —— §8.5 纪律「link 为 null（门禁拒绝/排队超时/启动失败）
         // 绝不写孤儿档案」。启动从未成功 = 没有 engineRunId = 没有执行可归档；
         // 这次未执行的事实由意图日志那条 COMMIT 行（上面）承担，两处不重复记账。
-        val archive = FileRunArchive(files.resolve(".autojs"))
+        val archive = FileRunArchive(files.resolve(".ns"))
         try {
             assertTrue(
                 archive.recordsOfProject("p1").isEmpty(),
@@ -211,7 +213,7 @@ class AppShellKitTest {
             "注入的存储必须真的收到 START/COMMIT 行（缝接错 = 行落在别处）",
         )
         assertFalse(
-            Files.exists(files.resolve(".autojs").resolve("intent-log.jsonl")),
+            Files.exists(files.resolve(".ns").resolve("intent-log.jsonl")),
             "已删回落：任何路径都不该再建 jsonl 意图日志",
         )
         Unit
@@ -237,7 +239,7 @@ class AppShellKitTest {
             shell.scheduler.onTrigger("t9", TriggerSource.TIMED, System.currentTimeMillis())
         }
 
-        val archive = FileRunArchive(files.resolve(".autojs"))
+        val archive = FileRunArchive(files.resolve(".ns"))
         try {
             val rec = archive.recordsOfProject("p9").single()
             assertEquals(RunState.SUCCEEDED, rec.state, "脚本自退出 → Succeeded")
@@ -266,7 +268,7 @@ class AppShellKitTest {
             shell.scheduler.onTrigger("t2", TriggerSource.TIMED, System.currentTimeMillis())
         }
 
-        val archive = FileRunArchive(files.resolve(".autojs"))
+        val archive = FileRunArchive(files.resolve(".ns"))
         try {
             assertTrue(archive.recordsOfProject("p2").isEmpty(), "门禁拒绝 = 没有引擎执行 = 不写档案")
         } finally {
@@ -342,8 +344,8 @@ class AppShellKitTest {
         // 先手写一个用户改过的脚本：补部署不得盖掉它
         val edited = files.resolve("scripts").resolve("p1").resolve("main.js")
         val sources = mapOf(
-            "p1" to mapOf("main.js" to "console.log(2)".toByteArray()),
-            "p2" to mapOf("a.js" to "console.log(9)".toByteArray()),
+            ProjectId("p1") to mapOf(RelPath("main.js") to "console.log(2)".toByteArray()),
+            ProjectId("p2") to mapOf(RelPath("a.js") to "console.log(9)".toByteArray()),
         )
         AppShellKit.assemble(
             // T1 桥 socket：桌面单测走 JDK unix domain socket（设备装配传 AndroidT1SocketBinder，见 assemble 的 KDoc）
@@ -352,7 +354,7 @@ class AppShellKitTest {
             cacheDir = cache,
             intentStore = InMemoryIntentStore(),
             schedulerProvider = RecordingProvider(),
-            scriptSources = mapOf("p1" to mapOf("main.js" to "// 用户手改".toByteArray())),
+            scriptSources = mapOf(ProjectId("p1") to mapOf(RelPath("main.js") to "// 用户手改".toByteArray())),
         ).use { first ->
             assertEquals(
                 listOf("p1/main.js"),
@@ -422,13 +424,13 @@ class AppShellKitTest {
     fun `资产来源按项目补缺：显式优先、读失败跳过不炸`() {
         val requested = mutableListOf<String>()
         kit(
-            scriptSources = mapOf("p1" to mapOf("main.js" to "// 显式".toByteArray())),
-            scriptProjects = listOf("p1", "p2", "p3"),
+            scriptSources = mapOf(ProjectId("p1") to mapOf(RelPath("main.js") to "// 显式".toByteArray())),
+            scriptProjects = listOf(ProjectId("p1"), ProjectId("p2"), ProjectId("p3")),
             assetReader = { projectId ->
-                requested += projectId
-                when (projectId) {
-                    "p1" -> mapOf("main.js" to "// 资产（必须被显式盖住不读都行）".toByteArray())
-                    "p2" -> mapOf("a.js" to "// 资产补".toByteArray())
+                requested += projectId.value
+                when (projectId.value) {
+                    "p1" -> mapOf(RelPath("main.js") to "// 资产（必须被显式盖住不读都行）".toByteArray())
+                    "p2" -> mapOf(RelPath("a.js") to "// 资产补".toByteArray())
                     else -> throw java.io.IOException("p3 资产损坏")
                 }
             },

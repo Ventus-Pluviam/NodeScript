@@ -28,7 +28,7 @@ import java.nio.file.Path
  *
  * 目录映射（§10 存储布局）：
  * - `filesDir/scripts` → [NpmProjectLayout.projectsRoot]（项目根）；
- * - `filesDir/.autojs` → journal（`install.journal`）/ history（`install-history.jsonl`）/
+ * - `filesDir/.ns` → journal（`install.journal`）/ history（`install-history.jsonl`）/
  *   lock 签名（`lock.sig`）/ 快照账本来源；
  * - `cacheDir/npm-cache` → [CacacheIndex]（cacache `content-v2` 真查；被系统清掉如实报缺口）。
  *
@@ -71,21 +71,21 @@ object NpmShellKit {
         // 项目根来自契约层（§9.6 单一事实来源）：与 script-repo/调度恢复/装配层同一个函数，
         // 拼错目录名不再可能（曾经这里与 AppShellKit 各写一份字面量）。
         val layout = NpmProjectLayout(ScriptPaths.projectsRoot(filesDir))
-        val autojsDir = filesDir.resolve(".autojs")
+        val nsDir = filesDir.resolve(".ns")
         // 装配即建目录（生产 filesDir 本来就要落盘；探针/部署读不存在的路径只会炸，
         // 建空目录不伪造任何"已安装"事实 —— 项目内容仍以 lockfile/node_modules 为准）。
         Files.createDirectories(layout.projectsRoot)
-        Files.createDirectories(autojsDir)
+        Files.createDirectories(nsDir)
         val services = NpmServices(
             layout = layout,
-            journal = InstallJournal(autojsDir),
+            journal = InstallJournal(nsDir),
             staging = InstallStaging(layout),
-            history = InstallHistory(autojsDir),
-            // 控制台命令历史（2026-10-10 批 90）：与审计史同住 `.autojs/`，
+            history = InstallHistory(nsDir),
+            // 控制台命令历史（2026-10-10 批 90）：与审计史同住 `.ns/`，
             // 但**纪律不同**（可修剪的便利缓存，见 ConsoleHistory 的类 KDoc）。
-            consoleHistory = ConsoleHistory(autojsDir),
-            lockSigner = lockKey?.let { LockSigner(autojsDir, it) },
-            snapshots = if (snapshots && lockKey != null) NpmSnapshot(layout, autojsDir, lockKey) else null,
+            consoleHistory = ConsoleHistory(nsDir),
+            lockSigner = lockKey?.let { LockSigner(nsDir, it) },
+            snapshots = if (snapshots && lockKey != null) NpmSnapshot(layout, nsDir, lockKey) else null,
             cacheIndex = CacacheIndex(NpmCacheSeedDeployer.cacheRoot(cacheDir)),
             bundleImporter = NpmOfflineBundleImporter,
             registryVerifier = registryVerifier,

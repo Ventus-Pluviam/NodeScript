@@ -13,6 +13,7 @@ import com.autoscript.domain.automation.LeasedScreenRecording
 import com.autoscript.domain.automation.toAutojsException
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.file.Files
 import java.nio.file.Path
@@ -91,7 +92,7 @@ class MediaProjectionRecorder(
     override suspend fun start(
         consent: ScreenConsentBroker,
         owner: MediaProjectionSessionOwner,
-        projectId: String,
+        projectId: ProjectId,
         width: Int,
         height: Int,
     ): RecordingHandle {
@@ -150,7 +151,7 @@ class MediaProjectionRecorder(
      * **不检查/不覆盖同名文件**：名字由我们现造，重名只可能是"同一毫秒 + 同一序号"，
      * 而那被序号排除了。
      */
-    private fun specFor(projectId: String, width: Int, height: Int): ScreenRecordingSpec {
+    private fun specFor(projectId: ProjectId, width: Int, height: Int): ScreenRecordingSpec {
         val dir = ScriptPaths.recordingsDir(filesDir, projectId)
         try {
             Files.createDirectories(dir)

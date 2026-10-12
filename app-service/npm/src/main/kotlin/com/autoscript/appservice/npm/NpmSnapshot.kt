@@ -1,5 +1,6 @@
 package com.autoscript.appservice.npm
 
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.npm.SnapshotRef
@@ -22,7 +23,7 @@ import java.util.zip.ZipOutputStream
  *
  * 产物 = `node_modules.zip`（含 `package.json` + `package-lock.json` + `node_modules` 全树
  * + `ledger/` 历史账（含旧审批只读）+ 随包同行的 `lock.sig`），外加一条 `snapshot.sig`：
- * `v1 <HMAC-SHA256>`，签名体 = `autojs-snapshot-v1|<projectId>|<lock.sig 原文>|<内容清单哈希>`。
+ * `v1 <HMAC-SHA256>`，签名体 = `autoscript-snapshot-v1|<projectId>|<lock.sig 原文>|<内容清单哈希>`。
  *
  * 为什么签**内容清单**而不是归档字节：归档头带时间戳/压缩方差，逐字节签会让同一棵树
  * 两次导出签不一致，导入方还得按位比对；签 `相对路径 + 逐文件 sha256` 的有序清单则
@@ -36,7 +37,7 @@ import java.util.zip.ZipOutputStream
  */
 class NpmSnapshot(
     private val layout: NpmProjectLayout,
-    /** `files/.autojs`（`approve-ledger.jsonl` / `install-history.jsonl` / `lock.sig` 的来源）。 */
+    /** `files/.ns`（`approve-ledger.jsonl` / `install-history.jsonl` / `lock.sig` 的来源）。 */
     private val ledgerDir: Path? = null,
     private val key: LockSigner.KeyProvider,
 ) {
@@ -78,8 +79,8 @@ class NpmSnapshot(
      */
     fun export(projectId: String, out: Path): Build {
         // projectId 合法性先过（防路径逃逸），再谈内容
-        layout.projectRoot(projectId)
-        val lock = layout.lockfile(projectId)
+        layout.projectRoot(ProjectId(projectId))
+        val lock = layout.lockfile(ProjectId(projectId))
         if (!Files.isRegularFile(lock)) {
             throw AutojsException(ErrorCode.ERR_FILE_NOT_FOUND, "快照导出拒绝：项目无 lockfile（$lock）")
         }
@@ -179,7 +180,7 @@ class NpmSnapshot(
         fun add(rel: String, p: Path) {
             if (Files.isRegularFile(p)) out.add(rel to p)
         }
-        val root = layout.projectRoot(projectId)
+        val root = layout.projectRoot(ProjectId(projectId))
         add("package.json", root.resolve("package.json"))
         add("package-lock.json", root.resolve("package-lock.json"))
         if (ledgerDir != null) {
@@ -187,7 +188,7 @@ class NpmSnapshot(
             add("ledger/install-history.jsonl", ledgerDir.resolve("install-history.jsonl"))
             add("lock.sig", ledgerDir.resolve("lock.sig"))
         }
-        val nm = layout.nodeModules(projectId)
+        val nm = layout.nodeModules(ProjectId(projectId))
         if (Files.isDirectory(nm)) {
             Files.walk(nm).use { s ->
                 s.filter { Files.isRegularFile(it) }.forEach { p ->
@@ -199,7 +200,7 @@ class NpmSnapshot(
     }
 
     private fun signBody(projectId: String, lockSigText: String?, contentHash: String): ByteArray =
-        ("autojs-snapshot-v1|" + projectId + "|" + (lockSigText ?: "none") + "|" + contentHash)
+        ("autoscript-snapshot-v1|" + projectId + "|" + (lockSigText ?: "none") + "|" + contentHash)
             .toByteArray(StandardCharsets.UTF_8)
 
     private fun sha256(bytes: ByteArray): String = DirSizer.sha256(bytes)

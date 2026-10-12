@@ -1,5 +1,7 @@
 package com.autoscript.domain.automation
 
+import com.autoscript.domain.scripts.ProjectId
+
 /**
  * 录屏规格（§9.2 录屏腿）：**语义层决定「录到哪、录多大」，设备层只执行**。
  *
@@ -186,7 +188,7 @@ interface ScreenRecordingController {
     suspend fun start(
         consent: ScreenConsentBroker,
         owner: MediaProjectionSessionOwner,
-        projectId: String,
+        projectId: ProjectId,
         /**
          * 视频尺寸**提示**（`<= 0` = 让设备层按屏幕真值）。与 `screen.startCapturer` 的
          * 尺寸参数同一条口径：**提示不是承诺** —— 设备层可以忽略它（编码器不接受该尺寸时
@@ -240,7 +242,7 @@ data class RecordingHandle(val refId: Long, val generation: Long, val path: Stri
  */
 data class ScreenRecordingContext(
     val owner: MediaProjectionSessionOwner,
-    val projectId: String,
+    val projectId: ProjectId,
 )
 
 /**
@@ -258,12 +260,15 @@ suspend fun screenRecordingContextOrThrow(): ScreenRecordingContext {
             com.autoscript.domain.core.ErrorCode.ERR_PERMISSION_DENIED,
             "本连接没有已认证的执行身份，不能开启录屏会话",
         )
-    val projectId = ctx.projectId
-    if (projectId.isBlank()) {
-        throw com.autoscript.domain.core.AutojsException(
+    // 判据进 `ProjectId`（批 109）：空串与「不是项目号的串」在此**同一处**被拒，
+    // 而下游 [MediaProjectionRecorder.start] 收的是类型 —— 拿到类型就意味着它能拼落点。
+    // 两句话术合并成一条的后果要照实记：空串现在报的是「不是合法项目号」而不是
+    // 「没有项目号」，而空串**本来就是**不是合法项目号 —— 合并没有丢信息，
+    // 只是把「认证点没装填」这个原因换成了判据本身的说法。
+    val projectId = ProjectId.createOrNull(ctx.projectId)
+        ?: throw com.autoscript.domain.core.AutojsException(
             com.autoscript.domain.core.ErrorCode.ERR_PERMISSION_DENIED,
-            "本次执行没有项目号（认证点未装填）：算不出录屏落点，本次拒绝（不套默认项目名）",
+            "本次执行没有可用项目号（认证点未装填或非合法项目号：${ctx.projectId}）：算不出录屏落点，本次拒绝（不套默认项目名）",
         )
-    }
     return ScreenRecordingContext(MediaProjectionSessionOwner(ctx.engineId, ctx.engineRunId, ctx.connectionId), projectId)
 }

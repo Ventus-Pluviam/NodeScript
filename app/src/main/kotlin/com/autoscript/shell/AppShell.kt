@@ -159,7 +159,7 @@ class AppShell(
             /**
              * 任务注册表持久缝（§8.6 调度持久性）。null = 未接存储：Scheduler 纯内存行为
              * （骨架/单测）。生产由 [AppShellKit][com.autoscript.shell.AppShellKit] 传
-             * `FileTaskStore`（与意图日志同一 `.autojs` 目录，同一追加纪律）。
+             * `FileTaskStore`（与意图日志同一 `.ns` 目录，同一追加纪律）。
              */
             taskStore: TaskStore? = null,
             screenGate: ScreenGate = ScreenGate.AllowAll,

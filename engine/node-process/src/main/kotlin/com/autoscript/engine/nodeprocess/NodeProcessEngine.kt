@@ -13,6 +13,8 @@ import com.autoscript.domain.engine.RunIdentityLease
 import com.autoscript.domain.engine.RunSummary
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.engine.StopResult
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import com.autoscript.domain.scripts.ScriptPaths
 import java.io.IOException
 import java.nio.file.Files
@@ -210,7 +212,14 @@ class NodeProcessEngine(
                 // ERR_INVALID_PARAM（RpcNamespaceHandler），而调度侧会把裸 IAE 记成宿主内部错。
                 // 判据「参数不对」只有一个错误码，两条路才对得上。
                 val scriptAbs = try {
-                    ScriptPaths.scriptFile(config.filesDir, run.projectId, run.scriptPath)
+                    // 判据在**构造值类**那一刻（批 109）：`EngineRunRequest` 的两个字段仍是
+                    // `String`（DTO 边界），到这里才折成 `ProjectId`/`RelPath` ——
+                    // 折不出就是「这俩不是合法项目号/项目内相对路径」，与外层那个 catch 同一语义。
+                    ScriptPaths.scriptFile(
+                        config.filesDir,
+                        ProjectId(run.projectId),
+                        RelPath(run.scriptPath),
+                    )
                 } catch (e: IllegalArgumentException) {
                     throw AutojsException(
                         ErrorCode.ERR_INVALID_PARAM,
@@ -267,7 +276,7 @@ class NodeProcessEngine(
 
                 applyRuntimeLimits(env)
                 val command = spawnCommand(scriptAbs, run.args)
-                val cwd = ScriptPaths.projectRoot(config.filesDir, run.projectId)
+                val cwd = ScriptPaths.projectRoot(config.filesDir, ProjectId(run.projectId))
                 // 在线必须与宿主同一本身份账；离线不签发、不凭空制造匿名桥身份。
                 // 授权快照由宿主一侧**上游**算好（RuntimeController.start → 池请求 → 本请求），
                 // 引擎只搬运、不重算（见 RunIdentityIssuer KDoc）。离线没有快照就不签发，

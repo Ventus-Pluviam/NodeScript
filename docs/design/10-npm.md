@@ -47,7 +47,7 @@
 
 存储布局（**分层到不同生命周期目录**，整改自批判「状态单点系于 filesDir」）：
 - `files/scripts/<projectId>/`：`package.json`、`package-lock.json`(v3)、`node_modules/`、`.npmrc`（项目级）。⚠ `filesDir` 所在分区文件系统由厂商决定（ext4/f2fs 皆有）——f2fs+eMMC 纳入真机红测矩阵，bin-links/符号链接/20k 小文件写方差按最差形态设计超时。
-- `files/.autojs`（**App 私有、安装会话只读、HMAC keyed 于 :main**）：`lock.sig`、`install.journal`（事务日志）、`install-history`（审计）、历史账本（含旧审批记录只读 —— 审批面已拆，`approve-ledger.jsonl` 不再写入，2026-10-11 决策第 62 项）。
+- `files/.ns`（**App 私有、安装会话只读、HMAC keyed 于 :main**）：`lock.sig`、`install.journal`（事务日志）、`install-history`（审计）、历史账本（含旧审批记录只读 —— 审批面已拆，`approve-ledger.jsonl` 不再写入，2026-10-11 决策第 62 项）。
 - `cacheDir/npm-cache`（**系统可自动清，损失可接受**）：npm 内容寻址缓存 `content-v2 + index-v5`（非 SQLite）；`cacheDir/npm-cache-seed`：精选 tarball 种子（axios/dayjs/lodash/cheerio 等 ~5MB），首启播种。
   **「npm 的缓存在哪」只有一份判据（2026-10-09 批 86）**：`NpmCacheSeedDeployer.cacheRoot(cacheDir)` = `cacheDir/npm-cache`，四处读者（喂给 npm 的 `--cache`、`CacacheIndex` 查询根、缓存回收根、离线 bundle 导入落点）一律经它。此前四处各拼各的，实测**互不相同**：`--cache` 拿到的是 `cacheDir` 本身（少一层）、`CacacheIndex` 读 `cacheDir/npm-cache`、导入落点又是第三个目录（协调器 `npmCacheDir` 未传时的 `projectsRoot` 同级兜底）—— 而 `cacheRoot` 自己当时是**恒等映射**却挂着「缓存根（cacheDir/npm-cache）」的注释，注释与实现相反。后果不是报错而是**静默失效**：`offlineGap` 恒报缺口、导入完 `ci --offline` 照样不命中。
 - `files/npm/`：vendored npm CLI（assets→filesDir 原子部署 tmp+sha256+rename；首启/升级落盘）。**已落地（2026-10-01）**：素材根 = `assets/npm/**`（键形状 `npm/<rel>`，零点条目 —— AssetManager 对点条目的可见性 ROM 间不一致），幂等锚 = `files/npm/.cli-manifest.sha256`（内容 = 全树清单规范化后的 sha256；2026-10-06 B9 起，构建期生成 `assets/npm-manifest.json`，含 count/bytes/files[path,sha256]。部署先核对 APK 文件集合、总字节和每件摘要，再核对落盘树；一致才免写，缺件/不可读/坏摘要拒绝部署并保留旧树。每次启动需要读盘校验，不再承诺零 IO）。**剪裁口径已实测**：按此口径剪出来的树（1668 文件 / 9MiB / 点条目 0）`npm ls`（装进 arborist）与真 `npm install` 都通过 —— 「丢点条目会不会弄瘸 npm」有实测答案，不走推断。
@@ -109,12 +109,12 @@
 注入（属 §10.3 表里 T2 那条，本批未动）。
 
 **已落（2026-10-10，T1 下半段）**：**spawn 桥本体**（上表 T1 那行的实现）。
-链：npm 会话进程经 `NODE_OPTIONS=--require=<files/.autojs/npm-t1-bridge.cjs>` 注入桥 shim →
+链：npm 会话进程经 `NODE_OPTIONS=--require=<files/.ns/npm-t1-bridge.cjs>` 注入桥 shim →
 `npm run <script>` / `npm exec <bin>` 发出的 `child_process.spawn("sh", ["-c", body])` 被 shim
 接住 → 经 unix domain socket 把 `{cmd,args,opts}` 报给 `:main` → 宿主起真进程 →
 stdout/stderr/退出码经同一条 socket 以**假管道**回填（`BridgedChild` 是宿主侧真进程在脚本
 进程里的本地投影：`stdout`/`stderr` 可读流、`stdin` 可写、`pid`/`exitCode`/`kill()` 齐全）。
-**七件落地物**：`npm-t1-bridge.cjs`（classpath 资源，与门禁 shim 同处 `files/.autojs/`）/
+**七件落地物**：`npm-t1-bridge.cjs`（classpath 资源，与门禁 shim 同处 `files/.ns/`）/
 `NpmT1Bridge`（socket 绑定 + 握手 + 逐帧派发 + 会话关断收尸）/ `T1Process.kt`（一个已放行的
 子进程）/ `NpmScriptExecutor`（一次 `npm run` = 一条 npm 会话进程；`scriptExecutor` 缝从此有值）/
 `:app` 的 `AndroidT1SocketBinder`（设备侧 `android.net.LocalServerSocket` + abstract 名）。
@@ -160,7 +160,7 @@ POSIX shell 惯例 `n = exit - 128` 反查信号名表（1–31；32+ 实时信�
 
 **已落（2026-10-09，T0 面）**：**强制注入的 child_process 拦截 shim**（上表 T0 末行 /
 §10.12 末行那条「零 spawn 不变量漂移」）—— `NpmSpawnGate` 把 `npm-spawn-gate.cjs`
-（`:app-service:npm` 的 classpath 资源）落到 `files/.autojs/`，`HostNodeExecutor` 经
+（`:app-service:npm` 的 classpath 资源）落到 `files/.ns/`，`HostNodeExecutor` 经
 `NODE_OPTIONS=--require=<它>` 注入安装会话进程（**追加不覆盖**父环境里那份），
 七个入口（`spawn`/`spawnSync`/`exec`/`execSync`/`execFile`/`execFileSync`/`fork`）一律抛错：
 非批准 spawn → `ERR_NPM_SPAWN_BLOCKED`、`detached:true` → `ERR_PERMISSION_DENIED`
@@ -176,7 +176,7 @@ POSIX shell 惯例 `n = exit - 128` 反查信号名表（1–31；32+ 实时信�
 
 > 批判指出：安装是原地、非原子写 node_modules，而 Android 上进程死亡是常态；半解包 + 坏符号链接会让后续 ci/install 在坏树上反复 EINTEGRITY。
 
-- **reify 目标 = `node_modules.part-<ts>` 暂存目录 → 完成校验 → rename 到位**；写入 `.autojs/install.journal`（begin/commit/fail 三段）。
+- **reify 目标 = `node_modules.part-<ts>` 暂存目录 → 完成校验 → rename 到位**；写入 `.ns/install.journal`（begin/commit/fail 三段）。
 - 启动与每次安装前置扫描 journal：检测 incomplete → UI 提示**一键回滚重建**（按 lock 走 `ci --offline`）。
 - 安装会话挂 **specialUse FGS（副类型 automation）+ oomAdj 前台豁免**，并纳入 `:main` 看门狗/kill 权威（RuntimeController 语义）而非独立存活；`:main`↔session 心跳断 → 新会话接管收尾。
 - Doze/强停：安装统一走 SchedulerProvider；Doze 下降级为「仅解析+下载+离线物化 cache，reify 写 node_modules 推迟到前台机会」；网络失败返回 `ERR_REGISTRY_UNAVAILABLE`（可诊断）而非挂死。
@@ -205,7 +205,7 @@ POSIX shell 惯例 `n = exit - 128` 反查信号名表（1–31；32+ 实时信�
      —— **旧账只读保留**（审计页要能读历史）。
    - 审计日志（registry 变更/lock 重签/脚本执行）落 App 且可导出；`versionHash` 随执行进审计条目，
      回答「我当时跑的是哪一份脚本」（脚本一改哈希就变），但**不再作放行判据**。
-     **落地现状（2026-10-09 批 85）**：「落 App」自始成立（`InstallHistory` → `files/.autojs/install-history.jsonl`，只追加、失败也记），但**读侧此前零消费方** —— 本批补上 `PackageManagerFacade.history()` → `HostSummary.npmHistory()` → `:ui` `AuditScreen`（入口在依赖管理页顶栏），见 §10.9 第 2 条。**「可导出」仍未落**：SAF 选目录 + 写文件那条通道没接，故界面上**不画导出按钮**（按下去什么都不发生的按钮比不画更糟）。
+     **落地现状（2026-10-09 批 85）**：「落 App」自始成立（`InstallHistory` → `files/.ns/install-history.jsonl`，只追加、失败也记），但**读侧此前零消费方** —— 本批补上 `PackageManagerFacade.history()` → `HostSummary.npmHistory()` → `:ui` `AuditScreen`（入口在依赖管理页顶栏），见 §10.9 第 2 条。**「可导出」仍未落**：SAF 选目录 + 写文件那条通道没接，故界面上**不画导出按钮**（按下去什么都不发生的按钮比不画更糟）。
 3. **恶意包防线（缺省启用）**：
    - 默认**拒绝全部 install 脚本**（对操纵无障碍/root 的自动化脚本是最大投毒面）；postinstall 包装完即出「脚本未运行」显式警告，**禁止静默**。
    - 在线 `npm audit` + `audit signatures`（ECDSA）；离线捆绑 OSV 库 + `osv-scanner --offline`；签名端点不可用**绝不静默降级**。
@@ -287,7 +287,7 @@ JS 侧 `npm-events.test.cjs` 逐字复刻同一套回包语义。
 
 **控制台命令历史读写口（2026-10-10 批 90，§10.9 第 3 条）**：与 `consoleOutput` 的分工是
 **环 vs 盘** —— 输出环（`SeqRing<NpmConsoleLine>`，有界 512）随进程消失，而"关掉控制台再进来
-还能翻回上次敲的那条"要靠落盘（`files/.autojs/console-history.jsonl`）。三条口径：
+还能翻回上次敲的那条"要靠落盘（`files/.ns/console-history.jsonl`）。三条口径：
 **按项目分开读**（与 `history()` 的无参全量**刻意相反**：控制台的命令跑在某个项目上，
 在 A 项目敲的 `npm install axios` 翻到 B 项目去点，落的是 B 的 `node_modules`，而按钮上那行字
 一模一样。两问不同 —— 那边问"这个宿主发生过什么"（审计），这边问"我在这个项目里敲过什么"）；
@@ -471,7 +471,7 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
      逐行报（尽力而为，拿不到也不该让安装失败）。**流真报过时不再补 `outputTail` 行**
      （否则同一段文本显示两遍，用户以为 npm 跑了两回）；空行**不报**（真实 npm 输出以空行
      结尾，`takeLast(8000)` 取到的正是那些空行）。
-   - **命令历史持久化已落（2026-10-10 批 90）**：`ConsoleHistory`（`files/.autojs/console-history.jsonl`）
+   - **命令历史持久化已落（2026-10-10 批 90）**：`ConsoleHistory`（`files/.ns/console-history.jsonl`）
      + `PackageManagerFacade.consoleHistory`/`recordConsoleHistory` → `HostSummary` 同两口 →
      `:ui` 输入行上方的 `HistoryRow`（横向滚动，点一下**填进输入框而不直接执行** ——
      历史里那条多半要改一改再跑）。口径见上面那一段与 `design-decisions.md` 第 60 项。
@@ -522,7 +522,7 @@ const offF = auto.npm.onFinished(f => f.success ? done() : fail(f.detail)); // �
    回收回执里的删/留数字**仍**取自 `NpmCacheReclaimReport` 本身，不取自配额条：两者量的是同一棵树，
    但一个是「这一刻有多大」、一个是「这次删了多少」，拿后者去对前者只会让人以为对不上。
 6. **首启引导**：原子部署 assets/npm CLI + 播种精选缓存 → registry ping 探测 → 选镜像（**默认官方 npmjs**，§18 第 7 项；镜像是加速选项不是开箱前提）与配置代理（能力中心网络项）。
-7. **打包向导联动**：node_modules 默认入 APK + `.autojs.build.ignore` 排除规则 + 「完全离线变体」（宿主预装 node_modules.zip）+ 项目 lock 签名生成。
+7. **打包向导联动**：node_modules 默认入 APK + `.autoscript.build.ignore` 排除规则 + 「完全离线变体」（宿主预装 node_modules.zip）+ 项目 lock 签名生成。
 8. **镜像源管理**（2026-10-09 批 83）：管理面板 → 镜像源管理（`RegistryScreen`），编的是 **npm registry 全局缺省**，**粒度全局一份**（用户 2026-10-09 裁定；不做「全局缺省 + 项目覆盖」的编辑面 —— 项目那层仍可手编 `.npmrc`，界面不代管）。
    - **归属 `:app-service:npm`**：它本来就在管这件事（`NpmConfigKey.REGISTRY`、项目 `.npmrc`、`InstallHistory.Op.REGISTRY` 审计键、交叉校验首选），搬去别处就是第二份 registry 判据。
    - **判据唯一一份住 `:domain`**（`NpmRegistryKeys`，与批 82 `ScriptEnvKeys` 同形）：`canonicalize`（规整化）与 `reject`（拒收原文）同时被 `NpmRegistryVerifier` 的缝边界与 `:ui` 的输入校验调用 —— 界面另判一遍必然漂移，漂移方向最坏（界面放行的串在写入侧被拒）。`NpmRegistryVerifier.OFFICIAL`/`MIRROR` 改为指向它的别名，URL 字面量从此只有一份。

@@ -38,7 +38,7 @@
 
 | 密钥 | 用途 | 存放 | 丢失的后果 |
 |---|---|---|---|
-| 应用 HMAC 密钥 | 签 `files/.autojs/lock.sig`，钉「这份 lock 是本机认可的」（§10.5-1） | **当前未接线**：接缝 `LockSigner.KeyProvider` 是全仓唯一入口（2026-10-01 起形状为 `secretKey(): SecretKey` —— 给句柄而不是字节，Keystore 里**不出库**的密钥也接得上），但**没有任何实现**，生产装配（`NpmShellKit.assembleHandler`）的 `lockKey` 缺省 `null` → **既不签也不验**。设计口径的存放处是 Android Keystore（**目标形态，非现状**） | 未接线期间不适用。接上之后的口径：密钥丢失 = **显式的「安全降级」失败**（`verifyOrThrow` 抛 `ERR_PERMISSION_DENIED`），不静默放行，也不「没签就跳过」 |
+| 应用 HMAC 密钥 | 签 `files/.ns/lock.sig`，钉「这份 lock 是本机认可的」（§10.5-1） | **当前未接线**：接缝 `LockSigner.KeyProvider` 是全仓唯一入口（2026-10-01 起形状为 `secretKey(): SecretKey` —— 给句柄而不是字节，Keystore 里**不出库**的密钥也接得上），但**没有任何实现**，生产装配（`NpmShellKit.assembleHandler`）的 `lockKey` 缺省 `null` → **既不签也不验**。设计口径的存放处是 Android Keystore（**目标形态，非现状**） | 未接线期间不适用。接上之后的口径：密钥丢失 = **显式的「安全降级」失败**（`verifyOrThrow` 抛 `ERR_PERMISSION_DENIED`），不静默放行，也不「没签就跳过」 |
 | APK 发布密钥 | 打包链签名 | 随打包整轨移入后续版本（§13），当前不入 P0 | 不适用（整轨未启用） |
 
 要点：

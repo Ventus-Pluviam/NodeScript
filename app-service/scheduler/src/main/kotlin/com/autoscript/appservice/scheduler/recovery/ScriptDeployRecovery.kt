@@ -1,5 +1,7 @@
 package com.autoscript.appservice.scheduler.recovery
 
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.file.Files
 import java.nio.file.Path
@@ -19,7 +21,9 @@ import java.nio.file.StandardCopyOption
  *    `AtomicDeployer` + `InstallCoordinator` 的职责，它们有 sha256/journal/审批链路）。
  *    这里的补法只有一条判据 —— 「目标不存在就写」。因此**已存在的文件内容本类不做校验**：
  *    用户手改过的脚本、旧版本残留，一律原样留着（宁可跑旧版，也不静默覆盖用户的东西）。
- * 2. **没有清单就是没得补**。`sources` 是"projectId → (项目内相对路径 → 字节)"，
+ * 2. **没有清单就是没得补**。`sources` 是"项目号 → (项目内相对路径 → 字节)"（批 109 起
+ * 键与内层键分别是 [ProjectId] 与 [RelPath]，**类型即判据**：装不进这张表的条目在构造期
+ * 就被拒，本类运行期不再判形态），
  *    而框架**没有内置脚本模板机制**（没有脚手架/生成器；assets 下有多少 `scripts/<id>/`
  *    就有多少，2026-10-02 起随包一个示例 `scripts/demo/`，是给人照抄的样本不是模板系统）。
  *    调用方给空映射 = 本次没补任何东西；[deployed] 会如实是 0，**不粉饰成"已恢复"**。
@@ -41,14 +45,19 @@ import java.nio.file.StandardCopyOption
 // Kotlin internal 只在模块内可见 —— 若标 internal，装配层就调不动这条缝，只能另起重复实现。
 class ScriptDeployRecovery(
     private val filesDir: Path,
-    private val sources: Map<String, Map<String, ByteArray>>,
+    private val sources: Map<ProjectId, Map<RelPath, ByteArray>>,
 ) {
 
-    /** 一个补上的文件。 */
-    data class Deployed(val projectId: String, val relPath: String, val target: Path)
+    /**
+     * 一个补上的文件。
+     *
+     * **两个字段都带类型**（批 109）：到这一步它们已经过了判据 —— [relPath] 尤其要紧，
+     * 因为它刚刚被拿去拼过目标路径。
+     */
+    data class Deployed(val projectId: ProjectId, val relPath: RelPath, val target: Path)
 
     /** 一个没补上的文件（[reason] 是原因原文，不折叠成布尔）。 */
-    data class Failure(val projectId: String, val relPath: String, val reason: String)
+    data class Failure(val projectId: ProjectId, val relPath: RelPath, val reason: String)
 
     /** 补部署结果（空 map + 空列表 = 没有来源可补，不是"恢复成功"）。 */
     data class Report(
@@ -67,16 +76,11 @@ class ScriptDeployRecovery(
     fun run(): Report {
         val deployed = mutableListOf<Deployed>()
         val failures = mutableListOf<Failure>()
-        for (projectId in sources.keys.sorted()) {
+        for (projectId in sources.keys.sortedBy { it.value }) {
             val files = sources.getValue(projectId)
-            for (relPath in files.keys.sorted()) {
+            for (relPath in files.keys.sortedBy { it.value }) {
                 val bytes = files.getValue(relPath)
                 val target = targetOf(projectId, relPath)
-                if (target == null) {
-                    // 非法相对路径：如实记一笔，跳过（不抛 —— 一个坏条目不该带走整批补部署）
-                    failures += Failure(projectId, relPath, "非法项目内相对路径（绝对路径/空段/.. 逃逸）")
-                    continue
-                }
                 try {
                     if (Files.exists(target)) continue        // 只补缺，绝不覆盖（见 KDoc 边界 1）
                     if (bytes.isEmpty()) {
@@ -93,9 +97,22 @@ class ScriptDeployRecovery(
         return Report(deployed, failures)
     }
 
-    /** 目标路径；非法相对路径回 null（判据见 [isSafeRelPath]）。 */
-    private fun targetOf(projectId: String, relPath: String): Path? =
-        if (isSafeRelPath(relPath)) ScriptPaths.projectRoot(filesDir, projectId).resolve(relPath) else null
+    /**
+     * 目标路径。
+     *
+     * **批 109 起不再有 `Path?` 这一支**：非法相对路径在 [RelPath] 的构造期就被拒了，
+     * 而 [sources] 的键类型要求元素**已经是** [RelPath] —— 类型把「一个坏条目」这个状态
+     * 从「运行时才判断」挪到了「装不进这张表」。装配层要喂非法条目，得在**构造 sources 时**
+     * 就被拒，那正是该拒的地方（见 [AppShellKit] 侧的接线）。
+     *
+     * **不再需要 `resolveIn` 的二次归一**：那套闸在 script-repo 模块里，而 scheduler 的架构
+     * 门禁禁止依赖同级 app-service（见本类原 KDoc —— 这也正是当初那份私有 `isSafeRelPath`
+     * 副本存在的原因）。现在判据在 `:domain` 的 [RelPath] 里，而 [RelPath] 的判据本身
+     * 就是「无 `..`/`.`/空段/反斜杠」，归一之后**必然仍在项目根之下** —— 所以这里直接
+     * `resolve` 即可，不需要再判一次。副本随之删除。
+     */
+    private fun targetOf(projectId: ProjectId, relPath: RelPath): Path =
+        ScriptPaths.projectRoot(filesDir, projectId).resolve(relPath.value)
 
     /**
      * 写入临时文件 + 同目录原子 rename（`StandardCopyOption.ATOMIC_MOVE`）。
@@ -120,21 +137,4 @@ class ScriptDeployRecovery(
         }
     }
 
-    private companion object {
-        /**
-         * 项目内相对路径判据（与 `:app-service:script-repo` 的 `DeployPath.isSafeRelPath` 同规约）。
-         *
-         * 这里**刻意重写一份而不是引用**：那份住 script-repo 模块，而 scheduler 的架构门禁
-         * 禁止依赖同级 app-service 模块（见 `ArchitectureTest`）。规约是同一套，
-         * 差异只在这份还要求"非空字节"的判定由调用处承担。
-         */
-        fun isSafeRelPath(relPath: String): Boolean {
-            if (relPath.isBlank()) return false
-            if (relPath.startsWith("/") || relPath.startsWith("\\")) return false
-            for (seg in relPath.split('/')) {
-                if (seg == ".." || seg == "." || seg.isEmpty() || seg.contains('\\')) return false
-            }
-            return true
-        }
-    }
 }

@@ -5,6 +5,8 @@ import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
 import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.file.Files
 import java.nio.file.Path
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -84,12 +86,12 @@ class DemoScriptTest {
      * 的同一条 BFS 语义（`assets/scripts/<projectId>/` 下的**子目录一起走**），
      * 本测从盘上读同一批文件：`lib/greet.js` 必须在返回值里，否则"递归部署"这句话没有证据。
      */
-    private fun demoAssets(): Map<String, ByteArray> {
+    private fun demoAssets(): Map<RelPath, ByteArray> {
         val root = repoRoot().resolve("app/src/main/assets/scripts/demo")
         check(Files.isDirectory(root)) { "示例脚本资产不在位：$root（它随 APK 分发，是唯一能跑的东西）" }
         return Files.walk(root).use { s ->
             s.filter { Files.isRegularFile(it) }.toList().associate {
-                root.relativize(it).toString().replace('\\', '/') to Files.readAllBytes(it)
+                RelPath(root.relativize(it).toString().replace('\\', '/')) to Files.readAllBytes(it)
             }
         }
     }
@@ -107,11 +109,11 @@ class DemoScriptTest {
     /** 把示例脚本按生产那条补部署落位，返回落位后的 main.js 路径。 */
     private fun deployDemo(files: Path): Path {
         val assets = demoAssets()
-        assertTrue(assets.containsKey("lib/greet.js"), "子目录必须一起随包（递归部署）：${assets.keys}")
-        val report = ScriptDeployRecovery(files, mapOf("demo" to assets)).run()
+        assertTrue(assets.containsKey(RelPath("lib/greet.js")), "子目录必须一起随包（递归部署）：${assets.keys}")
+        val report = ScriptDeployRecovery(files, mapOf(ProjectId("demo") to assets)).run()
         assertTrue(report.failures.isEmpty(), "补部署不该有失败项：${report.failures}")
         assertEquals(assets.size, report.deployed.size, "每个资产文件都要落位（deployed=${report.deployed}）")
-        return ScriptPaths.scriptFile(files, "demo", "main.js")
+        return ScriptPaths.scriptFile(files, ProjectId("demo"), RelPath("main.js"))
     }
 
     @Test

@@ -17,7 +17,7 @@ data class PackSpec(
     val includeNodeModules: Boolean = true,
     // 完全离线变体：宿主预装 node_modules.zip，包内只留 lock 签名。
     val offlineVariant: Boolean = false,
-    // .autojs.build.ignore 规则（gitignore-lite 子集，见 BuildIgnore）。
+    // .autoscript.build.ignore 规则（gitignore-lite 子集，见 BuildIgnore）。
     val ignoreRules: List<String> = emptyList(),
 ) {
     init {
@@ -44,7 +44,7 @@ data class PackManifest(
 )
 
 /**
- * .autojs.build.ignore 排除规则（gitignore-lite 子集，纯 Kotlin、无正则引擎依赖）：
+ * .autoscript.build.ignore 排除规则（gitignore-lite 子集，纯 Kotlin、无正则引擎依赖）：
  * 空行与井号开头忽略；斜杠结尾表示整目录排除；含星号为单段通配（星号不跨段）；
  * 其余为精确相对路径。
  */
