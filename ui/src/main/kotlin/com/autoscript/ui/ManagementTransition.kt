@@ -1,12 +1,18 @@
 package com.autoscript.ui
 
+import android.os.Build
+import android.view.View
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.matchParentSize
+import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -14,10 +20,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -110,6 +123,22 @@ internal fun <T> ManagementTransition(
     val density = LocalDensity.current.density
     var viewportHeight by remember { mutableFloatStateOf(0f) }
     var viewportWidth by remember { mutableFloatStateOf(0f) }
+    // 顶层要不要画圆角裁剪/阴影。**只在「有没有盖层」这个布尔上推导**（快照态），
+    // 手势推进度时不动 —— 否则每帧重组合去算一个不变的值，正是「首次点击卡」的形状。
+    val framed = remember { derivedStateOf { top != null } }.value
+    // 圆角半径（px）—— TG 在 `drawChild` 里取屏幕四角 `RoundedCorner` 半径做 round-rect
+    // 裁剪（`ActionBarLayout.java:1136-1155`），这是**屏幕圆角**不是我们自己定的数。
+    // 布局跑过一遍之后（`viewportWidth` 非 0）用真实半径；布局没到先 0 兜底，
+    // 布局一到 `remember` 换 key 重算。
+    val cornerShape = remember(viewportWidth, viewportHeight, density) {
+        val r = if (viewportWidth <= 0f || viewportHeight <= 0f) {
+            0f
+        } else {
+            screenCornerRadiusPx(LocalView.current)
+        }
+        // `CornerSize(float)` 是 **PxCornerSize**（像素，不是 dp）—— `toPx` 原样返回。
+        RoundedCornerShape(CornerSize(r))
+    }
 
     // **返回键与侧缘手势合走一条路**：TG 也是一个 `OnBackAnimationCallback` 管
     // started / progressed / cancelled / invoked 四态（`LaunchActivity.java:736-818`）。
@@ -221,11 +250,49 @@ internal fun <T> ManagementTransition(
                     }
                     .matchParentSize(),
             ) {
-                content(over)
+                // 子页内容 + 屏幕圆角裁剪。裁剪用 [cornerShape] 盖住四角 —— 内容不是
+                // `matchParentSize`（它不参与父级尺寸计算），直接用 `fillMaxSize`。
+                Box(Modifier.fillMaxSize().clip(cornerShape)) {
+                    content(over)
+                }
             }
+        }
+        // 侧缘阴影（TG `layer_shadow`，`ActionBarLayout.java:1194-1201`）：画在**顶层左缘
+        // 外侧**那一缕（`[x - shadowW, x]`），宽度固定。alpha 随顶层位移淡出 —— TG 是
+        // `clamp(255·widthOffset/dp(20))`（`widthOffset = 屏宽 - x`）；顶层就位
+        // （`x == 0`）时不画（TG 的 `translationX != 0` 门）。**画在两层之后**，
+        // 与 TG「`super.drawChild` 之后画 shadow」同序。全程只在 graphicsLayer 的
+        // lambda 里读瞬时量 —— 图层级失效，不引发重组。
+        if (framed) {
+            val shadowX = (1f - progress.value) * SLIDE_DP * density + gesture.dx +
+                dismiss.value * (viewportWidth - gesture.dx)
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationX = shadowX - EDGE_DP * density
+                        alpha = if (shadowX != 0f) {
+                            ((viewportWidth - shadowX) / (EDGE_ALPHA_DP * density)).coerceIn(0f, 1f)
+                        } else {
+                            0f
+                        }
+                    }
+                    .drawWithContent {
+                        drawRect(color = EDGE, size = Size(EDGE_DP * density, size.height), style = Fill)
+                    },
+            )
         }
     }
 }
+
+/** 盖层被遮住时的侧缘阴影（TG `layer_shadow` 的角色：遮在页面外缘）。 */
+private val EDGE = Color(0x33000000)
+
+/** 盖层侧缘阴影宽度（TG `layer_shadow` 的固有宽度）。 */
+private const val EDGE_DP = 8f
+
+/** 阴影淡出的分母：TG `clamp(255·widthOffset/dp(20))`（`ActionBarLayout.java:1192`）。 */
+private const val EDGE_ALPHA_DP = 20f
 
 private const val DURATION_MS = 150
 
@@ -240,3 +307,26 @@ private const val DIM = 0.4f
 
 /** Android `DecelerateInterpolator(1.5f)` 的 Bezier 近似（见 KDoc「两处有意不等于 TG」）。 */
 private val EASE = CubicBezierEasing(0f, 0f, 0.2f, 1f)
+
+/**
+ * 屏幕四角的系统圆角半径（px）。TG 的裁剪用的就是
+ * `insets.getRoundedCorner(POSITION_*)`（`ActionBarLayout.java:1136`）—— 这是
+ * **设备的物理圆角**，不是我们自定数。API 31+ 才能问 `Display.getRoundedCornerSize`，
+ * 旧版本与拿不到 Display 时按 0 兜底（无圆角屏）。
+ */
+private fun screenCornerRadiusPx(view: View): Float {
+    val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        runCatching { view.display }.getOrNull()
+    } else {
+        null
+    }
+    if (display == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0f
+    return runCatching {
+        maxOf(
+            display.getRoundedCornerSize(0),
+            display.getRoundedCornerSize(1),
+            display.getRoundedCornerSize(2),
+            display.getRoundedCornerSize(3),
+        )
+    }.getOrDefault(0).toFloat()
+}
