@@ -32,8 +32,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 管理页里「面板 ⇄ 子页 / 子页 ⇄ 子页」那一层切换的动画，**逐值复刻 Telegram**
@@ -170,41 +172,57 @@ internal fun <T> ManagementTransition(
 
     LaunchedEffect(page) {
         if (page == top) return@LaunchedEffect
-        if (page == under) {
-            // 切出。**手势提交**与**返回键**走两条不同的路：
-            if (committed.value) {
-                // 手势提交：从手指当前位置继续飞到屏宽 + 淡出，380ms
-                // （TG `animateBackEndAnimation(false)`，`:1606-1618`；
-                // `:1608` 的 `newBackTransitions() ? 380 : 50` 取 380）。
-                coroutineScope {
-                    launch {
-                        dismiss.snapTo(0f)
-                        dismiss.animateTo(1f, tween(FLY_OUT_MS, easing = EASE))
+        try {
+            if (page == under) {
+                // 切出。**手势提交**与**返回键**走两条不同的路：
+                if (committed.value) {
+                    // 手势提交：从手指当前位置继续飞到屏宽 + 淡出，380ms
+                    // （TG `animateBackEndAnimation(false)`，`:1606-1618`；
+                    // `:1608` 的 `newBackTransitions() ? 380 : 50` 取 380）。
+                    coroutineScope {
+                        launch {
+                            dismiss.snapTo(0f)
+                            dismiss.animateTo(1f, tween(FLY_OUT_MS, easing = EASE))
+                        }
+                        launch {
+                            progress.snapTo(1f)
+                            progress.animateTo(0f, tween(FLY_OUT_MS, easing = EASE))
+                        }
                     }
-                    launch {
-                        progress.snapTo(1f)
-                        progress.animateTo(0f, tween(FLY_OUT_MS, easing = EASE))
-                    }
+                } else {
+                    // 返回键 / 编程切走：150ms 滑出（TG `startLayoutAnimation` 那一套）。
+                    progress.snapTo(1f)
+                    progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
                 }
-            } else {
-                // 返回键 / 编程切走：150ms 滑出（TG `startLayoutAnimation` 那一套）。
                 progress.snapTo(1f)
-                progress.animateTo(0f, tween(DURATION_MS, easing = EASE))
+            } else {
+                // 切入：新页盖上来，原来显示的那层退到 `under`。
+                under = top ?: under
+                top = page
+                progress.snapTo(0f)
+                progress.animateTo(1f, tween(DURATION_MS, easing = EASE))
             }
-            top = null
-            progress.snapTo(1f)
-        } else {
-            // 切入：新页盖上来，原来显示的那层退到 `under`。
-            under = top ?: under
-            top = page
-            progress.snapTo(0f)
-            progress.animateTo(1f, tween(DURATION_MS, easing = EASE))
+        } finally {
+            // **收尾一律不可取消** —— 这就是卡死的根因所在。
+            //
+            // `LaunchedEffect(page)` 在 `page` 再次变化时被**取消**；取消会丢掉 `finally`
+            // 之后的代码，于是 `top` 留在旧值、`page` 已经指向别的页 —— 两者脱节后
+            // `if (page == under)` / `else` 两支都不再命中，后续任何进出都推不动动画，
+            // 表现就是**卡死**。
+            //
+            // TG 不会出这个事：它的 `animateBackEndAnimation` 回调（`ActionBarLayout:1660`）
+            // 与栈变更是**同一个 AnimatorSet**里的相邻步骤，不存在「动画被外力掐断、
+            // 栈没跟上」这个中间态。这里用 `NonCancellable` 把两边焊在一起。
+            withContext(NonCancellable) {
+                top = null
+                progress.snapTo(1f)
+                // 稳态下不留任何手势残留（TG 的 `animateBackEndAnimation` 收尾同样清零）。
+                gesture.reset()
+                dismiss.snapTo(0f)
+                committed.value = false
+                onAnimatingChanged(false)
+            }
         }
-        // 稳态下不留任何手势残留（TG 的 `animateBackEndAnimation` 收尾同样清零）。
-        gesture.reset()
-        dismiss.snapTo(0f)
-        committed.value = false
-        onAnimatingChanged(false)
     }
 
     // 视口尺寸：`onSizeChanged` 给的是 px，与 `touchY` 同坐标系。
@@ -221,9 +239,50 @@ internal fun <T> ManagementTransition(
     ) {
         // 没有覆盖层时 progress 恒为 1，所以**压暗要以「有没有 top」为前提** ——
         // 直接按 progress 算会让稳态下的页面一直是 0.6 透明度。
-        val t = if (top == null) 0f else progress.value
-        // 底层：**只淡**（不位移，用户口径照 TG 原文）。压暗 0.4 是「盖住时压暗」那一档。
-        Box(Modifier.alpha(1f - DIM * t).matchParentSize()) { content(under) }
+        //
+        // **底层要跟着窗口一起挪 + 被裁**（TG `drawChild`，`:1100-1104` 与 `:1158-1166`）：
+        // 窗口朝右让出 `translationX`，底层只在 `[0, translationX]` 那一段露出来，
+        // **且被裁到 `translationX + dp(1)`**。TG 另在 `:1203-1212` 给这段画一层
+        // **scrim**（灰遮罩）：`Color.argb(120 · clamp01(widthOffset / width), 0, 0.8)`，
+        // 盖住整段露出来的底层 —— 这才是你说的「旁边的灰色遮罩」，**不是那条窄边阴影**
+        // （`layer_shadow` 只画在窗口左缘 8dp 内，是另一回事、上一版画成它所以不对）。
+        //
+        // 之前只做了 `alpha` 压暗：底层满宽铺着、不裁也不画 scrim，所以看到的是
+        // 「窗缩在一边、另一边一大片压暗的底」而不是「旁边一层灰罩」。
+        val underAlpha = 1f - DIM * t
+        // 顶层在父坐标系里的 x —— 底层裁剪、顶层位移、侧缘阴影**三处共用同一个数**
+        // （TG 里它们都源自同一个 `innerTranslationX`，各写一遍必然漂）。
+        val layerX = topLayerX(progress.value, gesture.dx, dismiss.value, viewportWidth, density)
+        if (top == null) {
+            Box(Modifier.matchParentSize()) { content(under) }
+        } else {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .alpha(underAlpha)
+                    // **底层不位移，只裁**（TG：动的是 `containerView`，`containerViewBack`
+                    // 原地不动、被 `clipRight = translationX + dp(1)` 裁出那一段）。
+                    .drawWithContent {
+                        clipRect(right = layerX) {
+                            drawContent()
+                            // 露出来的那一段铺满灰罩（TG `:1204-1212`），按让出的宽度走 ——
+                            // TG 是 `120·clamp01(widthOffset/width)`、上限 0.8。
+                            // `viewportWidth == 0` 时（首帧未布局）不画，避免 0/0 = NaN。
+                            val width = viewportWidth
+                            val widthOffset = width - layerX
+                            if (width > 0f && widthOffset > 0f) {
+                                drawRect(
+                                    color = SCRIM.copy(
+                                        alpha = SCRIM_ALPHA * (widthOffset / width).coerceIn(0f, 1f)
+                                    )
+                                )
+                            }
+                        }
+                    },
+            ) {
+                content(under)
+            }
+        }
         top?.let { over ->
             // 从**哪一侧**滑的（`BackEventCompat.swipeEdge`）—— TG 的 `predictiveBackLeft`
             //（`ActionBarLayout.onBackStarted:1548` 用触点 X 对中线判）只用来**镜像缩放锚点**
@@ -235,14 +294,9 @@ internal fun <T> ManagementTransition(
                 Modifier
                     .alpha(progress.value * (1f - dismiss.value))
                     .graphicsLayer {
-                        // 三段相加，互不干涉（见 KDoc「三个来源」），**一律朝右**：
-                        //   ① 进出场：(1-progress)·48dp
-                        //   ② 跟手：gesture.dx
-                        //   ③ 提交后的飞出：dismiss·(屏宽 - dx) —— 终点正好落在屏宽，
-                        //      与 TG 的 `TRANSLATION_X → measuredWidth` 同构。
-                        translationX = (1f - progress.value) * SLIDE_DP * density +
-                            gesture.dx +
-                            dismiss.value * (viewportWidth - gesture.dx)
+                        // 三段相加，互不干涉（见 KDoc「三个来源」）—— 与底层裁剪共用
+                        // [topLayerX]，保证「裁的」与「移的」永远是同一个数。
+                        translationX = layerX
                         // 缩放：TG 在预测式返回期间 `containerView.getAlpha()` 恒为 1
                         // （`:1119` 的内层 `lerp(0.90, 0.85, 1 - alpha)` 因此取 0.90），
                         // 所以这里 alpha 传常量 1，不跟 `progress`/`dismiss` 走。
@@ -292,8 +346,7 @@ internal fun <T> ManagementTransition(
             LaunchedEffect(Unit) {
                 onAnimatingChanged(true)
             }
-            val shadowX = (1f - progress.value) * SLIDE_DP * density + gesture.dx +
-                dismiss.value * (viewportWidth - gesture.dx)
+            val shadowX = layerX
             Box(
                 Modifier
                     .fillMaxSize()
@@ -347,6 +400,31 @@ private const val FLY_OUT_MS = 380
 
 /** 切入/切出的横向位移（TG `ActionBarLayout.java:1892` 的 `dp(48)`）。 */
 private const val SLIDE_DP = 48
+
+/**
+ * 顶层在**父坐标系**里的 x（px）—— 三段相加，见 KDoc「顶层位移的三个来源」：
+ * `(1-progress)·48dp + gesture.dx + dismiss·(屏宽 - dx)`。
+ *
+ * **抽成纯函数**，因为底层裁剪（TG 的 `clipRight`）与顶层位移用的是**同一个**数，
+ * 两处各写一遍公式就会漂。底下层裁剪与顶层阴影都调它。
+ */
+private fun topLayerX(
+    progress: Float,
+    dx: Float,
+    dismiss: Float,
+    viewportWidth: Float,
+    density: Float,
+): Float = (1f - progress) * SLIDE_DP * density + dx + dismiss * (viewportWidth - dx)
+
+/**
+ * 露出来那一段的灰遮罩（TG `scrimPaint`，`ActionBarLayout.java:1204-1208`）：
+ * `Color.argb(120 · clamp01(widthOffset/width), 0, 0, 0)`。**这是用户说的「灰色遮罩」**，
+ * 盖住整段露出来的底层页面；与只画窗口左缘 8dp 的 `layer_shadow` 是两回事。
+ */
+private val SCRIM = Color.Black
+
+/** 灰遮罩的峰值 alpha（TG `:1206` 的 `120`）。 */
+private const val SCRIM_ALPHA = 120f / 255f
 
 /** 底层页被盖住时压暗到 0.6（见 KDoc「底层页只淡、不位移」）。 */
 private const val DIM = 0.4f
