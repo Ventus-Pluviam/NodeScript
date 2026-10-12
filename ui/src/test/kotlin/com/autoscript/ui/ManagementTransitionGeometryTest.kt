@@ -22,6 +22,9 @@ class ManagementTransitionGeometryTest {
     /** TG 的 `dpf2(56)` 满量程。 */
     private val full = 56 * density
 
+    /** TG `:1206` 的 `120/255` —— 遮罩峰值 alpha。 */
+    private val SCRIM_PEAK = 120f / 255f
+
     @Test
     fun `跟手期间净位移恒为 0——TG 每帧先 translate(-dx) 把 innerTranslationX 抵消掉`() {
         var dx = 0f
@@ -132,6 +135,33 @@ class ManagementTransitionGeometryTest {
     fun `锚点不越出视口——手指按在状态栏或导航栏上是真实情况`() {
         assertEquals(0f, anchorPivotY(predictive = true, touchY = -50f, height = 2000f), 1e-6f)
         assertEquals(1f, anchorPivotY(predictive = true, touchY = 2100f, height = 2000f), 1e-6f)
+    }
+
+    @Test
+    fun `跟手刚开始就有遮罩——widthOffset 取 innerTranslationX 不是净位移`() {
+        // TG `:1192` 的 `widthOffset = width - translationX`，`translationX` ≡
+        // `innerTranslationX`，跟手期间已经是正的。取净位移的话这一项会是 0，
+        // 遮罩要等松手后才出现（用户 2026-10-13 报的那个现象）。
+        val opacity = scrimOpacity(innerTranslationX = full, viewportWidth = width)
+        assertTrue(opacity > 0f, "刚跟手就该有遮罩，实际 $opacity")
+    }
+
+    @Test
+    fun `遮罩随时长推出而变淡，落在峰值那一档`() {
+        // 跟手满量程：widthOffset = 屏宽 - dp(56)，比例约 0.844，被 0.8 的上界钳住。
+        val maxOpacity = scrimOpacity(innerTranslationX = full, viewportWidth = width)
+        assertEquals(SCRIM_PEAK * 0.8f, maxOpacity, 1e-4f)
+        assertTrue(scrimOpacity(innerTranslationX = full / 2f, viewportWidth = width) < maxOpacity)
+    }
+
+    @Test
+    fun `窗口就位时没有遮罩`() {
+        assertEquals(0f, scrimOpacity(innerTranslationX = 0f, viewportWidth = width), 1e-6f)
+    }
+
+    @Test
+    fun `视口没量出来时不算遮罩——不拿 0 当分母`() {
+        assertEquals(0f, scrimOpacity(innerTranslationX = full, viewportWidth = 0f), 1e-6f)
     }
 
     @Test

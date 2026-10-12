@@ -33,7 +33,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.absoluteValue
 import kotlin.math.min
 
 /**
@@ -321,15 +320,21 @@ internal fun <T> ManagementTransition(
                             this@drawWithContent.drawContent()
                             // 裁出来的这段铺灰罩（TG `scrimPaint`，`:1204-1208`）：
                             // `Color.argb(120 · clamp(widthOffset / width, 0, 0.8), 0, 0, 0)`。
-                            // `widthOffset` 是**窗口让出的宽度**，两向都取绝对值。
-                            // `viewportWidth == 0` 时（首帧未布局）不画，避免 0/0 = NaN。
-                            val width = viewportWidth
-                            if (width > 0f) {
-                                val widthOffset = netX.absoluteValue.coerceAtMost(width)
-                                val opacity = (widthOffset / width).coerceIn(0f, SCRIM_MAX_OPACITY)
-                                if (opacity > 0f) {
-                                    drawRect(color = SCRIM.copy(alpha = SCRIM_ALPHA * opacity))
-                                }
+                            //
+                            // **`widthOffset` 取 TG 那个 `width - innerTranslationX`
+                            // （`:1192`），不是净位移**（`:1095` 的 `translationX` ≡
+                            // `innerTranslationX`）。差别就是「跟手期间为什么没遮罩」：
+                            // 那时 `innerTranslationX = dx = dp(56)·StandardDecelerate(t)`
+                            // 已经大于 0，于是 `widthOffset` 从满屏一路降到 `width - dp(56)`
+                            // —— 缝一露出来就是**满档遮罩**。我上一版错取了 `|净位移|`
+                            // （跟手期间恒为 0），遮罩要等松手后 `translationX` 越过 `dp(56)`
+                            // 才开始出现，正是你报的「松开后才出现了阴影」。
+                            //
+                            // 右缘滑时 `innerTranslationX` 仍是正的（TG 那边恒正，
+                            // `:1571`），所以公式不用改。
+                            val opacity = scrimOpacity(innerTranslationX, viewportWidth)
+                            if (opacity > 0f) {
+                                drawRect(color = SCRIM.copy(alpha = opacity))
                             }
                         }
                     },
@@ -448,6 +453,22 @@ internal fun anchorPivotX(
 internal fun anchorPivotY(predictive: Boolean, touchY: Float, height: Float): Float {
     if (!predictive || height <= 0f || touchY.isNaN()) return 0.5f
     return (touchY / height).coerceIn(0f, 1f)
+}
+
+/**
+ * 灰遮罩的不透明度（TG `:1204` 的 `clamp(widthOffset / width, 0, 0.8f)`），
+ * **乘进峰值 alpha 之后**（`120/255`，TG `:1206`）。
+ *
+ * @param innerTranslationX TG 的 `innerTranslationX`（`:1095` 的 `translationX`）——
+ *   跟手期间就已经是正数（`dp(56)·StandardDecelerate(t)`），所以**遮罩从缝一露出来
+ *   就是满档**，不必等松手。
+ * @param viewportWidth 视口宽（TG 的 `width`，已扣掉 padding）。
+ */
+internal fun scrimOpacity(innerTranslationX: Float, viewportWidth: Float): Float {
+    if (viewportWidth <= 0f) return 0f
+    val widthOffset = (viewportWidth - innerTranslationX).coerceAtLeast(0f)
+    val opacity = (widthOffset / viewportWidth).coerceIn(0f, SCRIM_MAX_OPACITY)
+    return SCRIM_ALPHA * opacity
 }
 
 /** 灰遮罩的峰值 alpha（TG `:1206` 的 `120`）。 */
