@@ -29,7 +29,6 @@ import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.AuditRowState
 import com.autoscript.ui.state.AuditState
 import com.autoscript.ui.state.LoadState
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
@@ -59,20 +58,11 @@ fun AuditScreen(
     modifier: Modifier = Modifier,
 ) {
     val visible = state.visible
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
-        total = visible.size,
-        emptyText = "读到了，暂无审计记录",
-        unit = "条记录",
-    )
     val refresh = rememberRefreshAction { onRefresh() }
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         ActionBar(
             title = "审计",
             onBack = onBack,
-            subtitle = status.hint,
-            subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         // 筛选条只在**真的不止一档**时出现：一档时画一排只有一个格的控件，

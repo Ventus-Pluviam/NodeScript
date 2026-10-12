@@ -29,7 +29,6 @@ import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.RegistryState
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
@@ -59,20 +58,11 @@ fun RegistryScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
-        total = if (state.snapshot == null) 0 else 1,
-        emptyText = "尚未读取",
-        unit = "项配置",
-    )
     val refresh = rememberRefreshAction { onRefresh() }
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         ActionBar(
             title = "镜像源管理",
             onBack = onBack,
-            subtitle = status.hint,
-            subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         (state.load as? LoadState.Failed)?.let { failed ->

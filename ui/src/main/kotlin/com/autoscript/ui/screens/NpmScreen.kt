@@ -37,7 +37,6 @@ import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.InstallProgressState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.domain.npm.NpmMaintenanceAction
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
@@ -91,13 +90,6 @@ fun NpmScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
-        total = state.installed.size,
-        emptyText = "这个项目还没有依赖",
-        unit = "个已装包",
-    )
     // 「刷新」兼作进度续拉（`:ui` 没有常驻轮询循环，见 `pollInstallEvents` 的 KDoc）：
     // 宿主是入队即返回的，一次现取多半只拿到 `QUEUED`，再点一次就能看到下一步。
     // 续拉在 `MainActivity.reloadNpm()` 里与快照一起发生 —— 本屏不持有读口。
@@ -106,8 +98,6 @@ fun NpmScreen(
         ActionBar(
             title = "依赖管理",
             onBack = onBack,
-            subtitle = status.hint,
-            subtitleTone = status.tone,
             actions = {
                 ActionBarAction("审计", onOpenAudit)
                 ActionBarAction("刷新", refresh::trigger)

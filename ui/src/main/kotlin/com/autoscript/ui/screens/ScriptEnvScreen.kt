@@ -32,7 +32,6 @@ import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.ScriptEnvState
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
@@ -65,20 +64,11 @@ fun ScriptEnvScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
-        total = state.entries.size,
-        emptyText = "还没有变量",
-        unit = "个变量",
-    )
     val refresh = rememberRefreshAction { onRefresh() }
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         ActionBar(
             title = "环境变量",
             onBack = onBack,
-            subtitle = status.hint,
-            subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         // 读失败**保留**了上一次读到的表（见 ScriptEnvState.failed），故这里说的是

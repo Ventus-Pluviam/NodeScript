@@ -41,7 +41,6 @@ import com.autoscript.ui.components.rememberScrollToTopVisible
 import com.autoscript.ui.state.ConsoleCmdLineState
 import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.LoadState
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.ui.state.modeLabel
@@ -100,11 +99,6 @@ fun ConsoleScreen(
      */
     history: List<String> = emptyList(),
 ) {
-    val status = Status.of(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
-        loadedText = state.project?.let { "$it · ${state.lines.size} 行输出" } ?: "没有可跑命令的项目",
-    )
     val refresh = rememberRefreshAction(onRefresh)
     val copy = rememberCopyAction()
     val listState = rememberLazyListState()
@@ -119,8 +113,6 @@ fun ConsoleScreen(
         ActionBar(
             title = "控制台",
             onBack = onBack,
-            subtitle = status.hint,
-            subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         (state.load as? LoadState.Failed)?.let { failed ->

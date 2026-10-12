@@ -54,7 +54,6 @@ import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleLineState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.LoadState
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.state.TaskLogRowState
 import com.autoscript.ui.state.TaskLogState
@@ -98,25 +97,6 @@ fun LogManagementScreen(
     var selectedTab by rememberSaveable { mutableIntStateOf(TAB_SYSTEM) }
     val systemLines = consoleState.systemLogLines()
     val scriptLines = consoleState.scriptOutputLines()
-    val status = when (selectedTab) {
-        TAB_SYSTEM -> Status.of(
-            load = consoleState.load,
-            notLoadedText = "尚未读取（点右上「刷新」现取）",
-            loadedText = "共 ${systemLines.size} 行",
-        )
-        TAB_SCRIPT -> Status.of(
-            load = consoleState.load,
-            notLoadedText = "尚未读取（点右上「刷新」现取）",
-            loadedText = "共 ${scriptLines.size} 行脚本输出",
-        )
-        else -> Status.count(
-            load = taskLogState.load,
-            notLoadedText = "尚未读取（点右上「刷新」现取）",
-            total = taskLogState.runs.size,
-            emptyText = "暂无已归档的终态执行",
-            unit = "次终态执行",
-        )
-    }
     val refresh = rememberRefreshAction {
         if (selectedTab == TAB_TASK) onRefreshTaskLog() else onRefreshConsole()
     }
@@ -130,8 +110,6 @@ fun LogManagementScreen(
         ActionBar(
             title = "日志管理",
             onBack = onBack,
-            subtitle = status.hint,
-            subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         Row(
