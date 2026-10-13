@@ -760,7 +760,7 @@ class AppShellApplication : Application(), HostSummary {
      * （"没在跑"是事实，不是失败）。
      */
     override suspend fun scriptLogIndex(): ScriptLogSnapshot {
-        val active = try {
+        val active: Set<Long> = try {
             assembled?.controller?.activeRunIds() ?: emptySet()
         } catch (_: Exception) {
             // 在途表读失败 = 当它是空集（running 全 false）：列表本身照样可读，
