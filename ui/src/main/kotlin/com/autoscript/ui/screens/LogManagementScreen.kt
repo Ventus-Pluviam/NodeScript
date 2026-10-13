@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -35,7 +37,9 @@ import com.autoscript.ui.components.Cell
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.CountBadge
 import com.autoscript.ui.components.EmptyHint
+import com.autoscript.ui.components.FileTypeAvatar
 import com.autoscript.ui.components.LocalToast
+import com.autoscript.ui.components.LogLineRow
 import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.ScrollToTopButton
@@ -54,6 +58,7 @@ import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleLineState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.LoadState
+import com.autoscript.ui.state.ScriptLogRowUi
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.state.TaskLogRowState
 import com.autoscript.ui.state.TaskLogState
@@ -88,17 +93,23 @@ import kotlinx.coroutines.launch
 fun LogManagementScreen(
     consoleState: ConsoleState,
     taskLogState: TaskLogState,
+    scriptLogState: com.autoscript.ui.state.ScriptLogState,
     onRefreshConsole: suspend () -> Unit,
     onRefreshTaskLog: suspend () -> Unit,
+    onRefreshScriptLog: suspend () -> Unit,
+    onReadScriptLog: suspend (Long) -> List<com.autoscript.domain.host.ConsoleLineRow>,
     onStopRun: (ActiveRunState) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(TAB_SYSTEM) }
     val systemLines = consoleState.systemLogLines()
-    val scriptLines = consoleState.scriptOutputLines()
     val refresh = rememberRefreshAction {
-        if (selectedTab == TAB_TASK) onRefreshTaskLog() else onRefreshConsole()
+        when (selectedTab) {
+            TAB_TASK -> onRefreshTaskLog()
+            TAB_SCRIPT -> onRefreshScriptLog()
+            else -> onRefreshConsole()
+        }
     }
     // 停止三态走外壳浮层（批 44）：键是**解析出的那一句** —— 同一句连着出现不重弹，
     // 换了一句才弹。停止的回执与读账分开（停失败不清已读到的行）。
@@ -122,7 +133,13 @@ fun LogManagementScreen(
         }
         when (selectedTab) {
             TAB_SYSTEM -> SystemLogList(consoleState, systemLines, Modifier.weight(1f))
-            TAB_SCRIPT -> ScriptOutputList(consoleState, scriptLines, onStopRun, Modifier.weight(1f))
+            TAB_SCRIPT -> ScriptOutputList(
+                consoleState = consoleState,
+                scriptLogState = scriptLogState,
+                onReadScriptLog = onReadScriptLog,
+                onStopRun = onStopRun,
+                modifier = Modifier.weight(1f),
+            )
             else -> TaskLogList(taskLogState, Modifier.weight(1f))
         }
     }
@@ -195,31 +212,45 @@ private fun SystemLogList(state: ConsoleState, lines: List<ConsoleLineState>, mo
 }
 
 /**
- * 「脚本输出」段：脚本进程的 console 行 + **在途执行块置顶**（带「停止」）。
+ * 「脚本输出」段（2026-10-13 用户令）：**按执行一条**的日志文件列表 + 在途执行块置顶。
  *
- * 在途块为什么在这儿而不是留在控制台：`TaskCenterScreen` 与本段都画
- * [ConsoleState.activeRuns]，「停止」那条链（按 runId 精确停 → 池四步 quiesce）是
- * **执行**面的东西，跟"敲命令"无关 —— 控制台改做命令面之后，它跟着日志一起搬过来。
+ * 一条 = 一次执行（标题 `/<project>/<path>`，左文件类型图标，右启动时间 + 大小；
+ * 还在跑画「运行中」）。点一行进详情（该次执行的落盘全文，`LogLineRow` 同款行）。
  *
- * 版式原样搬自旧控制台（`Cell` + `CountBadge` + 行尾 `PillButton`）：**不**与
- * `TaskCenterScreen.RunRow`（TG `UserCell` 56dp 那种）合并 —— 那是两种读法，
- * 强行合并会把其中一处的版式改坏。真正重复的只有 `summaryText()`，已收进
- * [ActiveRunState.summaryText] 一处。
+ * 在途块为什么还在这儿：`TaskCenterScreen` 与本段都画 `ConsoleState.activeRuns`，
+ * 「停止」那条链（按 runId 精确停 → 池四步 quiesce）是**执行**面的东西 ——
+ * 它跟着"看执行"走，不跟着"看文件"走。列表是落盘（过去 + 正在），在途是现值。
+ *
+ * dropped/pageFull 横幅**不在这里**：那是内存控制台行数据面的账（有界 2000），
+ * 文件列表没有"拉满/丢包"这件事 —— 系统日志 tab 原样保留。
  */
 @Composable
 private fun ScriptOutputList(
-    state: ConsoleState,
-    lines: List<ConsoleLineState>,
+    consoleState: ConsoleState,
+    scriptLogState: com.autoscript.ui.state.ScriptLogState,
+    onReadScriptLog: suspend (Long) -> List<com.autoscript.domain.host.ConsoleLineRow>,
     onStopRun: (ActiveRunState) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // 详情（null = 列表；非 null = 该次执行的详情面，屏内局部状态 ——
+    // 返回回列表，不清已读到的列表；与管理子页的层级无关，进详情不收底栏）。
+    var selectedRunId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val selected = selectedRunId
+    if (selected != null) {
+        ScriptLogDetail(
+            runId = selected,
+            onReadScriptLog = onReadScriptLog,
+            onBack = { selectedRunId = null },
+            modifier = modifier,
+        )
+        return
+    }
     val copy = rememberCopyAction()
     val particles = rememberDeletionParticles()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    // 在途执行消失（被停掉/自己跑完）时在原地炸一簇。日志行不参与 —— 丢弃的行是从
-    // 列表**顶部**滚出去的，而用户的视线在底部新行上，炸了也看不见。
-    val runIds = state.activeRuns.map { it.runId.toString() }
+    // 在途执行消失（被停掉/自己跑完）时在原地炸一簇。
+    val runIds = consoleState.activeRuns.map { it.runId.toString() }
     // 主题色在组合期取好再交给 effect：`ThemeColors.accent` 是 @Composable 读，
     // 在 effect 的挂起块里读它编译不过（且那本来就是"取一次、整簇同色"的语义）。
     val particleColor = ThemeColors.accent
@@ -233,45 +264,25 @@ private fun ScriptOutputList(
         ) {
             item {
                 ToneText(
-                    text = "脚本进程的 console 输出（按执行归属）。点一行复制；长按在途执行行出菜单。" +
-                        "仅保留本次进程内的有界输出，不是任务日志的持久全文。",
+                    text = "每次执行一条：标题是脚本路径，右侧是启动时间与日志大小；" +
+                        "还在跑的显示「运行中」。点一行看该次执行的完整输出。",
                     tone = StatusTone.MUTED,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
-            if (state.droppedTotal > 0L) {
+            (consoleState.load as? LoadState.Failed)?.let { failed ->
                 item {
                     ToneText(
-                        text = "已丢弃 ${state.droppedTotal} 行（队列有界，最早输出被覆盖）：日志有缺口",
-                        tone = StatusTone.ATTENTION,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
-            }
-            if (state.pageFull && state.load.isLoaded) {
-                item {
-                    ToneText(
-                        text = "本批已拉满，可能还有更新的行 —— 点「刷新」继续拉取",
-                        tone = StatusTone.MUTED,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
-            }
-            (state.load as? LoadState.Failed)?.let { failed ->
-                item {
-                    ToneText(
-                        text = "读取失败：${failed.reason}",
+                        text = "在途读取失败：${failed.reason}",
                         tone = StatusTone.PROBLEM,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
             }
-            if (state.activeRuns.isNotEmpty()) {
-                item { SectionHeader("在途执行 ${state.activeRuns.size}") }
-                items(state.activeRuns, key = { it.runId }) { run ->
+            if (consoleState.activeRuns.isNotEmpty()) {
+                item { SectionHeader("在途执行 ${consoleState.activeRuns.size}") }
+                items(consoleState.activeRuns, key = { it.runId }) { run ->
                     // animateItem 要有 key 才生效（在途行有 runId）：新起一次执行时
                     // 这行是**淡入落位**进来的，而不是凭空出现。
                     Box(
@@ -283,33 +294,39 @@ private fun ScriptOutputList(
                     ) {
                         ActiveRunRow(
                             run,
-                            stopInFlight = state.stopInFlight,
+                            stopInFlight = consoleState.stopInFlight,
                             onStop = { onStopRun(run) },
                             onCopy = { copy.copy("已复制执行摘要", run.summaryText()) },
                         )
                         Separator()
                     }
                 }
-            } else if (state.load.isLoaded) {
+            } else if (consoleState.load.isLoaded) {
                 item {
                     // 读成功且没有在途执行 —— 真实事实（在途表是权威），与"没读到"分开。
                     SectionHeader("无在途执行")
                 }
             }
-            if (state.load.isLoaded && lines.isEmpty()) {
-                item { EmptyHint("读到了，暂无脚本输出（跑一个脚本就有了）") }
+            when (val load = scriptLogState.load) {
+                LoadState.NotLoaded -> item { EmptyHint("尚未读取脚本输出") }
+                is LoadState.Failed -> item {
+                    ToneText(
+                        text = "读取脚本输出失败：${load.reason}",
+                        tone = StatusTone.PROBLEM,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+                LoadState.Loaded -> if (scriptLogState.rows.isEmpty()) {
+                    item { EmptyHint("暂无脚本输出（跑一个脚本就有了）") }
+                }
             }
-            items(lines, key = { it.seq }) { line ->
-                ToneText(
-                    text = line.scriptOutputText(),
-                    tone = line.tone,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .animateItem()
-                        .fillMaxWidth()
-                        .pressable(role = Role.Button, onClick = { copy.copy("已复制该行", line.scriptOutputText()) })
-                        .padding(horizontal = 16.dp, vertical = 1.dp),
+            items(scriptLogState.rows, key = { it.runId }) { row ->
+                ScriptLogEntryRow(
+                    row = row,
+                    onClick = { selectedRunId = row.runId },
+                    modifier = Modifier.animateItem(),
                 )
+                Separator()
             }
         }
         particles.Overlay(Modifier.matchParentSize())
@@ -438,8 +455,125 @@ private fun TaskLogRow(run: TaskLogRowState, onCopy: () -> Unit) {
     }
 }
 
+/**
+ * 一次执行的日志条目（一行 = 一次执行；2026-10-13 用户令）。
+ *
+ * 版式 = 文件行：左 44dp 文件类型图标（与任务头像同档，TG 联系人行那一格），
+ * 中标题 + 启动时间，右大小 / 运行中。点行进详情（`onClick`）。
+ */
+@Composable
+private fun ScriptLogEntryRow(
+    row: ScriptLogRowUi,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .pressable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FileTypeAvatar(ext = row.ext, name = row.title, size = 44.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = row.title,
+                color = ThemeColors.text,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            ToneText(
+                text = "启动 ${row.startedText}",
+                tone = StatusTone.MUTED,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (row.running) {
+            // 在跑：大小位置让给「运行中」（大小在变，写一个数就是撒谎）。
+            ToneText(text = "运行中", tone = StatusTone.LINK, style = MaterialTheme.typography.bodySmall)
+        } else {
+            ToneText(text = row.sizeText, tone = StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * 一次执行的日志详情（点列表行进来；2026-10-13 用户令）。
+ *
+ * 内容经 [onReadScriptLog] 挂起拉取（`HostSummary.scriptLogContent`，
+ * 截尾 2000 行）。三落点：未读 → 空态；失败 → 原因（保留上次读到的行）；
+ * 成功 → 全文（时间升序）。行渲染复用 `LogLineRow`（与悬浮窗同一份）。
+ * 返回回列表（屏内局部状态，不动管理子页层级、不收底栏）。
+ */
+@Composable
+private fun ScriptLogDetail(
+    runId: Long,
+    onReadScriptLog: suspend (Long) -> List<com.autoscript.domain.host.ConsoleLineRow>,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val copy = rememberCopyAction()
+    var load by rememberSaveable(runId) { mutableStateOf<LoadState>(LoadState.NotLoaded) }
+    var lines by rememberSaveable(runId) { mutableStateOf<List<String>>(emptyList()) }
+    // 行是富结构（level/time/text），saveable 存不了 —— 存原文 JSON 行，画时再解。
+    // 解码失败的行显示原文（坏行不掀翻整份详情，与 ScriptLogRead.content 同纪律）。
+    LaunchedEffect(runId) {
+        load = try {
+            val rows = onReadScriptLog(runId)
+            lines = rows.map { "${it.atMillis}|${it.level}|${it.text}" }
+            LoadState.Loaded
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Exception) {
+            LoadState.of(t)
+        }
+    }
+    Column(modifier.fillMaxSize().background(ThemeColors.background)) {
+        ActionBar(title = "#$runId", onBack = onBack)
+        when (val current = load) {
+            LoadState.NotLoaded -> EmptyHint("正在读取…")
+            is LoadState.Failed -> ToneText(
+                text = "读取失败：${current.reason}",
+                tone = StatusTone.PROBLEM,
+                modifier = Modifier.padding(16.dp),
+            )
+            LoadState.Loaded -> if (lines.isEmpty()) {
+                EmptyHint("这次执行没有输出")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
+                ) {
+                    items(lines, key = { it.hashCode() }) { raw ->
+                        val parts = raw.split('|', limit = 3)
+                        val text = if (parts.size == 3) {
+                            val time = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")
+                                .format(
+                                    java.time.Instant.ofEpochMilli(parts[0].toLongOrNull() ?: 0L)
+                                        .atZone(java.time.ZoneId.systemDefault()),
+                                )
+                            val levelLabel = com.autoscript.ui.state.LevelText.describe(parts[1])
+                            "$time  $levelLabel  ${parts[2]}"
+                        } else {
+                            raw
+                        }
+                        ToneText(
+                            text = text,
+                            tone = if (parts.getOrNull(1) == "error") StatusTone.PROBLEM else StatusTone.NEUTRAL,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .pressable(role = Role.Button, onClick = { copy.copy("已复制该行", text) })
+                                .padding(horizontal = 16.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 系统日志一行（也是复制出去的那串字）：本列表全是 runId 0，故不再每行写归属。 */
 private fun ConsoleLineState.systemLogText(): String = "$timeText  $levelLabel  $text"
-
-/** 脚本输出一行：这里全是脚本进程的行（`runId != 0`），归属是每条都要看的那个信息。 */
-private fun ConsoleLineState.scriptOutputText(): String = "$timeText  $levelLabel  [#$runId] $text"

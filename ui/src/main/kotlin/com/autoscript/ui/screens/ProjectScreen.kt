@@ -88,6 +88,7 @@ import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.MenuGap
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.FileTypeAvatar
 import com.autoscript.ui.components.LocalToast
 import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.ROW_MORE_DOTS_WEIGHT
@@ -215,16 +216,17 @@ fun ProjectScreen(
     // （排队那条路由宿主的分级表管，界面不替它拦）。
     var runningKey by remember { mutableStateOf<String?>(null) }
 
-    /** 跑一个文件（点行尾 ▶）。挂起到本次执行结算，成败归宿主（回执走 toast）。 */
+    /** 跑一个文件（点行尾 ▶）。挂起到本次执行结算，成败归宿主（回执 = 悬浮窗）。 */
     fun runFile(file: ScriptFileRowUi) {
         val key = ProjectState.keyOf(file)
         if (runningKey != null) return
         runningKey = key
         scope.launch {
             try {
+                // 2026-10-13 起成功回执 = 悬浮窗（外壳在 onRunFile 里先开窗再跑）——
+                // 这里不再弹「已触发…」toast（措辞不替宿主宣布结果那条纪律仍在：
+                // 成败在控制台/任务日志/日志管理，窗里只看输出）。失败 catch 保留。
                 onRunFile(file.projectId, file.relPath)
-                // 措辞不替宿主宣布结果：成败在控制台/任务日志，这里只说"这一行去了哪"。
-                toast?.show("已触发「${file.name}」（执行成败见控制台）")
             } catch (t: kotlinx.coroutines.CancellationException) {
                 throw t
             } catch (t: com.autoscript.domain.core.AutojsException) {
@@ -915,48 +917,6 @@ private fun FolderAvatar(name: String) {
         contentAlignment = Alignment.Center,
     ) {
         Glyph(kind = GlyphKind.FOLDER, tint = Color.White, size = 26.dp, weight = 1.15f)
-    }
-}
-
-/**
- * 文件类型头像（TG `AvatarDrawable` 的取色 + `SharedDocumentCell.extTextView` 的白字）：
- * 底色 = 扩展名哈希取色表槽位（同一扩展名恒同色），字 = 扩展名（最多 4 字符），
- * JS/HTML/SH/MD 等常见类型换专属字形（白线画在色底上）。
- */
-@Composable
-private fun FileTypeAvatar(ext: String, name: String) {
-    val palette = ThemeColors
-    val colors = palette.fileAvatarColors
-    val slot = if (ext.isNotEmpty()) {
-        ext.first().code % colors.size
-    } else {
-        name.firstOrNull()?.code?.plus(1)?.mod(colors.size) ?: 0
-    }
-    val bg = colors[slot]
-    val knownGlyph = when (ext) {
-        "js", "mjs", "cjs", "ts", "json" -> GlyphKind.FILE_JS
-        "md", "txt", "log", "doc" -> GlyphKind.FILE_DOC
-        "html", "htm", "css" -> GlyphKind.FILE_HTML
-        "sh", "bash", "zsh" -> GlyphKind.FILE_SH
-        else -> null
-    }
-    Box(
-        Modifier
-            .size(52.dp)
-            .graphicsLayer { shape = CircleShape }
-            .background(bg, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (knownGlyph != null) {
-            // 常见类型：白线字形（比缩写字更一眼可辨 —— TG 文件页对图片/视频也是图标优先）。
-            Glyph(kind = knownGlyph, tint = Color.White, size = 26.dp, weight = 1.15f)
-        } else {
-            Text(
-                text = ext.take(4).ifEmpty { "?" },
-                color = Color.White,
-                style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
-            )
-        }
     }
 }
 

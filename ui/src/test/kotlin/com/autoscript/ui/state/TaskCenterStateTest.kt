@@ -287,7 +287,7 @@ class TaskCenterStateTest {
         name: String = "任务$id",
         nextFireAtMillis: Long? = null,
     ) = TaskRowState(
-        id = id, name = name, scriptPath = "p/$id.js", scheduleText = "", nextFireText = null,
+        id = id, name = name, projectId = "p", scriptPath = "$id.js", scheduleText = "", nextFireText = null,
         enabled = true, degraded = false, once = false, nextFireAtMillis = nextFireAtMillis,
     )
 

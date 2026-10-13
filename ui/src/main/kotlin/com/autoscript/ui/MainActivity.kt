@@ -195,6 +195,15 @@ class MainActivity : ComponentActivity() {
     private var taskLogState: TaskLogState by mutableStateOf(TaskLogState.NOT_LOADED)
 
     /**
+     * 脚本输出日志的文件列表（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+     *
+     * 与 [taskLogState] 同一条三落点纪律（未读/失败保留/成功覆盖）。
+     */
+    private var scriptLogState: com.autoscript.ui.state.ScriptLogState by mutableStateOf(
+        com.autoscript.ui.state.ScriptLogState.NOT_LOADED,
+    )
+
+    /**
      * 依赖管理页状态（依赖面板一个读口：现取一次算一份状态，拆多个读口就会
      * 各自取一次、两次结果可以互相矛盾）。
      */
@@ -227,11 +236,35 @@ class MainActivity : ComponentActivity() {
      */
     private var auditState: AuditState by mutableStateOf(AuditState.NOT_LOADED)
 
+    /**
+     * 执行日志悬浮窗控制器（2026-10-13；组合外持有，供挂起函数用）。
+     *
+     * 组合内的 `logWindow`（remember 那份）是同一实例的"组合可见版" ——
+     * 这里存引用只是为了让 `runFileWithWindow`/`runTaskNowOp` 这些挂起函数
+     * 能调到 `open/close`（它们不在组合里）。赋值点唯一（remember 块内），
+     * 不存在两份实例打架。
+     */
+    private var logWindowCtl: com.autoscript.ui.overlay.LogWindowController? = null
+
+    /** 挂起函数侧的控制器入口（组合还没跑起来时 null → 直接抛，不静默吞）。 */
+    private fun logWindowRef(): com.autoscript.ui.overlay.LogWindowController =
+        checkNotNull(logWindowCtl) { "悬浮窗控制器未就绪" }
+
     // 「当前页签」不再是一个字段：它由 pager 的滚动位置派生（见 setContent 里的 pagerState）。
     // 存两份必然漂移 —— 手指划过去时字段说 A、pager 说 B。
 
     /** 主题档位（跟随系统/浅/深）。 */
     private var themeMode: ThemeMode by mutableStateOf(ThemeMode.SYSTEM)
+
+    /**
+     * 执行日志悬浮窗的系统宿主（2026-10-13；Activity 字段，组合外持有）。
+     *
+     * 组合里 `remember` 不合适：`SystemLogWindowHost` 持有 `WindowManager` 与 view，
+     * 生命周期必须跟 Activity（`onDestroy` 撤窗），而不是跟某次组合 ——
+     * 组合重建（主题切换）时宿主不能跟着重建，否则窗闪一下。`themeMode` 传 lambda
+     * 现读（窗内主题跟 App 走，不快照）。
+     */
+    private var logWindowHost: com.autoscript.ui.overlay.SystemLogWindowHost? = null
 
     /** 每次 `onResume` +1：驱动 [LaunchedEffect] 重问系统（回前台即重读）。 */
     private var resumeTick: Int by mutableStateOf(0)
@@ -358,6 +391,10 @@ class MainActivity : ComponentActivity() {
         // 界面没了：叫醒还挂着的等待者（如实回"没能问用户"），清在途轮次。
         // **不把任何东西留进待领口** —— 销毁不是授权。
         consentRequests.abandon()
+        // 执行日志系统窗必须跟 Activity 一起撤（2026-10-13）：泄漏的 overlay 窗
+        // 会让系统弹 "has leaked window" 并杀进程。`logWindowHost` 是 Activity 字段
+        // （组合外持有，见 onCreate 的 setContent 部分），这里直接撤。
+        logWindowHost?.hide()
         super.onDestroy()
     }
 
@@ -420,6 +457,32 @@ class MainActivity : ComponentActivity() {
             // 四屏的复制回执与操作/停止回执都经 `LocalToast` 落到它上面 ——
             // 此前那些回执是各屏列表里的一行，弹一条就把内容往下推一次。
             val toast = rememberToastAction()
+            // 执行日志悬浮窗（2026-10-13）：控制器 + 系统宿主各一份（组合内 remember，
+            // 切页不丢 —— 它们在 pager 外的 setContent 层）。系统宿主的 view 生命周期
+            // 挂 Activity 字段 `logWindowHost`（onDestroy 撤窗），这里只保证字段就位。
+            if (logWindowHost == null) {
+                logWindowHost = com.autoscript.ui.overlay.SystemLogWindowHost(this) { themeMode }
+            }
+            val logWindow = remember(toast, logWindowHost) {
+                com.autoscript.ui.overlay.LogWindowController(
+                    hostSummary = { hostSummary() },
+                    toast = { toast.show(it) },
+                    systemHost = logWindowHost,
+                )
+            }
+            // 控制器实例交组合外字段（见 logWindowCtl KDoc）：挂起函数经它调 open/close。
+            logWindowCtl = logWindow
+            // 悬浮窗同步与轮询（2026-10-13）：系统窗内容同步 + 窗开期间拉取。
+            // `logWindow.state != null` 即开 —— 关窗（state null）效应取消、轮询停。
+            com.autoscript.ui.overlay.SystemWindowSync(
+                controller = logWindow,
+                lines = consoleState.lines,
+                onPauseToggle = { scope.launch { logWindow.togglePause() } },
+            )
+            com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
+                reloadConsole()
+                logWindow.bind(consoleState.activeRuns)
+            }
             // 系统栏图标的明暗跟**本 App 的主题档位**走，不是跟系统深色开关走：
             // 用户在顶栏把主题切成浅色、而系统还是深色时，状态栏图标必须转深色，
             // 否则白底上画一排白图标 = 看不见。`enableEdgeToEdge` 的 auto 只认系统档位，
@@ -443,6 +506,10 @@ class MainActivity : ComponentActivity() {
                     // 唯一事实来源，页签条与重读都从它派生，绕过去就又会漂移。
                     onSelectTab = { scope.launch { pagerState.animateScrollToPage(it) } },
                     toast = toast,
+                    // 执行日志悬浮窗（2026-10-13）：控制器 + 行事实源 + 按钮协程域。
+                    logWindow = logWindow,
+                    logLines = { consoleState.lines },
+                    logScope = scope,
                     modifier = themeSwitch.modifier,
                 ) { shellModifier ->
                         // 页内滚动容器要用的「露出来」口径（光标入视等）：pager 自己换成
@@ -476,8 +543,7 @@ class MainActivity : ComponentActivity() {
                                 Tab.TASKS -> TaskCenterScreen(
                                     state = taskState,
                                     console = consoleState,
-                                    onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
-                                    onCancel = { task -> scope.launch { cancelTaskOp(task) } },
+                                    onRunNow = { task -> scope.launch { runTaskNowOp(task) } },                                    onCancel = { task -> scope.launch { cancelTaskOp(task) } },
                                     onRegister = { form -> scope.launch { registerTaskOp(form) } },
                                     onStopRun = { run -> scope.launch { stopRunOp(run) } },
                                     modifier = Modifier,
@@ -609,7 +675,7 @@ class MainActivity : ComponentActivity() {
                         ManagementPage.ENV -> reloadEnv()
                         ManagementPage.REGISTRY -> reloadRegistry()
                         ManagementPage.AUDIT -> reloadAudit()
-                        ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog() }
+                        ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog(); reloadScriptLogs() }
                         null -> Unit
                     }
                     // 设置页两处都现取。限额表那句与「切页签即现取」同款：脚本设置是**设置页
@@ -650,8 +716,15 @@ class MainActivity : ComponentActivity() {
                 onReadFile = { projectId, relPath -> readScriptFileOp(projectId, relPath) },
                 onSaveFile = { projectId, relPath, content -> saveScriptFileOp(projectId, relPath, content) },
                 // 点行尾 ▶ 跑这个文件：挂起到本次执行结算（与任务中心「立即执行」同一条链），
-                // 成败归控制台/任务日志，回执在 ProjectScreen 内部走 toast。
-                onRunFile = { projectId, relPath -> scope.launch { runScriptFileOp(projectId, relPath) } },
+                // 成败归控制台/任务日志。2026-10-13 起回执 = 开悬浮窗（不再弹
+                // 「已触发…」toast）：先开窗再跑，跑起来之前窗里是「未开始」空态；
+                // 没跑起来（抛）→ 关窗 + 上抛给 ProjectScreen 的失败 toast。
+                //
+                // **直调 `runScriptFileOp`，不再包一层 `scope.launch`**：`onRunFile`
+                // 本身已是 suspend（ProjectScreen 在自己的 launch 里调它），再包一层
+                // 就变成 fire-and-forget —— toast 分发瞬间弹、转圈闪一帧、catch
+                // 永远看不到宿主异常（此前就是这个写法，见本行历史）。
+                onRunFile = { projectId, relPath -> runFileWithWindow(projectId, relPath) },
                 onSortChange = { sort, reversed ->
                     projectState = projectState.copy(sort = sort, reversed = reversed, opError = null, opNotice = null)
                 },
@@ -764,8 +837,11 @@ class MainActivity : ComponentActivity() {
             ManagementPage.LOGS -> LogManagementScreen(
                 consoleState = consoleState,
                 taskLogState = taskLogState,
+                scriptLogState = scriptLogState,
                 onRefreshConsole = { reloadConsole() },
                 onRefreshTaskLog = { reloadTaskLog() },
+                onRefreshScriptLog = { reloadScriptLogs() },
+                onReadScriptLog = { runId -> readScriptLogOp(runId) },
                 onStopRun = { run -> scope.launch { stopRunOp(run) } },
                 onBack = onCloseLogManagement,
                 modifier = Modifier,
@@ -979,6 +1055,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 现取脚本输出日志列表（挂起；只写 [scriptLogState]）。三落点与 [reloadTaskLog]
+     * 同构：读口壳无关（目录可读即成功），`running` 列壳未就绪时全 false。
+     */
+    private suspend fun reloadScriptLogs() {
+        val host = hostSummary()
+        val previous = scriptLogState
+        scriptLogState = try {
+            if (host == null) {
+                com.autoscript.ui.state.ScriptLogState.failed(
+                    IllegalStateException("宿主摘要未接线"),
+                    previous,
+                )
+            } else {
+                com.autoscript.ui.state.ScriptLogState.of(host.scriptLogIndex())
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Exception) {
+            com.autoscript.ui.state.ScriptLogState.failed(t, previous)
+        }
+    }
+
+    /**
+     * 读一次执行的日志全文（挂起；日志详情面用，不落状态）。
+     *
+     * 失败抛（调用方画"读取失败"）—— 与 `readScriptFileOp` 同一条"读不到就抛"纪律。
+     */
+    private suspend fun readScriptLogOp(runId: Long): List<com.autoscript.domain.host.ConsoleLineRow> {
+        val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
+        return host.scriptLogContent(runId)
+    }
+
     private suspend fun reloadCapabilities() {
         val host = hostSummary()
         if (host == null) {
@@ -1033,7 +1142,7 @@ class MainActivity : ComponentActivity() {
      *
      * @param op 执行操作并返回成功回执文案（失败抛 —— 由本函数收进 opError）。
      */
-    private suspend fun performTaskOp(op: suspend (HostSummary) -> String) {
+    private suspend fun performTaskOp(op: suspend (HostSummary) -> String?) {
         if (taskState.opInFlight) return // 双保险：按钮已禁用，这里兜住并发入口
         val host = hostSummary()
         if (host == null) {
@@ -1074,24 +1183,41 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 点行尾 ▶ 跑文件（2026-10-13）：先开悬浮窗再跑，挂起到结算。
+     *
+     * 没跑起来（抛）→ 关窗 + 上抛（`ProjectScreen.runFile` 的 catch 弹失败 toast）。
+     * 定时/后台触发不走这里（调度器直调宿主），故天然不弹窗 —— 日志照存。
+     */
+    private suspend fun runFileWithWindow(projectId: String, relPath: String) {
+        logWindowRef().open(projectId, relPath)
+        try {
+            runScriptFileOp(projectId, relPath)
+        } catch (t: Throwable) {
+            logWindowRef().close()
+            throw t
+        }
+    }
+
+    /**
      * 立即执行（`USER_CLICK`）：**挂起到执行结算**（排队 10s + 脚本超时/默认 30s，
      * 见 `HostSummary.runTaskNow` KDoc），期间 `opInFlight` 禁用按钮。
      *
-     * 回执措辞点破两条语义：成败不在本口（在意图日志/控制台）；Once 触发即出册
-     * （刷新后卡片消失是调度器语义，不是被取消了）。
+     * 2026-10-13 起成功回执 = 开悬浮窗（不再弹「已触发…/已执行…」toast：
+     * 成功文案改 null，`opToastMessage` 对 null 静默 —— 登记/取消/失败回执不动）。
+     * Once 出册语义不变（刷新后卡片消失仍是调度器语义）。失败（opError 非空）→ 关窗。
      */
     private suspend fun runTaskNowOp(task: TaskRowState) {
         // 挂起目标先落账：那一行的播放钮要画成"转圈的开口弧"（其余行不受影响）。
         taskState = taskState.copy(opTargetTaskId = task.id)
         try {
+            logWindowRef().open(task.projectId, task.scriptPath)
             performTaskOp { host ->
                 host.runTaskNow(task.id)
-                if (task.once) {
-                    "已执行「${task.name}」并出册（一次性任务；执行成败见控制台）"
-                } else {
-                    "已触发「${task.name}」（执行成败见控制台）"
-                }
+                // 成功不弹 toast（回执 = 悬浮窗）：回 null。
+                null
             }
+            // performTaskOp 把失败收进 opError（不抛）—— 没跑起来就关窗。
+            if (taskState.opError != null) logWindowRef().close()
         } finally {
             taskState = taskState.copy(opTargetTaskId = null)
         }
@@ -1516,6 +1642,12 @@ private fun MainShell(
     pagerState: PagerState,
     onSelectTab: (Int) -> Unit,
     toast: ToastAction,
+    /** 执行日志悬浮窗控制器（2026-10-13；in-app 兜底窗挂这里，与 ToastHost 同层）。 */
+    logWindow: com.autoscript.ui.overlay.LogWindowController,
+    /** 悬浮窗可见行的事实源（consoleState.lines 的呈现态；Activity 字段现读）。 */
+    logLines: () -> List<com.autoscript.ui.state.ConsoleLineState>,
+    /** 悬浮窗按钮的协程入口（togglePause 是挂起的；Activity 的 scope）。 */
+    logScope: kotlinx.coroutines.CoroutineScope,
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
 ) {
@@ -1541,6 +1673,21 @@ private fun MainShell(
                         .padding(bottom = TabBarBottomClearance()),
                 ) {
                     content(Modifier.fillMaxSize())
+                }
+                // 执行日志悬浮窗的 in-app 兜底（2026-10-13）：无悬浮窗权限时走这里 ——
+                // 与 ToastHost 同层（pager 外，过导航存活）、后画压内容。走系统窗时
+                // state 非空但这里不画（`!usingSystemWindow` 门），不叠两层窗。
+                val logState = logWindow.state
+                if (logState != null && !logWindow.usingSystemWindow) {
+                    com.autoscript.ui.overlay.LogWindowInAppHost(
+                        state = logState,
+                        lines = logLines(),
+                        onPauseToggle = { logScope.launch { logWindow.togglePause() } },
+                        onClear = { logWindow.clearLogs(it) },
+                        onClose = { logWindow.close() },
+                        onFullscreenToggle = { logWindow.toggleFullscreen() },
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
                 // 胶囊盖在内容之上：后画的在上层。它自己的 8dp 外边距让四周露出内容。
                 //
