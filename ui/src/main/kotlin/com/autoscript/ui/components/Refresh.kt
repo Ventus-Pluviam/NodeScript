@@ -209,17 +209,17 @@ private class FeedConnection(
         // 松手即弹回 —— 与"行上还是空白处按下"无关：`dispatchPostFling` 冒到壳这一层时，
         // 内层（列表）已经把自己那份消费完了，剩下的全落到这里，所以内层松手那一下必经这里。
         //
-        // 做法是"反向喂一个极小位移、再正常弹"：`OverscrollEffect` 接口没有公开 `onRelease`
-        // （`animateToRelease` 是 private），唯一能让它弹回的公开口就是 `applyToScroll` /
-        // `applyToFling`。直接 `applyToFling(Zero)` 链路太长（先看方向、再 `performFling`、
-        // 最后才 `animateToReleaseIfNeeded`）—— 松手那一下速度恒 `Zero`，反而容易一路早退。
-        // 反向位移走 `applyToScroll` 的 destretch 段：`0.5f` 刚好卡在它"忽略小余量"
-        // （`< 0.5f`）的门槛上，必被受理；随后的 `applyToFling(Zero)` 把剩下的交给
-        // `animateToReleaseIfNeeded()`（内部 `EdgeEffect.onRelease()`，与 TG 同一个）。
+        // 做法是给一个朝"回缩方向"的极小速度、走 `applyToFling` 里那条**设计好的**
+        // `absorbToRelaxIfNeeded`（"甩尾速度把已有的拉伸吃掉"）：`OverscrollEffect`
+        // 接口没有公开 `onRelease`（`animateToRelease` 是 private），这是唯一能让它
+        // 弹回的公开口。反向是 `lastPull` 记的（顶边被下拉 → 回缩方向朝上，给负速度）。
+        // 余下的交给最后的 `animateToReleaseIfNeeded()`（内部 `EdgeEffect.onRelease()`，
+        // 与 TG 同一个）。`performFling` 给 `{ Velocity.Zero }`：壳本来就不滚，
+        // 速度传下去只会被外层拿去滚别的东西。
+        // 只在 `isInProgress` 时动手，没拉过就不碰。
         if (effect.isInProgress) {
-            val kick = if (lastPull > 0f) -0.5f else 0.5f
-            effect.applyToScroll(Offset(0f, kick), NestedScrollSource.UserInput) { Offset.Zero }
-            effect.applyToFling(Velocity.Zero) { Velocity.Zero }
+            val relax = if (lastPull > 0f) -1f else 1f
+            effect.applyToFling(Velocity(0f, relax)) { Velocity.Zero }
         }
         return Velocity.Zero
     }
