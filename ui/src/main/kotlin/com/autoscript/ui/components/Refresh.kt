@@ -3,6 +3,7 @@ package com.autoscript.ui.components
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -117,6 +118,7 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  * 语义互相接手，不另记状态。形变量是**自估**的（平台不给读拉伸距离的公开口，`distance` /
  * `displacement` 都是 internal），估偏的后果只是回弹快一点/慢一点，不会卡滚动。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RefreshableBox(
     modifier: Modifier = Modifier,
@@ -187,15 +189,17 @@ private class StretchConnection(
         return Offset(0f, available.y)
     }
 
-    override suspend fun onPostFling(consumed: Velocity, available: Velocity) {
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
         val from = stretch.floatValue
         // 没拉过（长列表甩到边而已）就别起协程。
-        if (from == 0f) return
+        if (from == 0f) return Velocity.Zero
         stretch.floatValue = 0f
         scope.launch {
             animate(initialValue = from, targetValue = 0f, animationSpec = STRETCH_SPEC) { value, _ ->
                 stretch.floatValue = value
             }
         }
+        // 甩尾速度**不再往下传**：形变是这一层自己画的，传下去只会被外层拿去滚别的东西。
+        return Velocity.Zero
     }
 }
