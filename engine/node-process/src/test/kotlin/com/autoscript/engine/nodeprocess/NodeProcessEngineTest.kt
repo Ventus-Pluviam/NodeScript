@@ -53,8 +53,13 @@ class NodeProcessEngineTest {
         }
     }
 
-    /** 可脚本化的假进程：存活/退出码/终止调用全部由测试驱动。 */
-    private class FakeProcess(
+    /**
+     * 可脚本化的假进程：存活/退出码/终止调用全部由测试驱动。
+     *
+     * **`open`**：暂停链那条用例要一个"冻得住"的替身（`SpawnedProcess.pauseExecution`
+     * 缺省 false —— 那正是"本设备冻不住"的如实形状），故留给用例继承覆写。
+     */
+    private open class FakeProcess(
         override val pid: Int? = 4242,
         var alive: Boolean = true,
         var exitCode: Int? = null,

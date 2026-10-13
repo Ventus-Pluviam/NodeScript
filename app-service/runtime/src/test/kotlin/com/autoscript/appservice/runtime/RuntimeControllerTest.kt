@@ -600,17 +600,14 @@ class RuntimeControllerCancellationTest {
      * 暂停账（2026-10-13）：`pauseRun` 冻住 → 锚点排除 + `RunStatus.paused`；
      * `resumeRun` 解冻 → 锚点回来 + startedAt 刷新（宽限与期限顺延）。
      *
-     * FakeEngine 的 pause()/resume() 缺省 false —— 这里用可冻的替身。
+     * FakeEngine 的 pause()/resume() 缺省 false（= 冻不住）—— 这里把两个开关打开，
+     * 走的就是生产那条"冻得住"的路。
      */
     @Test
     fun `pauseRun 进集并排除看门狗锚点 resumeRun 出集并顺延`() = runBlocking {
-        val engines = MutableList(1) {
-            object : FakeEngine(EngineId(it)) {
-                var frozen = false
-                override suspend fun pause(): Boolean = true.also { frozen = true }
-                override suspend fun resume(): Boolean = true.also { frozen = false }
-            }
-        }
+        val engines = MutableList(1) { FakeEngine(EngineId(it)) }
+        engines.single().pauseResult = true
+        engines.single().resumeResult = true
         val pool = FixedEnginePool({ id -> engines[id.poolIndex] }, 1)
         var now = 1_000_000L
         val c = RuntimeController(pool, WatchdogPolicy(), clock = { now })
@@ -640,7 +637,7 @@ class RuntimeControllerCancellationTest {
 
     @Test
     fun `pauseRun 非在途与引擎冻不住都回 false 且不进集`() = runBlocking {
-        val (c) = controller()
+        val (c, _) = controller()
         assertFalse(c.pauseRun(999L), "从未存在 → false，不抛")
         val started = assertInstanceOf(
             RuntimeController.StartOutcome.Started::class.java,
