@@ -176,6 +176,12 @@ fun RefreshableBox(
  * `canScrollForward/canScrollBackward`**（TG 也不查 —— `EdgeEffect` 无条件接余量）。
  * `performScroll` 给 `{ Offset.Zero }`：滚动已经发生过了（拿的是 post-scroll 的余量），
  * 再滚一次就是同一段位移走两遍。
+ *
+ * **回弹收尾也归这里**（行上拉松手的唯一收尾者）：内容不满一屏的列表
+ * `shouldDispatchOverscroll = false`，它自己的 `onDragStopped` 会绕开 `effect.applyToFling`，
+ * 既不 absorb 也不 `animateToRelease` —— 而 [onPostFling] 是链上第一个还开着的钩子，
+ * 回弹（内部 `EdgeEffect.onRelease()`）只能在这里启动；启动后还必须把余速全报已消费，
+ * 免得外层 scrollable 的 fling 把它掐停（细节见 onPostFling 实现处的注释）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 private class FeedConnection(
@@ -203,10 +209,16 @@ private class FeedConnection(
     }
 
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-        if (effect.isInProgress) {
-            effect.applyToFling(Velocity.Zero) { Velocity.Zero }
-        }
-        return Velocity.Zero
+        if (!effect.isInProgress) return Velocity.Zero
+        effect.applyToFling(Velocity.Zero) { Velocity.Zero }
+        // 余速必须全报「已消费」，否则链上外层（壳自己那份 scrollable 的连接）会拿着
+        // 剩余速度跑自己的 fling —— scrollByWithOverscroll(SideEffect) → effect.applyToScroll
+        // → scrollCycleInProgress 刚被上面置回 false → stopOverscrollAnimation()
+        // （pull*(Offset.Zero) = onPullDistance(0)）把刚启动的回弹当场掐停在原距离，
+        // 拉出去的形变就此冻住 —— 「行上拉不回弹」正是这条：回弹启动了一帧就被外层按死。
+        // 吞掉余速后外层无速可滚，整条链不再发生任何 applyToScroll，
+        // 回弹动画由 draw 每帧推进 EdgeEffect 直到 isFinished，与 TG（AOSP EdgeEffect）同一条路。
+        return available
     }
 }
 
