@@ -557,6 +557,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                 )
+                                }
                                 Tab.SETTINGS -> SettingsScreen(
                                     state = capabilityState,
                                     onOpenSettings = { hostSummary()?.openCapabilitySettings(it) },
