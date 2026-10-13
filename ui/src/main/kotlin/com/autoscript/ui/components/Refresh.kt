@@ -1,18 +1,12 @@
 package com.autoscript.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.OverscrollEffect
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
-import androidx.compose.foundation.gestures.ScrollableState
-import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.overscroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -117,28 +111,23 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  * `DrawGlow…` 的 `draw()` 里那一行）。自接的那份没有绘制节点，尺寸恒 `Zero`，
  * 喂多少都早退 —— 不是门的问题，是**尺寸从来没给出去**。
  *
- * 这一版不绕门、不自喂，做法只有一句：**给壳挂一个自己的 `scrollable`**，state 用
- * [OverscrollProxyState]（两个 `canScroll*` 恒 `true`、`scrollBy` 一像素不吃），
- * 形变挂它身上 ——
- * 1. 手指在列表空白处按下时，列表的 `LazyColumn`（`canScroll* == false`，直接拒绝）
- *    让出手势，壳自己的 `scrollable` 接住拖拽（它的 `canScroll*` 恒真，直接开拖）；
- * 2. 它的 [ScrollingLogic] 见 `shouldDispatchOverscroll == true`，把拖拽喂给平台那份
- *    `EdgeEffect`（API 31+ 是 `RenderNode` stretch，与 TG 同一个平台件）；
- * 3. `scrollBy` 全放行（返回 `0f`），于是位移原样落到 `applyToScroll` 的
- *    `leftForOverscroll` 里 —— **全部变成形变**，内容本身一像素不动（TG 下拉时内容
- *    也不滚，只有形变）。
- * 4. 长列表自己那份形变**不关**（`LocalOverscrollConfiguration` 不再给 null）：
- *    手指按在行上时是列表自己接、有形变；按在空白处时是这层接、有形变。两层各管各的
- *    手势，不叠加 —— `e193c4d` 那次 `provides null` 把任务中心本来能用的那份关掉了，
+ * 做法只有一句：**余量经 nested-scroll 链漏到壳，由 [FeedConnection] 喂给壳自己的
+ * 那份平台形变** ——
+ * 1. 行上按着拖：内层 `LazyColumn` 赢了手势但一像素不滚（内容不满一屏），
+ *    到边余量经链漏下来，[FeedConnection] 喂给 `effect`；
+ * 2. 空白处按下：列表没有手势节点参战，拖拽位移原样经链落到壳，同一条路照喂 ——
+ *    所以 `86f16c1` 那版的假 state `scrollable` 是多余的，已删（见下）；
+ * 3. 形变是平台那份 `EdgeEffect`（API 31+ 是 `RenderNode` stretch，与 TG 同一个平台件），
+ *    绘制与尺寸都由壳自己的 `overscroll(effect)` 节点给 —— 不依赖列表容器；
+ * 4. 长列表自己那份形变**不关**：行上是列表自己接、空白处是这层接，各管各的手势，
+ *    不叠加 —— `e193c4d` 那次 `provides null` 把任务中心本来能用的那份关掉了，
  *    那是净负收益，这次不重犯。
- * 5. **行上按着拖**（`86f16c1` 漏的，用户口径「谁说只限制空白处了」）：内层 `LazyColumn`
- *    赢了手势但一像素不滚，壳的 `scrollable` 看不到 —— 余量经 nested-scroll 链漏下来，
- *    由 [FeedConnection] 喂给同一份 `effect`（这条路不经过 `shouldDispatchOverscroll`，
- *    且尺寸由壳的绘制节点给，不早退）。
  *
- * 如实记账：`scrollBy` 全放行在语义上是"壳假装能滚" —— `scrollable` 的无障碍动作
- * （`scrollBy` 语义）会说自己能滚，读屏用户可能听到一个滚不动的"滚动控件"。代价很小，
- * 但账要记在这里。
+ * `86f16c1` 那版还挂了一个自己的 `scrollable`（假 state 骗开门，管空白处），
+ * 它与 [FeedConnection] 共用同一份 `effect` —— 两份 `ScrollingLogic` 各自记
+ * `scrollCycleInProgress`、各自调 `finish()`，手动归零走哪条、周期标志留在哪条
+ * 全看运气，「回弹时快时慢轮换」正是这么来的。本版已把 `scrollable` 连同假 state
+ * 一起删掉，只剩 [FeedConnection] 一条路。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -150,21 +139,12 @@ fun RefreshableBox(
     // `overscroll(effect)` 提供，尺寸由壳自己的 bounds 给 —— 不依赖列表容器。
     // 这一行是前三版（`22a6fd0`/`b5f2084`/`e193c4d`）全灭的根因：自接的那份没有绘制节点，
     // `updateSize` 从没人调过，`applyToScroll` 见 `containerSize.isEmpty()` 就早退。
+    // 平台那份形变：绘制与尺寸都由壳自己的 `overscroll` 节点给，不依赖列表容器。
     val effect = ScrollableDefaults.overscrollEffect()
-    val proxy = remember { OverscrollProxyState() }
     val feed = remember(effect) { FeedConnection(effect) }
     Box(
         modifier = modifier
             .overscroll(effect)
-            .scrollable(
-                state = proxy,
-                orientation = Orientation.Vertical,
-                overscrollEffect = effect,
-            )
-            // **行上按着拖的那条路**：`LazyColumn` 的手势节点先赢、吃掉手势但一像素不滚，
-            // 壳的 `scrollable` 根本看不到 —— 余量（列表到边之后剩下的那截）经 nested-scroll
-            // 链漏到这一层，由这里喂给同一份 `effect`。与上面 `scrollable` 管的那条
-            // （空白处按下）各管各的手势，不叠加。
             .nestedScroll(feed),
         content = content,
     )
@@ -235,36 +215,5 @@ private class FeedConnection(
     }
 }
 
-/**
- * 「假装能滚」的 [ScrollableState]：只为骗开 `shouldDispatchOverscroll` 那道门
- * （见 [RefreshableBox] 的 KDoc）。
- *
- * - `canScrollForward/canScrollBackward` 恒 `true` —— 门恒开，不满一屏也触发；
- * - `scrollBy` 一律返回 `0f`（一像素不吃）—— 位移全留给 `applyToScroll` 变成形变，
- *   内容本身不动；
- * - `scroll` 走缺省的互斥实现（`ScrollableState.scroll$default` 那套由接口自带，
- *   这里不用自己写 —— `scrollByWithOverscroll` 那条拖拽路不经过它）；
- * - `isScrollInProgress` 恒 `false` —— 本体不持有滚动，`performRawScroll` 不会早退。
- */
-private class OverscrollProxyState : ScrollableState {
-    override val canScrollForward: Boolean = true
-    override val canScrollBackward: Boolean = true
-    override val isScrollInProgress: Boolean = false
-    override fun dispatchRawDelta(delta: Float): Float = 0f
-    override suspend fun scroll(
-        scrollPriority: androidx.compose.foundation.MutatePriority,
-        block: suspend ScrollScope.() -> Unit,
-    ) {
-        // 本体不持有滚动：`scrollByWithOverscroll` 那条拖拽路不经过这里。
-        // 无障碍的语义滚动会走到这里 —— 直接执行，让它按"滚了 0"结算。
-        NoopScrollScope.block()
-    }
-}
-
 /** 回零那一下多还的量（px）：确保 distance 归零触发 finish()。见 onPostFling。 */
 private const val RELEASE_OVERSHOOT_PX = 2f
-
-/** 不吃位移的 [ScrollScope]（[OverscrollProxyState.scroll] 用）。 */
-private object NoopScrollScope : ScrollScope {
-    override fun scrollBy(pixels: Float): Float = 0f
-}
