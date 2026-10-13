@@ -183,10 +183,14 @@ private class FeedConnection(
     private val effect: OverscrollEffect,
 ) : NestedScrollConnection {
 
+    /** 最后一次喂进去的位移方向（`onPostFling` 反向踢一脚用）。 */
+    private var lastPull = 0f
+
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
         // 反向先把已有的形变拉回去（`EdgeEffect` 的 destretch 段），夹在余量之内绝不多还。
         val consumed = effect.applyToScroll(Offset(0f, available.y), source) { Offset.Zero }
+        if (consumed.y != 0f) lastPull = consumed.y
         return Offset(0f, consumed.y)
     }
 
@@ -197,13 +201,26 @@ private class FeedConnection(
     ): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
         val taken = effect.applyToScroll(available, source) { Offset.Zero }
+        if (taken.y != 0f) lastPull = taken.y
         return Offset(0f, taken.y)
     }
 
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-        // 松手/甩尾 → `EdgeEffect.onRelease()` 弹回。速度不再往下传：形变是这一层画的，
-        // 传下去只会被外层拿去滚别的东西。
-        effect.applyToFling(available) { Velocity.Zero }
+        // 松手即弹回 —— 与"行上还是空白处按下"无关：`dispatchPostFling` 冒到壳这一层时，
+        // 内层（列表）已经把自己那份消费完了，剩下的全落到这里，所以内层松手那一下必经这里。
+        //
+        // 做法是"反向喂一个极小位移、再正常弹"：`OverscrollEffect` 接口没有公开 `onRelease`
+        // （`animateToRelease` 是 private），唯一能让它弹回的公开口就是 `applyToScroll` /
+        // `applyToFling`。直接 `applyToFling(Zero)` 链路太长（先看方向、再 `performFling`、
+        // 最后才 `animateToReleaseIfNeeded`）—— 松手那一下速度恒 `Zero`，反而容易一路早退。
+        // 反向位移走 `applyToScroll` 的 destretch 段：`0.5f` 刚好卡在它"忽略小余量"
+        // （`< 0.5f`）的门槛上，必被受理；随后的 `applyToFling(Zero)` 把剩下的交给
+        // `animateToReleaseIfNeeded()`（内部 `EdgeEffect.onRelease()`，与 TG 同一个）。
+        if (effect.isInProgress) {
+            val kick = if (lastPull > 0f) -0.5f else 0.5f
+            effect.applyToScroll(Offset(0f, kick), NestedScrollSource.UserInput) { Offset.Zero }
+            effect.applyToFling(Velocity.Zero) { Velocity.Zero }
+        }
         return Velocity.Zero
     }
 }
