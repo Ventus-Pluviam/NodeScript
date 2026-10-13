@@ -2,28 +2,24 @@ package com.autoscript.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalOverscrollConfiguration
-import androidx.compose.foundation.OverscrollEffect
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.foundation.gestures.ScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.overscroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.Velocity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+
 
 /**
  * 一次刷新的**唯一入口**：顶栏那颗「刷新」都走它（任务/管理/设置三屏）。
@@ -90,32 +86,99 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  *
  * 壳为什么还留着（而不是把四屏的 `RefreshableBox { … }` 拆成裸 `Box { … }`）：
  * 四屏的 content lambda 收的是 `BoxScope`，且"填满"由调用方传的 modifier 决定 ——
- * 壳在这里只是给"内容宿主"一个名字，四屏一行不用动。
+ * 壳在这里只是给"内容宿主"一个名字，四屏一行不用动。**它也是下拉形变的代管层**
+ * （见下），所以四屏一处接上、四处生效。
  *
- * ## 下拉形变：这里**什么都不做**（2026-10-13，三次尝试全撤）
+ * ## 下拉形变：代管一份平台 `EdgeEffect`（2026-10-13 用户口径，第 4 次尝试）
  *
- * 形变由 `LazyColumn`/`verticalScroll` **自带的那份平台形变**负责，本屏不插手
- * —— 这就是"平台缺省"的行为，也是前两次绕路之前的状态。
+ * 用户口径：「文件列表、任务列表、管理面板这些下拉时要有和 TG 一样的形变」。
  *
- * 撤掉的两次与失败原因（如实记账，不删）：
- * - `22a6fd0` 在壳上自接 `OverscrollEffect`：`applyToScroll` 见
- *   `containerSize.isEmpty()` 就早退，且 `applyToFling` 不发信号 —— 空转。
- * - `e193c4d` 改成平台 `EdgeEffect` + 手指按着才接：仍然空转（`onPostScroll`
- *   不见效果），而 `LocalOverscrollConfiguration provides null` 把**本来能用**的
- *   长列表那份关掉了 —— 这是净负收益，用户口径「任务中心拉了没反应」正是这一条。
+ * **TG 用的是什么**（`/tmp/tg` 12.10.6 实读）：就是 AOSP `EdgeEffect` 本身，
+ * 形变一个字没改 —— `RecyclerListView.java:2160` 的 `setAdaptiveOverScroll()` +
+ * `dispatchTouchEvent` 那两行 `OVER_SCROLL_ALWAYS`/`NEVER` 切换，即「**手指按着的
+ * 时候才接形变**」。`EdgeEffect` 在 View 体系里是**无条件**接到边余量上的，
+ * AOSP 与 TG 都没有"能不能滚"的门。
  *
- * **不满一屏的列表为什么没有形变**（项目页几个文件、管理面板五个入口、设置顶页两张卡）：
- * Compose 只在 `shouldDispatchOverscroll = canScrollForward || canScrollBackward` 时
- * 才把形变接上（`ScrollingLogic.scrollByWithOverscroll`，字节码核过）。AOSP 与 TG
- * **都没有这道门** —— `EdgeEffect` 是无条件接到边余量上的，所以 TG 的设置页不满一屏
- * 照样有形变。这道门在 Compose 内部，自绘/自喂两条路都绕不开（要绕只能改
- * `ScrollingLogic` 本身，那要 fork Compose 源码）。这条路值不值得走是产品决定，
- * 不该由实现细节顺带带过去。
+ * **Compose 的那道门**（`ScrollingLogic.scrollByWithOverscroll` 只在
+ * `shouldDispatchOverscroll = canScrollForward || canScrollBackward` 时才接形变，
+ * 字节码核过）：**内容不满一屏的列表两个都是 false，一次都不触发**。项目页（几个文件）、
+ * 设置顶页（两张卡）正是这种。View 体系没有这道门 —— 这是 Compose 自己加的。
+ *
+ * 前三次为什么空转（`22a6fd0` / `b5f2084` / `e193c4d`，如实记账）：
+ * 全死在 [OverscrollEffect.applyToScroll] 内部第一行 ——
+ * `if (containerSize.isEmpty()) return performScroll(delta)`。`containerSize`
+ * 只有挂在**会画东西的 modifier**上才会被 `updateSize` 填上（`DrawStretch…`/
+ * `DrawGlow…` 的 `draw()` 里那一行）。自接的那份没有绘制节点，尺寸恒 `Zero`，
+ * 喂多少都早退 —— 不是门的问题，是**尺寸从来没给出去**。
+ *
+ * 这一版不绕门、不自喂，做法只有一句：**给壳挂一个自己的 `scrollable`**，state 用
+ * [OverscrollProxyState]（两个 `canScroll*` 恒 `true`、`scrollBy` 一像素不吃），
+ * 形变挂它身上 ——
+ * 1. 手指在列表空白处按下时，列表的 `LazyColumn`（`canScroll* == false`，直接拒绝）
+ *    让出手势，壳自己的 `scrollable` 接住拖拽（它的 `canScroll*` 恒真，直接开拖）；
+ * 2. 它的 [ScrollingLogic] 见 `shouldDispatchOverscroll == true`，把拖拽喂给平台那份
+ *    `EdgeEffect`（API 31+ 是 `RenderNode` stretch，与 TG 同一个平台件）；
+ * 3. `scrollBy` 全放行（返回 `0f`），于是位移原样落到 `applyToScroll` 的
+ *    `leftForOverscroll` 里 —— **全部变成形变**，内容本身一像素不动（TG 下拉时内容
+ *    也不滚，只有形变）。
+ * 4. 长列表自己那份形变**不关**（`LocalOverscrollConfiguration` 不再给 null）：
+ *    手指按在行上时是列表自己接、有形变；按在空白处时是这层接、有形变。两层各管各的
+ *    手势，不叠加 —— `e193c4d` 那次 `provides null` 把任务中心本来能用的那份关掉了，
+ *    那是净负收益，这次不重犯。
+ *
+ * 如实记账：`scrollBy` 全放行在语义上是"壳假装能滚" —— `scrollable` 的无障碍动作
+ * （`scrollBy` 语义）会说自己能滚，读屏用户可能听到一个滚不动的"滚动控件"。代价很小，
+ * 但账要记在这里。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RefreshableBox(
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    Box(modifier = modifier, content = content)
+    // 平台那份形变（`AndroidEdgeEffectOverscrollEffect`）：绘制层由下面的
+    // `overscroll(effect)` 提供，尺寸由壳自己的 bounds 给 —— 不依赖列表容器。
+    val effect = ScrollableDefaults.overscrollEffect()
+    val proxy = remember { OverscrollProxyState() }
+    Box(
+        modifier = modifier
+            .overscroll(effect)
+            .scrollable(
+                state = proxy,
+                orientation = Orientation.Vertical,
+                overscrollEffect = effect,
+            ),
+        content = content,
+    )
+}
+
+/**
+ * 「假装能滚」的 [ScrollableState]：只为骗开 `shouldDispatchOverscroll` 那道门
+ * （见 [RefreshableBox] 的 KDoc）。
+ *
+ * - `canScrollForward/canScrollBackward` 恒 `true` —— 门恒开，不满一屏也触发；
+ * - `scrollBy` 一律返回 `0f`（一像素不吃）—— 位移全留给 `applyToScroll` 变成形变，
+ *   内容本身不动；
+ * - `scroll` 走缺省的互斥实现（`ScrollableState.scroll$default` 那套由接口自带，
+ *   这里不用自己写 —— `scrollByWithOverscroll` 那条拖拽路不经过它）；
+ * - `isScrollInProgress` 恒 `false` —— 本体不持有滚动，`performRawScroll` 不会早退。
+ */
+private class OverscrollProxyState : ScrollableState {
+    override val canScrollForward: Boolean = true
+    override val canScrollBackward: Boolean = true
+    override val isScrollInProgress: Boolean = false
+    override fun dispatchRawDelta(delta: Float): Float = 0f
+    override suspend fun scroll(
+        scrollPriority: androidx.compose.foundation.MutatePriority,
+        block: suspend ScrollScope.() -> Unit,
+    ) {
+        // 本体不持有滚动：`scrollByWithOverscroll` 那条拖拽路不经过这里。
+        // 无障碍的语义滚动会走到这里 —— 直接执行，让它按"滚了 0"结算。
+        NoopScrollScope.block()
+    }
+}
+
+/** 不吃位移的 [ScrollScope]（[OverscrollProxyState.scroll] 用）。 */
+private object NoopScrollScope : ScrollScope {
+    override fun scrollBy(pixels: Float): Float = 0f
 }
