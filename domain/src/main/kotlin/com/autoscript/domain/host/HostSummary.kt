@@ -191,6 +191,40 @@ interface HostSummary {
     suspend fun saveScriptFile(projectId: String, relPath: String, content: String)
 
     /**
+     * 跑一个脚本文件（项目页文件行尾那颗 ▶；2026-10-13 用户口径）。
+     *
+     * 与 [runTaskNow] 是**两条入口、一条执行链**：那边按 `taskId` 触发已登记的任务，
+     * 这边按 `(projectId, relPath)` 触发**没登记过**的那个文件 —— 用户想跑一下手里这个
+     * 脚本，不该先被迫登记一条定时任务。宿主侧两条都走同一条投递链（意图日志 → 引擎池 →
+     * 档案），所以跑过的文件在控制台与任务日志里都查得到，触发源是 `USER_CLICK`。
+     *
+     * **挂起到本次执行结算**（与 [runTaskNow] 逐字同一条口径：排队上限 USER_CLICK 10s +
+     * 脚本超时/默认 30s）—— 调用方在挂起期间应禁用那颗 ▶ 并如实显示「执行中」，不要另起
+     * 计时器猜结束。
+     *
+     * **成败不由本口回报**（结局在意图日志/控制台，与 [runTaskNow] 同）—— 调用方文案
+     * 不得把"调用返回了"说成"脚本跑成功了"。
+     *
+     * 失败抛：
+     * - 该扩展名**不可执行**（判据的唯一一份在 `:domain` 的
+     *   [com.autoscript.domain.scripts.ScriptRunnability.isRunnable]，本口不另判一遍）——
+     *   引擎侧起的是 `node <路径>`，`.sh` 这类只会得到一句 SyntaxError，当场拒比假装跑过好；
+     * - 文件不存在 / 项目不存在（`ERR_FILE_NOT_FOUND`，与 [readScriptFile] 同源）；
+     * - 调度已收口（宿主正在停止）；
+     * - 壳未装配（与 [runTaskNow] 同）。
+     *
+     * @param relPath 同 [readScriptFile]（`files/scripts/` 之下的相对路径，首段 = 项目名）。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但**不静默**
+     * —— 让「没接线」与「跑了但没输出」在界面上长得不一样（与 [runNpmCommand] 同一条纪律）。
+     */
+    suspend fun runScriptFile(projectId: String, relPath: String): Unit =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "脚本执行口未接线：本宿主没有接上「跑这个文件」的入口（projectId=$projectId，relPath=$relPath）",
+        )
+
+    /**
      * 为指定路径文件创建语法高亮会话（编辑器前端呼叫）。
      * 默认 NONE：原生解析器缺席时，编辑器保留纯文本能力。
      */

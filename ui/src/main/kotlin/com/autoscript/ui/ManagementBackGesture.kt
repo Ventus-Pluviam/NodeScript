@@ -138,7 +138,7 @@ internal class BackGestureState {
 }
 
 /** 跟手位移的满量程，单位 dp（TG `:1570` 的 `dp(56)`）。 */
-internal val BACK_GESTURE_DP = 56f
+internal const val BACK_GESTURE_DP = 56f
 
 /** `CubicBezierInterpolator.StandardDecelerate` = `PathInterpolator(0f, 0f, 0f, 1f)`。 */
 private val BACK_EASE = CubicBezierEasing(0f, 0f, 0f, 1f)

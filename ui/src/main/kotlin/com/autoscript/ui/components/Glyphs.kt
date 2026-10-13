@@ -86,6 +86,9 @@ enum class GlyphKind {
     /** 立即执行（任务行尾的实心播放三角）。 */
     PLAY,
 
+    /** 执行脚本（项目页文件行尾那颗 ▶ —— 与 [PLAY] 同一颗三角，只是语义是"跑这个文件"）。 */
+    RUN,
+
     /** 排序切换钮——切到**按字母**（三条横杠 + 字母 A；TG `msg_contacts_name`）。 */
     SORT_NAME,
 
@@ -344,8 +347,10 @@ fun Glyph(
                 drawPath(path(0.62f to 0.24f, 0.76f to 0.38f), tint, style = stroke)
             }
 
-            // 播放三角（任务行尾「立即执行」）：实心（TG 这颗是填充形，线性描边读不出"按了会跑"）。
-            GlyphKind.PLAY -> {
+            // 播放三角（任务行尾「立即执行」/ 项目页文件行尾「运行」）：实心
+            // （TG 这颗是填充形，线性描边读不出"按了会跑"）。两档共用这一支 ——
+            // 形态本来就该一模一样，抄成两支迟早只改一支。
+            GlyphKind.PLAY, GlyphKind.RUN -> {
                 drawPath(
                     path(0.30f to 0.20f, 0.30f to 0.80f, 0.80f to 0.50f).apply { close() },
                     tint,

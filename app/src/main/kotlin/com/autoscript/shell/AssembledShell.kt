@@ -2,24 +2,25 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.appservice.runtime.EngineWatchdog
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
 import com.autoscript.appservice.scriptrepo.core.BridgeAddonDeploy
 import com.autoscript.appservice.scriptrepo.core.BridgeDistDeploy
 import com.autoscript.domain.bridge.NamespaceHandler
-import com.autoscript.domain.scripts.TaskStore
-import com.autoscript.domain.host.TaskLogSnapshot
-import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
+import com.autoscript.domain.host.TaskCenterSnapshot
+import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
-import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
+import com.autoscript.domain.scripts.ScriptRunnability
+import com.autoscript.domain.scripts.TaskStore
 import com.autoscript.domain.scripts.TimedSchedule
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 /**
  * 装壳产物与壳自己的协程域（2026-10-01 D7 自 `AppShellKit.kt` 原样外迁：它们与
@@ -254,6 +255,29 @@ class AssembledShell internal constructor(
             throw IllegalStateException("任务不存在（可能已被取消）：$taskId")
         }
         scheduler.onTrigger(taskId, TriggerSource.USER_CLICK)
+    }
+
+    /**
+     * 跑一个**没有登记过**的脚本文件（`HostSummary.runScriptFile` 的装配实现；项目页文件行尾 ▶）。
+     *
+     * 两道门都在**这里**，不往调度器里塞：
+     * 1. 扩展名可执行（判据唯一一份在 `:domain` 的 [ScriptRunnability.isRunnable]）——
+     *    引擎侧起的是 `node <路径>`，`.sh` 只会得到一句 SyntaxError，当场拒比假装跑过好；
+     * 2. 调度未收口 —— 交给 `Scheduler.onTriggerFile` 判（它才持有 `sinking`）。
+     *
+     * **文件在不在盘上不在这里判**：那件事引擎侧本来就要查（`NodeProcessEngine` 对
+     * 缺文件如实回 `ERR_FILE_NOT_FOUND`，带绝对路径），在这一层再查一遍等于把同一条
+     * 判据写成两份、还要为此把 `filesDir` 塞进本类。**"不存在"与"存在但跑不起来"两句话
+     * 由引擎侧原文区分**，不在这里替它说。
+     *
+     * **挂起到本次执行结算**（与 [runTaskNow] 逐字同一条口径）—— 调用方据此禁用那颗 ▶。
+     * 成败不由本口回报：结局在意图日志/控制台，调用方文案不得把"返回了"说成"跑成功了"。
+     */
+    suspend fun runScriptFile(projectId: String, relPath: String) {
+        require(ScriptRunnability.isRunnable(relPath)) {
+            "这个文件不能被引擎执行（引擎起的是 node，只认 ${ScriptRunnability.EXECUTABLE_EXTENSIONS.joinToString("/") { ".$it" }}）：$relPath"
+        }
+        shell.scheduler.onTriggerFile(projectId = projectId, relPath = relPath)
     }
 
     /**

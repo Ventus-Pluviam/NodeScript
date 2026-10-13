@@ -98,7 +98,6 @@ import com.autoscript.ui.state.EditorScroll
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.state.SyntaxHighlightResult
 import com.autoscript.ui.theme.ThemeColors
-import com.autoscript.ui.theme.isDarkTheme
 import com.autoscript.ui.theme.syntaxColor
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
@@ -1141,7 +1140,6 @@ private fun rememberEditorHighlight(text: String, relPath: String): AnnotatedStr
     // 语法高亮会话（组合期间持有，换文件时才换；正文变化时投进去）。factory 在会话的
     // worker 线程上被调用 —— 开原生会话（含 dlopen）不在组合线程上做。
     val host = LocalEditorHighlightHost.current
-    val dark = isDarkTheme()
     val session = remember(relPath) {
         host?.let { editorHost ->
             EditorHighlightSession(relPath, factory = { path: String -> editorHost.open(path) }).also { it.start() }
@@ -1157,7 +1155,7 @@ private fun rememberEditorHighlight(text: String, relPath: String): AnnotatedStr
     val highlightResult by (session?.result ?: NoHighlightResult).collectAsState()
     val spans = highlightResult?.spans.orEmpty()
     // 贴色：一行都没贴上（纯文本、非 JS、原生缺席、区间全非法）时回 null，走原来的纯 String 路径。
-    return if (spans.isEmpty()) null else highlightedText(text, spans) { kind -> syntaxColor(kind, dark) }
+    return if (spans.isEmpty()) null else highlightedText(text, spans) { kind -> syntaxColor(kind) }
 }
 
 /** 高亮会话缺席（未供宿主 / 非 JS / 原生库不可用）时代入的空流：值恒为 null = 纯文本。 */

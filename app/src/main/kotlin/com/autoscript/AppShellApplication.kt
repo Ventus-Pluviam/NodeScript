@@ -731,6 +731,18 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 跑一个脚本文件（[HostSummary] 的生产实现，项目页文件行尾 ▶）。
+     *
+     * 壳没装好就抛（与 [runTaskNow] 同一条纪律：按了钮什么都不发生比报错更难查）；
+     * 其余判据（扩展名可执行 / 文件真的在盘上 / 调度未收口）都在 [AssembledShell.runScriptFile]。
+     */
+    override suspend fun runScriptFile(projectId: String, relPath: String) {
+        val built = assembled
+            ?: error("壳未装配（装配中或失败）：无法执行脚本文件")
+        built.runScriptFile(projectId, relPath)
+    }
+
+    /**
      * 脚本文件清单（[HostSummary] 的生产实现，项目页文件列表）。
      *
      * 壳没装好也**不抛**：文件列表读的是落盘目录（`files/scripts/`），不依赖壳里

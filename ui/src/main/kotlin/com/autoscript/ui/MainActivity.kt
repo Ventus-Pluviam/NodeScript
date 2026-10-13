@@ -628,6 +628,9 @@ class MainActivity : ComponentActivity() {
                 // （清单没变），保存成功后才重读一次清单（大小/时刻变了）。
                 onReadFile = { projectId, relPath -> readScriptFileOp(projectId, relPath) },
                 onSaveFile = { projectId, relPath, content -> saveScriptFileOp(projectId, relPath, content) },
+                // 点行尾 ▶ 跑这个文件：挂起到本次执行结算（与任务中心「立即执行」同一条链），
+                // 成败归控制台/任务日志，回执在 ProjectScreen 内部走 toast。
+                onRunFile = { projectId, relPath -> scope.launch { runScriptFileOp(projectId, relPath) } },
                 onSortChange = { sort, reversed ->
                     projectState = projectState.copy(sort = sort, reversed = reversed, opError = null, opNotice = null)
                 },
@@ -834,6 +837,20 @@ class MainActivity : ComponentActivity() {
      * **不写 [projectState]**：读取的成败归编辑器自己显示（清单没有任何变化），
      * 宿主未接线照抛 —— 编辑器把原因显示在正文上方，而不是让列表替它报错。
      */
+    /**
+     * 跑一个脚本文件（项目页文件行尾 ▶）。
+     *
+     * **不写 [projectState]**：执行结果归控制台/任务日志（宿主读数），清单没有变化，
+     * 不在这一层刷新列表 —— 与 [readScriptFileOp] 同一条分工。
+     *
+     * 宿主侧在 [AssembledShell.runScriptFile] 判「扩展名可执行 / 文件在盘上 / 调度未收口」，
+     * 这里只把 `HostSummary.runScriptFile` 转下去；挂起到执行结算，失败的原文给 toast。
+     */
+    private suspend fun runScriptFileOp(projectId: String, relPath: String) {
+        val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
+        host.runScriptFile(projectId, relPath)
+    }
+
     private suspend fun readScriptFileOp(projectId: String, relPath: String): String {
         val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
         return host.readScriptFile(projectId, relPath)

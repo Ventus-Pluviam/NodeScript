@@ -16,8 +16,11 @@ import com.autoscript.domain.editor.SyntaxKind
  * 之前分深浅两套的写法删掉了：那套浅色档的深蓝/深绿在 `#161E27` 上发暗、对比不够。
  * 正文色 [Colors.text] 一律不动 —— 未命中任何 kind 的文本仍按正文色画，着色只是叠在
  * 上面的一层。
+ *
+ * **不带 `dark` 参数**：一套色之后它没有读者（原先留着是为了不动调用点形状），
+ * 而一个"永远被忽略"的参数比少一个参数更坏 —— 下一个改配色的人会以为它在起作用。
  */
-fun syntaxColor(kind: SyntaxKind, dark: Boolean): Color = when (kind) {
+fun syntaxColor(kind: SyntaxKind): Color = when (kind) {
     SyntaxKind.KEYWORD -> Color(0xFFCF8E6D)
     SyntaxKind.STRING -> Color(0xFF6AAB73)
     SyntaxKind.COMMENT -> Color(0xFF7F848E)

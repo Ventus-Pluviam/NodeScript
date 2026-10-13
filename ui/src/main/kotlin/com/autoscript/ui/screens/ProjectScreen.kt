@@ -1,6 +1,7 @@
 package com.autoscript.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +25,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,6 +56,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -63,6 +69,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autoscript.domain.scripts.ScriptRunnability
 import com.autoscript.ui.ManagementTransition
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
@@ -122,6 +129,9 @@ import kotlinx.coroutines.launch
  * 诚实边界（与其他屏同一条纪律）：没读到显示「尚未读取」，失败带原文；
  * 读到了且为空才说「还没有脚本文件」—— 那是真的没有（`files/scripts/` 为空）。
  */
+// 参数数在 2026-10-13 加了 [onRunFile] 之后跨过 detekt 的阈值（10），原来的 9 个离阈值不远；
+// 全部是屏自己的读口/回调（与 SettingsScreen 那份 @Suppress 同型），不是值得继续拆分了才压下来。
+@Suppress("LongParameterList")
 @Composable
 fun ProjectScreen(
     state: ProjectState,
@@ -145,6 +155,13 @@ fun ProjectScreen(
     onReadFile: suspend (projectId: String, relPath: String) -> String,
     /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */
     onSaveFile: suspend (projectId: String, relPath: String, content: String) -> Unit,
+    /**
+     * 跑一个脚本文件（文件行尾那颗 ▶；2026-10-13 用户口径）。
+     *
+     * **挂起**：宿主要挂到本次执行结算（与任务中心的「立即执行」同一条口径），
+     * 调用方据此把那一行的 ▶ 换成"执行中"并禁用。
+     */
+    onRunFile: suspend (projectId: String, relPath: String) -> Unit,
     /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */
     onSortChange: (FileSort, Boolean) -> Unit,
     /**
@@ -192,6 +209,33 @@ fun ProjectScreen(
     // 动画进行中（TG `animationInProgress`）：动画期间点列表里的另一行，在 TG 里是
     // 什么都不发生。不吞的话 `editing` 两次变，切出的收尾会被取消。
     var editorAnimating by remember { mutableStateOf(false) }
+    // 正在跑的脚本（键 = `ProjectState.keyOf` 那一份）。挂起期间那一行的 ▶ 换成转圈，
+    // 其余行照旧可点 —— 引擎池容量是 1，但"这一颗在跑"与"别的文件能不能跑"是两件事
+    // （排队那条路由宿主的分级表管，界面不替它拦）。
+    var runningKey by remember { mutableStateOf<String?>(null) }
+
+    /** 跑一个文件（点行尾 ▶）。挂起到本次执行结算，成败归宿主（回执走 toast）。 */
+    fun runFile(file: ScriptFileRowUi) {
+        val key = ProjectState.keyOf(file)
+        if (runningKey != null) return
+        runningKey = key
+        scope.launch {
+            try {
+                onRunFile(file.projectId, file.relPath)
+                // 措辞不替宿主宣布结果：成败在控制台/任务日志，这里只说"这一行去了哪"。
+                toast?.show("已触发「${file.name}」（执行成败见控制台）")
+            } catch (t: kotlinx.coroutines.CancellationException) {
+                throw t
+            } catch (t: com.autoscript.domain.core.AutojsException) {
+                toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
+            } catch (t: IllegalArgumentException) {
+                toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
+            } finally {
+                runningKey = null
+            }
+        }
+    }
+
     /** 开一个文件（动画期间吞掉，与面板入口同一口径）。 */
     fun openEditor(file: ScriptFileRowUi) {
         // 动画期间吞掉（与面板入口同一口径）。**底栏 flag 一起吞**：切出动画里 `editing`
@@ -355,6 +399,11 @@ fun ProjectScreen(
                                     file = file,
                                     selected = key in selected,
                                     showMore = !selectionMode,
+                                    // ▶ 只在**可执行**（JS 家族）且不在选择模式时出现 ——
+                                    // 判据的唯一一份在 `:domain` 的 `ScriptRunnability`。
+                                    showRun = !selectionMode && ScriptRunnability.isRunnable(file.relPath),
+                                    running = runningKey == key,
+                                    onRun = { runFile(file) },
                                     onClick = {
                                         when {
                                             selectionMode -> selected = ProjectState.toggleSelection(selected, key)
@@ -647,6 +696,12 @@ private fun FileRow(
     selected: Boolean,
     /** 是否画行尾的 ⋮（选择模式里不画 —— 那时行尾留给"已选 N 项"那套语义）。 */
     showMore: Boolean,
+    /** 是否画行尾的 ▶（只对可执行脚本；判据见调用点的 `ScriptRunnability`）。 */
+    showRun: Boolean,
+    /** 这个文件此刻在跑（▶ 换成转圈、按钮禁用）。 */
+    running: Boolean,
+    /** 行尾 ▶ 的落点（跑这个文件）。 */
+    onRun: () -> Unit,
     onClick: () -> Unit,
     /** 行尾 ⋮ 的落点（开操作面板）。 */
     onMore: () -> Unit,
@@ -690,6 +745,18 @@ private fun FileRow(
                 maxLines = 1,
             )
         }
+        if (showRun) {
+            // 行尾 ▶（跑这个文件；2026-10-13 用户口径「可执行文件在菜单栏左边加个执行图标按钮」）：
+            // 与任务中心那颗「立即执行」同一形态（实心三角、accent 蓝、44dp 触控目标），
+            // 只是它跑的是**这一行这个文件**、不需要先登记任务。
+            //
+            // 挂在 ⋮ **左边**：⋮ 是"这一行的其余动作"（TG 的溢出钮位），▶ 是主动作 ——
+            // 主动作排在溢出钮前面，与顶栏「外壳动作在左、本屏动作在右」是同一条读法。
+            //
+            // 跑动中换成转圈（0.9s 一圈线性，与任务中心那颗同一节奏）：宿主是挂起到
+            // 执行结算的，静止的 ▶ 会让人以为没点上。
+            RunScriptButton(running = running, onClick = onRun)
+        }
         if (showMore) {
             // 行尾 ⋮（TG 的溢出钮 `ic_ab_other`）：48dp 触控目标、居行右端。
             // 色取 `windowBackgroundWhiteBlackText`（[ThemeColors.text]：浅色下就是黑），
@@ -719,6 +786,54 @@ private fun FileRow(
         }
     }
 }
+
+/**
+ * 行尾那颗 ▶（跑这个文件）。跑动中换成开口弧转圈 —— 与任务中心那颗「立即执行」
+ * （[com.autoscript.ui.screens.TaskCenterScreen] 的 `PlayButton`）同一形态、同一节奏：
+ * 同一件事在两屏长得不一样，用户就得学两遍。
+ *
+ * 触控目标 44dp（与那颗一致），图标 20dp、accent 蓝（[ThemeColors.accent]）。
+ */
+@Composable
+private fun RunScriptButton(running: Boolean, onClick: () -> Unit) {
+    val accent = ThemeColors.accent
+    Box(
+        Modifier
+            .size(RunScriptTouch)
+            .semantics { contentDescription = if (running) "执行中" else "运行" }
+            .pressable(enabled = !running, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (running) {
+            // 色值在组合期取好再进绘制 lambda（`ThemeColors` 是 CompositionLocal 读口，
+            // 绘制帧里读不到组合环境）—— 与任务中心那颗逐字同一条理由。
+            val spin = rememberInfiniteTransition(label = "runSpin")
+            val angle by spin.animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(tween(durationMillis = 900, easing = LinearEasing)),
+                label = "runSpinAngle",
+            )
+            Canvas(Modifier.size(RunScriptIcon)) {
+                drawArc(
+                    color = accent,
+                    startAngle = angle,
+                    sweepAngle = 280f,
+                    useCenter = false,
+                    style = Stroke(width = this.size.minDimension * 0.16f, cap = StrokeCap.Round),
+                )
+            }
+        } else {
+            Glyph(kind = GlyphKind.RUN, tint = accent, size = RunScriptIcon)
+        }
+    }
+}
+
+/** 行尾 ▶ 的触控目标（与任务中心那颗「立即执行」同值）。 */
+private val RunScriptTouch = 44.dp
+
+/** 行尾 ▶ 的图标边长（同上）。 */
+private val RunScriptIcon = 20.dp
 
 /** 行尾 ⋮ 的触控目标（Material 最小可达性 48dp）。 */
 private val FileRowMoreTouch = 48.dp
