@@ -761,7 +761,7 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun scriptLogIndex(): ScriptLogSnapshot {
         val active: Set<Long> = try {
-            assembled?.controller?.activeRunIds() ?: emptySet()
+            assembled?.shell?.controller?.activeRunIds() ?: emptySet()
         } catch (_: Exception) {
             // 在途表读失败 = 当它是空集（running 全 false）：列表本身照样可读，
             // "谁在跑"这一列宁可保守false，也不用一次读失败把整份列表打成失败。
