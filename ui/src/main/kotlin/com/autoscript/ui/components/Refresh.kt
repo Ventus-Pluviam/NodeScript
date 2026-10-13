@@ -3,7 +3,6 @@ package com.autoscript.ui.components
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.MutatePriority
-import androidx.compose.foundation.NoOpOverscrollEffect
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
@@ -159,7 +158,11 @@ fun RefreshableBox(
             .scrollable(
                 state = proxy,
                 orientation = Orientation.Vertical,
-                overscrollEffect = NoOpOverscrollEffect,
+                // overscrollEffect 必须显式传同一份 effect：`scrollable` 的缺省走
+                // remember + LocalOverscrollConfiguration，会记住另一份实例 ——
+                // 两份 ScrollingLogic 各写各的 EdgeEffect，松手回弹只弹其中一份，
+                // 「时快时慢轮换」正是这么来的（6284a24 误诊备忘）。
+                overscrollEffect = effect,
             )
             .nestedScroll(feed),
         content = content,
