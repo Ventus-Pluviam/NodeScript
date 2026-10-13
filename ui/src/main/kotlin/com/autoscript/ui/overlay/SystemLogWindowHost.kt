@@ -82,8 +82,9 @@ class SystemLogWindowHost(
                 setContent { Theme(mode = themeMode()) { content() } }
             }
             val density = context.resources.displayMetrics.density
-            compactW = (COMPACT_WIDTH_DP * density).toInt()
-            compactH = (COMPACT_HEIGHT_DP * density).toInt()
+            // Dp * density 还是 Dp（.toInt() 不在 Dp 上）；先取 .value（float）再换算。
+            compactW = (COMPACT_WIDTH_DP.value * density).toInt()
+            compactH = (COMPACT_HEIGHT_DP.value * density).toInt()
             val p = WindowManager.LayoutParams(
                 compactW,
                 compactH,

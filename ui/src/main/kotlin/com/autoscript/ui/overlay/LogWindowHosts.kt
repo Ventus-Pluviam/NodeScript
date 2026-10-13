@@ -70,31 +70,34 @@ fun LogWindowInAppHost(
 ) {
     val copy = rememberCopyAction()
     val shown = state.visible(lines)
-    Box(
-        modifier
-            .then(
-                if (state.fullscreen) {
-                    Modifier.fillMaxSize()
-                } else {
-                    Modifier
-                        .width(340.dp)
-                        .height(420.dp)
-                        .align(Alignment.TopEnd)
-                },
+    // `align` 是 `BoxScope` 的扩展，只能在 Box 内部的**子项**上调 —— 不能拼在传给
+    // `Box(...)` 的 modifier 链上（编译期抓到）。外层 Box 铺满吃掉尺寸，内层定尺寸/对齐。
+    Box(modifier.fillMaxSize()) {
+        Box(
+            if (state.fullscreen) {
+                Modifier
+                    .fillMaxSize()
+                    .padding(top = 56.dp, bottom = TabBarBottomClearance())
+            } else {
+                Modifier
+                    .width(340.dp)
+                    .height(420.dp)
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 8.dp, bottom = TabBarBottomClearance())
+            },
+        ) {
+            LogWindowContent(
+                state = state,
+                lines = shown,
+                onPauseToggle = onPauseToggle,
+                onClear = { onClear(shown.maxOfOrNull { it.seq } ?: state.watermarkSeq) },
+                onClose = onClose,
+                onFullscreenToggle = onFullscreenToggle,
+                onCopyLine = { copy.copy("已复制该行", it) },
+                onDrag = {},
+                modifier = Modifier.fillMaxSize(),
             )
-            .padding(top = 56.dp, end = 8.dp, bottom = TabBarBottomClearance()),
-    ) {
-        LogWindowContent(
-            state = state,
-            lines = shown,
-            onPauseToggle = onPauseToggle,
-            onClear = { onClear(shown.maxOfOrNull { it.seq } ?: state.watermarkSeq) },
-            onClose = onClose,
-            onFullscreenToggle = onFullscreenToggle,
-            onCopyLine = { copy.copy("已复制该行", it) },
-            onDrag = {},
-            modifier = Modifier.fillMaxSize(),
-        )
+        }
     }
 }
 
