@@ -167,27 +167,6 @@ class RuntimeController(
         return true
     }
 
-    /** 优雅停止一次执行（四步 quiesce 由池/槽位驱动，TimedOut 已 kill 兜底）。 */
-    suspend fun stop(runId: Long): StopOutcome {
-        val handle = guard.withLock {
-            startedAt.remove(runId)
-            active.remove(runId)
-            // 过账：暂停中被停 —— 引擎侧 `stop()` 入口也会 auto-resume，这里清集是
-            // 为了让「它曾被暂停过」这个事实随 run 终结一起消失（集只装在途）。
-            paused.remove(runId)
-        } ?: return StopOutcome.AlreadyGone
-        heartbeats.forget(runId)
-        // A11：stop 也是 run 终结 —— 同一条收口（与 kill/自然退出同口径）。
-        revokeRunResources(runId)
-        // 自停会撤销当前桥连接并取消调用协程；已摘走的 handle 必须完成回池。
-        return withContext(NonCancellable) {
-            when (val result = pool.release(handle)) {
-                StopResult.Clean -> StopOutcome.StoppedClean
-                is StopResult.TimedOut -> StopOutcome.StoppedTimeout(result.partial)
-            }
-        }
-    }
-
     /**
      * 急停代次（[killAll]/[forceStopAll] 推进；读写都在 [guard] 临界区内）。
      *
@@ -299,6 +278,9 @@ class RuntimeController(
         val handle = guard.withLock {
             startedAt.remove(runId)
             active.remove(runId)
+            // 过账：暂停中被停 —— 引擎侧 `stop()` 入口也会 auto-resume，这里清集是
+            // 为了让「它曾被暂停过」这个事实随 run 终结一起消失（集只装在途）。
+            paused.remove(runId)
         } ?: return StopOutcome.AlreadyGone
         heartbeats.forget(runId)
         // A11：stop 也是 run 终结 —— 同一条收口（与 kill/自然退出同口径）。
