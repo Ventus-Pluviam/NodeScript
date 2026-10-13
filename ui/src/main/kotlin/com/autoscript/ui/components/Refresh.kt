@@ -1,20 +1,23 @@
 package com.autoscript.ui.components
 
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.LocalOverscrollConfiguration
-import androidx.compose.foundation.OverscrollEffect
-import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.overscroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -22,6 +25,7 @@ import androidx.compose.ui.unit.Velocity
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+
 
 /**
  * 一次刷新的**唯一入口**：顶栏那颗「刷新」都走它（任务/管理/设置三屏）。
@@ -91,82 +95,86 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  * 壳在这里只是给"内容宿主"一个名字，四屏一行不用动。**它现在也是下拉形变的落点**
  * （见下），所以四屏一处接上、四处生效。
  *
- * ## 下拉形变（TG 的 overscroll stretch，2026-10-13 用户口径）
+ * ## 下拉形变（TG 的橡皮筋，2026-10-13 用户口径）
  *
- * 用户口径：「文件列表、设置列表这些下拉时要有和 TG 一样的形变效果（编辑页下拉就有）」。
- * 编辑页有而列表没有，**不是两套实现**，是同一套被 Compose 的一道门卡住了：
- * `ScrollingLogic.shouldDispatchOverscroll = canScrollForward || canScrollBackward`
- * （`Scrollable.kt`）—— **内容不满一屏的列表两个都是 false**，于是平台形变一次都不触发。
- * 编辑页的正文恒 ≥ 一屏（`heightIn(min = viewportHeight)` + 长文件），所以它有。
- * 项目页（几个文件）、设置顶页（两张卡）恰恰都是"不满一屏"的那种列表。
+ * 用户口径：「文件列表、任务列表、管理面板这些下拉时要有和 TG 一样的形变」。
  *
- * 做法（**用平台自己的那份形变**，不自己写变换）：
- * 1. [ScrollableDefaults.overscrollEffect] 拿到的就是 AOSP 的 `EdgeEffect` 形变
- *    （API 31+ 是 stretch、以下是 glow）—— 与 TG 的 `RecyclerView` 默认 overscroll
- *    是**同一个东西**，观感天然一致；
- * 2. `LocalOverscrollConfiguration provides null` 把**列表自己那一份**关掉
- *    （`rememberOverscrollEffect` 见 null 回 `NoOpOverscrollEffect`）—— 不关就是两层
- *    形变叠着走（长列表上尤其明显）；
- * 3. [StretchConnection] 在**子节点没吃掉的余量**上喂这份形变（`onPostScroll`），
- *    并在反向时先把它拉回去（`onPreScroll`，与平台那条 pre-scroll 同义）；
- *    松手时 `onPostFling` 交给 `EdgeEffect.onRelease()` 弹回。
- *    这条缝**不经过** `shouldDispatchOverscroll` 那道门，所以不满一屏的列表照样有形变。
+ * **为什么不能交给平台那份**（上一版接的就是它，红了）：Compose 只在
+ * `shouldDispatchOverscroll = canScrollForward || canScrollBackward` 时才把形变接上
+ * （`ScrollingLogic.scrollByWithOverscroll`）—— **内容不满一屏的列表两个都是 false，
+ * 一次都不触发**。项目页（几个文件）、管理面板（五个入口）恰恰全是"不满一屏"的那种。
+ * 想在壳上自己喂一份 `OverscrollEffect` 也补不上：那份只有被 `scrollable` 接住才会被
+ * `updateSize`，容器尺寸恒为 `Zero`，`applyToScroll` 第一行就早退。
  *
- * 边界（如实记账）：形变量由 [StretchConnection] 自己估（平台不给读距离的公开口，
- * `displacement`/`distance` 都是 internal），估偏的后果只是"反向那一下少拉一点/多拉一点"，
- * 不会卡住滚动 —— 反向消费**永远不超过**估算的形变量。
+ * 所以这里自己画，链路只有两段：
+ * 1. [StretchConnection] 在 `nestedScroll` 里把「列表到边之后剩下的那截余量」记成一个数
+ *    （`snapTo`，随手写不启动动画）；反向滚动优先把这份余量还给列表，**永远不多还**；
+ * 2. [Modifier.graphicsLayer] 把内容按这个数沿纵向撑开 —— 锚点在**顶端**，内容顶边不动、
+ *    整张内容被拉长（TG 的 `EdgeEffect` stretch 就是这个观感），底部溢出的那截落到屏幕外。
+ *    形变量按比例封顶（[STRETCH_RATIO]），拉到底也不会夸张。
+ *
+ * 松手走 [STRETCH_SPEC] 那条弹簧弹回；弹的过程中重新按下，[snapTo] 与 `animate` 的取消
+ * 语义互相接手，不另记状态。形变量是**自估**的（平台不给读拉伸距离的公开口，`distance` /
+ * `displacement` 都是 internal），估偏的后果只是回弹快一点/慢一点，不会卡滚动。
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RefreshableBox(
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    // **先取平台那份形变、再关掉列表自己那份**：顺序不能反 ——
-    // `ScrollableDefaults.overscrollEffect()` 读的就是 `LocalOverscrollConfiguration`，
-    // 在 null 的下面调它拿到的是 `NoOpOverscrollEffect`（等于什么都没接上）。
-    val effect = ScrollableDefaults.overscrollEffect()
-    val connection = remember(effect) { StretchConnection(effect) }
+    // 当前被拉长出去多少 px（正 = 顶边被拉住往下拽）。graphicsLayer 的 lambda 在**绘制期**
+    // 读它 —— 形变因此只重绘、不重组。
+    val stretch = remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    val connection = remember(stretch) { StretchConnection(stretch, scope) }
+    // 把**列表自己那份**平台形变关掉（null → `NoOpOverscrollEffect`）：长列表上它本来就会
+    // 触发，与这一层叠着走就成了两层形变。不满一屏的列表它本来一次都不触发，关掉无影响。
     CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
-        Box(modifier = modifier.nestedScroll(connection).overscroll(effect), content = content)
+        Box(
+            modifier = modifier
+                .nestedScroll(connection)
+                .graphicsLayer {
+                    val pulled = stretch.floatValue
+                    if (pulled != 0f && size.height > 0f) {
+                        // 顶端为原点：内容顶边不动、整张被拉长（TG stretch 同款观感）。
+                        transformOrigin = TransformOrigin(0.5f, 0f)
+                        scaleY = 1f + minOf(abs(pulled) / size.height, STRETCH_RATIO)
+                    }
+                },
+            content = content,
+        )
     }
 }
 
-/**
- * 把**子节点没吃掉的滚动余量**喂给平台形变（见 [RefreshableBox] 的 KDoc）。
- *
- * 三段各司其职，与 `ScrollingLogic` 里那条内置路径同义：
- * - `onPreScroll`：**反向**时先把已有的形变拉回去（`toRelax` 夹在估算量之内），
- *   正向继续拉时一个像素都不碰 —— 碰了就成了"越拉越紧还滚不动"；
- * - `onPostScroll`：余量（列表到边之后剩下的那截）转成形变；
- * - `onPostFling`：松手/甩尾结束 → `applyToFling` 内部 `EdgeEffect.onRelease()` 弹回。
- *
- * `performScroll` 一律给 `{ Offset.Zero }`：**滚动已经发生过了**（我们拿的是 post-scroll
- * 的余量），这里再滚一次就是同一段位移走两遍。
- */
-// `OverscrollEffect` 及其三个成员都是 `@ExperimentalFoundationApi` —— 用它的类型/调它的方法
-// 都要在这一层显式 opt-in（`RefreshableBox` 那个注解管不到这个类）。
-@OptIn(ExperimentalFoundationApi::class)
-private class StretchConnection(private val effect: OverscrollEffect) : NestedScrollConnection {
+/** 纵向最多撑到几倍（满量下拉时）。见 [RefreshableBox] 的 KDoc。 */
+private const val STRETCH_RATIO = 0.22f
 
-    /** 当前形变量的**估算**（px，带符号：正 = 顶部被下拉）。见 KDoc 的边界那条。 */
-    private var stretched = 0f
+/** 弹回用：欠阻尼一点、手感干脆（与 TG `EdgeEffect.onRelease()` 的回缩同一档）。 */
+private val STRETCH_SPEC = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+
+/**
+ * 把**子节点没吃掉的滚动余量**记成形变量（见 [RefreshableBox] 的 KDoc）。
+ *
+ * 三段各司其职：
+ * - `onPreScroll`：**反向**时先把已经拉出去的那截还给列表（夹在余量之内，绝不多还），
+ *   同向继续拉不碰 —— 碰了就成"越拉越紧还滚不动"；
+ * - `onPostScroll`：余量（列表到边之后剩下的那截）转成形变；
+ * - `onPostFling`：松手 → 弹簧弹回 `0f`（列表没被拉过就直接返回，不起协程）。
+ */
+private class StretchConnection(
+    private val stretch: MutableFloatState,
+    private val scope: CoroutineScope,
+) : NestedScrollConnection {
 
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
-        // 没有形变可拉：顺手把估算清零（进程重建、被别处清过都会走到这里）。
-        if (!effect.isInProgress) {
-            stretched = 0f
-            return Offset.Zero
-        }
+        val pulled = stretch.floatValue
         // 同向 = 还在往同一边拉，不归这一段管（留给 onPostScroll 继续加）。
-        if (available.y * stretched >= 0f) return Offset.Zero
-        val toRelax = available.y.coerceIn(-abs(stretched), abs(stretched))
+        if (pulled == 0f || available.y * pulled >= 0f) return Offset.Zero
+        val toRelax = available.y.coerceIn(-abs(pulled), abs(pulled))
         if (toRelax == 0f) return Offset.Zero
-        val consumed = effect.applyToScroll(Offset(0f, toRelax), source) { Offset.Zero }
-        stretched += consumed.y
-        if (!effect.isInProgress) stretched = 0f
-        return Offset(0f, consumed.y)
+        stretch.floatValue = pulled + toRelax
+        return Offset(0f, toRelax)
     }
 
     override fun onPostScroll(
@@ -175,14 +183,19 @@ private class StretchConnection(private val effect: OverscrollEffect) : NestedSc
         source: NestedScrollSource,
     ): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
-        val taken = effect.applyToScroll(available, source) { Offset.Zero }
-        if (taken.y != 0f) stretched += taken.y
-        return Offset(0f, taken.y)
+        stretch.floatValue += available.y
+        return Offset(0f, available.y)
     }
 
-    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-        effect.applyToFling(available) { Velocity.Zero }
-        stretched = 0f
-        return Velocity.Zero
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity) {
+        val from = stretch.floatValue
+        // 没拉过（长列表甩到边而已）就别起协程。
+        if (from == 0f) return
+        stretch.floatValue = 0f
+        scope.launch {
+            animate(initialValue = from, targetValue = 0f, animationSpec = STRETCH_SPEC) { value, _ ->
+                stretch.floatValue = value
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 package com.autoscript.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalTabBarHidden
+import com.autoscript.ui.components.RefreshableBox
 import com.autoscript.ui.components.SettingIconColors
 import com.autoscript.ui.components.SettingsCard
 import com.autoscript.ui.components.SettingsCellRow
@@ -81,56 +83,55 @@ fun ManagementScreen(
             titleStyle = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
             background = ThemeColors.surfaceMuted,
         )
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(top = 8.dp, bottom = TabBarBottomClearance()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item {
-                SettingsCard {
-                    SettingsCellRow(
-                        title = "依赖管理",
-                        colors = DependencyColors,
-                        glyph = GlyphKind.FILE_GENERIC,
-                        onClick = { open(onOpenNpm) },
-                    )
-                    SettingsCellRow(
-                        title = "环境变量",
-                        colors = EnvironmentColors,
-                        glyph = GlyphKind.SETTINGS,
-                        onClick = { open(onOpenEnv) },
-                    )
-                    SettingsCellRow(
-                        title = "日志管理",
-                        colors = LogColors,
-                        glyph = GlyphKind.FILE_DOC,
-                        onClick = { open(onOpenLogManagement) },
-                    )
-                    SettingsCellRow(
-                        title = "镜像源管理",
-                        colors = RegistryColors,
-                        glyph = GlyphKind.FILE_HTML,
-                        onClick = { open(onOpenRegistry) },
-                    )
-                }
-            }
-            item {
-                SettingsCard {
-                    SettingsCellRow(
-                        title = "控制台",
-                        colors = ConsoleColors,
-                        glyph = GlyphKind.CONSOLE,
-                        onClick = { open(onOpenConsole) },
-                    )
+        // 下拉形变落点与其余三屏同款（`RefreshableBox`，见其 KDoc）—— 本屏只有五个入口、
+        // 内容恒不满一屏，正是平台那份 `EdgeEffect` 一次都不触发的形态。
+        Box(Modifier.weight(1f)) {
+            RefreshableBox(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = TabBarBottomClearance()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item {
+                        SettingsCard {
+                            SettingsCellRow(
+                                title = "依赖管理",
+                                colors = DependencyColors,
+                                glyph = GlyphKind.FILE_GENERIC,
+                                onClick = { open(onOpenNpm) },
+                            )
+                            SettingsCellRow(
+                                title = "环境变量",
+                                colors = EnvironmentColors,
+                                glyph = GlyphKind.SETTINGS,
+                                onClick = { open(onOpenEnv) },
+                            )
+                            SettingsCellRow(
+                                title = "日志管理",
+                                colors = LogColors,
+                                glyph = GlyphKind.FILE_DOC,
+                                onClick = { open(onOpenLogManagement) },
+                            )
+                            SettingsCellRow(
+                                title = "镜像源管理",
+                                colors = RegistryColors,
+                                glyph = GlyphKind.FILE_HTML,
+                                onClick = { open(onOpenRegistry) },
+                            )
+                        }
+                    }
+                    item {
+                        SettingsCard {
+                            SettingsCellRow(
+                                title = "控制台",
+                                colors = ConsoleColors,
+                                glyph = GlyphKind.CONSOLE,
+                                onClick = { open(onOpenConsole) },
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
-
-// 与设置页相同的 TG 渐变色对；图标语义由各屏自己选，不把业务映射放进共用组件。
-private val DependencyColors = SettingIconColors(Color(0xFFF28B31), Color(0xFFE26314))
-private val EnvironmentColors = SettingIconColors(Color(0xFFC46EF4), Color(0xFF9F55DF))
-private val LogColors = SettingIconColors(Color(0xFF4F85F6), Color(0xFF3568E8))
-private val RegistryColors = SettingIconColors(Color(0xFF32C0CE), Color(0xFF1D9CC6))
-private val ConsoleColors = SettingIconColors(Color(0xFF55CA47), Color(0xFF27B434))
