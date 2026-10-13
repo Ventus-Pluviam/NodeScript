@@ -12,6 +12,28 @@
 
 ---
 
+## 79. 执行日志落盘 + 执行暂停落地（2026-10-13，用户令；推翻第 42 项与「暂停未进 P0」）
+
+用户令三条：① 脚本执行时弹**系统级悬浮窗**看日志（去「已触发…」toast）；② 日志管理
+「脚本输出」按**每次执行**成列表（标题/图标/启动时间/大小，运行中显示「运行中」，
+点行看全文）；③ 悬浮窗四钮（暂停/清空/关闭/全屏）。
+
+**推翻的两条旧口径（原文不删，只追加）**：
+- 批 74 / 本文件第 42 项「不做 console 持久化」—— 本批推翻：`filesDir/.ns/script-logs/`
+  落 `<runId>.log`（JSONL）+ `index.jsonl`，只记脚本行（runId≠0），append-only 无
+  retention（与 A13「不再跟进」同一口径）。理由：用户要的是"跑完还能找到这次输出"，
+  内存环（有界 2000、关应用即失）回答不了这个问题 —— **这是新需求，不是旧决策错了**。
+- `docs/design/08-execution.md` L28「无 pause/resume，暂停未进 P0」+ `implementation-notes.md`
+  L533「SUSPENDED 无代码基础」—— 本批以前者为准绳落地**最小子集**：OS 级 SIGSTOP/SIGCONT
+  + `RuntimeController.paused` 旁账集（看门狗锚点过滤、resume 刷新 startedAt + 心跳 rebase、
+  await 暂停冻结 deadline、stop/kill 入口过账），**不加 `EngineStatus.SUSPENDED`**
+  （触点太多：状态机/投影/agrees/isWatchable/await/全部替身）。设计分卷与注记原文不动，
+  以本条为准。`tsf_control` 的 pause/resume 仍是设计稿（control TSF 未接），不动。
+
+**顺带修的两处既有问题**：`MainActivity.onRunFile` 双 launch 假挂起（toast 分发即弹、
+转圈闪一帧、catch 捕不到异常）→ 直调真挂起；▶ 链 relPath 形状待核实（清单首段=项目名
+vs 引擎项目内路径，疑似 double-prefix，实现时以 `AssembledShell.runScriptFile` 为归一点）。
+
 ## 77. 存储面改名 `.autojs` → `.ns`、签名域内字符串去掉对标产品名，且不做旧版兼容（2026-10-12，批 108，D6 结案）
 
 维护者拍板：`.autojs` 存储目录改成 `.ns`，**不需要兼容旧版**。本批落地，第 18 项那两条
