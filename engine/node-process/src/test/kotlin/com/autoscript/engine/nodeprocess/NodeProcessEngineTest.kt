@@ -639,4 +639,57 @@ class NodeProcessEngineTest {
         assertEquals(EngineStatus.CRASHED, runBlocking { e.status() })
         assertTrue(killed.drainWaits.isEmpty(), "强杀后的 status 不 join 排水")
     }
+
+    /**
+     * 暂停/恢复（2026-10-13）：委托当前 execution 的进程；stop 入口先解冻。
+     *
+     * FakeProcess 缺省 `pauseExecution/resumeExecution` = false（`SpawnedProcess`
+     * 接口缺省）—— 这里用可冻的替身；真 `kill -STOP` 由设备验证，单测只钉委托关系。
+     */
+    @Test
+    fun `pause 委托进程 resume 解冻 stop 先解冻再停`() {
+        val launcher = FakeLauncher()
+        val proc = object : FakeProcess() {
+            var paused = false
+            override fun pauseExecution(): Boolean = true.also { paused = true }
+            override fun resumeExecution(): Boolean = true.also { paused = false }
+        }
+        launcher.nextProcess = proc
+        val e = engine(launcher)
+        writeScript()
+        runBlocking { e.execute(request()) }
+        assertTrue(runBlocking { e.pause() })
+        assertTrue(proc.paused)
+        assertTrue(runBlocking { e.resume() })
+        assertFalse(proc.paused)
+        // 冻住后 stop：先解冻（resume 调用）再 SIGTERM
+        runBlocking { e.pause() }
+        var resumes = 0
+        val proc2 = object : FakeProcess() {
+            override fun pauseExecution(): Boolean = true
+            override fun resumeExecution(): Boolean = true.also { resumes++ }
+        }
+        // 同一 execution 的进程已换不掉 —— 用新引擎验证 stop 路径的解冻调用：
+        val launcher2 = FakeLauncher()
+        launcher2.nextProcess = proc2
+        val e2 = engine(launcher2)
+        runBlocking { e2.execute(request()) }
+        runBlocking { e2.pause() }
+        runBlocking { e2.stop() }
+        assertTrue(resumes >= 1, "stop 前必须先解冻，否则 SIGTERM 发给冻住的进程不被处理")
+    }
+
+    @Test
+    fun `pause 无执行或冻不住回 false`() {
+        val e = engine(FakeLauncher())
+        assertFalse(runBlocking { e.pause() }, "从未启动 → false，不抛")
+        assertFalse(runBlocking { e.resume() })
+        // FakeProcess 缺省冻不住
+        val launcher = FakeLauncher()
+        launcher.nextProcess = FakeProcess()
+        val e2 = engine(launcher)
+        writeScript()
+        runBlocking { e2.execute(request()) }
+        assertFalse(runBlocking { e2.pause() })
+    }
 }

@@ -1,9 +1,11 @@
 package com.autoscript.ui.state
 
 import com.autoscript.domain.host.CapabilityCenterSnapshot
+import com.autoscript.domain.host.ConsoleLineRow
 import com.autoscript.domain.host.ConsoleSnapshot
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.host.ScriptFilesSnapshot
+import com.autoscript.domain.host.ScriptLogSnapshot
 import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
@@ -61,6 +63,20 @@ open class FakeHost(
 
     override suspend fun stopRun(runId: Long): Boolean =
         throw UnsupportedOperationException("本替身未提供 stopRun（用例按需覆盖）")
+
+    override suspend fun scriptLogIndex(): ScriptLogSnapshot =
+        throw UnsupportedOperationException("本替身未提供 scriptLogIndex（用例按需覆盖）")
+
+    override suspend fun scriptLogContent(runId: Long, maxLines: Int): List<ConsoleLineRow> =
+        throw UnsupportedOperationException("本替身未提供 scriptLogContent（用例按需覆盖）")
+
+    override suspend fun pauseRun(runId: Long): Boolean =
+        throw UnsupportedOperationException("本替身未提供 pauseRun（用例按需覆盖）")
+
+    override suspend fun resumeRun(runId: Long): Boolean =
+        throw UnsupportedOperationException("本替身未提供 resumeRun（用例按需覆盖）")
+
+    override fun overlayAllowed(): Boolean = false
 
     override suspend fun scriptFiles(): ScriptFilesSnapshot =
         throw UnsupportedOperationException("本替身未提供 scriptFiles（用例按需覆盖）")

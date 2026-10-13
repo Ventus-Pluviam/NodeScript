@@ -568,4 +568,89 @@ class RuntimeControllerCancellationTest {
         }
         assertTrue(leaked, "取消不得被折成 host=null（那会造出一条假的\"宿主无状态\"对照）")
     }
+
+    /**
+     * 落盘口（2026-10-13）：start 成功即记 index 一次，参数取这次请求的归属。
+     */
+    @Test
+    fun `start 成功调 onRunStarted 一次 参数是这次请求的归属`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val pool2 = FixedEnginePool({ id -> FakeEngine(EngineId(id.poolIndex)) }, 1)
+        val c2 = RuntimeController(
+            pool2,
+            WatchdogPolicy(),
+            onRunStarted = { runId, project, path, at ->
+                seen += "$runId|$project|$path|$at"
+            },
+        )
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c2.start(PoolAcquireRequest("demo", "data/test.js", runNonce = "nx")),
+        )
+        assertEquals(1, seen.size, "Granted 分支恰好一次")
+        val parts = seen.single().split("|")
+        assertEquals(started.runId.toString(), parts[0])
+        assertEquals("demo", parts[1])
+        assertEquals("data/test.js", parts[2])
+        c2.killAll(KillCause.REQUESTED)
+        Unit
+    }
+
+    /**
+     * 暂停账（2026-10-13）：`pauseRun` 冻住 → 锚点排除 + `RunStatus.paused`；
+     * `resumeRun` 解冻 → 锚点回来 + startedAt 刷新（宽限与期限顺延）。
+     *
+     * FakeEngine 的 pause()/resume() 缺省 false —— 这里用可冻的替身。
+     */
+    @Test
+    fun `pauseRun 进集并排除看门狗锚点 resumeRun 出集并顺延`() = runBlocking {
+        val engines = MutableList(1) {
+            object : FakeEngine(EngineId(it)) {
+                var frozen = false
+                override suspend fun pause(): Boolean = true.also { frozen = true }
+                override suspend fun resume(): Boolean = true.also { frozen = false }
+            }
+        }
+        val pool = FixedEnginePool({ id -> engines[id.poolIndex] }, 1)
+        var now = 1_000_000L
+        val c = RuntimeController(pool, WatchdogPolicy(), clock = { now })
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("demo", "a.js", runNonce = "np")),
+        )
+        val runId = started.runId
+        assertEquals(1, c.watchAnchors().size, "未暂停时锚点在")
+
+        assertTrue(c.pauseRun(runId))
+        assertTrue(c.watchAnchors().isEmpty(), "暂停的 run 不进看门狗锚点，否则 1.5s 必杀")
+        val st = c.statusOf(runId)
+        assertTrue(st?.paused == true, "RunStatus 带 paused 给 UI")
+        assertEquals("demo", st?.projectId)
+        assertEquals("a.js", st?.scriptPath)
+
+        now += 600_000L // 暂停 10 分钟
+        assertTrue(c.resumeRun(runId))
+        assertEquals(1, c.watchAnchors().size, "解冻后锚点回来")
+        val anchor = c.watchAnchors().single()
+        assertEquals(now, anchor.startedAtMillis, "startedAt 刷新 = 宽限与期限顺延整个暂停时长")
+        assertFalse(c.statusOf(runId)?.paused == true)
+        c.killAll(KillCause.REQUESTED)
+        Unit
+    }
+
+    @Test
+    fun `pauseRun 非在途与引擎冻不住都回 false 且不进集`() = runBlocking {
+        val (c) = controller()
+        assertFalse(c.pauseRun(999L), "从未存在 → false，不抛")
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p", "a.js", runNonce = "nq")),
+        )
+        // FakeEngine 缺省 pause() = false（冻不住）
+        assertFalse(c.pauseRun(started.runId))
+        assertEquals(1, c.watchAnchors().size, "没冻住的 run 不得被排除 —— 否则该杀的不杀")
+        assertFalse(c.resumeRun(started.runId), "没冻住就没什么可解")
+        c.killAll(KillCause.REQUESTED)
+        Unit
+    }
 }

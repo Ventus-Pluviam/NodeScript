@@ -136,6 +136,29 @@ class ConsoleCollectorTest {
         assertEquals(listOf(1L, 2L), lines.map { it.seq })
     }
 
+    /**
+     * 落盘缝（2026-10-13）：每行入队后 sink 收到同一行（缺省不落盘行为不变）。
+     */
+    @Test
+    fun `lineSink 收到入队的每一行`() {
+        val seen = mutableListOf<com.autoscript.bridge.ConsoleLine>()
+        val c = ConsoleCollector(lineSink = { seen += it })
+        val a = c.append(7L, "log", "one")
+        val b = c.append(7L, "error", "two")
+        assertEquals(listOf(a, b), seen)
+    }
+
+    /**
+     * 落盘缝绝不掀翻桥的数据面：sink 抛了，append 照常入队、drain 照常读到。
+     */
+    @Test
+    fun `lineSink 抛异常不逃逸且行已入队`() {
+        val c = ConsoleCollector(lineSink = { throw IllegalStateException("盘坏了") })
+        c.append(7L, "log", "still-here")
+        val (_, lines) = c.drain(0)
+        assertEquals(listOf("still-here"), lines.map { it.text })
+    }
+
     @Test
     fun `并发写满时容量与丢弃数精确`() = runBlocking(AuthenticatedRunContext(EngineId(0), 42, 1, CapabilityMask.ALL)) {
         val c = ConsoleCollector(capacity = 19)

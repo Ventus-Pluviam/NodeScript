@@ -36,6 +36,15 @@ data class ConsoleLine(
  */
 class ConsoleCollector(
     private val capacity: Int = DEFAULT_CAPACITY,
+    /**
+     * 落盘缝（2026-10-13 执行日志持久化）：每行入队后在**锁外**调用一次。
+     *
+     * 锁外是刻意的：sink 做文件 IO，持收集器锁做 IO 会让桥 log 调用全部排队；
+     * 抛异常由本类 `runCatching` 吞掉 —— 诊断面绝不掀翻桥的数据面（与
+     * `runCatching` 容忍纪律的 `ConsoleHistory` 同口径，见 `:app-service:npm`）。
+     * 缺省 = 不落盘（单测/替身进程各自隔离，行为与此前一致）。
+     */
+    private val lineSink: (ConsoleLine) -> Unit = {},
 ) : RequestHandler {
 
     init {
@@ -66,14 +75,18 @@ class ConsoleCollector(
     }
 
     /** 宿主直写；回放启动缓冲时可保留原始时间，seq 仍由收集器在入队时统一分配。 */
-    @Synchronized
     fun append(runId: Long, level: String, text: String, atMillis: Long = Instant.now().toEpochMilli()): ConsoleLine {
-        val line = ConsoleLine(seq = seq++, runId = runId, level = level, text = text, atMillis = atMillis)
-        if (lines.size == capacity) {
-            lines.removeFirst()
-            dropped++
+        val line = synchronized(this) {
+            val built = ConsoleLine(seq = seq++, runId = runId, level = level, text = text, atMillis = atMillis)
+            if (lines.size == capacity) {
+                lines.removeFirst()
+                dropped++
+            }
+            lines.addLast(built)
+            built
         }
-        lines.addLast(line)
+        // 落盘在锁外（见 [lineSink]）：IO 慢不挡桥，抛了也不逃逸。
+        runCatching { lineSink(line) }
         return line
     }
 

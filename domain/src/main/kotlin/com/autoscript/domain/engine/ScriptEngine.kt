@@ -26,6 +26,23 @@ interface ScriptEngine {
     /** 看门狗强制手段：仅 RuntimeController 有调用权（kill 权威，§4.1）。 */
     suspend fun kill(): KillCause
 
+    /**
+     * OS 级冻结这次执行（2026-10-13 执行暂停；悬浮窗「暂停执行」按钮的落点）。
+     *
+     * **不是**优雅停：进程原地冻住（SIGSTOP）、心跳与输出都停，[resume] 后从
+     * 冻住那一行继续。暂停期间看门狗照常看不到心跳 —— 看门狗排除、宽限与
+     * 期限顺延是 `RuntimeController` 的账（见它那边的 `paused`），引擎只管冻/解冻。
+     *
+     * @return true = 已冻住；false = 本引擎冻不住（替身/离线实现、pid 拿不到、
+     *   `kill` 二进制缺席 —— 原文由实现日志，调用方如实报"不支持"，不假装）。
+     * 缺省 false：与 `lastRunSummary` 的缺省 null 同一条"替身零改动"纪律 ——
+     * FakeEngine/UnavailableEngine 不用动，UI 按 false 反馈。
+     */
+    suspend fun pause(): Boolean = false
+
+    /** 解冻 [pause] 冻住的执行（SIGCONT）。语义与 [pause] 对偶，缺省同样 false。 */
+    suspend fun resume(): Boolean = false
+
     /** 当前状态快照（事件推送走 bridge EventBus，不在此轮询建模）。 */
     suspend fun status(): EngineStatus
 

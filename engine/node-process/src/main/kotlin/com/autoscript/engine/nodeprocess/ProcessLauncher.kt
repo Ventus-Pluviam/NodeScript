@@ -41,6 +41,19 @@ interface SpawnedProcess {
     /** 强制终止（SIGKILL）—— 仅 kill 权威（§4.1）经 quiesce 超时兜底触达。 */
     fun destroyForcibly()
 
+    /**
+     * OS 级冻结（SIGSTOP；2026-10-13 执行暂停）：进程原地停住，可被 [resumeExecution] 解冻。
+     *
+     * 信号走 `kill` 二进制（toybox，`ProcOps` 同手法）—— JVM 没有"按 pid 发信号"的 API
+     * （`ProcessHandle` 不在 android.jar 桩面），本模块又禁依赖 `:platform:*`
+     * （archUnit 引擎黑名单），故在模块内起 `kill` 进程（见真实现）。缺省 false：
+     * 假实现/替身进程冻不住，如实报、不假装。
+     */
+    fun pauseExecution(): Boolean = false
+
+    /** 解冻 [pauseExecution] 冻住的进程（SIGCONT）。缺省同样 false。 */
+    fun resumeExecution(): Boolean = false
+
     /** 等待退出，[timeoutMillis] 内退出回 true，超时回 false（不抛）。 */
     fun waitFor(timeoutMillis: Long): Boolean
 
@@ -203,6 +216,32 @@ class ProcessBuilderLauncher : ProcessLauncher {
 
         override fun destroyForcibly() {
             process.destroyForcibly()
+        }
+
+        /**
+         * `kill -STOP <pid>`（2026-10-13）：pid 为 null（旧 API 反射拿不到）或
+         * `kill` 二进制缺席时回 false —— 冻不住就如实说，不猜。`waitFor` 等信号送达：
+         * exit 0 才算送到（toybox 的 kill 对不存在的 pid 非 0，如实回 false）。
+         */
+        override fun pauseExecution(): Boolean = signal("-STOP")
+
+        /** `kill -CONT <pid>`（与 [pauseExecution] 对偶）。 */
+        override fun resumeExecution(): Boolean = signal("-CONT")
+
+        private fun signal(flag: String): Boolean {
+            val target = pid ?: return false
+            return try {
+                val sent = ProcessBuilder("kill", flag, target.toString()).start()
+                val done = sent.waitFor(SIGNAL_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+                done && sent.exitValue() == 0
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        companion object {
+            /** `kill` 信号进程的等待上限：发信号是瞬时动作，超了就是二进制缺席/卡住，如实 false。 */
+            private const val SIGNAL_TIMEOUT_MILLIS = 2_000L
         }
 
         override fun waitFor(timeoutMillis: Long): Boolean =

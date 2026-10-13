@@ -165,6 +165,14 @@ class AppShell(
             screenGate: ScreenGate = ScreenGate.AllowAll,
             poolCapacity: Int = 1,
             /**
+             * 脚本输出日志的落盘缝（2026-10-13 执行日志持久化）。null = 不落盘
+             * （骨架/单测的缺省）：`ConsoleCollector.lineSink` 与
+             * `RuntimeController.onRunStarted` 同时接到它 —— 两条缝不分开给，
+             * 免得 index 与日志文件各说各的（begin 了没 sink / sink 了没 begin）。
+             * 生产由 `AppShellKit` 传 `ScriptLogStore(nsDir/"script-logs")`。
+             */
+            scriptLogs: ScriptLogStore? = null,
+            /**
              * `a11y` 命名空间实现（§9.1）。注入缝：实现在 `:platform:capabilities`，
              * 而 `:app` 禁止直连 `:platform`（§6，archUnit 强制），故由持有实现的
              * Android 侧（Application/Activity）在调用 [assemble] 时传入；
@@ -323,7 +331,10 @@ class AppShell(
             val frameServer = NewlineFrameServer(router, identities)
             var assembled = false
             try {
-                val console = ConsoleCollector()
+                // 2026-10-13 落盘缝：行级 sink（ConsoleCollector.append 锁外回调）与
+                // run 级 begin（RuntimeController.start Granted 分支回调）同时接到
+                // 同一份 store —— index 与日志文件永不分家（见 assemble 的 scriptLogs KDoc）。
+                val console = ConsoleCollector(lineSink = { scriptLogs?.appendLine(it) })
                 router.register("console", console)
 
                 val controller = RuntimeController(
@@ -332,6 +343,9 @@ class AppShell(
                     // A11：run 终结时收掉那条连接的进程级资源（投屏会话），不再依赖 socket 断
                     // —— 脚本把桥 fd 继承给子进程时主进程死掉不产生 EOF（见缝的 KDoc）。
                     revokeRunResources = frameServer::revokeRunResources,
+                    onRunStarted = { runId, projectId, scriptPath, startedAt ->
+                        scriptLogs?.begin(runId, projectId, scriptPath, startedAt)
+                    },
                 )
                 val enginesHandler = EnginesNamespaceHandler(controller)
                 router.register("engines", enginesHandler)

@@ -98,9 +98,9 @@ class ConsoleReadTest {
             c,
             runStatuses = {
                 statuses(
-                    RuntimeController.RunStatus(runId = 11L, host = null, pool = EngineStatus.IDLE, drift = false),
-                    RuntimeController.RunStatus(runId = 12L, host = EngineStatus.RUNNING, pool = EngineStatus.RUNNING, drift = false),
-                    RuntimeController.RunStatus(runId = 13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true),
+                    RuntimeController.RunStatus(runId = 11L, host = null, pool = EngineStatus.IDLE, drift = false, projectId = "demo", scriptPath = "a.js", paused = false),
+                    RuntimeController.RunStatus(runId = 12L, host = EngineStatus.RUNNING, pool = EngineStatus.RUNNING, drift = false, projectId = "demo", scriptPath = "b.js", paused = true),
+                    RuntimeController.RunStatus(runId = 13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true, projectId = "demo", scriptPath = "c.js", paused = false),
                 )
             },
         )

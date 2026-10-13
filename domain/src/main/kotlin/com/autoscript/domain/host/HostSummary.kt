@@ -82,6 +82,52 @@ interface HostSummary {
     suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot
 
     /**
+     * 脚本输出日志的文件列表（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+     *
+     * 读的是落盘目录（`filesDir/.ns/script-logs/`），**壳没装好也不抛** —— 与
+     * [scriptFiles] 同一条"不依赖壳寄存器"口径：目录照样可读，列出来是事实
+     * （此时"有日志但跑不了"恰恰是用户该看到的全貌）。[ScriptLogRow.running]
+     * 那一列需要壳里的在途表：壳未就绪时一律 false（"没在跑"是事实，不是失败）。
+     * 只有遍历/解析本身抛（IO 异常）才向上传。
+     */
+    suspend fun scriptLogIndex(): ScriptLogSnapshot
+
+    /**
+     * 一次执行的日志全文（点日志列表那一行进详情；2026-10-13 用户令）。
+     *
+     * 读 `filesDir/.ns/script-logs/&lt;runId&gt;.log`（JSONL，截尾 [maxLines] 行 ——
+     * 长跑脚本的输出能到几十万行，详情页全读会把内存撑爆；截尾只截**显示**，
+     * 文件里那份全文不动）。只复用 [ConsoleLineRow] 的形状（seq/level/text/at），
+     * runId 已隐含在调用参数里，不再重复携带。
+     *
+     * 文件缺失/解析失败**抛**（与 [readScriptFile] 同一条纪律）：读不到就是读不到，
+     * 不返回空表 —— 空表是"这次执行真的没输出"，两者在详情页是两句话。
+     */
+    suspend fun scriptLogContent(runId: Long, maxLines: Int = 2000): List<ConsoleLineRow>
+
+    /**
+     * 暂停一次**在途**执行（悬浮窗「暂停执行」按钮；2026-10-13 用户令）。
+     *
+     * OS 级冻结（SIGSTOP，见 `RuntimeController.pauseRun`）—— 不是优雅停：
+     * 进程原地冻住、心跳停、输出停，恢复（[resumeRun]）后从冻住那一行继续。
+     * @return true = 已冻住；false = 它已结算/从未存在，或本设备冻不住
+     *   （pid 拿不到 / `kill` 二进制缺席 —— 原文见异常，不在这里编）。
+     * 壳未装配**抛**（与 [stopRun] 同：静默 false = 点了暂停却什么都没发生）。
+     */
+    suspend fun pauseRun(runId: Long): Boolean
+
+    /** 恢复一次被 [pauseRun] 冻住的执行（看门狗宽限与期限线随之顺延）。语义与 [pauseRun] 对偶。 */
+    suspend fun resumeRun(runId: Long): Boolean
+
+    /**
+     * 本机有没有弹**系统级**悬浮窗的资格（执行日志悬浮窗的宿主二选一；2026-10-13 用户令）。
+     *
+     * 同步、便宜：就是 `Settings.canDrawOverlays` 那一句（`:ui` 不碰 `Settings`，
+     * 实现在 `:app`）。false = 用应用内兜底窗（与 ToastHost 同型）+ toast 引导去能力中心授权。
+     */
+    fun overlayAllowed(): Boolean
+
+    /**
      * 登记定时任务（任务中心操作面「登记」；§8.6）。
      *
      * 挂起：登记先落盘再动内存/闹钟（`Scheduler.schedule` 的 store-first 纪律）——

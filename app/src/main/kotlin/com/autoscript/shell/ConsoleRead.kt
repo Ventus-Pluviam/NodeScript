@@ -63,6 +63,9 @@ object ConsoleRead {
                     host = status.host,
                     pool = status.pool,
                     drift = status.drift,
+                    projectId = status.projectId,
+                    scriptPath = status.scriptPath,
+                    paused = status.paused,
                 )
             },
         )

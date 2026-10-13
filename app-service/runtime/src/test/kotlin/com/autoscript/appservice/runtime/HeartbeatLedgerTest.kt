@@ -121,4 +121,24 @@ class HeartbeatLedgerTest {
         clock.now -= 500                              // 管理员改表/时区跳变
         assertEquals(0L, ledger.sinceLastBeat(1L), "负间隔会让失联判定看似安全，却把 CPU/RSS 一起拖偏")
     }
+
+    /**
+     * rebase（2026-10-13 暂停恢复）：时钟拨到现在、序号不动、无条目 no-op。
+     */
+    @org.junit.jupiter.api.Test
+    fun `rebase 把时钟拨到现在且序号不动`() {
+        val clock = FakeClock()
+        val ledger = HeartbeatLedger(clock)
+        ledger.beat(1L, seq = 5)
+        clock.advance(600_000L) // 暂停 10 分钟
+        assertTrue(ledger.rebase(1L))
+        assertEquals(0L, ledger.sinceLastBeat(1L), "拨到现在 = 恢复后不被判失联")
+        assertEquals(5L, ledger.lastSeq(1L), "序号是引擎侧事实，宿主不动它")
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `rebase 无条目回 false`() {
+        val ledger = HeartbeatLedger()
+        assertFalse(ledger.rebase(99L))
+    }
 }

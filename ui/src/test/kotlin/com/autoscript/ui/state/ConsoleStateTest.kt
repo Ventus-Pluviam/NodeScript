@@ -138,7 +138,7 @@ class ConsoleStateTest {
                 nextSeq = 1L,
                 pageFull = true,
                 droppedTotal = 9L,
-                activeRuns = listOf(ActiveRunRow(1L, null, EngineStatus.RUNNING, true)),
+                activeRuns = listOf(ActiveRunRow(1L, null, EngineStatus.RUNNING, true, "demo", "a.js", false)),
             ),
             nowMillis = 1L,
         )
@@ -211,7 +211,7 @@ class ConsoleStateTest {
     fun `宿主状态读不到就是 null 不是某个状态`() {
         val s = ConsoleState.of(
             ConsoleState.NOT_LOADED,
-            snap(activeRuns = listOf(ActiveRunRow(11L, host = null, pool = EngineStatus.IDLE, drift = false))),
+            snap(activeRuns = listOf(ActiveRunRow(11L, host = null, pool = EngineStatus.IDLE, drift = false, projectId = "demo", scriptPath = "a.js", paused = false))),
             nowMillis = 1L,
         )
         val run = s.activeRuns.single()
@@ -226,7 +226,7 @@ class ConsoleStateTest {
             ConsoleState.NOT_LOADED,
             snap(
                 activeRuns = listOf(
-                    ActiveRunRow(13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true),
+                    ActiveRunRow(13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true, projectId = "demo", scriptPath = "c.js", paused = false),
                 ),
             ),
             nowMillis = 1L,

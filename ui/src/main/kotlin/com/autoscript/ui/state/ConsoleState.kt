@@ -157,6 +157,12 @@ data class ActiveRunState(
     val hostLabel: String?,
     val poolLabel: String,
     val drift: Boolean,
+    /** 本次执行的归属（2026-10-13：悬浮窗标题与日志列表标题的事实源）。 */
+    val projectId: String,
+    /** 项目内相对路径（如 `data/test.js`）。 */
+    val scriptPath: String,
+    /** 是否被暂停（2026-10-13：暂停按钮与「已暂停」后缀的事实源）。 */
+    val paused: Boolean,
 ) {
     /**
      * 复制用的执行摘要 —— 与行里画的那句**同源**（改一处两边都改）。
@@ -182,6 +188,9 @@ data class ActiveRunState(
             hostLabel = run.host?.let { EngineStatusText.describe(it) },
             poolLabel = EngineStatusText.describe(run.pool),
             drift = run.drift,
+            projectId = run.projectId,
+            scriptPath = run.scriptPath,
+            paused = run.paused,
         )
     }
 }

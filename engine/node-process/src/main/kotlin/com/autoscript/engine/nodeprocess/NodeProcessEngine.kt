@@ -315,9 +315,34 @@ class NodeProcessEngine(
     }
 
     /**
+     * 冻住这次执行（2026-10-13；SPI [ScriptEngine.pause] 的真实现）。
+     *
+     * 委托当前 execution 的进程（SIGSTOP）。false = 没有在跑的执行 / 进程侧冻不住
+     * （pid 拿不到 / `kill` 二进制缺席 —— `SpawnedProcess.pauseExecution` 如实报）。
+     * **status() 保持 RUNNING**：暂停是 `RuntimeController` 旁账里的事（`paused` 集），
+     * 引擎状态机不加 SUSPENDED（触点太多，见 RuntimeController 的 KDoc）。
+     */
+    override suspend fun pause(): Boolean = withContext(Dispatchers.IO) {
+        val current = execution ?: return@withContext false
+        if (!current.process.isAlive) return@withContext false
+        current.process.pauseExecution()
+    }
+
+    /** 解冻 [pause] 冻住的执行（SIGCONT；语义对偶）。 */
+    override suspend fun resume(): Boolean = withContext(Dispatchers.IO) {
+        val current = execution ?: return@withContext false
+        if (!current.process.isAlive) return@withContext false
+        current.process.resumeExecution()
+    }
+
+    /**
      * 四步 quiesce 的「请求退出」步（§8.3）：SIGTERM → [NodeEngineConfig.stopGraceMillis] 内退净
      * 回 [StopResult.Clean]；超时回 [StopResult.TimedOut]（partial=true = 尚有残留），
      * 池侧 `PoolSlot.quiesce` 据此 kill 兜底。从未启动/已退净 → 如实 Clean（无事可停）。
+     *
+     * **先解冻再停**（2026-10-13）：SIGTERM 发给 SIGSTOP 冻住的进程不会被处理 ——
+     * 不解冻就 3s 必 TimedOut 降级 SIGKILL，丢掉干净退出语义与排水尾部。解冻失败
+     * （冻不住的进程本来也没被冻住）不阻断停止。
      */
     override suspend fun stop(): StopResult = withContext(Dispatchers.IO) {
         val current = execution ?: return@withContext StopResult.Clean
@@ -326,6 +351,7 @@ class NodeProcessEngine(
             current.lease?.naturalExit()
             return@withContext StopResult.Clean
         }
+        current.process.resumeExecution()
         current.stopRequested = true
         current.lease?.revoke()
         p.destroy()

@@ -294,4 +294,16 @@ class AssembledShell internal constructor(
         is com.autoscript.appservice.runtime.RuntimeController.StopOutcome.StoppedTimeout -> true
         com.autoscript.appservice.runtime.RuntimeController.StopOutcome.AlreadyGone -> false
     }
+
+    /**
+     * 冻住/解冻一次在途执行（`HostSummary.pauseRun`/`resumeRun` 的装配实现；2026-10-13）。
+     *
+     * 与 [stopRun] 同一条"在途表精确命中"口径：false = 已结算/从未存在，或引擎冻不住
+     * （pid 拿不到 / `kill` 二进制缺席）—— 调用方（悬浮窗按钮）按 false 反馈
+     * 「该执行不支持暂停」，不抛。壳的判据一律在 `RuntimeController`，这里只转调。
+     */
+    suspend fun pauseRun(runId: Long): Boolean = shell.controller.pauseRun(runId)
+
+    /** 与 [pauseRun] 对偶（解冻）。 */
+    suspend fun resumeRun(runId: Long): Boolean = shell.controller.resumeRun(runId)
 }

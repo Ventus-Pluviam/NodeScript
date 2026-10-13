@@ -5,6 +5,8 @@ import android.os.Process
 import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.domain.host.CapabilityCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
+import com.autoscript.domain.host.ConsoleLineRow
+import com.autoscript.domain.host.ScriptLogSnapshot
 import com.autoscript.appservice.npm.ShellOpExecutor
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.shell.asShellOpExecutor
@@ -63,6 +65,7 @@ import com.autoscript.appservice.scriptrepo.core.FileScriptEnvStore
 import com.autoscript.appservice.scriptrepo.core.FileScriptLimitsStore
 import com.autoscript.shell.ScriptFileOps
 import com.autoscript.shell.ScriptFilesRead
+import com.autoscript.shell.ScriptLogRead
 import com.autoscript.shell.ScreenGateAndroid
 import com.autoscript.shell.ScreenInteractive
 import com.autoscript.shell.ScreenOffGuard
@@ -729,6 +732,63 @@ class AppShellApplication : Application(), HostSummary {
             ?: throw IllegalStateException("壳未装配（装配中或失败）：无法停止执行")
         return built.stopRun(runId)
     }
+
+    /**
+     * 冻住/解冻一次在途执行（[HostSummary] 的生产实现；2026-10-13）。
+     *
+     * 壳没装好就抛（与 [stopRun] 同一条纪律）；false = 已结算/从未存在，或本设备
+     * 冻不住（原文由引擎侧日志，UI 按 false 反馈「该执行不支持暂停」）。
+     */
+    override suspend fun pauseRun(runId: Long): Boolean {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法暂停执行")
+        return built.pauseRun(runId)
+    }
+
+    /** 与 [pauseRun] 对偶（解冻）。 */
+    override suspend fun resumeRun(runId: Long): Boolean {
+        val built = assembled
+            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法恢复执行")
+        return built.resumeRun(runId)
+    }
+
+    /**
+     * 脚本输出日志的文件列表（[HostSummary] 的生产实现；2026-10-13）。
+     *
+     * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：只读 `filesDir/.ns/script-logs/`
+     * 落盘，壳没装好也照样列。`running` 那一列要壳里的在途表：壳未就绪 = 空集
+     * （"没在跑"是事实，不是失败）。
+     */
+    override suspend fun scriptLogIndex(): ScriptLogSnapshot {
+        val active = try {
+            assembled?.controller?.activeRunIds() ?: emptySet()
+        } catch (_: Exception) {
+            // 在途表读失败 = 当它是空集（running 全 false）：列表本身照样可读，
+            // "谁在跑"这一列宁可保守false，也不用一次读失败把整份列表打成失败。
+            emptySet()
+        }
+        return ScriptLogRead.snapshot(filesDir.toPath(), active)
+    }
+
+    /**
+     * 一次执行的日志全文（[HostSummary] 的生产实现；2026-10-13）。
+     *
+     * 只读落盘文件，不依赖壳寄存器（与 [scriptLogIndex] 同口径）；文件缺失/坏行
+     * 的判据在 [ScriptLogRead.content] —— 缺失抛（"读不到"与"没输出"是两句话）。
+     */
+    override suspend fun scriptLogContent(runId: Long, maxLines: Int): List<ConsoleLineRow> =
+        ScriptLogRead.content(filesDir.toPath(), runId, maxLines)
+
+    /**
+     * 系统级悬浮窗资格（[HostSummary] 的生产实现；2026-10-13）。
+     *
+     * 就是 `Settings.canDrawOverlays` 那一句（`:ui` 不碰 `Settings`，实现只能住这里；
+     * 先例见 `AndroidSystemStateReader.overlayDrawable`）。同步、便宜、无抛：
+     * 查不到就当 false（用应用内兜底窗，不拿异常挡开窗的路）。
+     */
+    override fun overlayAllowed(): Boolean = runCatching {
+        android.provider.Settings.canDrawOverlays(applicationContext)
+    }.getOrDefault(false)
 
     /**
      * 跑一个脚本文件（[HostSummary] 的生产实现，项目页文件行尾 ▶）。
