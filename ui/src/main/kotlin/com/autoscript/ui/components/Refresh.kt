@@ -188,7 +188,10 @@ private class FeedConnection(
 
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
-        // 反向先把已有的形变拉回去（`EdgeEffect` 的 destretch 段），夹在余量之内绝不多还。
+        // 没形变时一像素不碰：pre-scroll 是内层列表滚动**之前**，这里吃了列表就没得滚
+        // —— 长列表正常滑动时抽搐一下正是这么来的（壳先把位移变形成变，列表再滚半截）。
+        // 只有已有形变时才动手，且只做回缩（反向拉回去），绝不新拉。
+        if (!effect.isInProgress) return Offset.Zero
         val consumed = effect.applyToScroll(Offset(0f, available.y), source) { Offset.Zero }
         lastPull += consumed.y
         if (!effect.isInProgress) lastPull = 0f
