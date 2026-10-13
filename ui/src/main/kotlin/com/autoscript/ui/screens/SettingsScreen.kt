@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +53,7 @@ import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalToast
 import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.RefreshableBox
+import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.ScrollToTopButton
 import com.autoscript.ui.components.rememberScrollToTopVisible
 import com.autoscript.ui.components.SettingIconColors
@@ -130,6 +132,14 @@ fun SettingsScreen(
     // 动画进行中（TG `animationInProgress`）—— 底下那份的入口照旧吞点击，与管理面板
     // 同一口径：退出动画没播完就点新入口，在 TG 里是什么都不发生。
     var animating by remember { mutableStateOf(false) }
+    // 悬浮底栏的隐藏开关（外壳供）。**进了子页底栏整条收掉**（用户口径 2026-10-13：
+    // 「点进列表里面时让底栏消失，退出来时才重新出现」）—— 子页与项目页的目录层同一条
+    // 理由：那四个页签既是别的页面、又压着内容底部。
+    val tabBarHidden = LocalTabBarHidden.current
+    // 底栏收放的**唯一**判据（与 `ProjectScreen` 那条 `fullScreen` 同一写法）：子页在前台
+    // = 占整屏 = 收掉；回顶页才放回来。单一判据保证"收/放"永远跟着状态走。
+    val fullScreen = subPage != SettingsSubPage.NONE
+    LaunchedEffect(fullScreen) { tabBarHidden.value = fullScreen }
 
     // 读态三态分派走 Status（`LoadState` 的纪律：界面不自己 when 它）。
     // 顶页不再挂它（批 49 去掉标题下的小字）—— 只在子页没读到 / 读失败时如实说。
@@ -142,7 +152,8 @@ fun SettingsScreen(
     // 一处包住全部入口：TG 是 `checkTransitionAnimation()` 在**进入栈的那一个方法**开头
     // 统一判的，不是每个入口各自判。
     fun open(target: SettingsSubPage) {
-        if (!animating) subPage = target
+        if (animating) return
+        subPage = target
     }
     val topListState = rememberLazyListState()
     val pageListState = rememberLazyListState()

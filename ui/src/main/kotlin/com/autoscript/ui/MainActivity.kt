@@ -489,7 +489,19 @@ class MainActivity : ComponentActivity() {
                                 // （2026-10-12；`ManagementTransition` 里逐值对着
                                 // `ActionBarLayout.startLayoutAnimation`）。`page == null`
                                 // 就是面板本身 —— 它也占一个槽位，所以「返回」是同一条路径。
-                                Tab.MANAGEMENT -> ManagementTransition(
+                                Tab.MANAGEMENT -> {
+                                    // 底栏收放的**唯一**判据（与 `ProjectScreen.fullScreen` 同一写法）：
+                                    // 管理子页在前台 = 占整屏 = 收掉。放这里而不是 `ManagementScreen.open`
+                                    // 里写 true、`onBackRequest` 里写 false —— 顶栏 ‹ 走的是
+                                    // `closeXxx`（直改 `xxxOpen`，**不经过** `onBackRequest`），
+                                    // 散写会让 ‹ 退出后底栏一直收着。单一判据跟着 `subPage` 走，
+                                    // 手势、返回键、‹、子页互切全都对。
+                                    LaunchedEffect(subPage) {
+                                        tabBarHidden.value = subPage != null
+                                    }
+                                    // 上面的 `LaunchedEffect` 只监视管理子页；四屏共用的编辑面/目录层
+                                    // 各自在自己的屏里（`ProjectScreen`/`SettingsScreen`）管自己的 flag。
+                                    ManagementTransition(
                                     page = subPage,
                                     active = pagerState.currentPage == Tab.MANAGEMENT.ordinal,
                                     // 动画进行中吞掉面板上的新入口点击（TG `animationInProgress`：

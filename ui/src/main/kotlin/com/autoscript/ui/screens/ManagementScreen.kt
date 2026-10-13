@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.SettingIconColors
 import com.autoscript.ui.components.SettingsCard
 import com.autoscript.ui.components.SettingsCellRow
@@ -56,10 +57,21 @@ fun ManagementScreen(
     entriesEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    // 悬浮底栏的隐藏开关（外壳供）。**进了子页底栏整条收掉**（用户口径 2026-10-13：
+    // 「点进列表里面时让底栏消失，退出来时才重新出现」）—— 四个页签既是别的页面、
+    // 又压着子页内容底部，与项目页进目录层、设置页进子页是同一条理由。
+    //
+    // **为什么这里只写 true、复位在 `MainActivity` 的 `onBackRequest` 里**：本屏拿不到
+    // `subPage`（那是外壳的层级状态），"什么时候该放回来"只有外壳知道。收的那一侧
+    // 必须写在这里 —— 本屏是唯一知道"用户点了要进子页"的地方（外壳只看到 `npmOpen` 变了）。
+    val tabBarHidden = LocalTabBarHidden.current
     // 一处包住全部入口：TG 是 `checkTransitionAnimation()` 在**进入栈的那一个方法**开头
     // 统一判的，不是每个 fragment 各自判 —— 这里同理，六个回调共用一道门。
     fun open(block: () -> Unit) {
-        if (entriesEnabled) block()
+        if (!entriesEnabled) return
+        block()
+        // 收底栏与"子页就位"同一帧（`block()` 就是 `npmOpen = true` 那一句）。
+        tabBarHidden.value = true
     }
     Column(modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
         ActionBar(

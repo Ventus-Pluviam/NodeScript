@@ -243,11 +243,6 @@ fun ProjectScreen(
         // 已经归 null、flag 已经复位，此时若只写 flag，底栏会在没有编辑面的时候又收起来。
         if (editorAnimating) return
         editing = file
-        // 底栏整条收掉（用户口径）：编辑面占整屏。不在这写 true，退出编辑页的那一拍
-        // `tabBarHidden` 还是旧值 false，底栏会多留一帧 —— 就是「退出来底栏要等一会才
-        // 突然出现」。先置 true 再上编辑面，两件事同一帧发生；`requestEditorClose` 的
-        // 收尾会把这条 flag 复位成 false。
-        tabBarHidden.value = true
     }
 
     // 编辑面递出来的「能不能退」判定（含未保存拦截）。**侧缘手势的提交路径走
@@ -257,11 +252,9 @@ fun ProjectScreen(
     /** 关掉编辑面（有未保存改动时先问一句，与返回键、‹ 同一个判定）。 */
     fun requestEditorClose() {
         (editorCloseGuard ?: { editing = null }).invoke()
-        // 底栏复位，**与「编辑面消失」同一帧**：编辑态外壳已经不画底栏了，拖到 `finally`
-        // 或 `onDispose` 会把底栏的出现也拖进那 380ms 飞出动画 —— 退出来底栏还要等一会
-        // 才突然出现（用户 2026-10-13 报的那个）。只要编辑面开始关（无论手势、返回键、
-        // ‹、确认框），flag 当场翻回 false。
-        if (tabBarHidden.value) tabBarHidden.value = false
+        // 底栏的复位不写在这里：`fullScreen`（editing 非空 || 目录层）在 `editing` 归
+        // null 的同一拍重算，`LaunchedEffect(fullScreen)` 据此放回底栏 —— 且从目录里
+        // 打开的编辑面退出时不会错误放回（那会儿人还在目录里）。
     }
 
     // 可见集 = 一层（[ProjectState.childrenOf]）→ 排序。**搜索时层裁剪让位**：
@@ -282,12 +275,38 @@ fun ProjectScreen(
     val selectionMode = selected.isNotEmpty()
     val allSelected = ProjectState.allSelected(selected, visible)
 
-    /** 退回上一层（返回键与顶栏 ‹ 共用一条路径）。 */
+    /**
+     * 进一层目录（点目录行、长按面板的「进入文件夹」都走这里）。
+     *
+     * **底栏整条收掉**（用户口径 2026-10-13：「点进列表里面时，让底栏消失，退出来时才重新出现」）：
+     * 进了层就是"在里面"，那四个页签既是别的页面、又压着列表最后几行 —— 与编辑面占整屏
+     * 是同一条理由。写口收在这两个函数里（而不是每个 `currentFolder = …` 各写一遍）：
+     * 三处入口漏一处就是"有时候收、有时候不收"。
+     */
+    fun enterFolder(relPath: String) {
+        currentFolder = relPath
+        selected = emptySet()
+        scope.launch { listState.scrollToItem(0) }
+    }
+
+    /**
+     * 退回上一层（返回键与顶栏 ‹ 共用一条路径）。
+     */
     fun goUp() {
         currentFolder = ProjectState.parentFolder(currentFolder)
         selected = emptySet()
         scope.launch { listState.scrollToItem(0) }
     }
+
+    // 底栏收放的**唯一**判据：进目录（currentFolder 非空）**或**进编辑面（editing 非空）
+    // = 占整屏 = 收掉；两者都回根才放回来。写成一条 `fullScreen` 而不是在各处分别写
+    // flag：**从目录里打开编辑面再退出**这种嵌套，散写会把旗标复位成 false 而人还在
+    // 目录里（退出编辑页那一下底栏会错误地冒出来）。单一判据让「收/放」永远跟着
+    // 状态走，不存在漏写一路。
+    val fullScreen = editing != null || currentFolder != null
+    // 与"状态翻面"同一帧生效（`LaunchedEffect` 在重组应用后立即跑 —— 编辑面开始关的
+    // 那一下底栏就放回来，不等 380ms 飞出动画走完；进编辑面的那一拍也立即收掉）。
+    LaunchedEffect(fullScreen) { tabBarHidden.value = fullScreen }
 
     // 返回键的退让次序照 TG：先收面板 → 再退选择模式 → 再清搜索 → 最后才退一层目录。
     // 每一档都只做一件事，且「还有下一档」才拦下返回 —— 于是根层没搜索时返回键
@@ -412,10 +431,10 @@ fun ProjectScreen(
                                             // 从搜索结果进目录要**收起搜索**：不然进了层列表还是全库的
                                             // 搜索结果，等于"点了没反应"（TG 的 onSearchCollapse 同款）。
                                             file.isDirectory -> {
-                                                currentFolder = file.relPath
+                                                // 从搜索结果进目录要**收起搜索**：不然进了层列表还是全库的
+                                                // 搜索结果，等于"点了没反应"（TG 的 onSearchCollapse 同款）。
                                                 query = ""
-                                                selected = emptySet()
-                                                scope.launch { listState.scrollToItem(0) }
+                                                enterFolder(file.relPath)
                                             }
                                             // 文件 = **直接进编辑面**（TG 文件页点文档就是打开，不弹菜单）；
                                             // 复制路径等其余动作走行尾的 ⋮ 与长按面板 —— 一行的主手势
@@ -477,11 +496,9 @@ fun ProjectScreen(
                     ActionBottomSheetItem(
                         label = "进入文件夹",
                         onClick = {
-                            currentFolder = target.relPath
                             query = ""
-                            selected = emptySet()
                             sheetTarget = null
-                            scope.launch { listState.scrollToItem(0) }
+                            enterFolder(target.relPath)
                         },
                     )
                 }
