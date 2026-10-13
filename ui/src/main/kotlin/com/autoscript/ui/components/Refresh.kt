@@ -221,6 +221,15 @@ private class FeedConnection(
             lastPull = 0f
             val back = -pulled + (if (pulled > 0f) -RELEASE_OVERSHOOT_PX else RELEASE_OVERSHOOT_PX)
             effect.applyToScroll(Offset(0f, back), NestedScrollSource.UserInput) { Offset.Zero }
+            // 必须再跟一次 applyToFling：它内部会把
+            // scrollCycleInProgress 置回 false（上面那次 applyToScroll
+            // 又把它置成了 true）。不清的话下一次拖拽
+            // 的“catch”逻辑被跳过，动画在“直接拉回”
+            // 和“正常弹回”之间轮换 —— 用户口径
+            // “一下猛的收回去，一下又正常慢慢收”正是这条。
+            // 顺便把剩下的交给 animateToReleaseIfNeeded
+            // （内部 EdgeEffect.onRelease()，与 TG 同一个）带动画收尾。
+            effect.applyToFling(Velocity.Zero) { Velocity.Zero }
         }
         return Velocity.Zero
     }
