@@ -2,6 +2,7 @@ package com.autoscript.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalOverscrollConfiguration
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
@@ -17,6 +18,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -125,6 +131,10 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  *    手指按在行上时是列表自己接、有形变；按在空白处时是这层接、有形变。两层各管各的
  *    手势，不叠加 —— `e193c4d` 那次 `provides null` 把任务中心本来能用的那份关掉了，
  *    那是净负收益，这次不重犯。
+ * 5. **行上按着拖**（`86f16c1` 漏的，用户口径「谁说只限制空白处了」）：内层 `LazyColumn`
+ *    赢了手势但一像素不滚，壳的 `scrollable` 看不到 —— 余量经 nested-scroll 链漏下来，
+ *    由 [FeedConnection] 喂给同一份 `effect`（这条路不经过 `shouldDispatchOverscroll`，
+ *    且尺寸由壳的绘制节点给，不早退）。
  *
  * 如实记账：`scrollBy` 全放行在语义上是"壳假装能滚" —— `scrollable` 的无障碍动作
  * （`scrollBy` 语义）会说自己能滚，读屏用户可能听到一个滚不动的"滚动控件"。代价很小，
@@ -138,8 +148,11 @@ fun RefreshableBox(
 ) {
     // 平台那份形变（`AndroidEdgeEffectOverscrollEffect`）：绘制层由下面的
     // `overscroll(effect)` 提供，尺寸由壳自己的 bounds 给 —— 不依赖列表容器。
+    // 这一行是前三版（`22a6fd0`/`b5f2084`/`e193c4d`）全灭的根因：自接的那份没有绘制节点，
+    // `updateSize` 从没人调过，`applyToScroll` 见 `containerSize.isEmpty()` 就早退。
     val effect = ScrollableDefaults.overscrollEffect()
     val proxy = remember { OverscrollProxyState() }
+    val feed = remember(effect) { FeedConnection(effect) }
     Box(
         modifier = modifier
             .overscroll(effect)
@@ -147,9 +160,52 @@ fun RefreshableBox(
                 state = proxy,
                 orientation = Orientation.Vertical,
                 overscrollEffect = effect,
-            ),
+            )
+            // **行上按着拖的那条路**：`LazyColumn` 的手势节点先赢、吃掉手势但一像素不滚，
+            // 壳的 `scrollable` 根本看不到 —— 余量（列表到边之后剩下的那截）经 nested-scroll
+            // 链漏到这一层，由这里喂给同一份 `effect`。与上面 `scrollable` 管的那条
+            // （空白处按下）各管各的手势，不叠加。
+            .nestedScroll(feed),
         content = content,
     )
+}
+
+/**
+ * 把**列表漏下来的到边余量**喂给壳那份 `effect`（见 [RefreshableBox] 的 KDoc）。
+ *
+ * 与 `ScrollingLogic` 里那条内置路径同义，差别只有一处：**不查
+ * `canScrollForward/canScrollBackward`**（TG 也不查 —— `EdgeEffect` 无条件接余量）。
+ * `performScroll` 给 `{ Offset.Zero }`：滚动已经发生过了（拿的是 post-scroll 的余量），
+ * 再滚一次就是同一段位移走两遍。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private class FeedConnection(
+    private val effect: OverscrollEffect,
+) : NestedScrollConnection {
+
+    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
+        // 反向先把已有的形变拉回去（`EdgeEffect` 的 destretch 段），夹在余量之内绝不多还。
+        val consumed = effect.applyToScroll(Offset(0f, available.y), source) { Offset.Zero }
+        return Offset(0f, consumed.y)
+    }
+
+    override fun onPostScroll(
+        consumed: Offset,
+        available: Offset,
+        source: NestedScrollSource,
+    ): Offset {
+        if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
+        val taken = effect.applyToScroll(available, source) { Offset.Zero }
+        return Offset(0f, taken.y)
+    }
+
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+        // 松手/甩尾 → `EdgeEffect.onRelease()` 弹回。速度不再往下传：形变是这一层画的，
+        // 传下去只会被外层拿去滚别的东西。
+        effect.applyToFling(available) { Velocity.Zero }
+        return Velocity.Zero
+    }
 }
 
 /**
