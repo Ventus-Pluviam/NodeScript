@@ -33,6 +33,17 @@ class LogWindowController(
         private set
 
     /**
+     * 窗位置（dp）：紧凑态的左上角，**跨窗存活** —— 关掉再开不跳回原点
+     * （用户刚把它挪到顺手的位置，下一次执行又弹回左上角是纯粹的骚扰）。
+     *
+     * 为什么住控制器而不是 [LogWindowState]：state 每次 `open` 都新建，而位置是
+     * **用户的偏好**不是"这一次执行的事实"。开窗时把它灌进新 state（单一事实源
+     * 仍在 state 里，宿主与手势只读那一份）。
+     */
+    private var lastX: Float = 0f
+    private var lastY: Float = 0f
+
+    /**
      * 开窗（文件 ▶ / 立即执行触发；先开再跑 —— 跑起来之前窗里是「未开始」空态）。
      *
      * 已开着（上一条还没关）→ 替换绑定（旧窗直接切到新归属，不叠两层窗）。
@@ -40,13 +51,59 @@ class LogWindowController(
      * in-app 窗由 `LogWindowInAppHost` 画 state —— 本函数只落状态。
      */
     fun open(projectId: String, relPath: String) {
-        state = LogWindowState(projectId = projectId, relPath = relPath)
+        // 沿用上一次的位置（跨窗存活，见 [lastX]）—— 换了执行不换地方。
+        state = LogWindowState(projectId = projectId, relPath = relPath, x = lastX, y = lastY)
         usingSystemWindow = (systemHost != null) && (hostSummary()?.overlayAllowed() == true)
         if (!usingSystemWindow && systemHost != null) {
             // 有系统宿主但没权限：每次开窗说一次，不记"已说过" ——
             // 权限随时可能在设置里打开，"只说一次"会让用户错过已授权的事实。
             toast("未授予悬浮窗权限，日志窗显示在应用内；可在能力中心授权")
         }
+    }
+
+    /**
+     * 拖动（**系统窗**的头部手势；位移 dp，相对按下那一刻）。
+     *
+     * 边界从系统宿主现取（屏幕可用区），夹取与坐标计算在状态层 —— 宿主只落位。
+     * 拖动改的是 state，`SystemWindowSync` 会把新坐标重喂给窗口（绝对坐标）。
+     *
+     * @return **真正落位**的位移（dp；夹取后可能小于请求量）—— 手势层用它补半速。
+     */
+    fun drag(dx: Float, dy: Float): Pair<Float, Float> {
+        val current = state ?: return 0f to 0f
+        val bounds = systemHost?.boundsDp() ?: (0f to 0f)
+        val next = current.movedTo(
+            dx,
+            dy,
+            bounds.first.takeIf { it > 0f },
+            bounds.second.takeIf { it > 0f },
+        )
+        // 回报**真正落位**的位移（夹取后可能小于请求量）—— 手势层靠它补半速，见
+        // `LogWindowContent.onDrag` 的 KDoc。
+        val applied = (next.x - current.x) to (next.y - current.y)
+        if (applied.first == 0f && applied.second == 0f) return 0f to 0f
+        state = next
+        lastX = next.x
+        lastY = next.y
+        if (usingSystemWindow) systemHost?.moveTo(next.x, next.y)
+        return applied
+    }
+
+    /**
+     * 拖动（**in-app 兜底窗**；位移 dp + 宿主量到的内容区边界 dp）。
+     *
+     * 与 [drag] 同一条分工（状态层算、宿主落位），差别只在边界来源：兜底窗的坐标系是
+     * 应用内容区，只有它自己量得到。
+     *
+     * @return 同 [drag]：真正落位的位移（dp）。
+     */
+    fun dragInApp(dx: Float, dy: Float, boundsW: Float, boundsH: Float): Pair<Float, Float> {
+        val current = state ?: return 0f to 0f
+        val next = current.movedTo(dx, dy, boundsW.takeIf { it > 0f }, boundsH.takeIf { it > 0f })
+        state = next
+        lastX = next.x
+        lastY = next.y
+        return (next.x - current.x) to (next.y - current.y)
     }
 
     /** 关窗（系统窗撤 view，in-app 窗靠 state null 不画）。 */

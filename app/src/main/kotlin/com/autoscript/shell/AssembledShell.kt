@@ -15,6 +15,7 @@ import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.scripts.ScriptRunnability
 import com.autoscript.domain.scripts.TaskStore
 import com.autoscript.domain.scripts.TimedSchedule
@@ -272,12 +273,27 @@ class AssembledShell internal constructor(
      *
      * **挂起到本次执行结算**（与 [runTaskNow] 逐字同一条口径）—— 调用方据此禁用那颗 ▶。
      * 成败不由本口回报：结局在意图日志/控制台，调用方文案不得把"返回了"说成"跑成功了"。
+     *
+     * **两种路径形状在此收口**（2026-10-13）：本口收文件清单形状（首段 = 项目名），
+     * 往下（调度器/意图日志/在途表/引擎）一律项目内形状 —— 转换与判据都在
+     * [ScriptPaths.projectInternalOrNull]，这一层只负责"削不出就拒"。
      */
     suspend fun runScriptFile(projectId: String, relPath: String) {
         require(ScriptRunnability.isRunnable(relPath)) {
             "这个文件不能被引擎执行（引擎起的是 node，只认 ${ScriptRunnability.EXECUTABLE_EXTENSIONS.joinToString("/") { ".$it" }}）：$relPath"
         }
-        shell.scheduler.onTriggerFile(projectId = projectId, relPath = relPath)
+        // **形状转换在这一层收口**（2026-10-13 修）：本口收的是文件清单那条 relPath
+        // （`files/scripts/` 之下，首段 = 项目名 —— 与 `readScriptFile` 同一个形状，
+        // 见 `HostSummary.runScriptFile` 的 @param），而调度器与引擎按**项目内**路径说。
+        // 直接透传的后果是引擎把 `demo/data/test.js` 拼成
+        // `files/scripts/demo/demo/data/test.js` —— 一句 ERR_FILE_NOT_FOUND，
+        // 且**编译期毫无迹象**。削不出（首段不是本项目）当场拒，不静默当项目内路径跑。
+        val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath)
+        require(internalPath != null) {
+            "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
+                "（relPath 是 files/scripts/ 之下的相对路径，首段应为项目名）"
+        }
+        shell.scheduler.onTriggerFile(projectId = projectId, relPath = internalPath)
     }
 
     /**

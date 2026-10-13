@@ -61,6 +61,7 @@ import com.autoscript.domain.automation.ScreenConsentOutcome
 import com.autoscript.domain.automation.ScreenConsentRequests
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.ui.screens.ScriptLimitsDraft
 import com.autoscript.ui.state.resetScriptLimits
@@ -1189,7 +1190,12 @@ class MainActivity : ComponentActivity() {
      * 定时/后台触发不走这里（调度器直调宿主），故天然不弹窗 —— 日志照存。
      */
     private suspend fun runFileWithWindow(projectId: String, relPath: String) {
-        logWindowRef().open(projectId, relPath)
+        // 窗标题与日志绑定都用**项目内**形状（`/demo/data/test.js`）—— 与引擎侧、
+        // 在途表 `ActiveRunRow.scriptPath`、落盘索引同一口径；清单那条 relPath
+        // （首段 = 项目名）只活在文件列表里，出这一层就换形（转换收在 `:domain`）。
+        // 削不出 = 这个文件不在该项目下 → 交给宿主拒（它的话术点名原因）。
+        val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath) ?: relPath
+        logWindowRef().open(projectId, internalPath)
         try {
             runScriptFileOp(projectId, relPath)
         } catch (t: Throwable) {
@@ -1686,6 +1692,9 @@ private fun MainShell(
                         onClear = { logWindow.clearLogs(it) },
                         onClose = { logWindow.close() },
                         onFullscreenToggle = { logWindow.toggleFullscreen() },
+                        // 落位量回报给手势层补半速（见 `LogWindowContent.onDrag` 的 KDoc）：
+                        // in-app 宿主在 dp 域，故这里直接回 dp 对，由它换算回 px。
+                        onDrag = { dx, dy, w, h -> logWindow.dragInApp(dx, dy, w, h) },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

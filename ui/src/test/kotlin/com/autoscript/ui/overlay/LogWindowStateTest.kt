@@ -89,6 +89,50 @@ class LogWindowStateTest {
         assertEquals("", LogWindowState(projectId = "p", relPath = "Makefile").ext)
     }
 
+    /**
+     * 拖动：位移相加 + 夹取（2026-10-13 用户报"不跟手"时补的）。
+     *
+     * 钉的是**夹取后不许把窗推出可视区** —— 拖丢了标题栏就再也拖不回来，
+     * 而窗外没有任何补救入口。
+     */
+    @Test
+    fun `movedTo 位移相加`() {
+        val s = LogWindowState(projectId = "demo", relPath = "a.js")
+            .movedTo(10f, 20f)
+            .movedTo(5f, -4f)
+        assertEquals(15f, s.x)
+        assertEquals(16f, s.y)
+    }
+
+    @Test
+    fun `movedTo 夹在可视区内`() {
+        val s = LogWindowState(projectId = "demo", relPath = "a.js")
+        // 边界 400x500，窗 340x420 → x 最多 60、y 最多 80。
+        val far = s.movedTo(999f, 999f, boundsWidth = 400f, boundsHeight = 500f)
+        assertEquals(60f, far.x)
+        assertEquals(80f, far.y)
+        val back = far.movedTo(-999f, -999f, boundsWidth = 400f, boundsHeight = 500f)
+        assertEquals(0f, back.x)
+        assertEquals(0f, back.y)
+    }
+
+    /** 边界未知（拿不到屏幕尺寸）→ 不夹：不假装知道屏幕多大。 */
+    @Test
+    fun `movedTo 无边界时不夹`() {
+        val s = LogWindowState(projectId = "demo", relPath = "a.js").movedTo(9999f, 9999f)
+        assertEquals(9999f, s.x)
+        assertEquals(9999f, s.y)
+    }
+
+    /** 边界比窗还小（极端小屏）→ 夹到 0 而不是负数（负数会把窗推出左上角）。 */
+    @Test
+    fun `movedTo 边界小于窗时夹到零`() {
+        val s = LogWindowState(projectId = "demo", relPath = "a.js")
+            .movedTo(50f, 50f, boundsWidth = 100f, boundsHeight = 100f)
+        assertEquals(0f, s.x)
+        assertEquals(0f, s.y)
+    }
+
     private fun line(seq: Long, runId: Long) = com.autoscript.ui.state.ConsoleLineState(
         seq = seq,
         runId = runId,

@@ -12,6 +12,55 @@
 
 ---
 
+## 80. 两种 relPath 形状在装配口收口；悬浮窗拖动跟手的两条真因（2026-10-13，用户实测反馈）
+
+用户实测两条反馈：悬浮窗**不跟手**；并追问第 79 项里留的那个问号（`▶` 链 relPath
+是否 double-prefix）。
+
+### 80.1 两种 relPath 形状是既成事实，转换必须在**装配口**收口
+
+仓里同一条脚本路径有**两种都是对的**形状：
+
+- **清单形状**（`files/scripts/` 之下，**首段 = 项目名**，`demo/data/test.js`）——
+  `ScriptFilesRead` 产出、`ScriptFileRow.relPath` 携带、`readScriptFile`/`saveScriptFile`
+  与 `ScriptFileOps.resolveInProject` 消费；
+- **项目内形状**（`data/test.js`）—— `EngineRunRequest.scriptPath`、意图日志、
+  在途表 `ActiveRunRow.scriptPath`、归档、`ScriptPaths.scriptFile` 消费。
+
+两种形状**在字符串上长得一样**，拼错了不编译失败、不报参数错，只会在引擎侧得到一句
+`ERR_FILE_NOT_FOUND`。2026-10-06 编辑器那条链踩过一次（`ScriptFileOps.resolveInProject`
+的 KDoc 里留着记录：被拼成 `…/demo/demo/main.js`，编辑器报"不是文件"），而 2026-10-13
+落的 `▶` 链**没有跟上** —— `AssembledShell.runScriptFile` 把清单形状直透给调度器，
+于是那次执行注定找不到文件（第 79 项留的"待核实"问号，**核实结果：属实**）。
+
+**修法与判据**：`:domain` 加 `ScriptPaths.projectInternalOrNull(projectId, relPath)`
+（判据 = **首段必须等于 projectId**，削不出回 null），`AssembledShell.runScriptFile`
+削完再投、削不出当场拒。三条都是刻意的：
+
+- **判据不能用"看着像就去掉"**：项目 `demo` 下真有 `demo/main.js` 时，容错写法会把
+  `demo/main.js` 削成 `main.js` 去跑**另一个文件** —— 静默跑错比响亮失败糟得多；
+- **转换住 `:domain` 而不是各调用点**：这是路径约定的判据，与 `PROJECT_ID`/`RelPath`
+  同一条理由（抄两份必然漂）；
+- **转换在装配口而不是在 `:ui`**：`HostSummary.runScriptFile` 的契约明写收清单形状
+  （与 `readScriptFile` 同形），转换因此必须在"契约形状 → 内部形状"的那个边界上发生。
+
+### 80.2 拖动"不跟手"是两条独立真因，不是一处手感问题
+
+- **手势检测被自己的重组打断**：拖动每帧改状态 → 重喂内容 → 重组，而 `pointerInput`
+  的 key 是每次重组**新建**的回调实例 —— 检测协程当场取消重启，手指还没抬手势就断。
+  这与"窗挪得慢"是两回事，但用户感知上是同一句"不跟手"。
+- **半速**：窗跟着手指走时本地坐标系被同向抵消，`positionChange()` 逐帧只报真实位移的
+  一半。补的量必须是**真正落位**的那一份（夹在屏幕边缘时窗没动，补"想挪的量"会让手指
+  回退时窗跳一段）。
+
+**顺带纠正一处 API 选型**：夹取边界不能用 `getCurrentSizeRange` —— 它回答的是"窗最多
+多大"（尺寸范围），而窗宽 340dp 在多数设备上正好落在 max 端，于是"max 减窗宽"≈0，
+夹取会把窗**钉死在左上角**。要的是"能摆到哪"，来源是 `getCurrentWindowMetrics().bounds`
+（可用区矩形，四条边一起给 —— 宽度夹取与顶边偏移同源，不另查 `status_bar_height` 资源：
+同一件事两份事实源在刘海/挖孔/横屏下必然对不上）。
+
+**未在本机跑门**（本地禁 gradle）：红绿以 Actions 为准。
+
 ## 79. 执行日志落盘 + 执行暂停落地（2026-10-13，用户令；推翻第 42 项与「暂停未进 P0」）
 
 用户令三条：① 脚本执行时弹**系统级悬浮窗**看日志（去「已触发…」toast）；② 日志管理

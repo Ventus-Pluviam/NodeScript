@@ -6,8 +6,9 @@ import com.autoscript.ui.state.ConsoleLineState
 /**
  * 执行日志悬浮窗的**纯状态**（2026-10-13 用户令；JVM 可测，不碰 Android）。
  *
- * 悬浮窗回答三个问题："看谁的输出"（[boundRunId]，由 [bind] 从在途表现值绑定）、
- * "看到哪"（[watermarkSeq]，清空按钮只推水位）、"多大"（[fullscreen] 紧凑/全屏切换）。
+ * 悬浮窗回答四个问题："看谁的输出"（[boundRunId]，由 [bind] 从在途表现值绑定）、
+ * "看到哪"（[watermarkSeq]，清空按钮只推水位）、"多大"（[fullscreen] 紧凑/全屏切换）、
+ * "摆在哪"（[x]/[y]，拖动改它，见 [movedTo]）。
  *
  * **为什么绑定走"归属匹配"而不是调用方传 runId**：`runScriptFile`/`runTaskNow`
  * 那两条链**不回 runId**（挂起到结算只回 Unit）—— 调用方在开窗那一刻根本不知道
@@ -27,6 +28,15 @@ data class LogWindowState(
     val boundRunId: Long? = null,
     /** 绑定那条 run 此刻冻没冻住（暂停按钮的图标与可用态就看它）。 */
     val paused: Boolean = false,
+    /**
+     * 紧凑态窗左上角（**dp**，相对宿主坐标系：系统窗 = 屏幕、in-app 窗 = 应用内容区）。
+     *
+     * 为什么位置住状态里而不是各宿主自己记：两个宿主画的是同一个窗，切换宿主
+     * （授权前后）不该把它挪回原点；拖动也只有一份事实源 —— 宿主按它落位，
+     * 手势按它算目标（见 [movedTo]）。
+     */
+    val x: Float = 0f,
+    val y: Float = 0f,
 ) {
     /**
      * 窗标题（**单一归一化点**）：`/$projectId/$relPath` —— 用户口径的
@@ -61,6 +71,26 @@ data class LogWindowState(
     }
 
     /**
+     * 拖到绝对位置（[dx]/[dy] = **相对按下那一刻的位移**，dp）。
+     *
+     * 为什么收"位移"而不是"目标坐标"：手势在窗自己的坐标系里量位移（窗跟着手指走时
+     * 本地坐标被同向抵消，差值恰是屏幕上的真实位移），故位移与窗当前坐标相加即目标 ——
+     * 计算收在这一处，两个宿主的手势层只报位移。
+     *
+     * **夹取**（[boundsWidth]/[boundsHeight] 非空时）：窗不许被拖出可视区。夹取后
+     * 手指继续外推时窗贴边不动，手指回退即跟回 —— 这是"拖丢了找不回来"的唯一防线
+     * （窗外没有第二次机会把标题栏拖回来）。边界未知（null）则不夹：不假装知道屏幕多大。
+     */
+    fun movedTo(dx: Float, dy: Float, boundsWidth: Float? = null, boundsHeight: Float? = null): LogWindowState {
+        val maxX = boundsWidth?.let { maxOf(0f, it - COMPACT_WIDTH_DP) }
+        val maxY = boundsHeight?.let { maxOf(0f, it - COMPACT_HEIGHT_DP) }
+        return copy(
+            x = if (maxX == null) x + dx else (x + dx).coerceIn(0f, maxX),
+            y = if (maxY == null) y + dy else (y + dy).coerceIn(0f, maxY),
+        )
+    }
+
+    /**
      * 可见行：绑定 run 的行 + 水位之上（清空按钮推水位后，旧行不画、新行照进）。
      *
      * 未绑定（boundRunId null）→ 空表（空态由内容层画，不在这里编一行假的）。
@@ -68,5 +98,20 @@ data class LogWindowState(
     fun visible(lines: List<ConsoleLineState>): List<ConsoleLineState> {
         val bound = boundRunId ?: return emptyList()
         return lines.filter { it.runId == bound && it.seq > watermarkSeq }
+    }
+
+    companion object {
+        /**
+         * 紧凑尺寸（**dp 数**，日志窗是"盯着看"的面，不是阅读器 —— 默认不大）。
+         *
+         * 为什么是裸 `Float` 而不是 `Dp`：本文件是纯状态层（JVM 可测，同包 `LogWindowStateTest`
+         * 跑在 `ui` 的单测门上），**不引 Compose 类型**；`Dp` 由两个宿主各自 `340.dp` 包一层
+         * —— 数字只有这一份，`Dp` 的包装是呈现层的事。
+         *
+         * 住这里而不是宿主里：尺寸既是宿主的窗口参数，也是**夹取边界**的一半
+         * （[movedTo] 要知道窗多宽才知道能拖多远），两个宿主共用同一份。
+         */
+        const val COMPACT_WIDTH_DP: Float = 340f
+        const val COMPACT_HEIGHT_DP: Float = 420f
     }
 }

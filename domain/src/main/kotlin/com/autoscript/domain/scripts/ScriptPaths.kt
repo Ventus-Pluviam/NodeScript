@@ -95,6 +95,34 @@ object ScriptPaths {
     }
 
     /**
+     * `files/scripts/` 之下的相对路径（**首段 = projectId**）→ **项目内**相对路径。
+     *
+     * 为什么需要这条转换：仓里同一条路径有**两种形状**，各自都是对的 ——
+     * 文件清单（`ScriptFilesRead`，`ScriptFileRow.relPath`）与文件读写口
+     * （[com.autoscript.domain.host.HostSummary.readScriptFile]）从 `files/scripts/` 起算，
+     * 首段是项目名（`demo/data/test.js`）；而**执行侧**（`EngineRunRequest.scriptPath`、
+     * 意图日志、在途表、归档）按项目内路径说（`data/test.js`），
+     * [scriptFile] 就是拿它去拼绝对路径的。两种形状在字符串上长得一样，
+     * 拼错了**不会编译失败**：`demo/demo/data/test.js` 只会得到一句
+     * `ERR_FILE_NOT_FOUND`（2026-10-06 编辑器那条链正是这么踩的，
+     * 见 `ScriptFileOps.resolveInProject` 的 KDoc），而 2026-10-13 的 ▶ 链
+     * （`AssembledShell.runScriptFile` → 调度器 → 引擎）当时就漏了这一道。
+     *
+     * **判据是"首段必须等于 projectId"**（与 `ScriptFileOps.resolveInProject` 同一条），
+     * 不是"看着像就去掉"：项目 `demo` 下真有 `demo/main.js` 这个子目录时，
+     * 容错的写法会把 `demo/main.js` 削成 `main.js` 去跑**另一个文件**。
+     * 削不出（首段不是项目名）**回 null**，由调用方响亮拒绝 —— 不静默当成项目内路径。
+     *
+     * 不做词法校验（`..`/绝对路径）：那是 [scriptFile] 与 [RelPath] 的事，本方法只削前缀。
+     */
+    fun projectInternalOrNull(projectId: String, relPath: String): String? {
+        val trimmed = relPath.trimEnd('/')
+        val prefix = "$projectId/"
+        if (!trimmed.startsWith(prefix)) return null
+        return trimmed.removePrefix(prefix).takeIf { it.isNotEmpty() }
+    }
+
+    /**
      * 录屏产物的落点目录：`files/scripts/<projectId>/.recordings`（§9.2 录屏腿）。
      *
      * **为什么是项目根下的点开头子目录**（三条都是既有约定，不是新发明的形状）：

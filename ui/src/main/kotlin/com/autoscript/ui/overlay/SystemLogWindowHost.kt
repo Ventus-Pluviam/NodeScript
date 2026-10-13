@@ -4,12 +4,9 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Bundle
 import android.view.Gravity
-import android.view.View
 import android.view.WindowManager
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -57,8 +54,24 @@ class SystemLogWindowHost(
     private var params: WindowManager.LayoutParams? = null
     private var compactW = 0
     private var compactH = 0
+    /** 紧凑态位置（px，绝对）：拖动与全屏往返都从这一对恢复。 */
     private var compactX = 0
     private var compactY = 0
+    /** 窗可视边界（px）：夹取用；拿不到（无 WindowManager）则不夹。 */
+    private var boundsW = 0
+    private var boundsH = 0
+    /**
+     * 可用区顶边在屏幕上的 y（px）。
+     *
+     * 为什么需要它：`WindowManager.LayoutParams` 的 y 是**相对屏幕**的，而"可用区"
+     * 从状态栏下面才开始 —— 不加这一道，窗会被摆到状态栏底下（标题行与四颗按钮
+     * 正好被盖住，看得见摸不着，而拖动把手就在那一行）。加上它之后，
+     * 状态里的 `y = 0` 在两个宿主里含义一致："贴可用区顶边"。
+     */
+    private var topOffsetPx = 0
+
+    /** dp → px（Dp 上的换算只能取 `.value`：`Dp * Float` 还是 Dp）。 */
+    private fun px(dp: Float): Int = (dp * context.resources.displayMetrics.density).toInt()
 
     /**
      * 弹系统窗（已开则只换内容）。[content] 是 `LogWindowContent` 那一份
@@ -66,11 +79,13 @@ class SystemLogWindowHost(
      *
      * @return false = 弹不起来（无 WindowManager / 被拒）→ 调用方用 in-app 回退。
      */
-    fun show(content: @Composable () -> Unit): Boolean {
+    fun show(content: @Composable () -> Unit, xDp: Float = 0f, yDp: Float = 0f): Boolean {
         val manager = wm ?: return false
+        syncBounds(manager)
         val existing = view
         if (existing != null) {
             existing.setContent { Theme(mode = themeMode()) { content() } }
+            moveTo(xDp, yDp)
             return true
         }
         return try {
@@ -81,10 +96,10 @@ class SystemLogWindowHost(
                 setViewTreeSavedStateRegistryOwner(o)
                 setContent { Theme(mode = themeMode()) { content() } }
             }
-            val density = context.resources.displayMetrics.density
-            // Dp * density 还是 Dp（.toInt() 不在 Dp 上）；先取 .value（float）再换算。
-            compactW = (COMPACT_WIDTH_DP.value * density).toInt()
-            compactH = (COMPACT_HEIGHT_DP.value * density).toInt()
+            compactW = px(LogWindowState.COMPACT_WIDTH_DP)
+            compactH = px(LogWindowState.COMPACT_HEIGHT_DP)
+            compactX = px(xDp)
+            compactY = topOffsetPx + px(yDp)
             val p = WindowManager.LayoutParams(
                 compactW,
                 compactH,
@@ -131,16 +146,81 @@ class SystemLogWindowHost(
         runCatching { manager.updateViewLayout(v, p) }
     }
 
-    /** 拖拽（头部手势的增量，dp→px 由调用方换算好传进来）。 */
-    fun moveBy(dxPx: Int, dyPx: Int) {
+    /**
+     * 落位到绝对坐标（dp）：拖动、开窗、切回紧凑三处共用同一条路。
+     *
+     * **收绝对坐标而不是增量**：增量要在宿主里累加，于是位置就有了两份事实源
+     * （状态里一份、宿主里一份），拖动与全屏往返各写一份必然漂。调用方（状态层）
+     * 算好目标，这里只落位 —— 夹取也在状态层（它才知道窗多大、边界多宽）。
+     *
+     * 全屏时忽略：位置被锁在 0,0（[setFullscreen] 存下的紧凑位置还在，退出全屏即回）。
+     */
+    fun moveTo(xDp: Float, yDp: Float) {
         val manager = wm ?: return
         val v = view ?: return
         val p = params ?: return
-        // 全屏时不漂：位置被锁在 0,0（setFullscreen 存的紧凑位置还在，退出全屏即回）。
         if (p.width == WindowManager.LayoutParams.MATCH_PARENT) return
-        p.x += dxPx
-        p.y += dyPx
+        compactX = px(xDp)
+        compactY = topOffsetPx + px(yDp)
+        p.x = compactX
+        p.y = compactY
         runCatching { manager.updateViewLayout(v, p) }
+    }
+
+    /**
+     * 可视边界（px）—— 夹取判据的一半，另一半是窗自己的尺寸。
+     *
+     * **要的是"能摆到哪"而不是"窗最多多大"**：`getCurrentSizeRange` 给的是**尺寸范围**
+     * （min/max），窗宽 340dp 在多数设备上恰好落在 max 那一端，于是"max 减去窗宽"≈0，
+     * 夹取会把窗钉死在左上角 —— 那是把"窗能长多大"误当成"窗能挪多远"。
+     * 正确来源是 `getCurrentWindowMetrics().bounds`（API 30+）：它给的是**可用区矩形**，
+     * 四条边一起给 —— 宽度夹取、顶边偏移（[topOffsetPx]）都从它出，两处同源。
+     * 本仓 minSdk 26，30 以下退回 `displayMetrics` + 状态栏资源（近似，见下）。
+     */
+    private fun syncBounds(manager: WindowManager) {
+        val m = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            runCatching { manager.currentWindowMetrics.bounds }.getOrNull()
+        } else {
+            null
+        }
+        // **两处口径必须同源**：边界与顶边偏移都取自 `getCurrentWindowMetrics().bounds`
+        // （API 30+，可用区，左/上/右/下四条边一起给），于是"窗能摆到哪"与"y=0 是哪"
+        // 用的是同一个矩形。此前写成"边界取 windowMetrics、顶边偏移另查
+        // `status_bar_height` 资源" —— 两个来源在刘海/挖孔/横屏下必然对不上
+        // （那是本仓反复踩过的形状：同一件事两份事实源）。
+        if (m != null && m.width() > 0 && m.height() > 0) {
+            boundsW = m.width()
+            boundsH = m.height()
+            topOffsetPx = m.top
+            return
+        }
+        // API 30 以下：`bounds` 拿不到，退回整屏 + 状态栏资源。这一档下
+        // 左/上偏移取状态栏高度（挖孔屏会偏一点 —— 老设备上的近似，如实记在这里）。
+        val dm = context.resources.displayMetrics
+        boundsW = dm.widthPixels
+        boundsH = dm.heightPixels
+        topOffsetPx = statusBarHeightPx()
+    }
+
+    /**
+     * 状态栏高度（px；**只有 API 30 以下那条路用它**，见 [syncBounds]）。
+     *
+     * 为什么不去问 `WindowInsets`：那是**某个 View 的** insets（要有一个已 attach 的
+     * View 才成立），而本类要在开窗**之前**就知道摆在哪。资源查询是这条路里唯一
+     * 与 View 无关的来源；查不到就给 0（不猜，宁可让窗贴到顶）。
+     */
+    private fun statusBarHeightPx(): Int = runCatching {
+        val id = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (id <= 0) 0 else context.resources.getDimensionPixelSize(id)
+    }.getOrDefault(0)
+
+    /** 可视边界（dp；0 = 未知，调用方据此不夹取）。 */
+    fun boundsDp(): Pair<Float, Float> {
+        val d = context.resources.displayMetrics.density
+        if (boundsW <= 0 || boundsH <= 0) return 0f to 0f
+        // 高度报**可用区**（扣掉顶边偏移）：状态里的 y 从可用区顶边起算，
+        // 夹取也必须按同一段算，否则窗底会伸到屏幕外面（差一个状态栏）。
+        return (boundsW / d) to ((boundsH - topOffsetPx) / d)
     }
 
     /** 撤窗（幂等；生命周期走完 ON_DESTROY + store.clear）。 */
@@ -183,9 +263,4 @@ class SystemLogWindowHost(
         }
     }
 
-    companion object {
-        /** 紧凑尺寸（日志窗是"盯着看"的面，不是阅读器 —— 默认不大）。 */
-        val COMPACT_WIDTH_DP: Dp = 340.dp
-        val COMPACT_HEIGHT_DP: Dp = 420.dp
-    }
 }

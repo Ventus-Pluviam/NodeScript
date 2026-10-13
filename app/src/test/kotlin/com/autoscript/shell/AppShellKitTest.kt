@@ -487,6 +487,54 @@ class AppShellKitTest {
         Unit
     }
 
+    /**
+     * ▶ 链的**路径形状**（2026-10-13）：本口收文件清单形状（首段 = 项目名），
+     * 往下（意图日志/引擎请求）一律项目内形状。
+     *
+     * 为什么值得一条链上用例：两种形状在字符串上长得一样，拼错了不编译失败 ——
+     * 引擎只会把 `demo/demo/a.js` 拼成绝对路径后回一句 ERR_FILE_NOT_FOUND
+     * （2026-10-06 编辑器那条链正是这么踩的）。这条把"过口之后剩下什么"钉死：
+     * 意图日志 START 行的 scriptPath 必须**只剩项目内那截**。
+     */
+    @Test
+    fun `▶ 链把清单形状削成项目内形状再投递`() = runBlocking {
+        val s = kit()
+        s.use { assembled ->
+            assembled.runScriptFile(projectId = "demo", relPath = "demo/data/test.js")
+        }
+        val log = PersistentIntentLog(intentStore)
+        try {
+            val row = log.all().single { it.projectId == "demo" }
+            assertEquals(
+                "data/test.js",
+                row.scriptPath,
+                "投递前必须削掉首段（= 项目名），否则引擎拼出 scripts/demo/demo/data/test.js",
+            )
+        } finally {
+            log.close()
+        }
+
+        Unit
+    }
+
+    /** 首段不是本项目 → **响亮拒**，不静默当成项目内路径去跑另一个文件。 */
+    @Test
+    fun `▶ 链拒收首段与项目不符的路径`() {
+        kit().use { assembled ->
+            val e = org.junit.jupiter.api.assertThrows<IllegalArgumentException> {
+                kotlinx.coroutines.runBlocking {
+                    assembled.runScriptFile(projectId = "demo", relPath = "other/data/test.js")
+                }
+            }
+            assertTrue(
+                "首段应为项目名" in (e.message ?: ""),
+                "拒收原文要点名两种形状的差别：${e.message}",
+            )
+        }
+
+        Unit
+    }
+
     @Test
     fun `无来源时补部署报告如实为空，不粉饰恢复成功`() {
         kit().use { assembled ->

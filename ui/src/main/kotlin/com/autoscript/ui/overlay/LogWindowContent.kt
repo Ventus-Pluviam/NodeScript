@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,8 +56,15 @@ fun LogWindowContent(
     onClose: () -> Unit,
     onFullscreenToggle: () -> Unit,
     onCopyLine: (String) -> Unit,
-    /** 头部拖拽（系统宿主消费 → updateViewLayout；in-app 宿主传 `{}`）。 */
-    onDrag: (Offset) -> Unit,
+    /**
+     * 头部拖拽：入参是本次的**本地**位移（px），返回值是**真正落位**的位移（px）。
+     *
+     * 为什么要返回值：窗跟着手指走时，本地坐标系被同向抵消 —— 不把"上一步已经挪了
+     * 多少"补回去，窗只会以**一半**速度跟手（经典半速 bug，2026-10-13 用户报"不跟手"）。
+     * 补的量必须是**真正落位**的那一份：拖到屏幕边缘被夹住时窗没动，此时补 0 ——
+     * 补"想挪的量"会让手指回退后窗突然跳一段。
+     */
+    onDrag: (Offset) -> Offset,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -148,17 +156,42 @@ private fun WindowIconButton(
     }
 }
 
-/** 头部拖拽手势：位移增量交给宿主（系统窗 → `updateViewLayout` 改 x/y）。 */
-private fun Modifier.dragHandle(onDrag: (Offset) -> Unit): Modifier = pointerInput(onDrag) {
-    awaitPointerEventScope {
-        while (true) {
-            val event = awaitPointerEvent()
-            val change = event.changes.firstOrNull() ?: continue
-            if (change.pressed) {
-                val delta = change.positionChange()
-                if (delta != Offset.Zero) onDrag(delta)
+/**
+ * 头部拖拽手势：位移增量交给宿主（系统窗 → `updateViewLayout` 改 x/y）。
+ *
+ * **两个坑，2026-10-13 用户报"不跟手"时一次修掉**：
+ *
+ * 1. **手势检测不能带会变的 key**。拖动每帧都改状态 → 重喂内容 → 重组 →
+ *    `pointerInput` 的 key 若是回调本身（每次都新建实例），检测协程**当场被取消重启**，
+ *    手指还没抬起来手势就断了。故 key 恒为 [Unit]（检测器活过整场拖动），
+ *    回调经 `rememberUpdatedState` 现取最新那份。
+ * 2. **补偿半速**：`positionChange()` 给的是**本地**坐标的差，而窗一挪，本地坐标系
+ *    就同向挪了同样多 —— 逐帧观察到的差值因此只有真实位移的一半（窗以半速跟手）。
+ *    补法是把上一步**真正落位**的位移加回来：
+ *    ```
+ *    真实位移 = 本地位移 + 上一步落位位移
+ *    ```
+ *    用返回值而不是"想挪的量"：夹在屏幕边缘时窗没动，此刻补 0 才对
+ *    （补想挪的量会让手指回退时窗跳一段）。
+ */
+@Composable
+private fun Modifier.dragHandle(onDrag: (Offset) -> Offset): Modifier {
+    val latest = rememberUpdatedState(onDrag)
+    return pointerInput(Unit) {
+        var applied = Offset.Zero
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull() ?: continue
+                if (change.pressed) {
+                    val delta = change.positionChange() + applied
+                    if (delta != Offset.Zero) applied = latest.value(delta)
+                } else {
+                    // 抬手/取消：补偿量归零，下一次按下从零起算。
+                    applied = Offset.Zero
+                }
+                event.changes.forEach { it.consume() }
             }
-            event.changes.forEach { it.consume() }
         }
     }
 }

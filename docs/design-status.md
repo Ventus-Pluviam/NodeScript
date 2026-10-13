@@ -699,6 +699,7 @@
 
 | 日期 | 条目 | 主题 | 文件 |
 |---|---|---|---|
+| 2026-10-13 | 2 | **悬浮窗跟手拖动 + `▶` 链路径形状收口**（用户实测反馈）：拖动不跟手两条真因（`pointerInput` key 是每帧新建的回调 → 检测协程被自己的重组打断；窗随手指走时本地坐标被同向抵消 → 半速）+ in-app 兜底窗也接拖动 + 位置跨窗存活 + 边界夹取（`getCurrentWindowMetrics().bounds`，`getCurrentSizeRange` 会钉死左上角）；**存量 bug**：`▶` 链把清单形状 relPath（首段 = 项目名）直透调度器/引擎 → `scripts/demo/demo/data/test.js`，修法是 `ScriptPaths.projectInternalOrNull` 收口 + 两条链上用例 | [`log/2026-10-13.md`](log/2026-10-13.md) |
 | 2026-10-13 | 1 | **执行日志悬浮窗 + 脚本输出按执行持久化 + 暂停执行**（用户令）：系统级悬浮窗（TYPE_APPLICATION_OVERLAY，切 App 也能看）+ 落盘（`filesDir/.ns/script-logs/`，`<runId>.log` + `index.jsonl`，只记脚本行）+ 暂停链（SIGSTOP/SIGCONT + `paused` 旁账集，不加 SUSPENDED）+ 日志管理按执行列表 + 详情。推翻批 74「不做 console 持久化」与「暂停未进 P0」（决策第 79 项）。顺修 `onRunFile` 双 launch 假挂起 | [`log/2026-10-13.md`](log/2026-10-13.md) |
 | 2026-10-12 | 19 | 批 109：**typed ids**（外审长线第一项）—— `:domain` 新增 `ProjectId`/`RelPath` 值类，值类只落**两端**（两个 ingress + 拼路径出口），中间 DTO 不动。**本批一半的价值是判据收一份**：原先**三份** relPath 判据 + **两份**项目号判据，现在一份不剩（`ScriptDeployRecovery` 那份私有副本删掉了——它是被架构门禁逼出来的，而 `:domain` 是允许的依赖）。**一次行为变更照实记账**：含 `.` 的项目号不再列出、`"a".repeat(65)` 不再被拒，两条都由 `ProjectStoreTest` 新增用例钉住。签名域一个字节没动。`Stream` + 值类要装箱（编译器给不出唯一重载），显式循环 + 事后排序 | [`log/2026-10-11.md`](log/2026-10-11.md) |
 | 2026-10-12 | 18 | 批 108：存储目录 `.autojs` → **`.ns`**、**不做旧版兼容**（维护者拍板，D6 结案）；同批把「对外发布 npm 包」那条需求**从待办池直接删除**。顺手统一三处同病相邻命名（`autojs-lock-v1` / `autojs-snapshot-v1` / `.autojs.build.ignore`）—— 批 7 只扫了描述面没扫到域内字符串；`AutoJsPro` 九处与第三方站点逐字未改。**方法收获**：第 18 项把「结论」与「支撑它的那条风险」焊在了一起，「要配迁移策略」本是成本不是否决 | [`log/2026-10-11.md`](log/2026-10-11.md) |
