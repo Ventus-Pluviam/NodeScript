@@ -183,14 +183,15 @@ private class FeedConnection(
     private val effect: OverscrollEffect,
 ) : NestedScrollConnection {
 
-    /** 最后一次喂进去的位移方向（`onPostFling` 反向踢一脚用）。 */
+    /** 当前被拉出去多远（px，有符号:正=顶边被下拉），onPostFling归零用。 */
     private var lastPull = 0f
 
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
         // 反向先把已有的形变拉回去（`EdgeEffect` 的 destretch 段），夹在余量之内绝不多还。
         val consumed = effect.applyToScroll(Offset(0f, available.y), source) { Offset.Zero }
-        if (consumed.y != 0f) lastPull = consumed.y
+        lastPull += consumed.y
+        if (!effect.isInProgress) lastPull = 0f
         return Offset(0f, consumed.y)
     }
 
@@ -201,25 +202,22 @@ private class FeedConnection(
     ): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
         val taken = effect.applyToScroll(available, source) { Offset.Zero }
-        if (taken.y != 0f) lastPull = taken.y
+        lastPull += taken.y
+        if (!effect.isInProgress) lastPull = 0f
         return Offset(0f, taken.y)
     }
 
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-        // 松手即弹回 —— 与"行上还是空白处按下"无关：`dispatchPostFling` 冒到壳这一层时，
-        // 内层（列表）已经把自己那份消费完了，剩下的全落到这里，所以内层松手那一下必经这里。
-        //
-        // 做法是给一个朝"回缩方向"的极小速度、走 `applyToFling` 里那条**设计好的**
-        // `absorbToRelaxIfNeeded`（"甩尾速度把已有的拉伸吃掉"）：`OverscrollEffect`
-        // 接口没有公开 `onRelease`（`animateToRelease` 是 private），这是唯一能让它
-        // 弹回的公开口。反向是 `lastPull` 记的（顶边被下拉 → 回缩方向朝上，给负速度）。
-        // 余下的交给最后的 `animateToReleaseIfNeeded()`（内部 `EdgeEffect.onRelease()`，
-        // 与 TG 同一个）。`performFling` 给 `{ Velocity.Zero }`：壳本来就不滚，
-        // 速度传下去只会被外层拿去滚别的东西。
-        // 只在 `isInProgress` 时动手，没拉过就不碰。
-        if (effect.isInProgress) {
-            val relax = if (lastPull > 0f) -1f else 1f
-            effect.applyToFling(Velocity(0f, relax)) { Velocity.Zero }
+        // pulled 记的是被拉出去多远（px，有符号）。
+        // 归零要还的 = -pulled（正好抵消），再多给
+        // RELEASE_OVERSHOOT_PX 确保 distance 归零触发 finish()。
+        // 还完之后 lastPull 清零 —— 下一次 onPreScroll
+        // 同向会重新累。
+        val pulled = lastPull
+        if (pulled != 0f) {
+            lastPull = 0f
+            val back = -pulled + (if (pulled > 0f) -RELEASE_OVERSHOOT_PX else RELEASE_OVERSHOOT_PX)
+            effect.applyToScroll(Offset(0f, back), NestedScrollSource.UserInput) { Offset.Zero }
         }
         return Velocity.Zero
     }
@@ -250,6 +248,9 @@ private class OverscrollProxyState : ScrollableState {
         NoopScrollScope.block()
     }
 }
+
+/** 回零那一下多还的量（px）：确保 distance 归零触发 finish()。见 onPostFling。 */
+private const val RELEASE_OVERSHOOT_PX = 2f
 
 /** 不吃位移的 [ScrollScope]（[OverscrollProxyState.scroll] 用）。 */
 private object NoopScrollScope : ScrollScope {
