@@ -77,7 +77,7 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
 }
 
 /**
- * 列表容器 —— 内容宿主，外加**下拉形变的落点**。
+ * 列表容器 —— **只有内容宿主这一件事，没有手势**。
  *
  * **参考项目没有下拉刷新手势**（M3 的 `PullToRefreshBox` 已拆掉）。TG 的
  * 列表（`RecyclerListView`）只有滚动，刷新一律是显式动作 —— `ActionBar` 上那颗，
@@ -90,124 +90,32 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  *
  * 壳为什么还留着（而不是把四屏的 `RefreshableBox { … }` 拆成裸 `Box { … }`）：
  * 四屏的 content lambda 收的是 `BoxScope`，且"填满"由调用方传的 modifier 决定 ——
- * 壳在这里只是给"内容宿主"一个名字，四屏一行不用动。**它也是下拉形变的落点**
- * （见下），所以三屏一处接上、三处生效。
+ * 壳在这里只是给"内容宿主"一个名字，四屏一行不用动。
  *
- * ## 下拉形变（TG 的 `EdgeEffect`，2026-10-13 用户口径）
+ * ## 下拉形变：这里**什么都不做**（2026-10-13，三次尝试全撤）
  *
- * 用户口径：「文件列表、任务列表、管理面板这些下拉时要有和 TG 一样的形变」。
+ * 形变由 `LazyColumn`/`verticalScroll` **自带的那份平台形变**负责，本屏不插手
+ * —— 这就是"平台缺省"的行为，也是前两次绕路之前的状态。
  *
- * **TG 用的是什么**（`/tmp/tg` 12.10.6 实读，不是推测）：**就是 AOSP `EdgeEffect`
- * 本身，形变一个字没改**。`RecyclerListView.java:2160` 起全部相关代码只有这么一段 ——
+ * 撤掉的两次与失败原因（如实记账，不删）：
+ * - `22a6fd0` 在壳上自接 `OverscrollEffect`：`applyToScroll` 见
+ *   `containerSize.isEmpty()` 就早退，且 `applyToFling` 不发信号 —— 空转。
+ * - `e193c4d` 改成平台 `EdgeEffect` + 手指按着才接：仍然空转（`onPostScroll`
+ *   不见效果），而 `LocalOverscrollConfiguration provides null` 把**本来能用**的
+ *   长列表那份关掉了 —— 这是净负收益，用户口径「任务中心拉了没反应」正是这一条。
  *
- * ```
- * public void setAdaptiveOverScroll() {
- *     adaptiveOverScroll = true;
- *     setOverScrollMode(OVER_SCROLL_NEVER);
- * }
- * // dispatchTouchEvent 里：
- * //   ACTION_DOWN   且 activeTouches 归零 → setOverScrollMode(OVER_SCROLL_ALWAYS)
- * //   ACTION_UP/CANCEL 且 activeTouches 归零 → setOverScrollMode(OVER_SCROLL_NEVER)
- * ```
- *
- * 即「**手指按着的时候才接形变**，其余时间一律关掉」，没有别的。另一个
- * `EdgeEffectFactory` 那条路（`EdgeEffectTrackerFactory`）TG 只是包了个
- * `TrackingEdgeEffect` 监听**可见性**（给 Blur3 判定要不要关模糊），
- * `super.onPull/onRelease` 原样转发 —— 同样没碰形变本身。
- *
- * 于是本屏照抄这两件事，各对应下面两行：
- * 1. **形变本体用平台那份** [ScrollableDefaults.overscrollEffect] —— 它就是
- *    `AndroidEdgeEffectOverscrollEffect`，内部持有 AOSP `EdgeEffect`（API 31+ 是
- *    `RenderNode` stretch，与 TG 跑的是**同一个平台件**），观感天然一致；
- * 2. **手指按着才接**（[StretchConnection] 的 [touching] 门 + [touchState] 那条
- *    `pointerInput`）—— 对应 TG 的 `OVER_SCROLL_ALWAYS`/`OVER_SCROLL_NEVER` 切换。
- *    只在这一段里把到边余量喂给它，其余时间喂了也白喂。
- *
- * **为什么不直接让 `LazyColumn` 自己那份形变管**（那才是"标准做法"）：Compose 只在
- * `shouldDispatchOverscroll = canScrollForward || canScrollBackward` 时才把它接上
- * （`ScrollingLogic.scrollByWithOverscroll`，字节码核过）—— **内容不满一屏的列表两个
- * 都是 false，一次都不触发**。项目页（几个文件）、设置顶页（两张卡）正是这种。
- * AOSP 与 TG 都没有这道门（`EdgeEffect` 是无条件接到边余量上的），所以 TG 的设置页
- * 不满一屏照样有形变 —— 这道门是 Compose 自己加的，不能拿它当 TG 的口径。
- *
- * 反过来把**列表自己那份**关掉（[LocalOverscrollConfiguration] 给 null）：
- * 长列表上它本来就会触发，与这里这一层叠着走就成了两层形变。不满一屏的列表它本来
- * 一次都不触发，关掉对它们没有影响。
+ * **不满一屏的列表为什么没有形变**（项目页几个文件、管理面板五个入口、设置顶页两张卡）：
+ * Compose 只在 `shouldDispatchOverscroll = canScrollForward || canScrollBackward` 时
+ * 才把形变接上（`ScrollingLogic.scrollByWithOverscroll`，字节码核过）。AOSP 与 TG
+ * **都没有这道门** —— `EdgeEffect` 是无条件接到边余量上的，所以 TG 的设置页不满一屏
+ * 照样有形变。这道门在 Compose 内部，自绘/自喂两条路都绕不开（要绕只能改
+ * `ScrollingLogic` 本身，那要 fork Compose 源码）。这条路值不值得走是产品决定，
+ * 不该由实现细节顺带带过去。
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RefreshableBox(
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    // **先取平台那份形变、再关掉列表自己那份**：顺序不能反 ——
-    // `ScrollableDefaults.overscrollEffect()` 读的就是 `LocalOverscrollConfiguration`，
-    // 在 null 的下面调它拿到的是 `NoOpOverscrollEffect`（等于什么都没接上）。
-    val effect = ScrollableDefaults.overscrollEffect()
-    val touching = remember { mutableStateOf(false) }
-    val connection = remember(effect, touching) { StretchConnection(effect, touching) }
-    CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
-        Box(
-            modifier = modifier
-                // TG 的 `OVER_SCROLL_ALWAYS` / `OVER_SCROLL_NEVER` 切换，就是这一条。
-                .pointerInput(Unit) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            // 每一拍都重算「还有没有手指按着」：`changes.any { pressed }`
-                            // 自己就含了 DOWN（有一根按下）与 UP/CANCEL（全部抬起）两种，
-                            // 不用分别认 action —— 与 TG 那两行 `ACTION_*` 分支同义。
-                            val event = awaitPointerEvent()
-                            touching.value = event.changes.any { it.pressed }
-                        }
-                    }
-                }
-                .nestedScroll(connection)
-                // 形变本体挂在这儿（API 31+ 是 `DrawStretchOverscrollModifier`，
-                // 绘制时顺带 `updateSize`，尺寸由这一层自己的 bounds 给）。
-                .overscroll(effect),
-            content = content,
-        )
-    }
-}
-
-/**
- * 把**子节点没吃掉的到边余量**喂给平台那份 `EdgeEffect`（见 [RefreshableBox] 的 KDoc）。
- *
- * 三个方法与 `ScrollingLogic` 里那条内置路径同义，差别只有一处：
- * **不查 `canScrollForward/canScrollBackward`**（TG 也不查），且只在 [touching]
- * 为真时动手 —— 对应 TG 只在 `ACTION_DOWN` 之后开着 `OVER_SCROLL_ALWAYS`。
- */
-@OptIn(ExperimentalFoundationApi::class)
-private class StretchConnection(
-    private val effect: OverscrollEffect,
-    private val touching: MutableState<Boolean>,
-) : NestedScrollConnection {
-
-    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-        if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
-        // 手指已经抬起来了：形变交给 `onPostFling` 的 `applyToFling` 收尾（内部
-        // `EdgeEffect.onRelease()`），这里不再喂。
-        if (!touching.value) return Offset.Zero
-        // `performScroll` 给 `{ Offset.Zero }`：滚动已经发生过了（这里拿的是 post-scroll
-        // 的余量），再滚一次就是同一段位移走两遍。这与平台那条内置路径同义。
-        val consumed = effect.applyToScroll(Offset(0f, available.y), source) { Offset.Zero }
-        return Offset(0f, consumed.y)
-    }
-
-    override fun onPostScroll(
-        consumed: Offset,
-        available: Offset,
-        source: NestedScrollSource,
-    ): Offset {
-        if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
-        if (!touching.value) return Offset.Zero
-        val taken = effect.applyToScroll(available, source) { Offset.Zero }
-        return Offset(0f, taken.y)
-    }
-
-    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-        // 松手/甩尾 → 弹回。内部走 `EdgeEffect.onRelease()`，与 TG 的 `onRelease()` 同一个。
-        effect.applyToFling(available) { Velocity.Zero }
-        return Velocity.Zero
-    }
+    Box(modifier = modifier, content = content)
 }
