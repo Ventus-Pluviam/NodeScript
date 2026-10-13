@@ -29,7 +29,7 @@
 - `:bridge:java` — Kotlin Router / RequestRegistry(TTL) / HandleRegistry(generation) / EventBus（§7）
 - `:bridge:native` — C++ N-API addon 控制面 + libnode.so 装载（§7，CI 构建）
 - `:bridge:image` — C++ 图像管线 libopencv.so（OpenCV 4.x，§9.2，CI 构建）
-- `:engine:node-process` — :nodeN 进程宿主：`NodeProcessEngine`（Kotlin spawn，实现 `:domain` 的 `ScriptEngine`）+ main.cpp（§5/§7.8；addon `.so` 本机 NDK 可交叉编译验证，APK `assembleDebug` 本机可直跑）
+- `:engine:node-process` — :nodeN 进程宿主：`NodeProcessEngine`（Kotlin spawn，实现 `:domain` 的 `ScriptEngine`）+ main.cpp（§5/§7.8；addon `.so` 与 APK 均走 CI 构建 —— **本机禁编**，见「构建」段禁令）
 - `:engine:sandbox` — QuickJS 宿主进程（**已裁 §18 第 1 项；壳 2026-09-30 已从 settings 注释摘除、不计入模块数**，空壳目录 2026-10-01 已从盘上删除、settings 里那行注释也同批删掉，见 `design-decisions.md` 同批追加行；复活 = 重建模块目录 + include 行加回 + ModuleGraphTest 允许集登记）
 - `:platform:capabilities` — **无障碍三面**：a11y 树/手势、screen 截图帧源、dialogs 对话框编排（`capabilities/{a11y,screen,dialogs,device}/` 子包；2026-09-30 步骤 6 系统面迁出，§9.1–9.4）
 - `:platform:process` — **进程/`/proc` 面**（批 105 新增）：杀树的 ppid 图 + `kill` 二进制 + pid 两级反射阶梯（`ProcOps`/`TreeOps`/`ProcTreeOps`）。**叶子模块，零模块依赖**（连 `:domain` 都不需要）—— `/proc` 不是领域概念，塞进 `:domain` 会失守「领域层零平台面」边界
@@ -44,6 +44,7 @@
 
 ## 构建
 
+- **禁止本地跑 Gradle，禁止本地构建二进制文件（2026-10-13 用户令）**：本机**不执行任何 `./gradlew`**（编译 / 单测 / detekt / lint / `assemble*` 一律不跑），也**不在本机编译任何二进制产物**（C++ addon `.so`、libnode/libopencv、Node 运行时、APK 等统统不编）。一切编译与构建只走 GitHub Actions（push 触发的 `ci.yml`，或 `gh workflow run engine-native --ref <分支>`）；本地只做改代码、读代码、提交、推送，红绿以 Actions run 为准。下面保留的环境变量口径只服务于 CI 同源理解，不构成本机可跑的理由。
 - **前置工具一律走环境变量约定，机器路径不写进本文件**：`JAVA_HOME`（JDK 17）、`ANDROID_HOME`（或仓库根 `local.properties` 的 `sdk.dir=`，已 gitignore；需 platform-35 + build-tools 35 + platform-tools）、`ANDROID_NDK_HOME`（只在编 C++ 时要）。本机（这台开发机）三处都已配好，**具体值见 `CLAUDE.local.md`**（不入库、已 gitignore）—— 别再往跟踪文件里写 `/root/…` 这类路径。
   **本机与 CI 同一口径**：跑的就是 ci.yml 里那条 `./gradlew`（全量命令见
   [`README.md`](README.md) 测试段），没有第二套脚本；「skipped/aborted ≠ 绿」的守卫做在约定插件
@@ -65,8 +66,8 @@
   `tests=0` / `skipped>0` 都红 —— 因为 `assumeTrue` 诚实跳过在本机对、在 CI 上会退化成
   「一片绿的假通过」。这条纪律是本仓「skipped ≠ 绿」的源头，别绕过它。
 - **可用 GitHub Actions 跑远端 CI**：远端 `origin` = `git@github.com:Ventus-Pluviam/NodeScript.git`（**公开仓**，SSH 可推；2026-10-02 实测 `gh api repos/… --jq .visibility` = `public`，原写「私有仓」是过期口径）。`ci.yml` 在 `push→main` 与 `pull_request` 时触发——把分支 `git push origin <分支>` 后开 PR 即跑全套门（PR 门 = JVM 单测 + archUnit + npm test + 文档链接门 + Android 构建/Lint；真 npm E2E 只在 nightly），不用等合入 main 才知道红绿。本机 `gh` token 若无该仓权限（`gh pr create` 报 404/解析不到仓库），用 push 后远端打印的 PR 链接手动开 PR；
-  看不到 runs 输出时以本机 `./gradlew` 同源复现为准。**不要为触发 CI 直推 main**。
-- **本机快速门**：与 CI **逐字同源**的 `./gradlew`（ci.yml L 任务行），单模块跑 `./gradlew :<模块>:test`（纯 JVM）或 `:<模块>:testDebugUnitTest`（android 模块）。守卫在约定插件里：测试出现 skipped/aborted 即红（`TestGuard.ENV_GATED` 只放行设计上环境门禁的 E2E；其余用 `-PallowSkipped=<类名>` 显式放行）。**`:ui`/`:app` 同源直跑**（`./gradlew :ui:testDebugUnitTest :app:testDebugUnitTest`）。
+  看不到 runs 输出时重触发或等下一次 run —— **不回退到本机 `./gradlew`（本机已禁跑）**。**不要为触发 CI 直推 main**。
+- **本机不设快速门（禁跑）**：曾有「与 CI 逐字同源的 `./gradlew` 本机直跑」一说，**2026-10-13 起作废** —— 本机不执行任何 `./gradlew`；要门就 push 后看 Actions。守卫仍在约定插件里（skipped/aborted 即红、`TestGuard.ENV_GATED` 只放行设计上环境门禁的 E2E），但**只在 CI 上生效**。
 
 ## 协作纪律（子 agent 必须遵守）
 
@@ -80,8 +81,4 @@
 
 - 版本口径 = **r28c**（与 `node-runtime-build/VERSIONS.env` 的 `NDK_VERSION` 同源；
   zip 校验见该管线 §2）。本机的 NDK 根见 `CLAUDE.local.md`（不入库）。
-- 用法：`export ANDROID_NDK_HOME=<你的 NDK 根>` +
-  `PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH`，
-  直接调 `aarch64-linux-android26-clang(++)`（API 26 = minSdk 冻结值）。
-- 本机只做 **C++ 交叉编译验证**（`bridge/native` 的 addon `.so` 能编出 arm64 ELF）；
-  APK/AGP `assembleDebug` 本机可直跑（已有 SDK，2026-09-24 已实测出包）；真机红测与生产签名管线仍走 CI。
+- **禁止本机编译二进制（2026-10-13 用户令）**：不在本机调 `aarch64-linux-android26-clang(++)`（或任何 NDK/本地工具链）编 addon `.so`，不本机跑 `assembleDebug`，不本机构建 Node 运行时/原生库 —— C++ 与 APK 的编译验证一律走 CI（与「构建」段禁令同一条）。此前「本机可做 C++ 交叉编译验证 / `assembleDebug` 可直跑」的口径**同日作废**。
