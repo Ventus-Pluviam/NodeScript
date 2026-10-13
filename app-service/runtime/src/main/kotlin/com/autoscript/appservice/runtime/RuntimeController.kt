@@ -277,10 +277,12 @@ class RuntimeController(
     suspend fun stop(runId: Long): StopOutcome {
         val handle = guard.withLock {
             startedAt.remove(runId)
-            active.remove(runId)
             // 过账：暂停中被停 —— 引擎侧 `stop()` 入口也会 auto-resume，这里清集是
             // 为了让「它曾被暂停过」这个事实随 run 终结一起消失（集只装在途）。
             paused.remove(runId)
+            // 必须放在最后：`withLock` 的值就是本块最后一个表达式 —— 放到 `paused.remove`
+            // 之后会把 `Boolean` 当成 `PoolHandle` 交出去（2026-10-13 CI 抓到）。
+            active.remove(runId)
         } ?: return StopOutcome.AlreadyGone
         heartbeats.forget(runId)
         // A11：stop 也是 run 终结 —— 同一条收口（与 kill/自然退出同口径）。
@@ -312,10 +314,11 @@ class RuntimeController(
     suspend fun killRun(runId: Long, cause: KillCause): KillCause? {
         val handle = guard.withLock {
             startedAt.remove(runId)
-            active.remove(runId)
             // 与 [stop] 同一条过账：暂停中被强杀同理清集（`engine.kill` 的 SIGKILL
             // 对 frozen 进程有效，不需要先解冻 —— 那是 SIGTERM 才有的问题）。
             paused.remove(runId)
+            // 必须是最后一个表达式（`withLock` 的值 = 本块末值）。
+            active.remove(runId)
         } ?: return null
         heartbeats.forget(runId)
         revokeRunResources(runId)
@@ -634,9 +637,10 @@ class RuntimeController(
     private suspend fun settleDone(runId: Long): Completed {
         val handle = guard.withLock {
             startedAt.remove(runId)
-            active.remove(runId)
             // 暂停中自然退出的 run：集里那笔随终结消失（与 stop/killRun 同口径）。
             paused.remove(runId)
+            // 必须是最后一个表达式（`withLock` 的值 = 本块末值）。
+            active.remove(runId)
         } ?: return Completed.UnknownRun(null)
         heartbeats.forget(runId)
         revokeRunResources(runId)
@@ -656,8 +660,9 @@ class RuntimeController(
     private suspend fun settleKilled(runId: Long): Completed {
         val handle = guard.withLock {
             startedAt.remove(runId)
-            active.remove(runId)
             paused.remove(runId)
+            // 必须是最后一个表达式（`withLock` 的值 = 本块末值）。
+            active.remove(runId)
         } ?: return Completed.UnknownRun(null)
         heartbeats.forget(runId)
         revokeRunResources(runId)
