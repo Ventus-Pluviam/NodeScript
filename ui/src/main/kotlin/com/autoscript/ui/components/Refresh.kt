@@ -2,7 +2,13 @@ package com.autoscript.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.OverscrollEffect
+import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.NoOpOverscrollEffect
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.foundation.gestures.ScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.overscroll
@@ -135,16 +141,26 @@ fun RefreshableBox(
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    // 平台那份形变（`AndroidEdgeEffectOverscrollEffect`）：绘制层由下面的
-    // `overscroll(effect)` 提供，尺寸由壳自己的 bounds 给 —— 不依赖列表容器。
-    // 这一行是前三版（`22a6fd0`/`b5f2084`/`e193c4d`）全灭的根因：自接的那份没有绘制节点，
-    // `updateSize` 从没人调过，`applyToScroll` 见 `containerSize.isEmpty()` 就早退。
     // 平台那份形变：绘制与尺寸都由壳自己的 `overscroll` 节点给，不依赖列表容器。
+    // （前三版全灭的根因正是这个：自接的那份没绘制节点、`updateSize` 从没人调过。）
     val effect = ScrollableDefaults.overscrollEffect()
+    val proxy = remember { OverscrollProxyState() }
     val feed = remember(effect) { FeedConnection(effect) }
     Box(
         modifier = modifier
             .overscroll(effect)
+            // 空白处按下的开拖者：列表没有手势节点参战，
+            // 没人开拖位移就进不了 nested-scroll 链。
+            // 这个 scrollable 门恒开（假 state）、位移一像素不吃，
+            // 只管开拖、形变由下面的 feed 统一喂——
+            // 注意这里没传 overscrollEffect：它自己那份是 NoOp，
+            // 不占用 effect，不与 feed 抢；两份 ScrollingLogic
+            // 各管各的 effect，轮换的病根没了。
+            .scrollable(
+                state = proxy,
+                orientation = Orientation.Vertical,
+                overscrollEffect = NoOpOverscrollEffect,
+            )
             .nestedScroll(feed),
         content = content,
     )
@@ -163,9 +179,6 @@ private class FeedConnection(
     private val effect: OverscrollEffect,
 ) : NestedScrollConnection {
 
-    /** 当前被拉出去多远（px，有符号:正=顶边被下拉），onPostFling归零用。 */
-    private var lastPull = 0f
-
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
         // 没形变时一像素不碰：pre-scroll 是内层列表滚动**之前**，这里吃了列表就没得滚
@@ -173,8 +186,6 @@ private class FeedConnection(
         // 只有已有形变时才动手，且只做回缩（反向拉回去），绝不新拉。
         if (!effect.isInProgress) return Offset.Zero
         val consumed = effect.applyToScroll(Offset(0f, available.y), source) { Offset.Zero }
-        lastPull += consumed.y
-        if (!effect.isInProgress) lastPull = 0f
         return Offset(0f, consumed.y)
     }
 
@@ -185,35 +196,38 @@ private class FeedConnection(
     ): Offset {
         if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
         val taken = effect.applyToScroll(available, source) { Offset.Zero }
-        lastPull += taken.y
-        if (!effect.isInProgress) lastPull = 0f
         return Offset(0f, taken.y)
     }
 
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-        // pulled 记的是被拉出去多远（px，有符号）。
-        // 归零要还的 = -pulled（正好抵消），再多给
-        // RELEASE_OVERSHOOT_PX 确保 distance 归零触发 finish()。
-        // 还完之后 lastPull 清零 —— 下一次 onPreScroll
-        // 同向会重新累。
-        val pulled = lastPull
-        if (pulled != 0f) {
-            lastPull = 0f
-            val back = -pulled + (if (pulled > 0f) -RELEASE_OVERSHOOT_PX else RELEASE_OVERSHOOT_PX)
-            effect.applyToScroll(Offset(0f, back), NestedScrollSource.UserInput) { Offset.Zero }
-            // 必须再跟一次 applyToFling：它内部会把
-            // scrollCycleInProgress 置回 false（上面那次 applyToScroll
-            // 又把它置成了 true）。不清的话下一次拖拽
-            // 的“catch”逻辑被跳过，动画在“直接拉回”
-            // 和“正常弹回”之间轮换 —— 用户口径
-            // “一下猛的收回去，一下又正常慢慢收”正是这条。
-            // 顺便把剩下的交给 animateToReleaseIfNeeded
-            // （内部 EdgeEffect.onRelease()，与 TG 同一个）带动画收尾。
+        if (effect.isInProgress) {
             effect.applyToFling(Velocity.Zero) { Velocity.Zero }
         }
         return Velocity.Zero
     }
 }
 
-/** 回零那一下多还的量（px）：确保 distance 归零触发 finish()。见 onPostFling。 */
-private const val RELEASE_OVERSHOOT_PX = 2f
+/**
+ * 只管开拖、不吃位移的 [ScrollableState]（见 [RefreshableBox] 的 KDoc）。
+ *
+ * - canScrollForward/canScrollBackward 恒 true —— 门恒开，空白处按下能开拖；
+ * - scrollBy 一律返回 0f（一像素不吃）—— 位移全落到 nested-scroll 链，由 feed 统一喂成形变；
+ * - isScrollInProgress 恒 false —— performRawScroll 不早退。
+ */
+private class OverscrollProxyState : ScrollableState {
+    override val canScrollForward: Boolean = true
+    override val canScrollBackward: Boolean = true
+    override val isScrollInProgress: Boolean = false
+    override fun dispatchRawDelta(delta: Float): Float = 0f
+    override suspend fun scroll(
+        scrollPriority: MutatePriority,
+        block: suspend ScrollScope.() -> Unit,
+    ) {
+        NoopScrollScope.block()
+    }
+}
+
+/** 不吃位移的 [ScrollScope]。 */
+private object NoopScrollScope : ScrollScope {
+    override fun scrollBy(pixels: Float): Float = 0f
+}
