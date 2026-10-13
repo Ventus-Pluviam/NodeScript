@@ -139,7 +139,8 @@ fun SettingsScreen(
     // 底栏收放的**唯一**判据（与 `ProjectScreen` 那条 `fullScreen` 同一写法）：子页在前台
     // = 占整屏 = 收掉；回顶页才放回来。单一判据保证"收/放"永远跟着状态走。
     val fullScreen = subPage != SettingsSubPage.NONE
-    LaunchedEffect(fullScreen) { tabBarHidden.value = fullScreen }
+    // 同 ProjectScreen 那条的 `active` 门：pager 预组合邻页，邻页组合时不许碰开关。
+    LaunchedEffect(active, fullScreen) { if (active) tabBarHidden.value = fullScreen }
 
     // 读态三态分派走 Status（`LoadState` 的纪律：界面不自己 when 它）。
     // 顶页不再挂它（批 49 去掉标题下的小字）—— 只在子页没读到 / 读失败时如实说。

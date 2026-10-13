@@ -496,8 +496,16 @@ class MainActivity : ComponentActivity() {
                                     // `closeXxx`（直改 `xxxOpen`，**不经过** `onBackRequest`），
                                     // 散写会让 ‹ 退出后底栏一直收着。单一判据跟着 `subPage` 走，
                                     // 手势、返回键、‹、子页互切全都对。
-                                    LaunchedEffect(subPage) {
-                                        tabBarHidden.value = subPage != null
+                                    //
+                                    // 读的是 **`LocalTabBarHidden`**（不是 `MainShell` 里那个局部变量：
+                                    // 它是 `MainShell` 的私有状态，这里在它 `content` lambda 的里面，
+                                    // 只拿得到经 provider 供下来的那一份 —— 同一个 `MutableState`）。
+                                    val tabBarHidden = LocalTabBarHidden.current
+                                    // `active` 门同 ProjectScreen/SettingsScreen：pager 预组合
+                                    // 邻页，邻页组合时（它作为"管理那一页"被预组合）不许碰开关。
+                                    val managementActive = pagerState.currentPage == Tab.MANAGEMENT.ordinal
+                                    LaunchedEffect(managementActive, subPage) {
+                                        if (managementActive) tabBarHidden.value = subPage != null
                                     }
                                     // 上面的 `LaunchedEffect` 只监视管理子页；四屏共用的编辑面/目录层
                                     // 各自在自己的屏里（`ProjectScreen`/`SettingsScreen`）管自己的 flag。

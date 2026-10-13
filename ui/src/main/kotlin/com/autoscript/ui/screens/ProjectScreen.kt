@@ -306,7 +306,11 @@ fun ProjectScreen(
     val fullScreen = editing != null || currentFolder != null
     // 与"状态翻面"同一帧生效（`LaunchedEffect` 在重组应用后立即跑 —— 编辑面开始关的
     // 那一下底栏就放回来，不等 380ms 飞出动画走完；进编辑面的那一拍也立即收掉）。
-    LaunchedEffect(fullScreen) { tabBarHidden.value = fullScreen }
+    //
+    // **`active` 门不能省**：pager 预组合邻页，邻页（它自己的 `fullScreen == false`）
+    // 组合时若也写这条 flag，会把正在前台那个整屏面的 true 覆盖回 false ——
+    // 底栏在人家全屏的时候冒出来。只有"我这一页停稳了"才许碰开关。
+    LaunchedEffect(active, fullScreen) { if (active) tabBarHidden.value = fullScreen }
 
     // 返回键的退让次序照 TG：先收面板 → 再退选择模式 → 再清搜索 → 最后才退一层目录。
     // 每一档都只做一件事，且「还有下一档」才拦下返回 —— 于是根层没搜索时返回键
