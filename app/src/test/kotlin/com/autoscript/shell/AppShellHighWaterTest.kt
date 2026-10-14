@@ -29,7 +29,11 @@ import org.junit.jupiter.api.Test
  * 刻意不共用一个全局序列：那样每次执行都是新号，"重发旧号"这条病根本复现不出来 ——
  * 这条用例要能在**没接高水位**时真红（`put` 撞 `id=1` 的终态行 → ISE），接了才绿。
  */
-private class HighWaterFakeEngine(override val id: EngineId) : ScriptEngine {
+private class HighWaterFakeEngine(
+    override val id: EngineId,
+    /** 看门狗按 pid 采样 `/proc`；本测试不接看门狗，如实回 null（"没有真进程"）。 */
+    override val pid: Int? = null,
+) : ScriptEngine {
     val executed = mutableListOf<EngineRunRequest>()
     var status: EngineStatus = EngineStatus.IDLE
     private val nextRunId = AtomicLong(1)
