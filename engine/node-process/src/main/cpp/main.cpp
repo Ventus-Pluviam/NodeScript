@@ -292,6 +292,12 @@ int main(int argc, char** argv) {
       return kExitDist;
     }
   }
+  // 参数序契约：node 选项（堆上限等）必须落在 **`-e BOOTSTRAP --` 之前**。
+  // node 的 argv 解析先吃选项、遇 `--` 收手，`--` 之后全是位置参数（脚本路径 +
+  // 脚本自己的参数）；脚本经 kBootstrap 的 `require(process.argv[1])` 取脚本路径，
+  // 拼错 = 选项被当成脚本名（设备实测 `MODULE_NOT_FOUND: Cannot find module
+  // '--max-old-space-size=192'`，退出码 1，引擎判 CRASHED）。位置参数自 `--` 起
+  // 原样透传（不含选项），顺序与个数都不变。
   std::vector<char*> node_argv;
   node_argv.push_back(argv[0]);  // argv[0] = 可执行名（node 惯例）
   static char flag_e[] = "-e";
@@ -302,8 +308,20 @@ int main(int argc, char** argv) {
     node_argv.push_back(flag_e);
     node_argv.push_back(bootstrap);
   }
+  // 两段过：先收选项（`-` 开头，落在 `--` 之前 = node 认它是选项），再原样透传
+  // 位置参数（脚本 + 脚本自己的参数，`--` 之后 = node 不碰）。脚本路径是绝对路径，
+  // 不会以 `-` 开头；脚本自己的参数即便以 `-` 开头也在 `--` 之后，照旧安全。
+  int first_positional = argc;   // 第一个位置参数的下标；== argc = 一个都没有
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i][0] == '-') {
+      node_argv.push_back(argv[i]);
+    } else {
+      first_positional = i;
+      break;
+    }
+  }
   node_argv.push_back(dd);
-  for (int i = 1; i < argc; ++i) node_argv.push_back(argv[i]);
+  for (int i = first_positional; i < argc; ++i) node_argv.push_back(argv[i]);
 
   int rc = node_start(static_cast<int>(node_argv.size()), node_argv.data());
   if (sock_fd >= 0) close(sock_fd);
