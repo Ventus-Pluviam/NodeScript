@@ -67,10 +67,11 @@ class LogWindowController(
      * 边界从系统宿主现取（屏幕可用区），夹取与坐标计算在状态层 —— 宿主只落位。
      * 拖动改的是 state，`SystemWindowSync` 会把新坐标重喂给窗口（绝对坐标）。
      *
-     * @return **真正落位**的位移（dp；夹取后可能小于请求量）—— 手势层用它补半速。
+     * [dx]/[dy] 是**屏幕坐标系**里的真实位移（手势层换算好的，见
+     * `LogWindowContent.onDrag` 的 KDoc）—— 这里只管相加与夹取，不猜参照系。
      */
-    fun drag(dx: Float, dy: Float): Pair<Float, Float> {
-        val current = state ?: return 0f to 0f
+    fun drag(dx: Float, dy: Float) {
+        val current = state ?: return
         val bounds = systemHost?.boundsDp() ?: (0f to 0f)
         val next = current.movedTo(
             dx,
@@ -78,15 +79,11 @@ class LogWindowController(
             bounds.first.takeIf { it > 0f },
             bounds.second.takeIf { it > 0f },
         )
-        // 回报**真正落位**的位移（夹取后可能小于请求量）—— 手势层靠它补半速，见
-        // `LogWindowContent.onDrag` 的 KDoc。
-        val applied = (next.x - current.x) to (next.y - current.y)
-        if (applied.first == 0f && applied.second == 0f) return 0f to 0f
+        if (next.x == current.x && next.y == current.y) return
         state = next
         lastX = next.x
         lastY = next.y
         if (usingSystemWindow) systemHost?.moveTo(next.x, next.y)
-        return applied
     }
 
     /**
@@ -94,16 +91,14 @@ class LogWindowController(
      *
      * 与 [drag] 同一条分工（状态层算、宿主落位），差别只在边界来源：兜底窗的坐标系是
      * 应用内容区，只有它自己量得到。
-     *
-     * @return 同 [drag]：真正落位的位移（dp）。
      */
-    fun dragInApp(dx: Float, dy: Float, boundsW: Float, boundsH: Float): Pair<Float, Float> {
-        val current = state ?: return 0f to 0f
+    fun dragInApp(dx: Float, dy: Float, boundsW: Float, boundsH: Float) {
+        val current = state ?: return
         val next = current.movedTo(dx, dy, boundsW.takeIf { it > 0f }, boundsH.takeIf { it > 0f })
+        if (next.x == current.x && next.y == current.y) return
         state = next
         lastX = next.x
         lastY = next.y
-        return (next.x - current.x) to (next.y - current.y)
     }
 
     /** 关窗（系统窗撤 view，in-app 窗靠 state null 不画）。 */

@@ -1692,8 +1692,6 @@ private fun MainShell(
                         onClear = { logWindow.clearLogs(it) },
                         onClose = { logWindow.close() },
                         onFullscreenToggle = { logWindow.toggleFullscreen() },
-                        // 落位量回报给手势层补半速（见 `LogWindowContent.onDrag` 的 KDoc）：
-                        // in-app 宿主在 dp 域，故这里直接回 dp 对，由它换算回 px。
                         onDrag = { dx, dy, w, h -> logWindow.dragInApp(dx, dy, w, h) },
                         modifier = Modifier.fillMaxSize(),
                     )

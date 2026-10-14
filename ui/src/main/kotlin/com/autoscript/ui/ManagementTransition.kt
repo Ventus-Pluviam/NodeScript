@@ -517,7 +517,11 @@ internal fun anchorPivotY(predictive: Boolean, touchY: Float, height: Float): Fl
  * @param viewportWidth 视口宽（TG 的 `width`，已扣掉 padding）。
  */
 internal fun scrimOpacity(innerTranslationX: Float, viewportWidth: Float): Float {
-    if (viewportWidth <= 0f) return 0f
+    // TG 整块（`:1180`）的门是 `translationX != 0 || overrideWidthOffset != -1` ——
+    // **窗口就位时压根不画遮罩**。把这道门收进函数里（而不是只留在调用点）：否则
+    // 纯函数在 `x == 0` 处会回「满档遮罩」这个荒谬值（`widthOffset = 满屏`，
+    // 比例 1.0 被 0.8 钳住），而那正是「就位时没有遮罩」这条判据要钉的。
+    if (viewportWidth <= 0f || innerTranslationX == 0f) return 0f
     val widthOffset = (viewportWidth - innerTranslationX).coerceAtLeast(0f)
     val opacity = (widthOffset / viewportWidth).coerceIn(0f, SCRIM_MAX_OPACITY)
     return SCRIM_ALPHA * opacity

@@ -19,7 +19,13 @@ class ScriptLogStoreTest {
     @TempDir
     lateinit var tmp: Path
 
-    private fun store(): ScriptLogStore = ScriptLogStore(tmp.resolve("script-logs"))
+    /**
+     * **目录必须与读侧同源**：`ScriptLogRead` 从 `filesDir/.ns/script-logs` 读
+     * （生产装配里 `nsDir = filesDir/.ns`、写侧 `nsDir.resolve("script-logs")`），
+     * 测试的写侧若直接落到 `tmp/script-logs`，写了也读不到 —— 那曾让整份列表空掉。
+     */
+    private fun store(): ScriptLogStore =
+        ScriptLogStore(tmp.resolve(".ns").resolve("script-logs"))
 
     @Test
     fun `begin 写 index 行 append 落对应 run 文件`() {
@@ -44,9 +50,12 @@ class ScriptLogStoreTest {
     fun `宿主行 runId0 不落盘`() {
         val s = store()
         s.begin(7L, "demo", "a.js", 1L)
-        s.appendLine(ConsoleLine(seq = 1L, runId = 0L, level = "log", text = "宿主侧", atMillis = 1L))
+        // 先落一条**真的**脚本行：否则 `<7>.log` 压根不存在，而 `content` 对
+        // 「文件缺失」是抛（"读不到"≠"没输出"）—— 那就测不到"宿主行没混进来"了。
+        s.appendLine(ConsoleLine(seq = 1L, runId = 7L, level = "log", text = "脚本侧", atMillis = 1L))
+        s.appendLine(ConsoleLine(seq = 2L, runId = 0L, level = "log", text = "宿主侧", atMillis = 2L))
         val content = ScriptLogRead.content(tmp, 7L)
-        assertTrue(content.isEmpty(), "runId 0 是引擎外日志，不进执行文件")
+        assertEquals(listOf("脚本侧"), content.map { it.text }, "runId 0 是引擎外日志，不进执行文件")
     }
 
     @Test

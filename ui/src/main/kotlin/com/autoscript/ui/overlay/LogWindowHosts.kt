@@ -18,7 +18,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -78,12 +77,12 @@ fun LogWindowInAppHost(
     onClose: () -> Unit,
     onFullscreenToggle: () -> Unit,
     /**
-     * 拖动位移（dp）+ 本宿主量到的可视边界（dp；0 = 未知）。
+     * 拖动位移（dp；**屏幕/内容坐标系里的真实位移**）+ 本宿主量到的可视边界（dp；0 = 未知）。
      *
      * 边界由**宿主**给（它才知道自己的坐标系多大：系统窗 = 屏幕可用区、in-app = 内容区），
      * 夹取由状态层做（它才知道窗多宽）—— 两边各答一半，谁都不抄对方的数。
      */
-    onDrag: (dx: Float, dy: Float, boundsW: Float, boundsH: Float) -> Pair<Float, Float>,
+    onDrag: (dx: Float, dy: Float, boundsW: Float, boundsH: Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val copy = rememberCopyAction()
@@ -137,12 +136,10 @@ fun LogWindowInAppHost(
                     onFullscreenToggle = onFullscreenToggle,
                     onCopyLine = { copy.copy("已复制该行", it) },
                     onDrag = { d ->
-                        // px → dp 进状态层，落位量再 dp → px 回给手势层（补半速用；见
-                        // `LogWindowContent.onDrag` 的 KDoc）。
-                        val applied = with(density) {
-                            onDrag(d.x.toDp().value, d.y.toDp().value, boxW, boxH)
-                        }
-                        with(density) { Offset(applied.first.dp.toPx(), applied.second.dp.toPx()) }
+                        // 手势层给的是屏幕上的真实位移（见 `LogWindowContent.dragHandle`
+                        // 的 KDoc），这里只换成 dp 交给状态层；夹取由状态层按本宿主
+                        // 量到的边界做。
+                        with(density) { onDrag(d.x.toDp().value, d.y.toDp().value, boxW, boxH) }
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -198,8 +195,7 @@ fun SystemWindowSync(
                     // 屏幕多宽，夹取只有在那里做才不用把尺寸抄两份；宿主只把算好的坐标落到窗口上。
                     // 窗内的坐标是 px（离屏 ComposeView 的密度与主界面同一台设备，故换算同源）。
                     onDrag = { d ->
-                        val applied = with(density) { controller.drag(d.x.toDp().value, d.y.toDp().value) }
-                        with(density) { Offset(applied.first.dp.toPx(), applied.second.dp.toPx()) }
+                        with(density) { controller.drag(d.x.toDp().value, d.y.toDp().value) }
                     },
                 )
             },

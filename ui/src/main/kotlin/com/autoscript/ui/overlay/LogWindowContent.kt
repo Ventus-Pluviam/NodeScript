@@ -56,15 +56,8 @@ fun LogWindowContent(
     onClose: () -> Unit,
     onFullscreenToggle: () -> Unit,
     onCopyLine: (String) -> Unit,
-    /**
-     * 头部拖拽：入参是本次的**本地**位移（px），返回值是**真正落位**的位移（px）。
-     *
-     * 为什么要返回值：窗跟着手指走时，本地坐标系被同向抵消 —— 不把"上一步已经挪了
-     * 多少"补回去，窗只会以**一半**速度跟手（经典半速 bug，2026-10-13 用户报"不跟手"）。
-     * 补的量必须是**真正落位**的那一份：拖到屏幕边缘被夹住时窗没动，此时补 0 ——
-     * 补"想挪的量"会让手指回退后窗突然跳一段。
-     */
-    onDrag: (Offset) -> Offset,
+    /** 头部拖拽：本次的位移增量（px，屏幕上的真实位移）。 */
+    onDrag: (Offset) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -157,38 +150,34 @@ private fun WindowIconButton(
 }
 
 /**
- * 头部拖拽手势：位移增量交给宿主（系统窗 → `updateViewLayout` 改 x/y）。
+ * 头部拖拽手势：把 `positionChange()` 交给宿主
+ * （系统窗 → `updateViewLayout` 改 x/y；in-app → 状态层 offset）。
  *
- * **两个坑，2026-10-13 用户报"不跟手"时一次修掉**：
+ * **不要"补偿"**（2026-10-14 用户实测"轻轻一动就移动出去很远"，起因就是补偿）：
+ * Compose 的 `positionChange()` 已经把 `position` 与 `previousPosition` **用同一份
+ * 当前坐标**换算过（事件派发时逐点 `screenToLocal`），所以差值恒等于屏幕上的真实位移
+ * —— 窗自己挪了不会让它变小。再"补上一步落位量"就是**把位移加两遍**，而且逐帧累积：
+ * 第 1 帧 10、第 2 帧 10+10=20、第 3 帧 10+20=30…… 窗越拖越快，正是"轻轻一动就飞出去"。
  *
- * 1. **手势检测不能带会变的 key**。拖动每帧都改状态 → 重喂内容 → 重组 →
- *    `pointerInput` 的 key 若是回调本身（每次都新建实例），检测协程**当场被取消重启**，
- *    手指还没抬起来手势就断了。故 key 恒为 [Unit]（检测器活过整场拖动），
- *    回调经 `rememberUpdatedState` 现取最新那份。
- * 2. **补偿半速**：`positionChange()` 给的是**本地**坐标的差，而窗一挪，本地坐标系
- *    就同向挪了同样多 —— 逐帧观察到的差值因此只有真实位移的一半（窗以半速跟手）。
- *    补法是把上一步**真正落位**的位移加回来：
- *    ```
- *    真实位移 = 本地位移 + 上一步落位位移
- *    ```
- *    用返回值而不是"想挪的量"：夹在屏幕边缘时窗没动，此刻补 0 才对
- *    （补想挪的量会让手指回退时窗跳一段）。
+ * **真正要防的是手势检测被重组打断**（2026-10-13 那次"不跟手"）：拖动每帧都改状态 →
+ * 重喂内容 → 重组 → `pointerInput` 的 key 若是回调本身（每次新建实例），检测协程会被
+ * 自己的重组取消重启，手指还没抬手势就断。故 key 恒为 [Unit]（检测器活过整场拖动），
+ * 回调经 `rememberUpdatedState` 现取最新那份。
+ *
+ * **夹取**：手势层只管报位移，夹取在状态层做（它才知道窗多大、边界多宽）—— 窗贴边后
+ * 位移继续报但落位被夹住，手指回退时坐标跟着回，天然不跳。
  */
 @Composable
-private fun Modifier.dragHandle(onDrag: (Offset) -> Offset): Modifier {
+private fun Modifier.dragHandle(onDrag: (Offset) -> Unit): Modifier {
     val latest = rememberUpdatedState(onDrag)
     return pointerInput(Unit) {
-        var applied = Offset.Zero
         awaitPointerEventScope {
             while (true) {
                 val event = awaitPointerEvent()
                 val change = event.changes.firstOrNull() ?: continue
                 if (change.pressed) {
-                    val delta = change.positionChange() + applied
-                    if (delta != Offset.Zero) applied = latest.value(delta)
-                } else {
-                    // 抬手/取消：补偿量归零，下一次按下从零起算。
-                    applied = Offset.Zero
+                    val delta = change.positionChange()
+                    if (delta != Offset.Zero) latest.value(delta)
                 }
                 event.changes.forEach { it.consume() }
             }

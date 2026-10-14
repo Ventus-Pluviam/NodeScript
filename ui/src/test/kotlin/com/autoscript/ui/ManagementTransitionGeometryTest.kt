@@ -37,8 +37,11 @@ class ManagementTransitionGeometryTest {
 
     @Test
     fun `超过满量程之后净位移才开始把窗口推出屏幕`() {
-        // TG `:1123` 的 `dx = Utilities.clamp(translationX, dp(56), 0)` —— 钳在 dp(56)。
-        assertEquals(full, netLayerX(full, density, fromLeft = true), 1e-3f)
+        // TG `:1123` 的 `dx = Utilities.clamp(translationX, dp(56), 0)` —— 钳在 dp(56)，
+        // 于是 `magnitude = translationX - clamp(...)`：
+        // - 恰好等于满量程（`full`）时钳值与它相等 → 净位移仍是 0（边界在**越过**之后）；
+        // - 越过之后（飞出段的 400）净位移 = 超出量。
+        assertEquals(0f, netLayerX(full, density, fromLeft = true), 1e-3f)
         assertEquals(400f - full, netLayerX(400f, density, fromLeft = true), 1e-3f)
     }
 
@@ -96,9 +99,12 @@ class ManagementTransitionGeometryTest {
 
     @Test
     fun `非手势缩放走 min 取零点二五与零点零五x 的较小者——TG 源码第 1121 行`() {
+        // `1.00 - min(0.25, 0.05 · x / dp(56))`：斜率是每满量程 0.05，故
+        // x = full 时缩 0.05（→ 0.95），不是 0.975（那是半量程的点）。
         assertEquals(1.0f, layerScale(0f, predictive = false, density = density), 1e-6f)
-        assertEquals(0.975f, layerScale(full, predictive = false, density = density), 1e-6f)
-        // 更大的位移不再继续缩：TG 那个 `min` 的上界。
+        assertEquals(0.975f, layerScale(full / 2f, predictive = false, density = density), 1e-6f)
+        assertEquals(0.95f, layerScale(full, predictive = false, density = density), 1e-6f)
+        // 更大的位移不再继续缩：TG 那个 `min` 的上界 0.25。
         assertEquals(0.75f, layerScale(full * 10, predictive = false, density = density), 1e-6f)
     }
 
@@ -155,11 +161,16 @@ class ManagementTransitionGeometryTest {
     }
 
     @Test
-    fun `遮罩随时长推出而变淡，落在峰值那一档`() {
-        // 跟手满量程：widthOffset = 屏宽 - dp(56)，比例约 0.844，被 0.8 的上界钳住。
-        val maxOpacity = scrimOpacity(innerTranslationX = full, viewportWidth = width)
-        assertEquals(SCRIM_PEAK * 0.8f, maxOpacity, 1e-4f)
-        assertTrue(scrimOpacity(innerTranslationX = full / 2f, viewportWidth = width) < maxOpacity)
+    fun `遮罩落在峰值那一档，推出更远才变淡`() {
+        // 屏宽 1080、满量程 dp(56)=168：`widthOffset / width = 0.844`，**已经越过**
+        // TG `:1204` 的 `clamp(..., 0, 0.8f)` 上界 —— 所以跟手整段都是峰值档
+        // （这正是「缝一露出来就是满档遮罩」的由来）。半量程也一样够到上界。
+        val peak = scrimOpacity(innerTranslationX = full, viewportWidth = width)
+        assertEquals(SCRIM_PEAK * 0.8f, peak, 1e-4f)
+        assertEquals(peak, scrimOpacity(innerTranslationX = full / 2f, viewportWidth = width), 1e-4f)
+        // 比例落回 0.8 之下（飞出段推出很远）遮罩才开始变淡。
+        val far = scrimOpacity(innerTranslationX = width * 0.9f, viewportWidth = width)
+        assertTrue(far < peak, "推出越远遮罩越淡，实际 $far vs $peak")
     }
 
     @Test

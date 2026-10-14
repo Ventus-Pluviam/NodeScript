@@ -287,7 +287,10 @@ class TaskCenterStateTest {
         name: String = "任务$id",
         nextFireAtMillis: Long? = null,
     ) = TaskRowState(
-        id = id, name = name, projectId = "p", scriptPath = "$id.js", scheduleText = "", nextFireText = null,
+        // scriptPath 保持 main 上的 `p/$id.js` 形态：搜索那条用例断言 `matches("p/a")`
+        // 命中（它测的是"脚本路径也参与命中"，与路径形状无关）。2026-10-13 给这一行加
+        // projectId 时顺手把 scriptPath 改成了 `$id.js`，把那条用例一起弄红了。
+        id = id, name = name, projectId = "p", scriptPath = "p/$id.js", scheduleText = "", nextFireText = null,
         enabled = true, degraded = false, once = false, nextFireAtMillis = nextFireAtMillis,
     )
 
