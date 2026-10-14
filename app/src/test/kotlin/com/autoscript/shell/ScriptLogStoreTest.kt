@@ -14,9 +14,10 @@ import java.nio.file.Path
  * 钉的是三条"静默地不对"：宿主行混进执行文件（详情页分不清谁说的）、
  * 写失败掀翻执行（诊断面绝不能比执行面更脆弱）、index 与日志文件分家。
  *
- * **这些用例同时是"写读同源"的守卫**：写侧 `ScriptLogStore` 落 `{"run":7`（裸数字），
- * 读侧 `ScriptLogRead.longField` 若去要求带引号（`ConsoleHistory` 那份的形状），
- * 每一行 index 都会解析失败、列表恒空 —— 2026-10-14 正是这么红的。
+ * **这些用例同时是"写读同源"的守卫**：写侧与读侧是一对手写的 JSONL 编解码
+ * （不是 `DomainJson`，因为半行也要能读）。两处形状必须逐字对上 —— 2026-10-14
+ * 连红两轮都出在这条缝上：先是读侧的数字字段要求带引号（writer 写裸数字），
+ * 后是写侧 `q()` 忘了补两端引号（`{"project":demo` 不是合法 JSON）。
  */
 class ScriptLogStoreTest {
 

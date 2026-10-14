@@ -96,8 +96,20 @@ class ScriptLogStore(
         const val INDEX_NAME = "index.jsonl"
         fun logName(runId: Long): String = "$runId.log"
 
-        /** JSON 字符串转义（引号/反斜杠/控制字符；与 `ConsoleHistory.q` 同款）。 */
+        /**
+         * JSON 字符串字面量：**两端补引号** + 转义（引号/反斜杠/控制字符）。
+         *
+         * 名字与形状都跟 `ConsoleHistory.q` / `InstallJournal.q` 对齐（那两份都是
+         * 「补引号 + 转义」）—— 2026-10-14 之前这里只转义、不补引号，writer 于是写出
+         * `{"run":7,"project":demo,...}`：**不是合法 JSON**，读侧 `stringField`
+         * 找 `"project":"` 恒落空 → 每一行 index 都解析失败、列表恒空（CI 上 6 条全红）。
+         *
+         * 为什么不能只转义：调用点是原始字符串 `""","project":"""` —— 结尾那个
+         * `"` 被 Kotlin 当成了定界符的一部分吃掉，写出的字面量里没有开引号，
+         * 所以引号只能由本函数补（别处调用点自己写了 `append("\\"")`，那是另一回事）。
+         */
         fun q(raw: String): String = buildString(raw.length + 2) {
+            append('"')
             for (c in raw) {
                 when (c) {
                     '"' -> append("\\\"")
@@ -108,6 +120,7 @@ class ScriptLogStore(
                     else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
                 }
             }
+            append('"')
         }
     }
 }
