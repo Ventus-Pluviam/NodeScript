@@ -39,8 +39,11 @@ class AppShellEnginePathsTest {
     )
 
     @Test
-    fun `引擎三件 so 的路径都读 nativeLibraryDir 而不是 files 下的 .ns`() {
-        val source = Files.readString(repoRoot().resolve(SOURCE))
+    fun `引擎三件 so 的路径都读 nativeLibraryDir 而不是 files 目录下的 ns`() {
+        val source = String(
+            Files.readAllBytes(repoRoot().resolve(SOURCE)),
+            Charsets.UTF_8,
+        )
 
         // 期望接收者 = `Paths.get(applicationInfo.nativeLibraryDir)` 绑到的那个 val
         // （见类 KDoc 末段：现推而不是写死，改名不该让门红在无关处）。
