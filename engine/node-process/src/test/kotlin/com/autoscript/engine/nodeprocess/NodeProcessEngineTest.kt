@@ -141,10 +141,15 @@ class NodeProcessEngineTest {
         return p
     }
 
-    /** 两个限额缝打包一个参数：这两个是同一件事（脚本资源限额），拆开只会让 `engine()` 顶破 detekt 的参数线。 */
+    /**
+     * 三个缝打包一个参数：拆开会让 `engine()` 顶破 detekt 的参数线（阈值 10，已到顶）。
+     * 前两个是同一件事（脚本资源限额），`grace` 是 stop 语义那一频段的配置 ——
+     * 三者共处一包**不是**设计上的耦合，只是同一个 helper 透传、参数位不够。
+     */
     private data class ScriptLimits(
         val maxHeapMb: () -> Int? = { null },
         val uvThreadPoolSize: () -> Int? = { null },
+        val grace: Long = 3_000,
     )
 
     /** 默认宿主 = 临时目录里的哑文件（绝对路径存在性预检要过；真起进程的是假缝）。 */
@@ -159,7 +164,6 @@ class NodeProcessEngineTest {
         bridgeDist: Path? = null,
         scriptEnv: () -> Map<String, String> = { emptyMap() },
         limits: ScriptLimits = ScriptLimits(),
-        grace: Long = 3_000,
         runIdHighWater: Long = 0,
     ): NodeProcessEngine {
         // 只有走默认才铺哑文件：预检缺位案显式传"不存在的路径"、PATH 名案传相对名 —— 都原样不动。
@@ -180,7 +184,7 @@ class NodeProcessEngineTest {
                 maxHeapMb = limits.maxHeapMb,
                 uvThreadPoolSize = limits.uvThreadPoolSize,
                 runIdHighWater = runIdHighWater,
-                stopGraceMillis = grace,
+                stopGraceMillis = limits.grace,
             ),
             launcher,
             identityIssuer = { _, _, _, _ -> object : com.autoscript.domain.engine.RunIdentityLease {
@@ -511,7 +515,7 @@ class NodeProcessEngineTest {
     fun `stop 语义——SIGTERM 退净回 Clean，忽略信号回 TimedOut partial`() {
         writeScript()
         val launcher = FakeLauncher()
-        val e = engine(launcher, grace = 50)
+        val e = engine(launcher, limits = ScriptLimits(grace = 50))
         runBlocking { e.execute(request()) }
         val proc = launcher.nextProcess
 
@@ -659,7 +663,7 @@ class NodeProcessEngineTest {
     fun `stop 与 kill 路径不等排水——终止手段的产物不填摘要也不付等待`() {
         writeScript()
         val launcher = FakeLauncher()
-        val e = engine(launcher, grace = 50)
+        val e = engine(launcher, limits = ScriptLimits(grace = 50))
         runBlocking { e.execute(request()) }
         val stopped = launcher.nextProcess
         assertEquals(StopResult.Clean, runBlocking { e.stop() })
