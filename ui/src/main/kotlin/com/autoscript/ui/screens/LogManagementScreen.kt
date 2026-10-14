@@ -516,7 +516,17 @@ private fun ScriptLogDetail(
 ) {
     val copy = rememberCopyAction()
     var load by rememberSaveable(runId) { mutableStateOf<LoadState>(LoadState.NotLoaded) }
-    var lines by rememberSaveable(runId) { mutableStateOf<List<String>>(emptyList()) }
+    // **行内容不放进 rememberSaveable**（2026-10-15 真机闪退）：详情页打开后 `LaunchedEffect`
+    // 把全文存进 Compose 的注册表（registry），该 runId 的详情每次组合都要重新 `register`，
+    // 而注册那一下对**现值**做 canBeSaved —— 空 `List` 是 Serializable（Bundle 收）、
+    // 读回来的 `List<String>` 也是 Serializable，**两者都过**；但 `String` 的
+    // `CharSequence` 抽象返回的匿名实现不是 Serializable，子列表（`List.subList`）也
+    // 不是 —— 一旦行内容形状落在这两种上，`register` 的 `requireCanBeSaved` 就抛
+    // `IllegalArgumentException`（Registry 拒绝），异常从离屏/主组合冒到进程 → 闪退。
+    // 详情是**屏内局部现值**（返回即弃），行数据不需要跨配置存活；丢掉"已读的行"在
+    // 进详情前本来就没读过，语义与 [load] 的 NotLoaded 一致。用 `remember` 而不是
+    // `rememberSaveable`：配置重建重新拉一次，成本只是一次本地文件读。
+    var lines by remember(runId) { mutableStateOf<List<String>>(emptyList()) }
     // 行是富结构（level/time/text），saveable 存不了 —— 存原文 JSON 行，画时再解。
     // 解码失败的行显示原文（坏行不掀翻整份详情，与 ScriptLogRead.content 同纪律）。
     LaunchedEffect(runId) {
