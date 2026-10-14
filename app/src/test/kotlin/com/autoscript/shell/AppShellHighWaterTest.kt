@@ -106,12 +106,15 @@ class AppShellHighWaterTest {
         assertEquals(1L, archive.maxEngineRunId(), "档案高水位 = 上一进程用过的最大号")
 
         // 新进程装配：把高水位传下去，池里每个引擎实例在 execute 之前先顶水位。
-        // 这里模拟的是 AppShellApplication 的装配动作（engineFactory 里读高水位 → 构造配置）。
+        // 这里模拟的是 AppShellApplication 的装配动作 —— 高水位在**装配前**同步读出
+        // （生产是 `RunArchiveWiring.highWater` 里 `runBlocking` 收口的那一下），
+        // 池工厂只做构造配置，不是挂起缝。
+        val highWater = archive.maxEngineRunId()
         val engines = mutableListOf<HighWaterFakeEngine>()
         val log = InMemoryIntentLog()
         val shell = AppShell.assemble(
             engineFactory = { id, _ ->
-                HighWaterFakeEngine(id, configHighWater = archive.maxEngineRunId()).also { engines += it }
+                HighWaterFakeEngine(id, configHighWater = highWater).also { engines += it }
             },
             schedulerProvider = HighWaterProvider,
             intentLog = log,
