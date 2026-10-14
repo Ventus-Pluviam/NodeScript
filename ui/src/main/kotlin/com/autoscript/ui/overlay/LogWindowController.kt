@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.ui.state.ActiveRunState
+import com.autoscript.ui.state.ConsoleLineState
 
 /**
  * 执行日志悬浮窗的**控制器**（2026-10-13 用户令；Activity `remember` 一份）。
@@ -105,6 +106,23 @@ class LogWindowController(
     fun close() {
         state = null
         systemHost?.hide()
+    }
+
+    /**
+     * 窗内日志行的**事实源**（`consoleState.lines` 的现值；调用方每次拉取后 [updateLines]）。
+     *
+     * 为什么行数据住控制器而不是"由调用方当参数喂进系统窗内容"（2026-10-14「点执行就闪退」）：
+     * 参数喂进去的代价是**每喂一次就要重跑一次 `setContent`**（`SystemWindowSync` 的效应
+     * 以它为键），而轮询 400ms 一轮、每轮 `ConsoleState.of` 都产出一个新的 `List` 实例 ——
+     * 于是窗一开就每 400ms 重建一次离屏组合。住这里之后，窗内容**现读**这份状态，
+     * 刷新走 Compose 重组，`setContent` 的执行次数 = 开窗次数。
+     */
+    var lines: List<ConsoleLineState> by mutableStateOf(emptyList())
+        private set
+
+    /** 行事实源刷新（调用方在 `reloadConsole` 之后推；见 [lines] 的 KDoc）。 */
+    fun updateLines(next: List<ConsoleLineState>) {
+        lines = next
     }
 
     /** 系统窗弹失败（运行时被拒）→ 落回 in-app（由 `SystemWindowSync` 调）。 */

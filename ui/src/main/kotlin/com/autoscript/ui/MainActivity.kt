@@ -251,6 +251,15 @@ class MainActivity : ComponentActivity() {
     private fun logWindowRef(): com.autoscript.ui.overlay.LogWindowController =
         checkNotNull(logWindowCtl) { "悬浮窗控制器未就绪" }
 
+    /**
+     * [logWindowRef] 的「有则给、没有就 null」版（**只给失败清理路径用**）。
+     *
+     * 为什么需要它：失败路径上要关窗，而关窗这件事本身**不该再抛** —— 拿不到控制器
+     * 恰恰是它要处理的那种失败（控制器未就绪），在清理里再 `checkNotNull` 一次
+     * 就是把「本来要报的错」换成「清理时崩的错」（2026-10-14「点执行就闪退」）。
+     */
+    private fun logWindowRefOrNull(): com.autoscript.ui.overlay.LogWindowController? = logWindowCtl
+
     // 「当前页签」不再是一个字段：它由 pager 的滚动位置派生（见 setContent 里的 pagerState）。
     // 存两份必然漂移 —— 手指划过去时字段说 A、pager 说 B。
 
@@ -475,13 +484,18 @@ class MainActivity : ComponentActivity() {
             logWindowCtl = logWindow
             // 悬浮窗同步与轮询（2026-10-13）：系统窗内容同步 + 窗开期间拉取。
             // `logWindow.state != null` 即开 —— 关窗（state null）效应取消、轮询停。
+            //
+            // **行数据不进 `SystemWindowSync` 的参数**（2026-10-14「点执行就闪退」）：
+            // 参数是 `LaunchedEffect` 的键，而每轮轮询都产出新的行列表 —— 内容一变
+            // 效应就重启、离屏窗就重跑一次 `setContent`。改走 `logWindow.lines`
+            // （窗内现读的 Compose 状态，刷新即普通重组，见 `SystemWindowSync` KDoc）。
             com.autoscript.ui.overlay.SystemWindowSync(
                 controller = logWindow,
-                lines = consoleState.lines,
                 onPauseToggle = { scope.launch { logWindow.togglePause() } },
             )
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
+                logWindow.updateLines(consoleState.lines)
                 logWindow.bind(consoleState.activeRuns)
             }
             // 系统栏图标的明暗跟**本 App 的主题档位**走，不是跟系统深色开关走：
@@ -1196,14 +1210,18 @@ class MainActivity : ComponentActivity() {
         // （首段 = 项目名）只活在文件列表里，出这一层就换形（转换收在 `:domain`）。
         // 削不出 = 这个文件不在该项目下 → 交给宿主拒（它的话术点名原因）。
         val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath) ?: relPath
-        logWindowRef().open(projectId, internalPath)
+        // **开窗也在 try 里**（2026-10-14「点执行就闪退」）：`logWindowRef()` 拿不到
+        // 控制器时是 `checkNotNull`（IllegalStateException），此前它在 try 之外 ——
+        // 那条路连「关窗」都不需要，却照样把异常送进组合作用域。开窗失败与执行失败
+        // 同一条出路：关窗 + 上抛（`ProjectScreen.runFile` 弹失败 toast）。
         try {
+            logWindowRef().open(projectId, internalPath)
             runScriptFileOp(projectId, relPath)
         } catch (t: kotlinx.coroutines.CancellationException) {
-            logWindowRef().close()
+            logWindowRefOrNull()?.close()
             throw t
         } catch (t: Exception) {
-            logWindowRef().close()
+            logWindowRefOrNull()?.close()
             throw t
         }
     }
@@ -1220,14 +1238,19 @@ class MainActivity : ComponentActivity() {
         // 挂起目标先落账：那一行的播放钮要画成"转圈的开口弧"（其余行不受影响）。
         taskState = taskState.copy(opTargetTaskId = task.id)
         try {
-            logWindowRef().open(task.projectId, task.scriptPath)
+            // **开窗失败不挡执行**（2026-10-14「点执行就闪退」）：控制器未就绪时
+            // `logWindowRef()` 抛 ISE，而本函数跑在 `scope.launch` 里（组合作用域），
+            // 上抛 = 终结进程。开窗是**回执**不是执行的前提 —— 它失败就退成
+            // 「没有悬浮窗的那次立即执行」（任务照跑，结局在控制台/任务日志里）。
+            val window = runCatching { logWindowRef() }.getOrNull()
+            window?.open(task.projectId, task.scriptPath)
             performTaskOp { host ->
                 host.runTaskNow(task.id)
                 // 成功不弹 toast（回执 = 悬浮窗）：回 null。
                 null
             }
             // performTaskOp 把失败收进 opError（不抛）—— 没跑起来就关窗。
-            if (taskState.opError != null) logWindowRef().close()
+            if (taskState.opError != null) window?.close()
         } finally {
             taskState = taskState.copy(opTargetTaskId = null)
         }

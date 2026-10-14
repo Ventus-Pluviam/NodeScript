@@ -77,16 +77,29 @@ class SystemLogWindowHost(
      * 弹系统窗（已开则只换内容）。[content] 是 `LogWindowContent` 那一份
      * （`Theme` 由本类自己包 —— 窗外没有 MainActivity 的主题链）。
      *
-     * @return false = 弹不起来（无 WindowManager / 被拒）→ 调用方用 in-app 回退。
+     * **两条分支都不许把异常放出去**（2026-10-14「点执行就闪退」）：`setContent`
+     * 在离屏 `ComposeView` 上跑的是**组合**，组合期抛出的任何东西都会顺着调用栈
+     * 冒到调用方 —— 而调用方是 `SystemWindowSync` 的 `LaunchedEffect`，那里的异常
+     * 没有接收者，直接终结进程。重喂那条此前是裸调，首建那条才有 `catch`。
+     * 两条现在同口径：失败回 false，调用方落 in-app 回退窗（**看得见的降级**，
+     * 比闪退好，也比静默不弹好）。
+     *
+     * @return false = 弹不起来（无 WindowManager / 被拒 / 重喂失败）→ 调用方用 in-app 回退。
      */
     fun show(content: @Composable () -> Unit, xDp: Float = 0f, yDp: Float = 0f): Boolean {
         val manager = wm ?: return false
         syncBounds(manager)
         val existing = view
         if (existing != null) {
-            existing.setContent { Theme(mode = themeMode()) { content() } }
-            moveTo(xDp, yDp)
-            return true
+            // 重喂：换内容（主题/归属/改画态）。**同样包 catch** —— 见本函数 KDoc。
+            return try {
+                existing.setContent { Theme(mode = themeMode()) { content() } }
+                moveTo(xDp, yDp)
+                true
+            } catch (_: Exception) {
+                hide()
+                false
+            }
         }
         return try {
             val o = OverlayOwners().also { owners = it }

@@ -233,6 +233,13 @@ fun ProjectScreen(
                 toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
             } catch (t: IllegalArgumentException) {
                 toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
+            } catch (t: IllegalStateException) {
+                // 宿主「■ 链」上的收口/判定异常（`error("壳未装配…")`、`check(!sinking)…`、
+                // `IllegalStateException("任务不存在…")`）不收进「执行失败」toast 就没人接：
+                // 悬浮窗失败路径不抛这些，抛的只可能是宿主没有把「跑不起来」折成
+                // `AutojsException` 的缺口 —— 亮原文，但**不上抛**（闪退换不来任何信息，
+                // 2026-10-14「点执行就闪退」那次就是这类没捂住的结果）。
+                toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
             } finally {
                 runningKey = null
             }

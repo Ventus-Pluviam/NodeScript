@@ -149,8 +149,14 @@ fun LogWindowInAppHost(
 }
 
 /**
- * 系统窗同步效应（无 UI）：state 非空 + 走系统窗 → `show` 同一份内容；
- * 改画的字段变 → 重 `show`（内容层无状态，全由参数进，重喂即刷新）。
+ * 系统窗同步效应（无 UI）：state 非空 + 走系统窗 → `show` 同一份内容。
+ *
+ * **`show` 只在「开窗」与「改画态」时跑，日志行刷新不再经过它**（2026-10-14
+ * 「点执行就闪退」）：`show` 对已存在的 view 走的是 `ComposeView.setContent`，
+ * 而轮询 400ms 一轮、每轮 `ConsoleState.of` 都产出**新的 `List` 实例** —— 把它
+ * 算进效应键就等于每 400ms 重建一次离屏组合（`setContent` 期间抛出的任何东西
+ * 都会从组合作用域冒到进程）。行数据改走 `controller.lines`（Compose 状态，
+ * 窗内**现读**），刷新是普通重组，`setContent` 的执行次数 = 开窗次数。
  *
  * **位置与内容分两条效应**（2026-10-13）：拖动只改 `x/y`，那条只调
  * `updateViewLayout`；若把位置也算进内容键，拖动每一帧都会重跑一遍 `setContent`
@@ -163,7 +169,6 @@ fun LogWindowInAppHost(
 @Composable
 fun SystemWindowSync(
     controller: LogWindowController,
-    lines: List<ConsoleLineState>,
     onPauseToggle: () -> Unit,
 ) {
     val state = controller.state
@@ -177,12 +182,16 @@ fun SystemWindowSync(
     // 内容效应里落位时读的是 `controller.state`（**现取**）而不是本轮捕获的那一份：
     // 键里没有位置，捕获值可能停在拖动之前 —— 拿它去 `show` 会把窗拽回旧位置，
     // 与位置效应打架（表现为"拖一下弹回去"）。
-    LaunchedEffect(state?.boundRunId, state?.watermarkSeq, state?.paused, state?.fullscreen, lines, controller.usingSystemWindow) {
+    //
+    // **键里也没有 `lines`**（见本函数 KDoc）：行刷新由窗内组合现读 `controller.lines`。
+    LaunchedEffect(state?.boundRunId, state?.watermarkSeq, state?.paused, state?.fullscreen, controller.usingSystemWindow) {
         if (state == null || host == null || !controller.usingSystemWindow) return@LaunchedEffect
-        val shown = state.visible(lines)
         val now = controller.state ?: return@LaunchedEffect
         val ok = host.show(
             {
+                // **窗内现读**（不是把本轮的行快照喂进来）：`lines` 是 Compose 状态，
+                // 轮询推新值时这里自动重组 —— 于是 `show` 只需在开窗/改画态时跑一次。
+                val shown = state.visible(controller.lines)
                 LogWindowContent(
                     state = state,
                     lines = shown,
