@@ -32,11 +32,11 @@ class LogWindowStateTest {
     @Test
     fun `标题是斜杠加项目加路径`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
-        assertEquals("/demo/data/test.js", s.title)
+        assertEquals("/demo/data/test.js", s.titleText)
     }
 
     @Test
-    fun `bind 按归属取最大 runId 并同步 paused`() {
+    fun `bind 按归属取最大 runId 并同步 paused 与 running`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
         val bound = s.bind(
             listOf(
@@ -47,16 +47,60 @@ class LogWindowStateTest {
         )
         assertEquals(3L, bound.boundRunId, "同归属取最大 = 最近一次触发")
         assertTrue(bound.paused)
+        assertTrue(bound.running, "在途 = 正在跑")
     }
 
     @Test
-    fun `bind 无同归属则解绑且 paused 回 false`() {
+    fun `从没绑上过（启动失败）→ 空态且 paused 回 false`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
-            .bind(listOf(run(1L)))
-        assertEquals(1L, s.boundRunId)
         val unbound = s.bind(listOf(run(2L, scriptPath = "other.js")))
-        assertEquals(null, unbound.boundRunId, "启动失败/已结算 → 空态，不留僵尸绑定")
+        assertEquals(null, unbound.boundRunId, "启动失败/门禁拒（从开窗起一次都没绑上）→ 空态")
         assertFalse(unbound.paused)
+    }
+
+    /**
+     * 2026-10-15 用户令「脚本执行完不要自动清理输出」：**结算不解绑**。
+     *
+     * 在途表是"正在跑的"这一句 —— run 跑完离开在途表是执行完成，不是「没有这回事」；
+     * 一结算就把窗口切回「本次执行未开始」空态，等于把刚跑完的日志在用户眼前自动清掉。
+     * 窗口保持绑在最后一条同归属 run 上，输出照常可见。只有「从开窗起一次都没绑上过」
+     * （启动失败/门禁拒）才落空态。
+     */
+    @Test
+    fun `bind 结算后保持绑定 输出照常可见`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+            .bind(listOf(run(7L)))
+        assertEquals(7L, s.boundRunId)
+        assertTrue(s.running)
+        // 7 号跑完离开在途表（同归属的空在途表 / 别的归属）：绑定保持、running 回 false。
+        val done = s.bind(emptyList())
+        assertEquals(7L, done.boundRunId, "结算不解绑：窗口仍是刚跑完的那条")
+        assertFalse(done.running, "已结算如实标记")
+        assertFalse(done.paused)
+        val done2 = done.bind(listOf(run(8L, scriptPath = "other.js")))
+        assertEquals(7L, done2.boundRunId, "别的归属出现也不抢绑定（不是新触发）")
+        // 有行照常可见（水位之上）；没有同归属也不画空态。
+        val lines = listOf(line(seq = 1L, runId = 7L), line(seq = 2L, runId = 7L))
+        assertEquals(listOf(1L, 2L), done.visible(lines).map { it.seq })
+        // 标题如实缀「· 已结束」：不把「已经跑完了」说成「还在跑」。
+        assertEquals("/demo/data/test.js · 已结束", done.titleText)
+        assertEquals("/demo/data/test.js", s.titleText, "在途不缀")
+    }
+
+    @Test
+    fun `bind 结算后同归属新 run 换绑到新那条`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+            .bind(listOf(run(7L)))
+            .bind(emptyList()) // 7 号跑完
+        val next = s.bind(listOf(run(9L)))
+        assertEquals(9L, next.boundRunId, "同归属新起一条 → 绑到新的（最近一次触发）")
+        assertTrue(next.running)
+    }
+
+    @Test
+    fun `从没绑上过（启动失败）标题不缀已结束`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        assertEquals("/demo/data/test.js", s.titleText, "未开始 ≠ 已结束")
     }
 
     @Test

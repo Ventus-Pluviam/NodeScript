@@ -6,9 +6,10 @@ import com.autoscript.ui.state.ConsoleLineState
 /**
  * 执行日志悬浮窗的**纯状态**（2026-10-13 用户令；JVM 可测，不碰 Android）。
  *
- * 悬浮窗回答四个问题："看谁的输出"（[boundRunId]，由 [bind] 从在途表现值绑定）、
- * "看到哪"（[watermarkSeq]，清空按钮只推水位）、"多大"（[fullscreen] 紧凑/全屏切换）、
- * "摆在哪"（[x]/[y]，拖动改它，见 [movedTo]）。
+ * 悬浮窗回答四个问题："看谁的输出"（[boundRunId]，由 [bind] 绑定 —— **绑定不随
+ * 结算解除**：用户令「执行完不要自动清理输出」）、"看到哪"（[watermarkSeq]，
+ * 清空按钮只推水位）、"多大"（[fullscreen] 紧凑/全屏切换）、"摆在哪"（[x]/[y]，
+ * 拖动改它，见 [movedTo]）。
  *
  * **为什么绑定走"归属匹配"而不是调用方传 runId**：`runScriptFile`/`runTaskNow`
  * 那两条链**不回 runId**（挂起到结算只回 Unit）—— 调用方在开窗那一刻根本不知道
@@ -24,10 +25,18 @@ data class LogWindowState(
     val watermarkSeq: Long = 0L,
     /** 紧凑/全屏（系统宿主 updateViewLayout，in-app 宿主改 Box 尺寸）。 */
     val fullscreen: Boolean = false,
-    /** 绑定的在途 run（null = 这次执行还没进在途表 / 已结算）。 */
+    /** 绑定的 run（null = 这次执行还没进在途表 / 还没跑起来过；**结算不在此列**）。 */
     val boundRunId: Long? = null,
     /** 绑定那条 run 此刻冻没冻住（暂停按钮的图标与可用态就看它）。 */
     val paused: Boolean = false,
+    /**
+     * 绑定那条 run 此刻还在不在途（false = 已结算：跑完/被停/崩溃）。
+     *
+     * 结算**不解绑**（用户令「脚本执行完不要自动清理输出」），窗口继续画刚跑完的
+     * 输出 —— 于是「还在跑」与「跑完了」必须另有一处说得清：[titleText] 的
+     * 「· 已结束」后缀、暂停钮的诚实回执都以本字段为判据。
+     */
+    val running: Boolean = false,
     /**
      * 紧凑态窗左上角（**dp**，相对宿主坐标系：系统窗 = 屏幕、in-app 窗 = 应用内容区）。
      *
@@ -42,8 +51,12 @@ data class LogWindowState(
      * 窗标题（**单一归一化点**）：`/$projectId/$relPath` —— 用户口径的
      * `/data/test.js` 就是这个形状（relPath 是项目内路径，首段不是项目名，
      * 见 `ScriptLogRead` 的 KDoc；`/` 前缀是显示形态，落盘/索引一律不用它）。
+     *
+     * 结算不解绑后（[running] = false 且绑过），标题缀「· 已结束」：窗口还开着、
+     * 日志还在，但不把「已经跑完了」说成「还在跑」。**还没绑上过**（boundRunId
+     * null，窗刚开、执行还没起来）不缀 —— 那是"未开始"，不是"已结束"。
      */
-    val title: String get() = "/$projectId/$relPath"
+    val titleText: String get() = if (running || boundRunId == null) title else "$title · 已结束"
 
     /**
      * 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。
@@ -60,18 +73,23 @@ data class LogWindowState(
      * 在途表现值 → 绑定/更新（每次 `reloadConsole` 后调用）。
      *
      * - 同归属（projectId + scriptPath 都对上）取最大 runId = 最近一次触发；
-     * - 窗开着但表里没有同归属（启动失败/门禁拒/已结算）→ boundRunId = null，
-     *   窗显示「本次执行未开始」空态，用户手动关（不自关：失败 toast 已经说了原因，
-     *   窗再自关等于抢话）；
+     * - 窗开着但表里没有同归属 → **不落 null 覆盖当前绑定**（2026-10-15 用户令
+     *   「脚本执行完不要自动清理输出」）：在途表是"正在跑的"这一句，run 结算离开
+     *   在途表是**执行完成**不是「没有这回事」—— 一结算就把窗口切回「未开始」空态，
+     *   等于把刚跑完的日志在用户眼前自动清掉。窗口保持绑在最后一条同归属 run 上，
+     *   输出照常可见；只有一种情况落空态：**从开窗起一次都没绑上过**（启动失败/
+     *   门禁拒 —— 失败 toast 已经说了原因，窗再自关等于抢话，故留空态手动关）；
      * - paused 随绑定 run 同步（run 结算消失后 paused 回 false，不留僵尸态）。
      */
     fun bind(activeRuns: List<ActiveRunState>): LogWindowState {
         val match = activeRuns
             .filter { it.projectId == projectId && it.scriptPath == relPath }
             .maxByOrNull { it.runId }
+        val keep = boundRunId
         return copy(
-            boundRunId = match?.runId,
-            paused = match?.paused == true,
+            boundRunId = match?.runId ?: keep.takeIf { keep != null },
+            running = match != null,
+            paused = (match ?: activeRuns.firstOrNull { it.runId == keep })?.paused == true,
         )
     }
 

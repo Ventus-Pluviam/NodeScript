@@ -41,7 +41,10 @@ import com.autoscript.ui.theme.ThemeColors
  * 执行日志悬浮窗的**内容**（2026-10-13 用户令；两个宿主共用同一份）。
  *
  * 版式：标题行（标题 + 右上四颗图标钮，顺序固定）+ 日志列表（`LogLineRow`）。
- * 未绑定（执行还没进在途表 / 已结算）→ 空态「本次执行未开始」。
+ * 未绑定（执行还没进在途表 / **从开窗起一次都没绑上过**）→ 空态「本次执行未开始」。
+ * 绑定那条跑完（结算）后窗口**保持**绑定、输出照常可见（用户令「脚本执行完不要
+ * 自动清理输出」）—— 标题缀「· 已结束」，行区照常画；没出过一行且已结算的
+ * 才画「本次执行没有输出」。
  *
  * **全回调化、不读任何 CompositionLocal**：系统宿主是离屏 `ComposeView`
  * （没有 MainActivity 的 `Theme` 之外的提供链 —— `Theme` 由宿主自己包，
@@ -76,7 +79,7 @@ fun LogWindowContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = state.title,
+                text = state.titleText,
                 color = ThemeColors.text,
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
@@ -86,6 +89,7 @@ fun LogWindowContent(
             WindowIconButton(
                 kind = if (state.paused) GlyphKind.RESUME else GlyphKind.PAUSE,
                 description = if (state.paused) "继续执行" else "暂停执行",
+                enabled = state.running,
                 onClick = onPauseToggle,
             )
             WindowIconButton(kind = GlyphKind.CLEAR, description = "清空日志", onClick = onClear)
@@ -98,15 +102,22 @@ fun LogWindowContent(
         }
         Box(Modifier.fillMaxSize().weight(1f)) {
             if (state.boundRunId == null) {
+                // **只有「从开窗起一次都没绑上过」才到这里**（启动失败/门禁拒）：跑过的
+                // 那条即使结算了也保持绑定（用户令「执行完不要自动清理输出」），
+                // 故这里不再写「已被停止」—— 被停的那次是可绑上的，走下面两支。
                 Text(
-                    text = "本次执行未开始（启动失败或已被停止）",
+                    text = "本次执行未开始（启动失败或未通过门禁）",
                     color = ThemeColors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.align(Alignment.Center).padding(16.dp),
                 )
             } else if (lines.isEmpty()) {
                 Text(
-                    text = if (state.paused) "已暂停 —— 恢复后输出继续" else "等待输出…",
+                    text = when {
+                        state.paused -> "已暂停 —— 恢复后输出继续"
+                        !state.running -> "本次执行没有输出（已结束）"
+                        else -> "等待输出…"
+                    },
                     color = ThemeColors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.align(Alignment.Center).padding(16.dp),
@@ -145,15 +156,16 @@ private fun WindowIconButton(
     description: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Box(
         modifier
             .size(36.dp)
             .semantics { contentDescription = description }
-            .pressable(role = Role.Button, onClick = onClick),
+            .pressable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Glyph(kind = kind, tint = ThemeColors.textSecondary, size = 20.dp)
+        Glyph(kind = kind, tint = if (enabled) ThemeColors.textSecondary else ThemeColors.textTertiary, size = 20.dp)
     }
 }
 

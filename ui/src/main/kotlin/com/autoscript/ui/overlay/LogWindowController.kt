@@ -133,6 +133,9 @@ class LogWindowController(
 
     /**
      * 在途表现值 → 绑定（每次 `reloadConsole` 后调用；现值现取）。
+     *
+     * 结算**不解绑**（用户令「执行完不要自动清理输出」）：绑定 run 跑完离开在途表后
+     * 窗口仍绑在它上面、输出照常可见（详见 `LogWindowState.bind` 的 KDoc）。
      */
     fun bind(activeRuns: List<ActiveRunState>) {
         val current = state ?: return

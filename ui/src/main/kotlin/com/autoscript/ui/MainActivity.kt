@@ -496,6 +496,9 @@ class MainActivity : ComponentActivity() {
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
                 logWindow.updateLines(consoleState.lines)
+                // 结算不解绑（用户令「脚本执行完不要自动清理输出」）：绑定随在途表
+                // 现取，但同归属 run 跑完离开在途表时**保持**窗口绑在它上面、
+                // 输出照常可见（详见 `LogWindowState.bind`）。
                 logWindow.bind(consoleState.activeRuns)
             }
             // 系统栏图标的明暗跟**本 App 的主题档位**走，不是跟系统深色开关走：
