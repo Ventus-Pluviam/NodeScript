@@ -139,6 +139,13 @@ data class NodeEngineConfig(
  * **runId 全局唯一**：文件级计数器跨全部实例递增 —— `RuntimeController.active` 以 runId 为键，
  * 池内多槽实例各自从 1 数会在在途表互相覆盖（与 `FakeEngine` 的共享序列同一语义）。
  *
+ * **跨进程纪律（2026-10-14 真机 bug）**：这个计数器是**进程内**的 —— App 每次重启都从 1
+ * 重新数。档案却是持久的（上一进程的终态行还在库里），于是新进程第一次执行会把上一进程
+ * 用掉的 engineRunId 再发一遍，`SqliteRunArchive.put` 撞「终态记录不可改写」响亮失败。
+ * 装配期必须经 [adoptRunIdHighWater] 把分配器顶到档案高水位之后（`RunArchive.maxEngineRunId`）——
+ * 缺了这一步的形态：设备上 `run_archive` 只有 2 行而意图日志 6 行，`script-logs/index.jsonl`
+ * 里 `{"run":1}` 出现三次，新进程第一次执行报 `终态记录不可改写: engineRunId=1 state=CRASHED`。
+ *
  * @param launcher spawn 缝：单测注入假实现断言 argv/env/cwd，集成测试换 [ProcessBuilderLauncher] 真起进程。
  */
 class NodeProcessEngine(
@@ -172,9 +179,11 @@ class NodeProcessEngine(
     /**
      * 拼 spawn 命令行：**堆上限标志位插在脚本路径之前**。
      *
-     * 位置是契约不是排版：`main.cpp` 的 node_argv 形如
-     * `{node, [-- -e BOOTSTRAP --], script, args...}`，标志位落在 script 之后会被当成脚本的
-     * 第一个位置参数（§7.8 的 argv 契约）。没配堆上限时**一个标记都不加** ——
+     * 位置是契约不是排版：`main.cpp` 按 node argv 规则**两段拼**（2026-10-14 修）——
+     * `node_argv = {argv[0], [选项…], [-e BOOTSTRAP --], script, args...}`，选项落在
+     * `--` **之前**（node 先吃选项、遇 `--` 收手）；标志位若排在 `--` 之后会被当成脚本的
+     * 第一个位置参数（设备实测 `Cannot find module '--max-old-space-size=192'`，
+     * 退出码 1，引擎判 CRASHED）。没配堆上限时**一个标记都不加** ——
      * 那不是「上限 0」而是完全交给 Node 的默认。
      */
     private fun spawnCommand(scriptAbs: Path, args: List<String>): List<String> {
@@ -190,6 +199,19 @@ class NodeProcessEngine(
     /** 仅存活时给真 pid；receipt 中的启动快照不受此属性的变化影响。 */
     override val pid: Int?
         get() = execution?.process?.takeIf { it.isAlive }?.pid
+
+    /**
+     * **把 runId 分配器顶到历史之后**（装配期一次；SPI 契约见 [ScriptEngine.adoptRunIdHighWater]）。
+     *
+     * 只前移不后退、幂等：`usedThrough <= 0`（空档案）一个字节都不动 —— 计数器仍从 1 数，
+     * 「单进程内跨实例唯一」那条既有契约原样保留（只有生产装配会经档案水位把它顶上去）。
+     * 返回**下一个将要发出的号**，供装配期日志/诊断。
+     */
+    override fun adoptRunIdHighWater(usedThrough: Long): Long {
+        if (usedThrough <= 0) return nodeEngineRunIds.get()
+        val next = if (usedThrough == Long.MAX_VALUE) Long.MAX_VALUE else usedThrough + 1
+        return nodeEngineRunIds.updateAndGet { current -> if (current >= next) current else next }
+    }
 
     override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
         var lease: RunIdentityLease? = null

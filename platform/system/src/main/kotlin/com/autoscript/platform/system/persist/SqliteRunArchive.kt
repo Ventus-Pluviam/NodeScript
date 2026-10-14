@@ -97,6 +97,11 @@ class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchiv
 
     override suspend fun unfinished(): List<RunRecord> = rows(RunArchiveSql.Query.Unfinished)
 
+    /** 高水位：一句 `MAX(engine_run_id)`（空表 COALESCE 回 0；见 [RunArchiveSql.maxEngineRunId]）。 */
+    override suspend fun maxEngineRunId(): Long =
+        runner.query(RunArchiveSql.maxEngineRunId().query).singleOrNull()?.long("max_id")
+            ?: error("高水位查询没回行（库异常）")
+
     /**
      * 一次性迁移导入（§8.5 存储引擎替换）：把 jsonl 侧的行**带着原 engineRunId** 落进 SQLite，
      * 关联随行一起导。

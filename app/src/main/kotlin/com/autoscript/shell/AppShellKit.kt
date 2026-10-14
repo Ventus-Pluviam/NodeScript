@@ -142,6 +142,16 @@ object AppShellKit {
         schedulerProvider: SchedulerProvider,
         screenGate: ScreenGate = ScreenGate.AllowAll,
         engineFactory: (EngineId, RunIdentityIssuer) -> ScriptEngine = { id, _ -> UnavailableEngine(id) },
+        /**
+         * **runId 高水位**（2026-10-14 真机 bug）：档案里**已用过的最大 engineRunId**，装配期
+         * 转交给每个引擎实例（[ScriptEngine.adoptRunIdHighWater]）—— 引擎分配器是进程内的，
+         * 不顶这一下新进程第一次执行就会重发上一进程用掉的号，归档撞「终态记录不可改写」。
+         *
+         * **缺省 0 = 不顶**：单测/离线配方没有跨进程历史。生产由 `AppShellApplication` 从
+         * `PlatformWiring` 的档案高水位读出来传下去（它本来就要 await 打开档案 —— 这条缝的
+         * 取数与转交正好在同一个装配函数的两半）。与 [AppShell.assemble] 同名参数逐字同义。
+         */
+        engineRunIdHighWater: Long = 0,
         a11yHandler: NamespaceHandler? = null,
         screenHandler: NamespaceHandler? = null,
         npmHandler: NamespaceHandler? = null,
@@ -348,6 +358,11 @@ object AppShellKit {
         // **无回落**（与 `intentStore` 同一条纪律，2026-10-08 裁定）：打不开就在
         // `PlatformWiring` 抛了，装配层据此判壳未就绪 —— 不拿「回落 jsonl」冒充「还能用」。
         val (archive, tasks) = storesFactory?.invoke() ?: (FileRunArchive(nsDir) to FileTaskStore(nsDir))
+        // runId 高水位（2026-10-14 真机 bug 的装配侧）：`maxEngineRunId()` 是**挂起**读口
+        // （存储自报），而本函数是同步的 —— 在同步函数里 await 一次存储读会把装配根变成
+        // 挂起函数（几十个调用点跟着改）。所以取数留在调用方那一层（AppShellApplication 在
+        // 打开档案后同步读一次），本配方只**转交**；测试/离线配方不传 = 0 = 不顶（单测
+        // 每用例是新进程语义，没有跨进程历史要避让）。
         // 注册表第三持久（§8.6）：意图日志管"已投递的意向"，这里管"还没到点的排期"。
         // Scheduler 经 [AppShell][com.autoscript.shell.AppShell] 的 `taskStore` 缝拿到它。
 
@@ -410,6 +425,7 @@ object AppShellKit {
 
         val shell = AppShell.assemble(
             engineFactory = engineFactory,
+            engineRunIdHighWater = engineRunIdHighWater,
             schedulerProvider = schedulerProvider,
             intentLog = log,
             runArchive = archive,

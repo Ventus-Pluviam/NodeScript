@@ -326,6 +326,12 @@ class AppShellApplication : Application(), HostSummary {
             // ArchitectureTest「平台实现只许装配包碰」看住）。
             val nsDir = filesDir.resolve(".ns")
             val intentStore = PlatformWiring.intentStore(appContext, nsDir)
+            // runId 高水位（2026-10-14 真机 bug 的装配侧）：档案里已用过的最大 engineRunId。
+            // 必须在这条**同步**路径上读 —— 引擎由 AppShellKit 在装配期 eager 建（池构造），
+            // 那个函数不挂起；本函数虽然在 IO 协程里，但 `installWithFiles` 的签名是同步的，
+            // 唯一能同步读到档案的地方就是这里（PlatformWiring.runArchiveHighWater）。
+            // 打不开即抛（与 intentStore 同一纪律）：拿 0 冒充"没有历史"会让新进程重发旧号。
+            val engineRunIdHighWater = PlatformWiring.runArchiveHighWater(appContext, nsDir)
             // 运行档案与任务注册表（批 102 P4）：生产面换 SQLite，各带一次性 jsonl 迁移。
             // 与 intentStore 同一纪律 —— 打不开即抛（异常冒到本函数的失败分支：记日志、
             // 壳保持未就绪、闹钟走漏投记账），**不回落 jsonl**。
@@ -335,6 +341,7 @@ class AppShellApplication : Application(), HostSummary {
                 schedulerProvider = AlarmSchedulerProvider(port = port),
                 screenGate = screenGateOf(this),
                 intentStore = intentStore,
+                engineRunIdHighWater = engineRunIdHighWater,
                 storesFactory = { PlatformWiring.stores(appContext, nsDir) },
                 engineFactory = { engineId, identities ->
                     NodeProcessEngine(

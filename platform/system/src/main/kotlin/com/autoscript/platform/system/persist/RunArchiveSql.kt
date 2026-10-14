@@ -166,6 +166,17 @@ internal object RunArchiveSql {
     fun countRows(): SqlOp = SqlOp(emptyList(), "SELECT COUNT(*) AS n FROM $TABLE")
 
     /**
+     * 已落过的最大 engineRunId（空表 → `0`）—— `RunArchive.maxEngineRunId` 的 SQL 面。
+     *
+     * **取 `MAX(engine_run_id)` 而不是 `sqlite_sequence`**：日常登记按调用方给的 id 写
+     * （见 [insert] 的 KDoc），自增序列只在迁移导入那条路上抬 —— 序列值可能**大于**表里
+     * 任何一行（导入过又清过表的情形），拿它当水位会把号跳到没人用过的地方，虽无害但不是
+     * 本口承诺的事实。`COALESCE` 让空表回 `0` 而不是 NULL：装配期"从没跑过"就是不必顶水位。
+     */
+    fun maxEngineRunId(): SqlOp =
+        SqlOp(emptyList(), "SELECT COALESCE(MAX(engine_run_id), 0) AS max_id FROM $TABLE")
+
+    /**
      * 迁移导入一行：**带原 engineRunId**（与 `intent-log.jsonl` 迁移同一条硬要求 ——
      * 不带就同号异义，`recordsOfIntent` 静默串档）。
      *

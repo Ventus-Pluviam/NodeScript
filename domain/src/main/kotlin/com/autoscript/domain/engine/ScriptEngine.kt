@@ -43,6 +43,36 @@ interface ScriptEngine {
     /** 解冻 [pause] 冻住的执行（SIGCONT）。语义与 [pause] 对偶，缺省同样 false。 */
     suspend fun resume(): Boolean = false
 
+    /**
+     * **把 runId 分配器顶到历史之后**（装配期一次；水位来源见 `RunArchive.maxEngineRunId`）。
+     *
+     * 为什么需要：engineRunId 是**跨进程持久**的身份（`RunRecord.id` / `EngineRunLink.engineRunId`
+     * / 执行日志文件名），而分配器活在进程里。新进程若不先顶到历史之后，第一次执行就会发出
+     * 一个**已被上一进程用掉的号** —— 档案那边撞「终态记录不可改写」响亮失败（2026-10-14
+     * 真机实测），且失败点在归档、报错面离病根很远。
+     *
+     * @param usedThrough **已用过的最大 runId**（空档案传 `0`）—— 语义是"这个号及以下都用过了"，
+     *   故实现保证**下一个发出的号严格大于它**。取值形态刻意与 `RunArchive.maxEngineRunId()`
+     *   同源，`adoptRunIdHighWater(archive.maxEngineRunId())` 是天然正确的配对（参数取"下界"
+     *   会让每个调用点各差一次一，那正是这类缝最容易错的地方）。
+     *
+     * 契约（实现须照此办）：
+     * - **只前移不后退**：新值 = `max(现值, usedThrough + 1)`，绝不把分配器调小
+     *   （调小 = 与本进程已发出的号相撞，那比原病更糟）；
+     * - **幂等**：同一水位调多次与调一次等价；
+     * - `usedThrough <= 0` = 无历史，不动分配器；
+     * - 返回**下一个将要发出的号**，供装配期日志/诊断。
+     *
+     * 缺省实现**什么都不做并回 0**：与 `pause`/`lastRunSummary` 的缺省同一条"替身零改动"
+     * 纪律 —— FakeEngine/UnavailableEngine 没有跨进程身份，也就没有要顶的水位。
+     *
+     * **刻意不是 `suspend`**（与同接口其余方法不同）：它是本进程内的一次计数器前移，
+     * 无 IO 也无等待；而调用点 `FixedEnginePool` 是**同步**构造（eager 建槽），
+     * 挂起签名会把装配根连带变成挂起函数。水位**读**那一侧（`RunArchive.maxEngineRunId`）
+     * 才是要碰存储的，它住调用方那一层，本来就 await 得到。
+     */
+    fun adoptRunIdHighWater(usedThrough: Long): Long = 0L
+
     /** 当前状态快照（事件推送走 bridge EventBus，不在此轮询建模）。 */
     suspend fun status(): EngineStatus
 

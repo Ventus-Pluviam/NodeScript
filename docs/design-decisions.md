@@ -12,6 +12,39 @@
 
 ---
 
+## 81. engineRunId 的跨进程唯一靠档案高水位顶起分配器（2026-10-14，真机实测「终态记录不可改写」）
+
+用户报新错误：点执行后悬浮窗提示「本次执行未开始」，toast 报 **`执行失败：终态记录不可改写`**。
+根因是一条时序：**engineRunId 是跨进程持久身份，而分配器活在进程里**。
+
+- **现场（设备实测）**：`run_archive` 只有 2 行（engine_run_id 1、2），意图日志却有 6 行 ——
+  后 4 行全部 `引擎异常结算（崩溃或被强杀）runId=1`；`script-logs/index.jsonl` 里
+  `{"run":1}` 出现**三次**（三个进程各发过一次 1 号）。
+- **机制**：`NodeProcessEngine.nodeEngineRunIds = AtomicLong(1)` 是**进程内**计数器 ——
+  App 每次重启都从 1 重新数。上一进程留下的终态行（`engine_run_id=1 state=CRASHED`）还在库里，
+  新进程第一次执行又拿 1 → `SqliteRunArchive.put` 撞
+  `check(!existing.state.isTerminalState())` 响亮失败（这正是 §8.5「终态不可改写」那条纪律在
+  正确履职），异常一路冒到 `ProjectScreen` 的 catch 成 toast；档案行没写成、悬浮窗绑不到
+  在途 run → 空态。**确定性复现**：`am force-stop com.autoscript` 后点 ▶，必然复发。
+- **为什么 CI 抓不到**：JVM 测试从不做「杀进程重启 + 对同一份持久档案再来一次」——
+  桌面全绿在设备上不成立（与 `.so` 路径串位、`main.cpp` 拼 argv 同一族）。
+
+**拍板（药）**：档案本来就是 engineRunId 的唯一持久事实源（§8.5），就由它回答「历史用到哪」——
+`RunArchive.maxEngineRunId()`（高水位，空档回 0）→ 装配期把水位传下去，引擎
+`adoptRunIdHighWater` 把分配器顶到历史之后（**只前移不后退、幂等、下一个发出的号严格大于水位**）。
+取数收在 `RunArchiveWiring.highWater`（打开 + 迁移 + 读一次 + 关，同步路径，句柄当场还掉）；
+`AppShell`/`AppShellKit` 各加 `engineRunIdHighWater: Long = 0`（缺省 0 = 不顶 ——
+单测/离线配方没有跨进程历史），生产由 `AppShellApplication.installWithFiles` 读出来传下去。
+**不让引擎自己持久化计数器**：那会是第二个真值，档案与计数器漂移时没人知道该信谁。
+
+**上游早有同一句纪律，只是没落到引擎侧**：`IntentStoreWiring` 的 KDoc 明写「新库从 1 发号
+会与历史 link **同号异义**」，故迁移必须带原 runId —— 本项是它的对偶：那边靠「导入带原 id」，
+这边靠「装配期顶水位」，防的是同一件事。**`docs/design/08-execution.md` §8.5 只有「不可改写、
+不可复活」的纪律句，没有明写「engineRunId 跨进程不复用」**，而 `docs/design/` 是冻结面 ——
+这句要补只能由维护者动，本项在此如实登记。
+
+**边界**：C++ 本机禁编、本机不跑 Gradle；红绿以 Actions 为准，真机复验走 CI 出的真形态 APK。
+
 ## 80. 两种 relPath 形状在装配口收口；悬浮窗拖动跟手的两条真因（2026-10-13，用户实测反馈）
 
 用户实测两条反馈：悬浮窗**不跟手**；并追问第 79 项里留的那个问号（`▶` 链 relPath

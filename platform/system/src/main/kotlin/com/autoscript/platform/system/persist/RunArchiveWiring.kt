@@ -38,6 +38,29 @@ object RunArchiveWiring {
         }
 
     /**
+     * **档案里的 runId 高水位**（2026-10-14 真机 bug）：已用过的最大 engineRunId，空档回 `0`。
+     *
+     * 为什么单开一个口而不是让调用方 `open()` 完再读：装配期要在**引擎建出来之前**拿到它
+     * （池是 eager 构造），而那条路径是同步的 —— 本口把「打开 + 迁移 + 读一次 + 关」收在
+     * 一处，句柄当场还掉，不留第二个长期连接。
+     *
+     * **先迁移再读**：老设备升级时历史还在 `run-archive.jsonl` 里，不迁移的话水位是 0 ——
+     * 那正是本条要防的"新进程重发旧号"（迁移幂等，随后 `open()` 那次照样是空跑）。
+     *
+     * 打不开即抛（与 [open] 同一条无回落纪律）：拿 0 冒充"没有历史"会造出本条要修的 bug。
+     */
+    fun highWater(context: Context, nsDir: Path): Long {
+        val runner = AndroidSqliteRunner(context.applicationContext, AndroidSqliteRunner.DB_NAME_RUN_ARCHIVE)
+        return try {
+            val store = SqliteRunArchive(runner)
+            migrate(store, nsDir.resolve(JSONL_NAME))
+            kotlinx.coroutines.runBlocking { store.maxEngineRunId() }
+        } finally {
+            runner.close()
+        }
+    }
+
+    /**
      * 一次性导入：库为空且 jsonl 非空 → 全量导入（带原 id + 关联）+ 归档 jsonl。
      *
      * @return 导入的行数（0 = 无需导入：库非空，或 jsonl 不存在/为空）

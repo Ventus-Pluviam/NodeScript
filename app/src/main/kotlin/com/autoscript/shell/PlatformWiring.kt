@@ -287,6 +287,22 @@ object PlatformWiring {
             TaskStoreWiring.open(context.applicationContext, nsDir)
 
     /**
+     * **档案里的 runId 高水位**（2026-10-14 真机 bug）：已用过的最大 engineRunId，空档回 `0`。
+     *
+     * 存在的理由是一条**时序**：高水位必须在引擎建出来之前拿到，而引擎由 `AppShellKit`
+     * 在装配期 eager 建（池构造），那个函数是同步的 —— 本口是全仓唯一能在同步装配路径上
+     * 把这份档案读出来的地方（`SQLiteOpenHelper` 的同步查询口）。
+     *
+     * **打开 + 迁移 + 读一次 + 关**都收在 [RunArchiveWiring.highWater] 里：句柄当场还掉，
+     * 不留第二个长期连接（[stores] 那份才是壳的长期句柄）。
+     *
+     * **打不开就抛**（与 [intentStore]/[stores] 同一条「无回落」纪律）：装配层据此判壳未就绪，
+     * 而不是拿 0 冒充"没有历史"—— 那会让新进程重发旧号，正是本条要修的病。
+     */
+    fun runArchiveHighWater(context: Context, nsDir: Path): Long =
+        RunArchiveWiring.highWater(context.applicationContext, nsDir)
+
+    /**
      * 生产入口：`Context` → [SystemSpis.of] 十件 + DialogHost 构造（本类是唯一同时
      * 碰得到两个平台模块与 overlay 实况的装配点）→ [inject]。
      * `overlayAvailable` 缺省 `{ false }`：悬浮窗/对话框先走 `TYPE_APPLICATION_OVERLAY`；

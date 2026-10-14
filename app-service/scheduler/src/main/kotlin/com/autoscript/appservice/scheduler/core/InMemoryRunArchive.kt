@@ -70,4 +70,8 @@ class InMemoryRunArchive : RunArchive {
     override suspend fun unfinished(): List<RunRecord> = synchronized(lock) {
         records.values.filter { !it.state.isTerminal }.sortedBy { it.id }
     }
+
+    override suspend fun maxEngineRunId(): Long = synchronized(lock) {
+        records.keys.maxOrNull() ?: 0L
+    }
 }
