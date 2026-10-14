@@ -10,6 +10,7 @@ import com.autoscript.domain.host.ScriptLogSnapshot
 import com.autoscript.appservice.npm.ShellOpExecutor
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.shell.asShellOpExecutor
+import com.autoscript.shell.runArchiveHighWater
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.NpmConsoleHandle
@@ -326,11 +327,13 @@ class AppShellApplication : Application(), HostSummary {
             // ArchitectureTest「平台实现只许装配包碰」看住）。
             val nsDir = filesDir.resolve(".ns")
             val intentStore = PlatformWiring.intentStore(appContext, nsDir)
-            // runId 高水位（2026-10-14 真机 bug 的装配侧）：档案里已用过的最大 engineRunId。
-            // 必须在这条**同步**路径上读 —— 引擎由 AppShellKit 在装配期 eager 建（池构造），
-            // 那个函数不挂起；本函数虽然在 IO 协程里，但 `installWithFiles` 的签名是同步的，
-            // 唯一能同步读到档案的地方就是这里（PlatformWiring.runArchiveHighWater）。
-            // 打不开即抛（与 intentStore 同一纪律）：拿 0 冒充"没有历史"会让新进程重发旧号。
+            // runId 高水位（2026-10-14 真机 bug 的装配侧）：档案里**已用过的最大 engineRunId**。
+            // 引擎的 runId 分配器是**进程内**的（每次 App 重启从 1 重数），而 engineRunId 是
+            // 跨进程持久的身份 —— 不把水位作为构造配置喂下去，新进程第一次执行就会重发上一
+            // 进程用掉的号，`SqliteRunArchive.put` 撞「终态记录不可改写」响亮失败（用户看到的
+            // 是「执行失败：终态记录不可改写」+ 悬浮窗空态）。取数在这里：本函数是同步的，
+            // 而引擎由 `AppShellKit` 装配期 eager 建（池构造）—— 只有这一层读得到。打不开即抛
+            // （与 intentStore 同一条无回落纪律）：拿 0 冒充"没有历史"正是本条要修的病。
             val engineRunIdHighWater = PlatformWiring.runArchiveHighWater(appContext, nsDir)
             // 运行档案与任务注册表（批 102 P4）：生产面换 SQLite，各带一次性 jsonl 迁移。
             // 与 intentStore 同一纪律 —— 打不开即抛（异常冒到本函数的失败分支：记日志、
@@ -341,13 +344,14 @@ class AppShellApplication : Application(), HostSummary {
                 schedulerProvider = AlarmSchedulerProvider(port = port),
                 screenGate = screenGateOf(this),
                 intentStore = intentStore,
-                engineRunIdHighWater = engineRunIdHighWater,
                 storesFactory = { PlatformWiring.stores(appContext, nsDir) },
                 engineFactory = { engineId, identities ->
                     NodeProcessEngine(
                         engineId,
                         NodeEngineConfig(
                             filesDir = filesDir,
+                            // 构造即站在历史之后（见上面那处读取的 KDoc）。
+                            runIdHighWater = engineRunIdHighWater,
                             hostBinary = nativeLibDir.resolve("libnoden.so"),
                             libnodePath = nativeLibDir.resolve("libnode.so"),
                             hostSocketName = bridge?.socketName,

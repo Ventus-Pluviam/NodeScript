@@ -64,7 +64,8 @@ interface RunArchive {
      * 当场抛（2026-10-14 真机实测：`终态记录不可改写: engineRunId=1 state=CRASHED`，
      * 悬浮窗落空态）。
      *
-     * 所以装配期要用本口把新进程的分配器顶到历史之后（[com.autoscript.domain.engine.ScriptEngine.adoptRunIdHighWater]）。
+     * 所以装配期要用本口把新进程的分配器顶到历史之后 —— 装配根读到本口的值，经引擎自己的
+     * 构造配置（`NodeEngineConfig.runIdHighWater`）喂下去，构造即站在历史之后。
      * **为什么由档案回答而不是让引擎自己持久化计数器**：档案本来就是 engineRunId 的
      * 唯一持久事实源（§8.5），再存一份计数器就是第二个真值；两者漂移时没人知道该信谁。
      *

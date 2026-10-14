@@ -157,22 +157,6 @@ class AppShell(
             intentLog: IntentLog,
             runArchive: RunArchive = InMemoryRunArchive(),
             /**
-             * **runId 高水位**（2026-10-14 真机 bug）：档案里**已用过的最大 engineRunId**
-             * （空档案传 `0`）。装配期把它转交给每个引擎实例
-             * （[ScriptEngine.adoptRunIdHighWater]）—— 引擎的分配器是进程内的，不顶这一下，
-             * 新进程第一次执行就会重发上一进程用掉的号，归档撞「终态记录不可改写」响亮失败
-             * （`RunArchive.maxEngineRunId` 的 KDoc 记了完整形态）。
-             *
-             * **缺省 0 = 不顶**：单测/离线配方每条用例都是新进程语义，没有历史要避让。
-             * 生产由 `AppShellKit` 从 `PlatformWiring` 的档案里读出来传下去。
-             *
-             * 为什么是**值**而不是读口/挂起函数：`FixedEnginePool` 在构造时 eager 建引擎
-             * （见它 `slots` 的初始化），而本函数是同步的 —— 在这里 await 一次存储读会把
-             * 装配根变成挂起函数（几十个调用点跟着改）。取值的活因此留在调用方那一层
-             * （它本来就要 await 打开档案）。
-             */
-            engineRunIdHighWater: Long = 0,
-            /**
              * 任务注册表持久缝（§8.6 调度持久性）。null = 未接存储：Scheduler 纯内存行为
              * （骨架/单测）。生产由 [AppShellKit][com.autoscript.shell.AppShellKit] 传
              * `FileTaskStore`（与意图日志同一 `.ns` 目录，同一追加纪律）。
@@ -354,16 +338,7 @@ class AppShell(
                 router.register("console", console)
 
                 val controller = RuntimeController(
-                    // 高水位在**引擎建出来之前**顶上去（2026-10-14）：池是 eager 构造
-                    // （见 `FixedEnginePool.slots`），晚了就只能给已建好的实例补课 ——
-                    // 那要求池暴露槽位迭代口，等于把「池怎么管槽」漏给装配层。
-                    FixedEnginePool(
-                        { id ->
-                            engineFactory(id, identities)
-                                .also { it.adoptRunIdHighWater(engineRunIdHighWater) }
-                        },
-                        poolCapacity,
-                    ),
+                    FixedEnginePool({ id -> engineFactory(id, identities) }, poolCapacity),
                     authorization = policy,
                     // A11：run 终结时收掉那条连接的进程级资源（投屏会话），不再依赖 socket 断
                     // —— 脚本把桥 fd 继承给子进程时主进程死掉不产生 EOF（见缝的 KDoc）。

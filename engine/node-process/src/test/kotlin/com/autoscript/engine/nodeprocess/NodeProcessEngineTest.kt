@@ -160,6 +160,7 @@ class NodeProcessEngineTest {
         scriptEnv: () -> Map<String, String> = { emptyMap() },
         limits: ScriptLimits = ScriptLimits(),
         grace: Long = 3_000,
+        runIdHighWater: Long = 0,
     ): NodeProcessEngine {
         // 只有走默认才铺哑文件：预检缺位案显式传"不存在的路径"、PATH 名案传相对名 —— 都原样不动。
         if (hostBinary == defaultHostBinary()) {
@@ -178,6 +179,7 @@ class NodeProcessEngineTest {
                 scriptEnv = scriptEnv,
                 maxHeapMb = limits.maxHeapMb,
                 uvThreadPoolSize = limits.uvThreadPoolSize,
+                runIdHighWater = runIdHighWater,
                 stopGraceMillis = grace,
             ),
             launcher,
@@ -567,33 +569,29 @@ class NodeProcessEngineTest {
 
     /**
      * 2026-10-14 真机 bug 的引擎侧回归：**进程重启**后分配器从 1 重新数，会重发上一进程
-     * 用掉的号 —— 档案撞「终态记录不可改写」。装配期经 `adoptRunIdHighWater` 把分配器
-     * 顶到历史之后：下一个发出的号必须严格大于已用过的最大号（不差一、只前移、幂等）。
+     * 用掉的号 —— 档案撞「终态记录不可改写」。装配期把档案高水位喂进
+     * [NodeEngineConfig.runIdHighWater]，构造即站在历史之后。
      *
      * **断言全用相对量**：分配器是**跨实例共享**的（类 KDoc「runId 全局唯一」），
      * 本类其它用例也在推进它 —— 写死数字会变成与执行顺序耦合的假断言。
+     * 水位**只前移不后退**（同一个共享计数器：新实例带更小的水位构造，不得把已发出的号调小）。
      */
     @Test
-    fun `顶高水位后 runId 接在历史之后 幂等只前移`() {
+    fun `构造水位后 runId 接在历史之后 更小的水位不后退`() {
         writeScript()
         val used1 = runBlocking { engine(FakeLauncher()).execute(request()) }.runId
         assertTrue(used1 > 0, "空档不顶时行为不变（仍从当前序列发号）")
 
-        // 模拟"上一进程用掉了 used1"：新实例把分配器顶到它之后。
-        val restarted = engine(FakeLauncher())
-        val next = restarted.adoptRunIdHighWater(used1)
-        assertTrue(next > used1, "顶完水位，下一个待发号必须严格大于已用过的最大号（$next vs $used1）")
-
+        // 模拟"上一进程用掉了 used1"：新实例带着水位构造。
+        val restarted = engine(FakeLauncher(), runIdHighWater = used1)
         val issued = runBlocking { restarted.execute(request()) }.runId
         assertTrue(issued > used1, "执行真的拿到历史之后的号（不再撞档案终态行）：$issued")
-        assertTrue(issued >= next, "发出的号不早于顶过的水位（$issued vs $next）")
 
-        // 幂等：同一水位重复顶 = 无操作；更小的水位（历史更浅）绝不把分配器调小
-        // —— 调小就与本进程已发出的号相撞，比原病更糟。
-        // `0` 在这里当"只读现值"用（真实现：不动分配器，回当前的下一个待发号）。
-        val current = restarted.adoptRunIdHighWater(0L)
-        assertEquals(current, restarted.adoptRunIdHighWater(used1), "同一水位重复顶 = 无操作")
-        assertEquals(current, restarted.adoptRunIdHighWater(1L), "更小的水位不调小分配器")
+        // 更小的水位（历史更浅 / 0 = 无历史）不得把共享计数器调小 —— 调小就与本进程
+        // 已发出的号相撞，比原病更糟。
+        engine(FakeLauncher(), runIdHighWater = 1L)
+        val afterShallow = runBlocking { engine(FakeLauncher()).execute(request()) }.runId
+        assertTrue(afterShallow > issued, "带更小水位的实例不得让序列回退：$afterShallow vs $issued")
     }
 
     @Test

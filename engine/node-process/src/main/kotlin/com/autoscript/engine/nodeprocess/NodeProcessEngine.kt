@@ -106,6 +106,13 @@ data class NodeEngineConfig(
      * 那一项的缺省与现状逐位相同（一份没配过的配置不该改变任何行为）。
      */
     val uvThreadPoolSize: () -> Int? = { null },
+    /**
+     * **runId 分配器的初始水位**（2026-10-14 真机 bug）：装配期可把分配器直接建在档案
+     * 高水位之后。取值形态与 `RunArchive.maxEngineRunId()` 同源（"已用过的最大号"），
+     * 本类保证**下一个发出的号严格大于它** —— 两处取"下界"而不是"起点"会让调用点各差
+     * 一次一，那正是这类缝最容易错的地方。缺省 `0` = 从 1 数（单测/离线路径行为不变）。
+     */
+    val runIdHighWater: Long = 0,
     /** 四步 quiesce 的排空窗口（§8.3）：`stop()` SIGTERM 后等这么久，未退则 TimedOut 交池 kill 兜底。 */
     val stopGraceMillis: Long = 3_000,
 )
@@ -142,7 +149,7 @@ data class NodeEngineConfig(
  * **跨进程纪律（2026-10-14 真机 bug）**：这个计数器是**进程内**的 —— App 每次重启都从 1
  * 重新数。档案却是持久的（上一进程的终态行还在库里），于是新进程第一次执行会把上一进程
  * 用掉的 engineRunId 再发一遍，`SqliteRunArchive.put` 撞「终态记录不可改写」响亮失败。
- * 装配期必须经 [adoptRunIdHighWater] 把分配器顶到档案高水位之后（`RunArchive.maxEngineRunId`）——
+ * 装配期必须把档案高水位喂进 [NodeEngineConfig.runIdHighWater]（`RunArchive.maxEngineRunId`）——
  * 缺了这一步的形态：设备上 `run_archive` 只有 2 行而意图日志 6 行，`script-logs/index.jsonl`
  * 里 `{"run":1}` 出现三次，新进程第一次执行报 `终态记录不可改写: engineRunId=1 state=CRASHED`。
  *
@@ -154,6 +161,12 @@ class NodeProcessEngine(
     private val launcher: ProcessLauncher = ProcessBuilderLauncher(),
     private val identityIssuer: RunIdentityIssuer? = null,
 ) : ScriptEngine {
+
+    init {
+        // 构造即顶水位（2026-10-14）：配置里带了历史高水位的话，本实例一存在就已经
+        // 站在历史之后 —— 不依赖装配层"记得在建完之后、第一次 execute 之前调一次"。
+        raiseFloor(config.runIdHighWater)
+    }
 
     /** 回调始终捕获本次执行，旧尾帧/旧清理不得按槽位找到新 run 的身份。 */
     private class Execution(val process: SpawnedProcess, val lease: RunIdentityLease?) {
@@ -199,19 +212,6 @@ class NodeProcessEngine(
     /** 仅存活时给真 pid；receipt 中的启动快照不受此属性的变化影响。 */
     override val pid: Int?
         get() = execution?.process?.takeIf { it.isAlive }?.pid
-
-    /**
-     * **把 runId 分配器顶到历史之后**（装配期一次；SPI 契约见 [ScriptEngine.adoptRunIdHighWater]）。
-     *
-     * 只前移不后退、幂等：`usedThrough <= 0`（空档案）一个字节都不动 —— 计数器仍从 1 数，
-     * 「单进程内跨实例唯一」那条既有契约原样保留（只有生产装配会经档案水位把它顶上去）。
-     * 返回**下一个将要发出的号**，供装配期日志/诊断。
-     */
-    override fun adoptRunIdHighWater(usedThrough: Long): Long {
-        if (usedThrough <= 0) return nodeEngineRunIds.get()
-        val next = if (usedThrough == Long.MAX_VALUE) Long.MAX_VALUE else usedThrough + 1
-        return nodeEngineRunIds.updateAndGet { current -> if (current >= next) current else next }
-    }
 
     override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
         var lease: RunIdentityLease? = null
@@ -481,5 +481,12 @@ class NodeProcessEngine(
 
         /** 跨全部引擎实例的 runId 序列（见类 KDoc「runId 全局唯一」）。 */
         private val nodeEngineRunIds = AtomicLong(1)
+
+        /** 把共享序列顶到 `usedThrough` 之后（返回下一个待发号；`<=0` 只读现值）。 */
+        private fun raiseFloor(usedThrough: Long): Long {
+            if (usedThrough <= 0) return nodeEngineRunIds.get()
+            val next = if (usedThrough == Long.MAX_VALUE) Long.MAX_VALUE else usedThrough + 1
+            return nodeEngineRunIds.updateAndGet { cur -> if (cur >= next) cur else next }
+        }
     }
 }

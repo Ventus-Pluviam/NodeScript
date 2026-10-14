@@ -24,28 +24,27 @@ import org.junit.jupiter.api.Test
 
 /**
  * 与 `NodeProcessEngine` **同形**的编号：**实例内**计数器从 1 起（真机分配器就是进程内计数器，
- * 每次重启从 1 重数），`adoptRunIdHighWater` 只前移不后退。
- *
- * 刻意不共用一个全局序列：那样每次执行都是新号，"重发旧号"这条病根本复现不出来 ——
- * 这条用例要能在**没接高水位**时真红（`put` 撞 `id=1` 的终态行 → ISE），接了才绿。
+ * 每次重启从 1 重数）。水位经构造配置 [HighWaterFakeEngine.configHighWater] 传入 ——
+ * 与生产 `NodeEngineConfig.runIdHighWater` 同一条缝，只前移不后退。
  */
 private class HighWaterFakeEngine(
     override val id: EngineId,
-    /** 看门狗按 pid 采样 `/proc`；本测试不接看门狗，如实回 null（"没有真进程"）。 */
     override val pid: Int? = null,
+    private val configHighWater: Long = 0,
 ) : ScriptEngine {
     val executed = mutableListOf<EngineRunRequest>()
     var status: EngineStatus = EngineStatus.IDLE
     private val nextRunId = AtomicLong(1)
 
-    /** 最近一次被顶到的水位（断言"在 execute 之前顶过"）。 */
+    /** 构造时被顶到的水位（断言"在 execute 之前顶过"）。 */
     @Volatile var adopted: Long = 0L
 
-    override fun adoptRunIdHighWater(usedThrough: Long): Long {
-        adopted = usedThrough
-        if (usedThrough <= 0) return nextRunId.get()
-        val floor = if (usedThrough == Long.MAX_VALUE) Long.MAX_VALUE else usedThrough + 1
-        return nextRunId.updateAndGet { cur -> if (cur >= floor) cur else floor }
+    init {
+        if (configHighWater > 0) {
+            val floor = if (configHighWater == Long.MAX_VALUE) Long.MAX_VALUE else configHighWater + 1
+            nextRunId.updateAndGet { cur -> if (cur >= floor) cur else floor }
+            adopted = configHighWater
+        }
     }
 
     override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
@@ -83,9 +82,10 @@ private object HighWaterProvider : SchedulerProvider {
 }
 
 /**
- * 2026-10-14 真机 bug「终态记录不可改写」的**装配层回归**：`AppShell.assemble` 收到
- * 档案高水位后，必须在引擎第一次 execute 之前把它顶给每个引擎实例 —— 这样"重启后的
- * 第一次执行"拿到的是历史之后的号，归档不再撞上一进程留下的终态行。
+ * 2026-10-14 真机 bug「终态记录不可改写」的**装配层回归**：装配根从档案读到高水位后，
+ * 必须在引擎第一次 execute 之前把它送进每个引擎实例（生产经 `NodeEngineConfig.runIdHighWater`，
+ * 构造即站在历史之后）—— 这样"重启后的第一次执行"拿到的是历史之后的号，归档不再撞
+ * 上一进程留下的终态行。
  */
 class AppShellHighWaterTest {
 
@@ -106,14 +106,16 @@ class AppShellHighWaterTest {
         assertEquals(1L, archive.maxEngineRunId(), "档案高水位 = 上一进程用过的最大号")
 
         // 新进程装配：把高水位传下去，池里每个引擎实例在 execute 之前先顶水位。
+        // 这里模拟的是 AppShellApplication 的装配动作（engineFactory 里读高水位 → 构造配置）。
         val engines = mutableListOf<HighWaterFakeEngine>()
         val log = InMemoryIntentLog()
         val shell = AppShell.assemble(
-            engineFactory = { id, _ -> HighWaterFakeEngine(id).also { engines += it } },
+            engineFactory = { id, _ ->
+                HighWaterFakeEngine(id, configHighWater = archive.maxEngineRunId()).also { engines += it }
+            },
             schedulerProvider = HighWaterProvider,
             intentLog = log,
             runArchive = archive,
-            engineRunIdHighWater = archive.maxEngineRunId(),
         )
         shell.use {
             it.scheduler.schedule(
