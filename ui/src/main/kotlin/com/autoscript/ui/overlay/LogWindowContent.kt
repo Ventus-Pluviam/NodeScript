@@ -102,11 +102,11 @@ fun LogWindowContent(
         }
         Box(Modifier.fillMaxSize().weight(1f)) {
             if (state.boundRunId == null) {
-                // **只有「从开窗起一次都没绑上过」才到这里**（启动失败/门禁拒）：跑过的
-                // 那条即使结算了也保持绑定（用户令「执行完不要自动清理输出」），
-                // 故这里不再写「已被停止」—— 被停的那次是可绑上的，走下面两支。
+                // **只有「从开窗起一次都没绑上过」才到这里**：跑过的那条即使结算了也保持
+                // 绑定（用户令「执行完不要自动清理输出」）—— 被停/跑完都能绑上，走下面两支；
+                // 落这里的只有"从未被在途表看见过"（启动失败 / 门禁拒 / 起跑即被停的那一线）。
                 Text(
-                    text = "本次执行未开始（启动失败或未通过门禁）",
+                    text = "本次执行未开始（启动失败、未通过门禁，或起跑即被停止）",
                     color = ThemeColors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.align(Alignment.Center).padding(16.dp),
@@ -115,7 +115,10 @@ fun LogWindowContent(
                 Text(
                     text = when {
                         state.paused -> "已暂停 —— 恢复后输出继续"
-                        !state.running -> "本次执行没有输出（已结束）"
+                        // 「已结算且一行都没有」：如实说没有输出，并指路持久全文 ——
+                        // 内存环（2000 行）理论上可能把这次的行挤掉，落盘那份不会
+                        // （`ScriptLogStore` 只追加），故不把"读不到"说成"没发生"。
+                        !state.running -> "本次执行没有输出（已结束）\n全文见 日志管理 → 脚本输出"
                         else -> "等待输出…"
                     },
                     color = ThemeColors.textSecondary,

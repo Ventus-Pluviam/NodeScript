@@ -77,8 +77,9 @@ class LogWindowStateTest {
         assertEquals(7L, done.boundRunId, "结算不解绑：窗口仍是刚跑完的那条")
         assertFalse(done.running, "已结算如实标记")
         assertFalse(done.paused)
-        val done2 = done.bind(listOf(run(8L, scriptPath = "other.js")))
-        assertEquals(7L, done2.boundRunId, "别的归属出现也不抢绑定（不是新触发）")
+        // 别的归属出现也不抢绑定（不是新触发）；已在途的 keep 仍会被选回（绑定不丢）。
+        val done2 = done.bind(listOf(run(8L, scriptPath = "other.js"), run(7L)))
+        assertEquals(7L, done2.boundRunId, "别的归属出现也不抢绑定；已在途的 keep 仍绑回")
         // 有行照常可见（水位之上）；没有同归属也不画空态。
         val lines = listOf(line(seq = 1L, runId = 7L), line(seq = 2L, runId = 7L))
         assertEquals(listOf(1L, 2L), done.visible(lines).map { it.seq })

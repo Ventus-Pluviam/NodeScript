@@ -85,11 +85,14 @@ data class LogWindowState(
         val match = activeRuns
             .filter { it.projectId == projectId && it.scriptPath == relPath }
             .maxByOrNull { it.runId }
+        // keep = 已绑过的那条；match 为 null（结算/未起跑）时保留它 —— **结算不解绑**。
+        // paused 只看 match：keep 若还在表里它就必然被 match 选中（同一套归属过滤，
+        // 取最大），故不存在"keep 在表里而 match 为 null"的第三态。
         val keep = boundRunId
         return copy(
-            boundRunId = match?.runId ?: keep.takeIf { keep != null },
+            boundRunId = match?.runId ?: keep,
             running = match != null,
-            paused = (match ?: activeRuns.firstOrNull { it.runId == keep })?.paused == true,
+            paused = match?.paused == true,
         )
     }
 
