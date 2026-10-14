@@ -23,33 +23,33 @@ class ManagementBackGestureTest {
     }
 
     @Test
-    fun `滑到一半且页面完全就位时缩到 0.95——TG 的 lerp(1.00, 0.90, 0.5)`() {
+    fun `滑到一半且页面完全就位时缩到零点九五——TG 的 lerp 三个端点取中`() {
         val s = backGestureScale(full / 2f, alpha = 1f, density)
         assertEquals(0.95f, s, 1e-6f)
     }
 
     @Test
-    fun `滑满且页面完全就位时缩到 0.90——TG 的 lerp 端点`() {
+    fun `滑满且页面完全就位时缩到零点九零——TG 的 lerp 端点`() {
         val s = backGestureScale(full, alpha = 1f, density)
         assertEquals(0.90f, s, 1e-6f)
     }
 
     @Test
-    fun `alpha 越小（越接近刚切入）终点越远——0.85 那一档只在这种情况下出现`() {
+    fun `alpha 越小（越接近刚切入）终点越远——零点八五那一档只在这种情况下出现`() {
         // TG: lerp(1.00, lerp(0.90, 0.85, 1 - alpha), 1.0) —— alpha=0 时内层是 0.85。
         val s = backGestureScale(full, alpha = 0f, density)
         assertEquals(0.85f, s, 1e-6f)
     }
 
     @Test
-    fun `超出满量程的位移被钳在 1.0——TG 的 clamp01(dx / dpf2(56))`() {
+    fun `超出满量程的位移被钳在一点零——TG 的 clamp01 把 dx 除以 dpf2 五十六`() {
         // 系统给的 progress 本就 ≤1，但公式自己钳一道：多给一倍位移也不该继续缩。
         val s = backGestureScale(full * 2f, alpha = 1f, density)
         assertEquals(0.90f, s, 1e-6f)
     }
 
     @Test
-    fun `缩放恒在 0.85 到 1.00 之间——不会缩到看不见，也不会放大`() {
+    fun `缩放恒在零点八五到一点零零之间——不会缩到看不见，也不会放大`() {
         var d = 0f
         while (d <= full) {
             val s = backGestureScale(d, alpha = 0f, density)

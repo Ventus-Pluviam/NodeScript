@@ -88,14 +88,14 @@ class ManagementTransitionGeometryTest {
     }
 
     @Test
-    fun `手势缩放走 lerp 端点 0.90——TG 的 :1119`() {
+    fun `手势缩放走 lerp 端点零点九零——TG 源码第 1119 行`() {
         assertEquals(1.0f, layerScale(0f, predictive = true, density = density), 1e-6f)
         assertEquals(0.95f, layerScale(full / 2f, predictive = true, density = density), 1e-6f)
         assertEquals(0.90f, layerScale(full, predictive = true, density = density), 1e-6f)
     }
 
     @Test
-    fun `非手势缩放走 min(0.25, 0.05x)——TG 的 :1121`() {
+    fun `非手势缩放走 min 取零点二五与零点零五x 的较小者——TG 源码第 1121 行`() {
         assertEquals(1.0f, layerScale(0f, predictive = false, density = density), 1e-6f)
         assertEquals(0.975f, layerScale(full, predictive = false, density = density), 1e-6f)
         // 更大的位移不再继续缩：TG 那个 `min` 的上界。
@@ -173,7 +173,7 @@ class ManagementTransitionGeometryTest {
     }
 
     @Test
-    fun `缩放恒不越过 1.00 上限也不放大`() {
+    fun `缩放恒不越过一点零零上限也不放大`() {
         var x = 0f
         while (x <= full) {
             assertTrue(layerScale(x, predictive = true, density = density) <= 1f + 1e-6f, "x=$x")
