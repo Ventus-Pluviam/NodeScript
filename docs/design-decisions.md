@@ -30,12 +30,23 @@
   桌面全绿在设备上不成立（与 `.so` 路径串位、`main.cpp` 拼 argv 同一族）。
 
 **拍板（药）**：档案本来就是 engineRunId 的唯一持久事实源（§8.5），就由它回答「历史用到哪」——
-`RunArchive.maxEngineRunId()`（高水位，空档回 0）→ 装配期把水位传下去，引擎
-`adoptRunIdHighWater` 把分配器顶到历史之后（**只前移不后退、幂等、下一个发出的号严格大于水位**）。
-取数收在 `RunArchiveWiring.highWater`（打开 + 迁移 + 读一次 + 关，同步路径，句柄当场还掉）；
-`AppShell`/`AppShellKit` 各加 `engineRunIdHighWater: Long = 0`（缺省 0 = 不顶 ——
-单测/离线配方没有跨进程历史），生产由 `AppShellApplication.installWithFiles` 读出来传下去。
-**不让引擎自己持久化计数器**：那会是第二个真值，档案与计数器漂移时没人知道该信谁。
+`RunArchive.maxEngineRunId()`（高水位，空档回 0）→ 装配期把水位传下去，引擎把分配器顶到
+历史之后（**只前移不后退、幂等、下一个发出的号严格大于水位**）。
+取数收在 `RunArchiveWiring.highWater`（打开 + 迁移 + 读一次 + 关，同步路径，句柄当场还掉），
+经 `PlatformWiring.runArchiveHighWater`（**顶层函数**，见下方修订注）给
+`AppShellApplication.installWithFiles`；**不让引擎自己持久化计数器**：那会是第二个真值，
+档案与计数器漂移时没人知道该信谁。
+
+**修订（2026-10-15，detekt 门连带）**：初版机制是「`ScriptEngine.adoptRunIdHighWater(usedThrough)`
+SPI 方法 + `AppShell`/`AppShellKit` 各加 `engineRunIdHighWater: Long = 0` 参数、池工厂建完引擎
+后补顶一次」，两条 detekt 门被撞红（CI run 38599006821）：加参数让 `AppShell.assemble`/
+`AppShellKit.assemble` 的 `LongParameterList` baseline 失配（baseline 承载的是**完整签名文本**，
+加一个参数即新违规）；`PlatformWiring` 加成员后到 11 个函数，撞 `TooManyFunctions`（对象内
+阈值 11）。改法 = 水位从「装配层事后顶一下」变成「引擎自己的构造配置」：`NodeEngineConfig
+.runIdHighWater: Long = 0` + 引擎 `init` 调 `raiseFloor(config.runIdHighWater)`（构造即站在
+历史之后，不依赖装配层记得补调）—— 撤掉 SPI 方法与两个参数（两函数回到本轮之前的形状，
+baseline 不再失配），探针挪到同文件**顶层函数**（顶层不进对象计数，与
+`ShellExecutor.asShellOpExecutor` 同例）。行为不变，两条回归门改为配置驱动。
 
 **上游早有同一句纪律，只是没落到引擎侧**：`IntentStoreWiring` 的 KDoc 明写「新库从 1 发号
 会与历史 link **同号异义**」，故迁移必须带原 runId —— 本项是它的对偶：那边靠「导入带原 id」，

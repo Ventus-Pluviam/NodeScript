@@ -6,9 +6,9 @@
   用户报 toast「执行失败：终态记录不可改写」。engineRunId 是跨进程持久身份，而分配器是
   进程内计数器 —— App 重启后第一次执行重发上一进程用掉的号，档案 `put` 撞「终态不可改写」
   响亮失败。设备实测：`run_archive` 2 行 vs 意图日志 6 行，`script-logs/index.jsonl` 里
-  `{"run":1}` 三次。药 = `RunArchive.maxEngineRunId()`（高水位）+ `adoptRunIdHighWater`
-  （只前移/幂等/非挂起）+ 装配期把水位顶给池里每个引擎。三个实现各补一句，契约/引擎/装配
-  三条回归门。
+  `{"run":1}` 三次。药 = `RunArchive.maxEngineRunId()`（高水位）+ 装配期把水位经引擎构造
+  配置 `NodeEngineConfig.runIdHighWater` 喂下去（构造即站在历史之后）→ 引擎 `init` 把
+  分配器顶到水位之后。三实现各补一句，契约/引擎/装配三条回归门。
 
 ## 最新追记（2026-10-14：点执行零输出第二层 —— main.cpp 把堆上限拼进了 `--` 之后）
 
