@@ -334,7 +334,7 @@ class AppShellApplication : Application(), HostSummary {
             // 是「执行失败：终态记录不可改写」+ 悬浮窗空态）。取数在这里：本函数是同步的，
             // 而引擎由 `AppShellKit` 装配期 eager 建（池构造）—— 只有这一层读得到。打不开即抛
             // （与 intentStore 同一条无回落纪律）：拿 0 冒充"没有历史"正是本条要修的病。
-            val engineRunIdHighWater = PlatformWiring.runArchiveHighWater(appContext, nsDir)
+            val engineRunIdHighWater = runArchiveHighWater(appContext, nsDir)
             // 运行档案与任务注册表（批 102 P4）：生产面换 SQLite，各带一次性 jsonl 迁移。
             // 与 intentStore 同一纪律 —— 打不开即抛（异常冒到本函数的失败分支：记日志、
             // 壳保持未就绪、闹钟走漏投记账），**不回落 jsonl**。
