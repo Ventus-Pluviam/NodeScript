@@ -1,5 +1,16 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-14：「点执行就闪退」四层收口）
+
+- [2026-10-14 · 点执行闪退修法](2026-10-14.md)：
+  离屏 `ComposeView.setContent` 跑的是组合，组合期一抛就从 `LaunchedEffect` 冒到进程
+  （组合协程域没有 `CoroutineExceptionHandler`，javap 核实）。此前内容效应键含 `lines`，
+  而轮询每轮都产出新的 `List` 实例 → 每 400ms 重跑一次裸 `setContent` 重喂分支。修成
+  fail-closed：行数据住 `LogWindowController.lines`（Compose 状态现读，`setContent`
+  次数 = 开窗次数）+ 重喂分支补 catch（失败落 in-app 回退）+ ▶ 链三条 ISE 逃逸路径
+  （`logWindowRef()` 在 try 外 / `scope.launch` 里 / catch 链没接 `IllegalStateException`）
+  收成失败 toast 或「没有悬浮窗的立即执行」。
+
 ## 最新追记（2026-10-13：悬浮窗跟手拖动 + ▶ 链路径形状收口）
 
 - [2026-10-13 · 悬浮窗拖动跟手 + ▶ 链双前缀修复](2026-10-13.md)：
