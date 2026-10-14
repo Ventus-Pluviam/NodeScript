@@ -92,13 +92,16 @@ class AppShellHighWaterTest {
     @Test
     fun `高水位在首次执行前顶给引擎 重启后不再撞档案终态行`() = runBlocking {
         // 上一进程留下的终态档案行（模拟设备上 run_archive 里 engine_run_id=1 的 CRASHED）。
+        // 关联挂一个**上一辈子**的 intentRunId（99）：新进程的意图日志从 1 开始发号，
+        // 用 1 的话 `recordsOfIntent(1)` 会把这条历史行也算进本次执行 —— 那是测试自己的
+        // 号段撞车，不是被测行为。
         val archive = InMemoryRunArchive()
         archive.put(
             com.autoscript.domain.scripts.RunRecord(
                 id = 1L, projectId = "demo", scriptPath = "main.js",
                 runNonce = "old", state = RunState.CRASHED,
             ),
-            com.autoscript.domain.scripts.EngineRunLink(intentRunId = 1, engineRunId = 1),
+            com.autoscript.domain.scripts.EngineRunLink(intentRunId = 99, engineRunId = 1),
         )
         assertEquals(1L, archive.maxEngineRunId(), "档案高水位 = 上一进程用过的最大号")
 
