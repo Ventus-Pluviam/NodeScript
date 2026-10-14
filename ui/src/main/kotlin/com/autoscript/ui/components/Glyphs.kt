@@ -86,6 +86,9 @@ enum class GlyphKind {
     /** 立即执行（任务行尾的实心播放三角）。 */
     PLAY,
 
+    /** 执行脚本（项目页文件行尾那颗 ▶ —— 与 [PLAY] 同一颗三角，只是语义是"跑这个文件"）。 */
+    RUN,
+
     /** 排序切换钮——切到**按字母**（三条横杠 + 字母 A；TG `msg_contacts_name`）。 */
     SORT_NAME,
 
@@ -103,6 +106,21 @@ enum class GlyphKind {
 
     /** 「更多」（文件/文件夹行尾的溢出钮）：三个竖排实心点（TG `ic_ab_other`）。 */
     MORE_VERT,
+
+    /** 暂停（执行日志悬浮窗「暂停执行」钮）：两条竖杠。 */
+    PAUSE,
+
+    /** 继续（已暂停时的同一颗钮位）：右侧三角（与 [PLAY] 同形，悬浮窗内自足）。 */
+    RESUME,
+
+    /** 清空（悬浮窗「清空日志」钮）：垃圾桶（桶身 + 桶盖 + 两条竖纹）。 */
+    CLEAR,
+
+    /** 关闭（悬浮窗「关掉悬浮窗」钮）：✕（两条对角，ActionBar 选择模式同款字形）。 */
+    CLOSE,
+
+    /** 全屏（悬浮窗「打开全屏」钮）：四角向外（展开；已全屏时同一颗钮画反向）。 */
+    FULLSCREEN,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -344,8 +362,10 @@ fun Glyph(
                 drawPath(path(0.62f to 0.24f, 0.76f to 0.38f), tint, style = stroke)
             }
 
-            // 播放三角（任务行尾「立即执行」）：实心（TG 这颗是填充形，线性描边读不出"按了会跑"）。
-            GlyphKind.PLAY -> {
+            // 播放三角（任务行尾「立即执行」/ 项目页文件行尾「运行」）：实心
+            // （TG 这颗是填充形，线性描边读不出"按了会跑"）。两档共用这一支 ——
+            // 形态本来就该一模一样，抄成两支迟早只改一支。
+            GlyphKind.PLAY, GlyphKind.RUN -> {
                 drawPath(
                     path(0.30f to 0.20f, 0.30f to 0.80f, 0.80f to 0.50f).apply { close() },
                     tint,
@@ -414,6 +434,47 @@ fun Glyph(
                 drawCircle(tint, radius = dot, center = at(0.5f, 0.19f))
                 drawCircle(tint, radius = dot, center = at(0.5f, 0.50f))
                 drawCircle(tint, radius = dot, center = at(0.5f, 0.81f))
+            }
+
+            // 暂停：两条竖杠（与 RESUME 同一钮位，状态切换不断布局）。
+            GlyphKind.PAUSE -> {
+                drawPath(path(0.36f to 0.22f, 0.36f to 0.78f), tint, style = stroke)
+                drawPath(path(0.64f to 0.22f, 0.64f to 0.78f), tint, style = stroke)
+            }
+
+            // 继续：右侧实心三角（PLAY 同形 —— 悬浮窗内没有播放语境，不会读错）。
+            GlyphKind.RESUME -> {
+                drawPath(
+                    path(0.34f to 0.22f, 0.34f to 0.78f, 0.76f to 0.50f).apply { close() },
+                    tint,
+                )
+            }
+
+            // 清空：垃圾桶 = 桶盖横线 + 提手 + 梯形桶身 + 两条竖纹。
+            GlyphKind.CLEAR -> {
+                drawPath(path(0.28f to 0.28f, 0.72f to 0.28f), tint, style = stroke)
+                drawPath(path(0.40f to 0.28f, 0.40f to 0.20f, 0.60f to 0.20f, 0.60f to 0.28f), tint, style = stroke)
+                drawPath(
+                    path(0.32f to 0.28f, 0.68f to 0.28f, 0.62f to 0.82f, 0.38f to 0.82f).apply { close() },
+                    tint,
+                    style = stroke,
+                )
+                drawPath(path(0.45f to 0.40f, 0.45f to 0.70f), tint, style = stroke)
+                drawPath(path(0.55f to 0.40f, 0.55f to 0.70f), tint, style = stroke)
+            }
+
+            // 关闭：✕ 两条对角（ActionBar 选择模式的 `backGlyph = "✕"` 同款字形，画出来）。
+            GlyphKind.CLOSE -> {
+                drawPath(path(0.28f to 0.28f, 0.72f to 0.72f), tint, style = stroke)
+                drawPath(path(0.72f to 0.28f, 0.28f to 0.72f), tint, style = stroke)
+            }
+
+            // 全屏：四角向外（四段折线，各自朝角落；已全屏时同一颗钮含义为"退出全屏"，字形不变）。
+            GlyphKind.FULLSCREEN -> {
+                drawPath(path(0.32f to 0.42f, 0.22f to 0.32f, 0.22f to 0.22f, 0.32f to 0.22f), tint, style = stroke)
+                drawPath(path(0.68f to 0.42f, 0.78f to 0.32f, 0.78f to 0.22f, 0.68f to 0.22f), tint, style = stroke)
+                drawPath(path(0.32f to 0.58f, 0.22f to 0.68f, 0.22f to 0.78f, 0.32f to 0.78f), tint, style = stroke)
+                drawPath(path(0.68f to 0.58f, 0.78f to 0.68f, 0.78f to 0.78f, 0.68f to 0.78f), tint, style = stroke)
             }
         }
     }

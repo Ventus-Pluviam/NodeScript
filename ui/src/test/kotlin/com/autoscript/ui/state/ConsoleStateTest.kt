@@ -47,6 +47,19 @@ class ConsoleStateTest {
         activeRuns = activeRuns,
     )
 
+    /** 一条在途行（本文件那几条断言用的形状；参数短名省得每行都超长）。 */
+    private fun activeRun(
+        runId: Long,
+        host: EngineStatus?,
+        pool: EngineStatus,
+        drift: Boolean = false,
+        path: String = "a.js",
+        paused: Boolean = false,
+    ) = ActiveRunRow(
+        runId = runId, host = host, pool = pool, drift = drift,
+        projectId = "demo", scriptPath = path, paused = paused,
+    )
+
     @Test
     fun `首帧哨兵是未读取 不是暂无日志`() {
         val s = ConsoleState.NOT_LOADED
@@ -138,7 +151,7 @@ class ConsoleStateTest {
                 nextSeq = 1L,
                 pageFull = true,
                 droppedTotal = 9L,
-                activeRuns = listOf(ActiveRunRow(1L, null, EngineStatus.RUNNING, true)),
+                activeRuns = listOf(ActiveRunRow(1L, null, EngineStatus.RUNNING, true, "demo", "a.js", false)),
             ),
             nowMillis = 1L,
         )
@@ -211,7 +224,7 @@ class ConsoleStateTest {
     fun `宿主状态读不到就是 null 不是某个状态`() {
         val s = ConsoleState.of(
             ConsoleState.NOT_LOADED,
-            snap(activeRuns = listOf(ActiveRunRow(11L, host = null, pool = EngineStatus.IDLE, drift = false))),
+            snap(activeRuns = listOf(activeRun(11L, host = null, pool = EngineStatus.IDLE))),
             nowMillis = 1L,
         )
         val run = s.activeRuns.single()
@@ -226,7 +239,7 @@ class ConsoleStateTest {
             ConsoleState.NOT_LOADED,
             snap(
                 activeRuns = listOf(
-                    ActiveRunRow(13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true),
+                    activeRun(13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true, path = "c.js"),
                 ),
             ),
             nowMillis = 1L,
@@ -255,7 +268,11 @@ class ConsoleStateTest {
         val script = s.scriptOutputLines()
         assertEquals(listOf("宿主装配完成", "闹钟投递"), system.map { it.text })
         assertEquals(listOf("脚本输出"), script.map { it.text })
-        assertEquals(s.lines.size, system.size + script.size, "两段不重不漏 —— 一行日志不能同时出现在两个页签下，也不能两边都没有")
+        assertEquals(
+            s.lines.size,
+            system.size + script.size,
+            "两段不重不漏 —— 一行日志不能同时出现在两个页签下，也不能两边都没有",
+        )
         assertTrue(system.all { it.external })
         assertTrue(script.none { it.external })
     }

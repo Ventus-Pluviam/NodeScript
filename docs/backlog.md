@@ -726,6 +726,12 @@ stage 目录），压实要连「哪些 nonce 曾经存在过」一起答，那�
   （写于只有身份、没有掩码时）逐字保留作历史，当前状态以本条为准。**
 - **A10 两半均已落地**：① 脚本 console 归属（批 74）、② 宿主事件进收集器（批 72）。
   **下方 A10 原始行逐字保留作历史，当前状态以本条为准。**
+- **2026-10-13 追记（用户令：A10①「不新增 console 持久化」部分推翻）**：
+  per-execution 落盘已落（`filesDir/.ns/script-logs/`，`<runId>.log` + `index.jsonl`，
+  只记脚本行，append-only 无 retention）—— 2026-10-07 那句「不新增 console 持久化」
+  是旧需求下的旧结论（当时要的只是"按执行显示"，内存环够用），现用户要"跑完还能找到"，
+  结论随之取代。任务日志仍是终态历史（不动）。口径见 [`design-decisions.md`](design-decisions.md)
+  第 79 项。
 - **D1 已拍板维持独立模块**（2026-10-01，口径见 [`design-decisions.md`](design-decisions.md) 第 17 项），
   按本文件纪律「裁定不做了从这里移走」——**下方 D1 行不再是待办**，逐字保留作历史。
 - **新增 A11（S，未排期）：`abortConnection` 对「子进程继承桥 socket fd」形态未覆盖**。

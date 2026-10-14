@@ -64,7 +64,8 @@
         android:name=".AppShellApplication"
         android:allowBackup="false"
         android:label="AutoScript"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true">
 
         <!--
           闹钟接收器（§8.6「AlarmManager setExactAndAllowWhileIdle → receiver」）：

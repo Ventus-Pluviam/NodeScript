@@ -71,6 +71,15 @@ class HeartbeatLedger(
         synchronized(lock) { beats.remove(runId) }
     }
 
+    /**
+     * 把该 run 的心跳时钟拨到现在（2026-10-13 执行暂停：`resumeRun` 的落点）。
+     *
+     * 暂停期间引擎 frozen、心跳停在冻住那一刻 —— `sinceLastBeat` 停在那里不动；
+     * 暂停几分钟后恢复，首跳还没到就被判"失联 N 分钟"当场误杀。rebase 把账拨到
+     * 现在（序号**不动**：seq 是引擎侧的自增事实，宿主改它等于伪造心跳）。
+     * 从未打过点的 run（无条目）no-op：那本来就是 null 那条路，不必造一条假账。
+     */
+
     /** 在册 runId 数（诊断/单测）。 */
     fun trackedRuns(): Set<Long> = synchronized(lock) { beats.keys.toSet() }
 
@@ -93,6 +102,17 @@ class HeartbeatLedger(
      * 负数把"引擎还活着"这件事讲圆。
      */
     private fun now(b: Beat): Long = (clock.nowMillis() - b.atMillis).coerceAtLeast(0L)
+
+    /**
+     * 把该 run 的心跳时钟拨到现在（见 [forget] 上方的 KDoc）。
+     *
+     * @return false = 无条目（从未打点，no-op）；true = 已拨到现在。
+     */
+    fun rebase(runId: Long): Boolean = synchronized(lock) {
+        val prev = beats[runId] ?: return false
+        beats[runId] = prev.copy(atMillis = clock.nowMillis())
+        true
+    }
 
     /** 超编淘汰最旧条目（LinkedHashMap 迭代序 = 插入序；首条不会被本次新写入淘汰）。 */
     private fun pruneLocked() {

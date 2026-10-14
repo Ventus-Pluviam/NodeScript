@@ -32,7 +32,6 @@ import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.CONCURRENCY_PRESETS
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.ScriptLimitsState
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.state.defaultsOf
 import com.autoscript.ui.theme.ThemeColors
@@ -71,20 +70,11 @@ fun ScriptLimitsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
-        total = 5,
-        emptyText = "未读取",
-        unit = "项限额",
-    )
     val refresh = rememberRefreshAction { onRefresh() }
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         ActionBar(
             title = "脚本设置",
             onBack = onBack,
-            subtitle = status.text,
-            subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
         )
         LazyColumn(

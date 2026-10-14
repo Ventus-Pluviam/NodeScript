@@ -3,7 +3,6 @@ package com.autoscript.ui.screens
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -22,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autoscript.ui.ManagementTransition
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.BAR_MORE_DOTS_WEIGHT
 import com.autoscript.ui.components.BarMoreDotsSize
@@ -52,6 +53,7 @@ import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LocalToast
 import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.RefreshableBox
+import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.ScrollToTopButton
 import com.autoscript.ui.components.rememberScrollToTopVisible
 import com.autoscript.ui.components.SettingIconColors
@@ -116,14 +118,29 @@ fun SettingsScreen(
     onLimitsReset: () -> Unit,
     themeSwitchLabel: String,
     onSwitchTheme: (Offset) -> Unit,
+    /**
+     * 本页是不是 pager 当前停稳的那一页。pager 预组合邻页（`beyondViewportPageCount = 1`），
+     * 邻页里那个手势返回处理器会替前台页签吞返回键（`OnBackPressedDispatcher` 是 LIFO，
+     * 顺序由组合顺序定）—— 不看 `active` 就是「在任务页按返回、设置页自己退了一层」。
+     */
+    active: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    // 子页开着时先吃掉系统返回。横划到别的页签时本屏不在组合里，BackHandler 随之卸下，
-    // 不会替别的页签拦返回键（与 ProjectScreen 各子态同一口径）。
     // 两个子页，故用**枚举而不是 Boolean**：布尔只能表示「开着哪个」，而本页已有两个里页，
     // 用布尔就得再加一个互斥判据 —— 那正是「按下去发现两个同时开着」那类 bug 的形状。
     var subPage by rememberSaveable { mutableStateOf(SettingsSubPage.NONE) }
-    BackHandler(enabled = subPage != SettingsSubPage.NONE) { subPage = SettingsSubPage.NONE }
+    // 动画进行中（TG `animationInProgress`）—— 底下那份的入口照旧吞点击，与管理面板
+    // 同一口径：退出动画没播完就点新入口，在 TG 里是什么都不发生。
+    var animating by remember { mutableStateOf(false) }
+    // 悬浮底栏的隐藏开关（外壳供）。**进了子页底栏整条收掉**（用户口径 2026-10-13：
+    // 「点进列表里面时让底栏消失，退出来时才重新出现」）—— 子页与项目页的目录层同一条
+    // 理由：那四个页签既是别的页面、又压着内容底部。
+    val tabBarHidden = LocalTabBarHidden.current
+    // 底栏收放的**唯一**判据（与 `ProjectScreen` 那条 `fullScreen` 同一写法）：子页在前台
+    // = 占整屏 = 收掉；回顶页才放回来。单一判据保证"收/放"永远跟着状态走。
+    val fullScreen = subPage != SettingsSubPage.NONE
+    // 同 ProjectScreen 那条的 `active` 门：pager 预组合邻页，邻页组合时不许碰开关。
+    LaunchedEffect(active, fullScreen) { if (active) tabBarHidden.value = fullScreen }
 
     // 读态三态分派走 Status（`LoadState` 的纪律：界面不自己 when 它）。
     // 顶页不再挂它（批 49 去掉标题下的小字）—— 只在子页没读到 / 读失败时如实说。
@@ -133,35 +150,141 @@ fun SettingsScreen(
         loadedText = "${state.rows.size} 项",
     )
     val toast = LocalToast.current
+    // 一处包住全部入口：TG 是 `checkTransitionAnimation()` 在**进入栈的那一个方法**开头
+    // 统一判的，不是每个入口各自判。
+    fun open(target: SettingsSubPage) {
+        if (animating) return
+        subPage = target
+    }
     val topListState = rememberLazyListState()
     val pageListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted)) {
-        if (subPage != SettingsSubPage.NONE) {
-            ActionBar(
-                title = subPage.title,
-                onBack = { subPage = SettingsSubPage.NONE },
-                background = ThemeColors.surfaceMuted,
-            )
-        } else {
-            ActionBar(
-                title = null,
-                background = ThemeColors.surfaceMuted,
-                actions = {
-                    SettingsMenu(themeSwitchLabel = themeSwitchLabel, onSwitchTheme = onSwitchTheme)
-                },
-            )
-        }
-        Box(Modifier.weight(1f)) {
-            RefreshableBox(Modifier.fillMaxSize()) {
-                when (subPage) {
-                    SettingsSubPage.PERMISSIONS ->
-                        PermissionsPage(state, status, pageListState, onOpenSettings)
-                    // 脚本设置子页（批 107；§8.1 脚本资源限额）：状态与回调整份从外面进来，
-                    // 本屏不持有读口 —— 设置页此前只收 `CapabilityCenterState`，接第一个
-                    // 持久化读口时把那份 `HostSummary` 依赖挡在外面（`:ui` 只依赖 `:domain`）。
-                    SettingsSubPage.SCRIPT_LIMITS -> ScriptLimitsScreen(
+    // **返回键整个交给 [ManagementTransition]**（它把「子页 ⇄ 顶页」与跟手手势合走
+    // 一条路，TG 也是一个 `OnBackAnimationCallback` 管四态，`LaunchActivity:738-818`）。
+    // 所以**不再挂 `BackHandler`** —— `OnBackPressedDispatcher` 是 LIFO，它排在后面
+    // 注册就把预测式手势整个吃掉（管理面板踩过这个坑）。
+    ManagementTransition(
+        page = subPage,
+        active = active,
+        onAnimatingChanged = { animating = it },
+        onBackRequest = { subPage = SettingsSubPage.NONE },
+        modifier = modifier,
+        // 显式写 `content =`：尾随 lambda 只能绑到**签名里最后一个**形参，而这里最后
+        // 一个是 `modifier`（不是函数类型）—— 写尾随 lambda 会被判成「实参过多」。
+        content = { page ->
+            // 底下那份 = 顶栏 + 列表 + 回顶钮。**子页开着时它照旧组合** —— 离场动画要求旧页
+            // 在动画期间仍在树上；列表本身不画（被盖住了，白组合一遍纯浪费）。
+            @Composable
+            fun TopLevel() {
+                Column(Modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
+                    ActionBar(
+                        title = null,
+                        background = ThemeColors.surfaceMuted,
+                        actions = {
+                            SettingsMenu(themeSwitchLabel = themeSwitchLabel, onSwitchTheme = onSwitchTheme)
+                        },
+                    )
+                    Box(Modifier.weight(1f)) {
+                        // **列表全程都画**，子页盖住时也不省 —— 离场/入场动画期间底下这份
+                        // **就是参照物**：48dp 的横移、淡入与圆角缩放都得有个东西在底下才
+                        // 看得出层次。之前「被盖住就不画」，底下只剩一张同色空底，动画看着
+                        // 「一点效果都没有」。TG `:1170` 同款：
+                        // `if (!isTransitionAnimationInProgress()) canvas.clipRect(...)`
+                        // —— 切换动画期间底层**根本不裁**。
+                        RefreshableBox(Modifier.fillMaxSize()) {
+                            LazyColumn(
+                                state = topListState,
+                                // 顶部不留：头部区自己让 26dp；底部让出悬浮底栏与导航 inset。
+                                contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
+                            ) {
+                                item { IdentityHeader() }
+                                item {
+                                    // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
+                                    // 全部纯文字（批 49：无图标、无副标题）。
+                                    SettingsCard {
+                                        SettingsCellRow(
+                                            title = "权限列表",
+                                            onClick = { open(SettingsSubPage.PERMISSIONS) },
+                                        )
+                                        SettingsCellRow(
+                                            title = "脚本设置",
+                                            onClick = { open(SettingsSubPage.SCRIPT_LIMITS) },
+                                        )
+                                        SettingsCellRow(
+                                            title = "语言切换",
+                                            onClick = { toast?.show("语言切换尚未开放") },
+                                        )
+                                        SettingsCellRow(
+                                            title = "帮助文档",
+                                            onClick = { toast?.show("帮助文档尚未开放") },
+                                        )
+                                    }
+                                }
+                                item { SectionGap() }
+                                item {
+                                    // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
+                                    SettingsCard {
+                                        SettingsCellRow(
+                                            title = "反馈",
+                                            onClick = { toast?.show("反馈尚未开放") },
+                                        )
+                                        SettingsCellRow(
+                                            title = "关于",
+                                            onClick = { toast?.show("关于尚未开放") },
+                                        )
+                                        SettingsCellRow(
+                                            title = "检查更新",
+                                            onClick = { toast?.show("检查更新尚未开放") },
+                                        )
+                                    }
+                                }
+                                if (state.degradedAlarmTaskIds.isNotEmpty()) {
+                                    item { SectionGap() }
+                                    item {
+                                        // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
+                                        // 排期**可能偏差**（§8.6 的承诺）。它是任务的账，不进权限子页。
+                                        SettingsCard {
+                                            CardCaptionRow(
+                                                text = "以下定时任务已降级（可能偏差）：" +
+                                                    state.degradedAlarmTaskIds.joinToString("、"),
+                                                tone = StatusTone.ATTENTION,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // 回顶钮跟着当前这一层走：顶页在时看顶页列表，子页在时看子页列表。
+                        val listState = if (page == SettingsSubPage.NONE) topListState else pageListState
+                        ScrollToTopButton(
+                            visible = rememberScrollToTopVisible(listState),
+                            onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                            // 回顶钮抬到悬浮底栏上方（胶囊占位 + 导航 inset，另加 8dp 呼吸）。
+                            modifier = Modifier.align(Alignment.BottomEnd)
+                                .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
+                        )
+                    }
+                }
+            }
+
+            when (page) {
+                // `NONE` = 面板本身（它也占一个槽位，见 `ManagementTransition` 的 KDoc）。
+                SettingsSubPage.NONE -> TopLevel()
+                SettingsSubPage.PERMISSIONS -> SettingsSubPageLayer(
+                    title = page.title,
+                    onBack = { subPage = SettingsSubPage.NONE },
+                ) {
+                    PermissionsPage(state, status, pageListState, onOpenSettings)
+                }
+                // 脚本设置子页（批 107；§8.1 脚本资源限额）：状态与回调整份从外面进来，
+                // 本屏不持有读口 —— 设置页此前只收 `CapabilityCenterState`，接第一个
+                // 持久化读口时把那份 `HostSummary` 依赖挡在外面（`:ui` 只依赖 `:domain`）。
+                SettingsSubPage.SCRIPT_LIMITS -> SettingsSubPageLayer(
+                    title = page.title,
+                    onBack = { subPage = SettingsSubPage.NONE },
+                ) {
+                    ScriptLimitsScreen(
                         state = limitsState,
                         onRefresh = onLimitsRefresh,
                         onDraft = onLimitsDraft,
@@ -170,77 +293,34 @@ fun SettingsScreen(
                         onBack = { subPage = SettingsSubPage.NONE },
                         modifier = Modifier,
                     )
-                    SettingsSubPage.NONE -> LazyColumn(
-                        state = topListState,
-                        // 顶部不留：头部区自己让 26dp；底部让出悬浮底栏与导航 inset。
-                        contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
-                    ) {
-                        item { IdentityHeader() }
-                        item {
-                            // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
-                            // 全部纯文字（批 49：无图标、无副标题）。
-                            SettingsCard {
-                                SettingsCellRow(
-                                    title = "权限列表",
-                                    onClick = { subPage = SettingsSubPage.PERMISSIONS },
-                                )
-                                SettingsCellRow(
-                                    title = "脚本设置",
-                                    onClick = { subPage = SettingsSubPage.SCRIPT_LIMITS },
-                                )
-                                SettingsCellRow(
-                                    title = "语言切换",
-                                    onClick = { toast?.show("语言切换尚未开放") },
-                                )
-                                SettingsCellRow(
-                                    title = "帮助文档",
-                                    onClick = { toast?.show("帮助文档尚未开放") },
-                                )
-                            }
-                        }
-                        item { SectionGap() }
-                        item {
-                            // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
-                            SettingsCard {
-                                SettingsCellRow(
-                                    title = "反馈",
-                                    onClick = { toast?.show("反馈尚未开放") },
-                                )
-                                SettingsCellRow(
-                                    title = "关于",
-                                    onClick = { toast?.show("关于尚未开放") },
-                                )
-                                SettingsCellRow(
-                                    title = "检查更新",
-                                    onClick = { toast?.show("检查更新尚未开放") },
-                                )
-                            }
-                        }
-                        if (state.degradedAlarmTaskIds.isNotEmpty()) {
-                            item { SectionGap() }
-                            item {
-                                // 非空不藏：精确闹钟被收回时这些任务降级成了 setWindow，
-                                // 排期**可能偏差**（§8.6 的承诺）。它是任务的账，不进权限子页。
-                                SettingsCard {
-                                    CardCaptionRow(
-                                        text = "以下定时任务已降级（可能偏差）：" +
-                                            state.degradedAlarmTaskIds.joinToString("、"),
-                                        tone = StatusTone.ATTENTION,
-                                    )
-                                }
-                            }
-                        }
-                    }
                 }
             }
-            val listState = if (subPage != SettingsSubPage.NONE) pageListState else topListState
-            ScrollToTopButton(
-                visible = rememberScrollToTopVisible(listState),
-                onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                // 回顶钮抬到悬浮底栏上方（胶囊占位 + 导航 inset，另加 8dp 呼吸）。
-                modifier = Modifier.align(Alignment.BottomEnd)
-                    .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
-            )
+        },
+    )
+}
+
+/**
+ * 一个设置子页的外壳（批 115）：顶栏 + 本体。
+ *
+ * **不挂 `BackHandler`** —— 与 [ManagementTransition] 那个普通返回键同源：外壳的
+ * `PredictiveBackHandler` 在**非手势**返回键（系统三键/手势导航的返回按钮）上同样会
+ * 走流结束 → `onCommit`（`handleOnBackPressed`），所以子页返回键归外层那条。
+ * 这里若再挂一颗普通 `OnBackPressedCallback`，它排在 `PredictiveBackHandler` 之后
+ * （LIFO）就会把预测式手势**整条退化**成普通返回，跟手动画就不存在了 ——
+ * 这正是「设置页还是没有预返回动画」的原因之一。
+ *
+ * @param onBack 顶栏 ‹（立即关，不复查）。
+ */
+@Composable
+private fun SettingsSubPageLayer(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
+        ActionBar(title = title, onBack = onBack, background = ThemeColors.surfaceMuted)
+        Box(Modifier.weight(1f)) {
+            RefreshableBox(Modifier.fillMaxSize()) { content() }
         }
     }
 }

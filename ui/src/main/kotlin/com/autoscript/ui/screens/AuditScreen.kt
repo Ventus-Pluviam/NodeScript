@@ -29,7 +29,6 @@ import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.AuditRowState
 import com.autoscript.ui.state.AuditState
 import com.autoscript.ui.state.LoadState
-import com.autoscript.ui.state.Status
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
@@ -59,28 +58,12 @@ fun AuditScreen(
     modifier: Modifier = Modifier,
 ) {
     val visible = state.visible
-    val status = Status.count(
-        load = state.load,
-        notLoadedText = "尚未读取（点右上「刷新」现取）",
-        total = visible.size,
-        emptyText = "读到了，暂无审计记录",
-        unit = "条记录",
-    )
     val refresh = rememberRefreshAction { onRefresh() }
     Column(modifier.fillMaxSize().background(ThemeColors.background)) {
         ActionBar(
             title = "审计",
             onBack = onBack,
-            subtitle = status.text,
-            subtitleTone = status.tone,
             actions = { ActionBarAction("刷新", refresh::trigger) },
-        )
-        ToneText(
-            "依赖相关操作的记账（安装 / 卸载 / 镜像源变更 / 脚本执行 …）。" +
-                "**失败也在这里** —— 审计要能回答「当时到底成没成」。点一行复制。",
-            StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
         )
         // 筛选条只在**真的不止一档**时出现：一档时画一排只有一个格的控件，
         // 是在暗示"还有别的可以选"（与 NpmScreen 的项目选择器同一条理由）。

@@ -82,6 +82,52 @@ interface HostSummary {
     suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot
 
     /**
+     * 脚本输出日志的文件列表（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+     *
+     * 读的是落盘目录（`filesDir/.ns/script-logs/`），**壳没装好也不抛** —— 与
+     * [scriptFiles] 同一条"不依赖壳寄存器"口径：目录照样可读，列出来是事实
+     * （此时"有日志但跑不了"恰恰是用户该看到的全貌）。[ScriptLogRow.running]
+     * 那一列需要壳里的在途表：壳未就绪时一律 false（"没在跑"是事实，不是失败）。
+     * 只有遍历/解析本身抛（IO 异常）才向上传。
+     */
+    suspend fun scriptLogIndex(): ScriptLogSnapshot
+
+    /**
+     * 一次执行的日志全文（点日志列表那一行进详情；2026-10-13 用户令）。
+     *
+     * 读 `filesDir/.ns/script-logs/&lt;runId&gt;.log`（JSONL，截尾 [maxLines] 行 ——
+     * 长跑脚本的输出能到几十万行，详情页全读会把内存撑爆；截尾只截**显示**，
+     * 文件里那份全文不动）。只复用 [ConsoleLineRow] 的形状（seq/level/text/at），
+     * runId 已隐含在调用参数里，不再重复携带。
+     *
+     * 文件缺失/解析失败**抛**（与 [readScriptFile] 同一条纪律）：读不到就是读不到，
+     * 不返回空表 —— 空表是"这次执行真的没输出"，两者在详情页是两句话。
+     */
+    suspend fun scriptLogContent(runId: Long, maxLines: Int = 2000): List<ConsoleLineRow>
+
+    /**
+     * 暂停一次**在途**执行（悬浮窗「暂停执行」按钮；2026-10-13 用户令）。
+     *
+     * OS 级冻结（SIGSTOP，见 `RuntimeController.pauseRun`）—— 不是优雅停：
+     * 进程原地冻住、心跳停、输出停，恢复（[resumeRun]）后从冻住那一行继续。
+     * @return true = 已冻住；false = 它已结算/从未存在，或本设备冻不住
+     *   （pid 拿不到 / `kill` 二进制缺席 —— 原文见异常，不在这里编）。
+     * 壳未装配**抛**（与 [stopRun] 同：静默 false = 点了暂停却什么都没发生）。
+     */
+    suspend fun pauseRun(runId: Long): Boolean
+
+    /** 恢复一次被 [pauseRun] 冻住的执行（看门狗宽限与期限线随之顺延）。语义与 [pauseRun] 对偶。 */
+    suspend fun resumeRun(runId: Long): Boolean
+
+    /**
+     * 本机有没有弹**系统级**悬浮窗的资格（执行日志悬浮窗的宿主二选一；2026-10-13 用户令）。
+     *
+     * 同步、便宜：就是 `Settings.canDrawOverlays` 那一句（`:ui` 不碰 `Settings`，
+     * 实现在 `:app`）。false = 用应用内兜底窗（与 ToastHost 同型）+ toast 引导去能力中心授权。
+     */
+    fun overlayAllowed(): Boolean
+
+    /**
      * 登记定时任务（任务中心操作面「登记」；§8.6）。
      *
      * 挂起：登记先落盘再动内存/闹钟（`Scheduler.schedule` 的 store-first 纪律）——
@@ -189,6 +235,40 @@ interface HostSummary {
      * @param relPath 同 [readScriptFile]。
      */
     suspend fun saveScriptFile(projectId: String, relPath: String, content: String)
+
+    /**
+     * 跑一个脚本文件（项目页文件行尾那颗 ▶；2026-10-13 用户口径）。
+     *
+     * 与 [runTaskNow] 是**两条入口、一条执行链**：那边按 `taskId` 触发已登记的任务，
+     * 这边按 `(projectId, relPath)` 触发**没登记过**的那个文件 —— 用户想跑一下手里这个
+     * 脚本，不该先被迫登记一条定时任务。宿主侧两条都走同一条投递链（意图日志 → 引擎池 →
+     * 档案），所以跑过的文件在控制台与任务日志里都查得到，触发源是 `USER_CLICK`。
+     *
+     * **挂起到本次执行结算**（与 [runTaskNow] 逐字同一条口径：排队上限 USER_CLICK 10s +
+     * 脚本超时/默认 30s）—— 调用方在挂起期间应禁用那颗 ▶ 并如实显示「执行中」，不要另起
+     * 计时器猜结束。
+     *
+     * **成败不由本口回报**（结局在意图日志/控制台，与 [runTaskNow] 同）—— 调用方文案
+     * 不得把"调用返回了"说成"脚本跑成功了"。
+     *
+     * 失败抛：
+     * - 该扩展名**不可执行**（判据的唯一一份在 `:domain` 的
+     *   [com.autoscript.domain.scripts.ScriptRunnability.isRunnable]，本口不另判一遍）——
+     *   引擎侧起的是 `node <路径>`，`.sh` 这类只会得到一句 SyntaxError，当场拒比假装跑过好；
+     * - 文件不存在 / 项目不存在（`ERR_FILE_NOT_FOUND`，与 [readScriptFile] 同源）；
+     * - 调度已收口（宿主正在停止）；
+     * - 壳未装配（与 [runTaskNow] 同）。
+     *
+     * @param relPath 同 [readScriptFile]（`files/scripts/` 之下的相对路径，首段 = 项目名）。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但**不静默**
+     * —— 让「没接线」与「跑了但没输出」在界面上长得不一样（与 [runNpmCommand] 同一条纪律）。
+     */
+    suspend fun runScriptFile(projectId: String, relPath: String): Unit =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "脚本执行口未接线：本宿主没有接上「跑这个文件」的入口（projectId=$projectId，relPath=$relPath）",
+        )
 
     /**
      * 为指定路径文件创建语法高亮会话（编辑器前端呼叫）。

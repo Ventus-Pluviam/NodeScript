@@ -37,6 +37,12 @@ CLAUDE.local.md
 # 密钥库（SECURITY.md 密钥管理：绝不提交）
 *.jks
 *.keystore
+# 例外：**开发用固定签名密钥**（2026-10-14 用户令「不要每次编译出来的安装包签名都不一样」）。
+# AGP 默认的 ~/.android/debug.keystore 是每台机器各自生成的 —— 本机与 CI 各一把，于是 CI 出的
+# 包盖不上本机装的包，每次都要卸载重装。仓库里这一把让两端同签名、可覆盖升级。
+# **不是发行密钥**（本仓不发行正式版，§18 第 3 项）：公开在仓库里，用途只有"开发期互相覆盖"。
+# 真做发行签名时另起一把、别用这把（见 app/build.gradle.kts 的 signingConfigs 注释）。
+!keystore/autoscript-dev.keystore
 
 # Telegram 安卓客户端源码（DrKLO/Telegram，`git clone --depth 1` 下来的本地副本）。
 # 用途：抄它的**配色键值**（`TMessagesProj/src/main/assets/{day,night}.attheme`、

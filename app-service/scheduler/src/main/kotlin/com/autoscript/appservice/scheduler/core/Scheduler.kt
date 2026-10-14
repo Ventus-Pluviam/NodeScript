@@ -4,6 +4,7 @@ import com.autoscript.domain.scripts.EngineRunLink
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
+import com.autoscript.domain.scripts.ScreenGuarantee
 import com.autoscript.domain.scripts.isTerminal
 import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.domain.scripts.TaskStore
@@ -169,54 +170,21 @@ class Scheduler(
         if (!task.enabled && source != TriggerSource.USER_CLICK) return   // §8.6 enabled 守卫
 
         try {
-            val pending = PendingRun(
-                projectId = task.projectId,
-                scriptPath = task.scriptPath,
-                args = task.args,
-                runNonce = nonceFactory(),
-                trigger = source,
-                scheduledAtMillis = scheduledAtMillis,
-                screen = task.screen,               // §8.6：屏幕契约透传 dispatcher（门禁在实现层落地）
-                timeoutMillis = task.scriptTimeoutMillis,
-                // §8.6：本次投递的到期时刻 = 排期时刻 + 排队上限（同一张分级表的入口）。
-                // 崩溃恢复据此判断"重启后这条还值不值得投"；在途排队的上限仍由 dispatcher 自己那一侧执行。
-                deadlineMillis = scheduledAtMillis + deadlineFor(source),
-            )
-            // 快速路径预检：同 nonce 已完成则不投。真正的幂等兜底是存储层的原子拒绝（appendStart。
-            if (!log.isCommitted(pending.runNonce)) {                       // §8.5 同 nonce 不重复投递
-                val started = log.appendStart(
-                    projectId = pending.projectId,
-                    scriptPath = pending.scriptPath,
-                    runNonce = pending.runNonce,
+            dispatchPending(
+                PendingRun(
+                    projectId = task.projectId,
+                    scriptPath = task.scriptPath,
+                    args = task.args,
+                    runNonce = nonceFactory(),
                     trigger = source,
                     scheduledAtMillis = scheduledAtMillis,
-                    screen = task.screen,           // 恢复重投不得丢失屏幕契约（reopen 保留）
-                    deadlineMillis = pending.deadlineMillis,
-                    // 落行带上执行载荷：崩溃恢复的 toPendingRun 只认 IntentRun，
-                    // 不落行 = 重投丢 args/timeout（§8.5「恢复不丢字段」）
-                    args = pending.args,
-                    timeoutMillis = pending.timeoutMillis,
-                )
-                // 归档入口（§8.5）：把日志已落行的 runId 交给 dispatcher，收回引擎侧身份，
-                // 由归档器把两侧成对写入（RunArchive.put + EngineRunLink）。
-                val report = dispatcher.dispatchToReport(pending.copy(intentRunId = started.runId))
-                log.commit(started.runId, report.outcome)
-                recordLink(pending, started.runId, report.link, report.outcome)
-                // 控制面句柄出口（§12.3 engines.exec）：真的产生了引擎执行（link != null）
-                // 才持有句柄 —— 门禁拒绝/排队超时/启动失败没有可停的东西，不持有假句柄。
-                // stop 与 link 同源（DispatchReport.stop）：link != null 蕴含
-                // 产生了引擎执行，stop != null 蕴含 dispatcher 接好了 §4.1 归口。
-                // 二者任一为 null 都不持有假句柄（门禁拒绝/排队超时/启动失败）。
-                val link = report.link
-                if (link != null) {
-                    lastHandle = EngineStopHandle(
-                        idLink = link,
-                        name = pending.scriptPath,
-                        runNonce = pending.runNonce,
-                        stop = report.stop,
-                    )
-                }
-            }
+                    screen = task.screen,           // §8.6：屏幕契约透传 dispatcher（门禁在实现层落地）
+                    timeoutMillis = task.scriptTimeoutMillis,
+                    // §8.6：本次投递的到期时刻 = 排期时刻 + 排队上限（同一张分级表的入口）。
+                    // 崩溃恢复据此判断"重启后这条还值不值得投"；在途排队的上限仍由 dispatcher 自己那一侧执行。
+                    deadlineMillis = scheduledAtMillis + deadlineFor(source),
+                ),
+            )
         } catch (t: Throwable) {
             // 投递失败如实落地：本轮不 commit（意图日志无 STARTED 或保持未 COMMIT，交由恢复路径裁决），
             // 但**绝不**牺牲排期推进 —— 异常逃逸会让周期任务从此静默（评审确认缺陷）。
@@ -250,6 +218,94 @@ class Scheduler(
                 source == TriggerSource.TIMED -> rearmFor(task)
                 else -> Unit
             }
+        }
+    }
+
+    /**
+     * 跑一个**没有登记过**的脚本文件（项目页文件行尾那颗 ▶；2026-10-13 用户口径）。
+     *
+     * 与 [onTrigger] 是**两条入口、一条投递链**：那边先按 `taskId` 查注册表拿到脚本与契约，
+     * 这边直接拿调用方给的 `(projectId, relPath)` 拼一条 [PendingRun]。共同的那一段
+     * （幂等预检 → `appendStart` → dispatch → `commit` → 归档 → 句柄）收在 [dispatchPending]
+     * 里，两处各写一遍必然漂 —— 漂的方向最坏是"文件跑的那次不进档案"，用户按 runId 查不到。
+     *
+     * **不查注册表、也不进 `running`**：跑一次文件不是登记一条任务（那正是本入口存在的理由），
+     * 所以 Once 终态化 / 周期续排那套 finally 分支在这里**都不适用** —— 意图日志那一行
+     * 就是这次执行的完整账，与控制台/任务日志同源。
+     *
+     * 触发源固定 [TriggerSource.USER_CLICK]（人按的），于是排队上限取分级表里那一档（10s），
+     * 到期时刻与 [onTrigger] 同一条式子算。
+     *
+     * **挂起到本次执行结算**：本函数在 dispatch 返回后才返回，调用方据此禁用那颗 ▶。
+     *
+     * @throws IllegalStateException 调度已收口（宿主正在停止）—— 与 [onTrigger] 的
+     *   `sinking` 早退不同：那里是"静默不投"（周期触发，没人盯着），这里是"响亮拒绝"
+     *   （用户按了钮，什么都不发生比报错更难查）。
+     */
+    suspend fun onTriggerFile(
+        projectId: String,
+        relPath: String,
+        args: List<String> = emptyList(),
+        timeoutMillis: Long? = null,
+        screen: ScreenGuarantee = ScreenGuarantee.ANY,
+        scheduledAtMillis: Long = clock(),
+    ) {
+        check(!sinking) { "调度已收口（宿主正在停止）：不再接收新触发" }
+        dispatchPending(
+            PendingRun(
+                projectId = projectId,
+                scriptPath = relPath,
+                args = args,
+                runNonce = nonceFactory(),
+                trigger = TriggerSource.USER_CLICK,
+                scheduledAtMillis = scheduledAtMillis,
+                screen = screen,
+                timeoutMillis = timeoutMillis,
+                deadlineMillis = scheduledAtMillis + deadlineFor(TriggerSource.USER_CLICK),
+            ),
+        )
+    }
+
+    /**
+     * 一次投递的共同段（[onTrigger] 与 [onTriggerFile] 共用）：
+     * 幂等预检 → 落 START 行 → 交给 dispatcher → COMMIT → 归档两侧 id → 持有停止句柄。
+     *
+     * 幂等预检（`isCommitted`）只是**快速路径**：真正的兜底是存储层的原子拒绝
+     * （`appendStart` 对已 COMMIT 的 nonce 抛），见 `IntentLog.appendStart` 的 KDoc。
+     */
+    private suspend fun dispatchPending(pending: PendingRun) {
+        if (log.isCommitted(pending.runNonce)) return                    // §8.5 同 nonce 不重复投递
+        val started = log.appendStart(
+            projectId = pending.projectId,
+            scriptPath = pending.scriptPath,
+            runNonce = pending.runNonce,
+            trigger = pending.trigger,
+            scheduledAtMillis = pending.scheduledAtMillis,
+            screen = pending.screen,            // 恢复重投不得丢失屏幕契约（reopen 保留）
+            deadlineMillis = pending.deadlineMillis,
+            // 落行带上执行载荷：崩溃恢复的 toPendingRun 只认 IntentRun，
+            // 不落行 = 重投丢 args/timeout（§8.5「恢复不丢字段」）
+            args = pending.args,
+            timeoutMillis = pending.timeoutMillis,
+        )
+        // 归档入口（§8.5）：把日志已落行的 runId 交给 dispatcher，收回引擎侧身份，
+        // 由归档器把两侧成对写入（RunArchive.put + EngineRunLink）。
+        val report = dispatcher.dispatchToReport(pending.copy(intentRunId = started.runId))
+        log.commit(started.runId, report.outcome)
+        recordLink(pending, started.runId, report.link, report.outcome)
+        // 控制面句柄出口（§12.3 engines.exec）：真的产生了引擎执行（link != null）
+        // 才持有句柄 —— 门禁拒绝/排队超时/启动失败没有可停的东西，不持有假句柄。
+        // stop 与 link 同源（DispatchReport.stop）：link != null 蕴含
+        // 产生了引擎执行，stop != null 蕴含 dispatcher 接好了 §4.1 归口。
+        // 二者任一为 null 都不持有假句柄（门禁拒绝/排队超时/启动失败）。
+        val link = report.link
+        if (link != null) {
+            lastHandle = EngineStopHandle(
+                idLink = link,
+                name = pending.scriptPath,
+                runNonce = pending.runNonce,
+                stop = report.stop,
+            )
         }
     }
 

@@ -1,6 +1,7 @@
 package com.autoscript.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,7 +24,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,6 +57,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -63,6 +70,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autoscript.domain.scripts.ScriptRunnability
+import com.autoscript.ui.ManagementTransition
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.ActionBottomSheet
@@ -79,7 +88,9 @@ import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.MenuGap
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.FileTypeAvatar
 import com.autoscript.ui.components.LocalToast
+import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.ROW_MORE_DOTS_WEIGHT
 import com.autoscript.ui.components.RefreshableBox
 import com.autoscript.ui.components.RowMoreDotsSize
@@ -120,6 +131,9 @@ import kotlinx.coroutines.launch
  * 诚实边界（与其他屏同一条纪律）：没读到显示「尚未读取」，失败带原文；
  * 读到了且为空才说「还没有脚本文件」—— 那是真的没有（`files/scripts/` 为空）。
  */
+// 参数数在 2026-10-13 加了 [onRunFile] 之后跨过 detekt 的阈值（10），原来的 9 个离阈值不远；
+// 全部是屏自己的读口/回调（与 SettingsScreen 那份 @Suppress 同型），不是值得继续拆分了才压下来。
+@Suppress("LongParameterList")
 @Composable
 fun ProjectScreen(
     state: ProjectState,
@@ -143,6 +157,13 @@ fun ProjectScreen(
     onReadFile: suspend (projectId: String, relPath: String) -> String,
     /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */
     onSaveFile: suspend (projectId: String, relPath: String, content: String) -> Unit,
+    /**
+     * 跑一个脚本文件（文件行尾那颗 ▶；2026-10-13 用户口径）。
+     *
+     * **挂起**：宿主要挂到本次执行结算（与任务中心的「立即执行」同一条口径），
+     * 调用方据此把那一行的 ▶ 换成"执行中"并禁用。
+     */
+    onRunFile: suspend (projectId: String, relPath: String) -> Unit,
     /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */
     onSortChange: (FileSort, Boolean) -> Unit,
     /**
@@ -178,23 +199,71 @@ fun ProjectScreen(
     val longPressFeedback = rememberLongPressFeedback()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // 悬浮底栏的隐藏开关（外壳供，[LocalTabBarHidden]）。编辑面占整屏时要把它整条收掉 ——
+    // 写口在这一层而不是编辑面自己那一层，见 [openEditor] / [requestEditorClose] 的注释。
+    val tabBarHidden = LocalTabBarHidden.current
 
-    // 正在编辑的文件（null = 不在编辑）。编辑面**换掉整页**而不是叠一层浮层
-    // （TG 打开文档就是整屏换页）：列表/FAB/搜索栏在编辑期间根本不组合，
-    // 返回键也整条让给编辑器 —— 少一层"底下那份还在不在"的悬念。
+    // 正在编辑的文件（null = 不在编辑）。编辑面**盖在整页之上**而不是「换掉整页」——
+    // TG 打开文档也是走 ActionBarLayout 那一层切换（`presentFragment`），底下那份列表
+    // 在动画期间仍在树上。进出各走 150ms 那套 + 跟手预测式返回，见文件尾那个
+    // [ManagementTransition]。
     var editing by remember { mutableStateOf<ScriptFileRowUi?>(null) }
-    val editingNow = editing
-    if (editingNow != null) {
-        ScriptEditorScreen(
-            projectId = editingNow.projectId,
-            relPath = editingNow.relPath,
-            displayName = editingNow.name,
-            onRead = onReadFile,
-            onSave = onSaveFile,
-            onClose = { editing = null },
-            modifier = modifier,
-        )
-        return
+    // 动画进行中（TG `animationInProgress`）：动画期间点列表里的另一行，在 TG 里是
+    // 什么都不发生。不吞的话 `editing` 两次变，切出的收尾会被取消。
+    var editorAnimating by remember { mutableStateOf(false) }
+    // 正在跑的脚本（键 = `ProjectState.keyOf` 那一份）。挂起期间那一行的 ▶ 换成转圈，
+    // 其余行照旧可点 —— 引擎池容量是 1，但"这一颗在跑"与"别的文件能不能跑"是两件事
+    // （排队那条路由宿主的分级表管，界面不替它拦）。
+    var runningKey by remember { mutableStateOf<String?>(null) }
+
+    /** 跑一个文件（点行尾 ▶）。挂起到本次执行结算，成败归宿主（回执 = 悬浮窗）。 */
+    fun runFile(file: ScriptFileRowUi) {
+        val key = ProjectState.keyOf(file)
+        if (runningKey != null) return
+        runningKey = key
+        scope.launch {
+            try {
+                // 2026-10-13 起成功回执 = 悬浮窗（外壳在 onRunFile 里先开窗再跑）——
+                // 这里不再弹「已触发…」toast（措辞不替宿主宣布结果那条纪律仍在：
+                // 成败在控制台/任务日志/日志管理，窗里只看输出）。失败 catch 保留。
+                onRunFile(file.projectId, file.relPath)
+            } catch (t: kotlinx.coroutines.CancellationException) {
+                throw t
+            } catch (t: com.autoscript.domain.core.AutojsException) {
+                toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
+            } catch (t: IllegalArgumentException) {
+                toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
+            } catch (t: IllegalStateException) {
+                // 宿主「■ 链」上的收口/判定异常（`error("壳未装配…")`、`check(!sinking)…`、
+                // `IllegalStateException("任务不存在…")`）不收进「执行失败」toast 就没人接：
+                // 悬浮窗失败路径不抛这些，抛的只可能是宿主没有把「跑不起来」折成
+                // `AutojsException` 的缺口 —— 亮原文，但**不上抛**（闪退换不来任何信息，
+                // 2026-10-14「点执行就闪退」那次就是这类没捂住的结果）。
+                toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
+            } finally {
+                runningKey = null
+            }
+        }
+    }
+
+    /** 开一个文件（动画期间吞掉，与面板入口同一口径）。 */
+    fun openEditor(file: ScriptFileRowUi) {
+        // 动画期间吞掉（与面板入口同一口径）。**底栏 flag 一起吞**：切出动画里 `editing`
+        // 已经归 null、flag 已经复位，此时若只写 flag，底栏会在没有编辑面的时候又收起来。
+        if (editorAnimating) return
+        editing = file
+    }
+
+    // 编辑面递出来的「能不能退」判定（含未保存拦截）。**侧缘手势的提交路径走
+    // `ManagementTransition.onBackRequest`，不经过编辑器自己那颗 `BackHandler`** ——
+    // 不接这道门的话，滑手回来会静默丢掉未保存的改动。
+    var editorCloseGuard by remember { mutableStateOf<(() -> Unit)?>(null) }
+    /** 关掉编辑面（有未保存改动时先问一句，与返回键、‹ 同一个判定）。 */
+    fun requestEditorClose() {
+        (editorCloseGuard ?: { editing = null }).invoke()
+        // 底栏的复位不写在这里：`fullScreen`（editing 非空 || 目录层）在 `editing` 归
+        // null 的同一拍重算，`LaunchedEffect(fullScreen)` 据此放回底栏 —— 且从目录里
+        // 打开的编辑面退出时不会错误放回（那会儿人还在目录里）。
     }
 
     // 可见集 = 一层（[ProjectState.childrenOf]）→ 排序。**搜索时层裁剪让位**：
@@ -215,12 +284,43 @@ fun ProjectScreen(
     val selectionMode = selected.isNotEmpty()
     val allSelected = ProjectState.allSelected(selected, visible)
 
-    /** 退回上一层（返回键与顶栏 ‹ 共用一条路径）。 */
+    /**
+     * 进一层目录（点目录行、长按面板的「进入文件夹」都走这里）。
+     *
+     * **底栏整条收掉**（用户口径 2026-10-13：「点进列表里面时，让底栏消失，退出来时才重新出现」）：
+     * 进了层就是"在里面"，那四个页签既是别的页面、又压着列表最后几行 —— 与编辑面占整屏
+     * 是同一条理由。写口收在这两个函数里（而不是每个 `currentFolder = …` 各写一遍）：
+     * 三处入口漏一处就是"有时候收、有时候不收"。
+     */
+    fun enterFolder(relPath: String) {
+        currentFolder = relPath
+        selected = emptySet()
+        scope.launch { listState.scrollToItem(0) }
+    }
+
+    /**
+     * 退回上一层（返回键与顶栏 ‹ 共用一条路径）。
+     */
     fun goUp() {
         currentFolder = ProjectState.parentFolder(currentFolder)
         selected = emptySet()
         scope.launch { listState.scrollToItem(0) }
     }
+
+    // 底栏收放的**唯一**判据：**只有编辑面**（editing 非空）算占整屏，才收掉。
+    //
+    // **进目录不算**（用户口径 2026-10-13「点进文件列表不需要隐藏啊，进入编辑页面才隐藏」）：
+    // 进目录只是列表换了一层内容，页面本身还是那个项目页 —— 底栏在它下面才是 TG 的读法。
+    // 写成一条派生判据而不是各处散写 flag：从目录里打开编辑面再退出这种嵌套，
+    // 散写会把旗标复位成 false 而编辑面还开着。
+    val fullScreen = editing != null
+    // 与"状态翻面"同一帧生效（`LaunchedEffect` 在重组应用后立即跑 —— 编辑面开始关的
+    // 那一下底栏就放回来，不等 380ms 飞出动画走完；进编辑面的那一拍也立即收掉）。
+    //
+    // **`active` 门不能省**：pager 预组合邻页，邻页（它自己的 `fullScreen == false`）
+    // 组合时若也写这条 flag，会把正在前台那个整屏面的 true 覆盖回 false ——
+    // 底栏在人家全屏的时候冒出来。只有"我这一页停稳了"才许碰开关。
+    LaunchedEffect(active, fullScreen) { if (active) tabBarHidden.value = fullScreen }
 
     // 返回键的退让次序照 TG：先收面板 → 再退选择模式 → 再清搜索 → 最后才退一层目录。
     // 每一档都只做一件事，且「还有下一档」才拦下返回 —— 于是根层没搜索时返回键
@@ -258,157 +358,209 @@ fun ProjectScreen(
         else -> null
     }
 
-    Column(modifier.fillMaxSize().background(ThemeColors.background)) {
-        if (selectionMode) {
-            // 选择模式顶栏（TG 的 action mode）：✕ 退出 / 已选计数 / 那一格是**同一个
-            // 开关** —— 选满了它自己变成"取消全选"（TG `SelectAll` / `DeselectAll`）。
-            ActionBar(
-                title = "已选 ${selected.size} 项",
-                onBack = { selected = emptySet() },
-                backGlyph = "✕",
-                actions = {
-                    ActionBarAction(
-                        text = if (allSelected) "取消全选" else "选择全部",
-                        onClick = { selected = ProjectState.toggleSelectAll(selected, visible) },
-                    )
-                },
-            )
-        } else {
-            ActionBar(
-                // 根层是品牌位（TG `DialogsActivity` 的 20sp 粗体蓝）；进了目录换成目录名
-                // —— 顶栏标题说"我在哪"，与副标题的完整路径一短一长。
-                title = ProjectState.folderTitle(currentFolder) ?: "NodeScript",
-                titleStyle = if (currentFolder == null) {
-                    TextStyle(
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = NodeScriptBrandColor,
+    // 底下那份：顶栏 + 搜索栏 + 文件列表 + FAB + 底部面板 + 创建对话框。
+    // **编辑面开着时它整份照旧组合** —— 进出动画期间底下这份就是参照物（见里面
+    // `RefreshableBox` 那段注释与 TG `:1170`）。
+    //
+    // @param showOverlays 只管**浮在上面那几个**（FAB、底部操作面板、创建对话框）——
+    //   它们盖在内容之上，编辑期间不该还能点；顶栏/搜索栏/列表是要参与动画的那部分。
+    @Composable
+    fun FileListLayer(showOverlays: Boolean) {
+            Column(Modifier.fillMaxSize().background(ThemeColors.background)) {
+                if (selectionMode) {
+                    // 选择模式顶栏（TG 的 action mode）：✕ 退出 / 已选计数 / 那一格是**同一个
+                    // 开关** —— 选满了它自己变成"取消全选"（TG `SelectAll` / `DeselectAll`）。
+                    ActionBar(
+                        title = "已选 ${selected.size} 项",
+                        onBack = { selected = emptySet() },
+                        backGlyph = "✕",
+                        actions = {
+                            ActionBarAction(
+                                text = if (allSelected) "取消全选" else "选择全部",
+                                onClick = { selected = ProjectState.toggleSelectAll(selected, visible) },
+                            )
+                        },
                     )
                 } else {
-                    null
-                },
-                subtitle = subtitle,
-                subtitleTone = if (load is LoadState.Failed) StatusTone.PROBLEM else StatusTone.MUTED,
-                // 进了目录才给 ‹（TG 文件页同款：根层没有"上一层"可退）。
-                onBack = if (currentFolder != null) ::goUp else null,
-                actions = {
-                    ProjectMenu(
-                        currentSort = state.sort,
-                        reversed = state.reversed,
-                        onSwitchTheme = onSwitchTheme,
-                        themeSwitchLabel = themeSwitchLabel,
-                        onSelectAll = { selected = ProjectState.toggleSelectAll(selected, visible) },
-                        onSort = { sort, reversed -> onSortChange(sort, reversed) },
+                    ActionBar(
+                        // 根层是品牌位（TG `DialogsActivity` 的 20sp 粗体蓝）；进了目录换成目录名
+                        // —— 顶栏标题说"我在哪"，与副标题的完整路径一短一长。
+                        title = ProjectState.folderTitle(currentFolder) ?: "NodeScript",
+                        titleStyle = if (currentFolder == null) {
+                            TextStyle(
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NodeScriptBrandColor,
+                            )
+                        } else {
+                            null
+                        },
+                        subtitle = subtitle,
+                        subtitleTone = if (load is LoadState.Failed) StatusTone.PROBLEM else StatusTone.MUTED,
+                        // 进了目录才给 ‹（TG 文件页同款：根层没有"上一层"可退）。
+                        onBack = if (currentFolder != null) ::goUp else null,
+                        actions = {
+                            ProjectMenu(
+                                currentSort = state.sort,
+                                reversed = state.reversed,
+                                onSwitchTheme = onSwitchTheme,
+                                themeSwitchLabel = themeSwitchLabel,
+                                onSelectAll = { selected = ProjectState.toggleSelectAll(selected, visible) },
+                                onSort = { sort, reversed -> onSortChange(sort, reversed) },
+                            )
+                        },
                     )
-                },
-            )
-        }
-        SearchField(
-            query = query,
-            onChange = { query = it },
-        )
-        Box(Modifier.weight(1f)) {
-            RefreshableBox(Modifier.fillMaxSize()) {
-                LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(top = 4.dp, bottom = TabBarBottomClearance()),
-                ) {
-                    items(visible, key = { item -> ProjectState.keyOf(item) }) { file ->
-                        val key = ProjectState.keyOf(file)
-                        FileRow(
-                            file = file,
-                            selected = key in selected,
-                            showMore = !selectionMode,
-                            onClick = {
-                                when {
-                                    selectionMode -> selected = ProjectState.toggleSelection(selected, key)
-                                    // 目录 = 进一层（TG 文件页点文件夹下钻）。
-                                    // 从搜索结果进目录要**收起搜索**：不然进了层列表还是全库的
-                                    // 搜索结果，等于"点了没反应"（TG 的 onSearchCollapse 同款）。
-                                    file.isDirectory -> {
-                                        currentFolder = file.relPath
-                                        query = ""
-                                        selected = emptySet()
-                                        scope.launch { listState.scrollToItem(0) }
-                                    }
-                                    // 文件 = **直接进编辑面**（TG 文件页点文档就是打开，不弹菜单）；
-                                    // 复制路径等其余动作走行尾的 ⋮ 与长按面板 —— 一行的主手势
-                                    // 只留给"最常做的那件事"，两件事抢同一下点击就是猜。
-                                    else -> editing = file
-                                }
-                            },
-                            onMore = { sheetTarget = file },
-                            onLongClick = {
-                                longPressFeedback()
-                                // 长按进选择模式并选中这一行（TG 的选择模式入口就是长按）；
-                                // 已在模式里则只切这一行。
-                                selected = ProjectState.toggleSelection(selected, key)
-                            },
-                        )
-                        // 行间不画分割线（2026-10-07 用户口径：取消文件列表之间的横线）。
+                }
+                // 搜索栏与列表同进同出 —— 编辑面盖住时也留着，回退那一下不会看到布局跳变。
+                SearchField(
+                    query = query,
+                    onChange = { query = it },
+                )
+                Box(Modifier.weight(1f)) {
+                    // **列表全程都画**，编辑面盖住时也不省 —— 进出动画期间底下这份就是
+                    // 参照物（48dp 横移 + 淡入 + 圆角缩放，都要有东西在底下才看得出层次）。
+                    // TG `:1170` 同款：`if (!isTransitionAnimationInProgress()) canvas.clipRect(...)`
+                    // —— 切换动画期间底层**根本不裁**。之前「被盖住就不画」，底下只剩一张
+                    // 同色空底，动画看着「一点效果都没有」。
+                    RefreshableBox(Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = PaddingValues(top = 4.dp, bottom = TabBarBottomClearance()),
+                        ) {
+                            items(visible, key = { item -> ProjectState.keyOf(item) }) { file ->
+                                val key = ProjectState.keyOf(file)
+                                FileRow(
+                                    file = file,
+                                    selected = key in selected,
+                                    showMore = !selectionMode,
+                                    // ▶ 只在**可执行**（JS 家族）且不在选择模式时出现 ——
+                                    // 判据的唯一一份在 `:domain` 的 `ScriptRunnability`。
+                                    showRun = !selectionMode && ScriptRunnability.isRunnable(file.relPath),
+                                    running = runningKey == key,
+                                    onRun = { runFile(file) },
+                                    onClick = {
+                                        when {
+                                            selectionMode -> selected = ProjectState.toggleSelection(selected, key)
+                                            // 目录 = 进一层（TG 文件页点文件夹下钻）。
+                                            // 从搜索结果进目录要**收起搜索**：不然进了层列表还是全库的
+                                            // 搜索结果，等于"点了没反应"（TG 的 onSearchCollapse 同款）。
+                                            file.isDirectory -> {
+                                                // 从搜索结果进目录要**收起搜索**：不然进了层列表还是全库的
+                                                // 搜索结果，等于"点了没反应"（TG 的 onSearchCollapse 同款）。
+                                                query = ""
+                                                enterFolder(file.relPath)
+                                            }
+                                            // 文件 = **直接进编辑面**（TG 文件页点文档就是打开，不弹菜单）；
+                                            // 复制路径等其余动作走行尾的 ⋮ 与长按面板 —— 一行的主手势
+                                            // 只留给"最常做的那件事"，两件事抢同一下点击就是猜。
+                                            else -> openEditor(file)
+                                        }
+                                    },
+                                    onMore = { sheetTarget = file },
+                                    onLongClick = {
+                                        longPressFeedback()
+                                        // 长按进选择模式并选中这一行（TG 的选择模式入口就是长按）；
+                                        // 已在模式里则只切这一行。
+                                        selected = ProjectState.toggleSelection(selected, key)
+                                    },
+                                )
+                                // 行间不画分割线（2026-10-07 用户口径：取消文件列表之间的横线）。
+                            }
+                            if (state.load.isLoaded && visible.isEmpty()) {
+                                item { EmptyFilesHint(filtered = query.isNotBlank(), inFolder = currentFolder != null) }
+                            }
+                        }
                     }
-                    if (state.load.isLoaded && visible.isEmpty()) {
-                        item { EmptyFilesHint(filtered = query.isNotBlank(), inFolder = currentFolder != null) }
+                    ScrollToTopButton(
+                        visible = rememberScrollToTopVisible(listState),
+                        onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                        modifier = Modifier.align(Alignment.BottomEnd)
+                            .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 64.dp)),
+                    )
+                    // FAB（TG FragmentFloatingButton：48dp 圆、品牌蓝、白铅笔）+ 展开的两个子项。
+                    // 选择模式下收起：TG 的 action mode 里没有"新建"这一档，留着会和"已选 N 项"
+                    // 的顶栏说两件不同的事。
+                    if (!selectionMode && showOverlays) {
+                        CreateFab(
+                            onCreateFile = { creatingKind = ProjectState.CreationKind.FILE },
+                            onCreateFolder = { creatingKind = ProjectState.CreationKind.FOLDER },
+                            modifier = Modifier.align(Alignment.BottomEnd)
+                                .padding(end = 20.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
+                        )
                     }
                 }
             }
-            ScrollToTopButton(
-                visible = rememberScrollToTopVisible(listState),
-                onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                modifier = Modifier.align(Alignment.BottomEnd)
-                    .padding(start = 16.dp, end = 16.dp, bottom = TabBarBottomClearance(extra = 64.dp)),
-            )
-            // FAB（TG FragmentFloatingButton：48dp 圆、品牌蓝、白铅笔）+ 展开的两个子项。
-            // 选择模式下收起：TG 的 action mode 里没有"新建"这一档，留着会和"已选 N 项"
-            // 的顶栏说两件不同的事。
-            if (!selectionMode) {
-                CreateFab(
-                    onCreateFile = { creatingKind = ProjectState.CreationKind.FILE },
-                    onCreateFolder = { creatingKind = ProjectState.CreationKind.FOLDER },
-                    modifier = Modifier.align(Alignment.BottomEnd)
-                        .padding(end = 20.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
-                )
-            }
-        }
-    }
-    // 一行的操作面板（TG 底部操作面板：长按/点文件行弹出，动作是大触控目标的整行）。
-    // **只放今天真能做的**：复制路径（本屏自己就能做）+ 进文件夹（目录行才有）。
-    // 运行/重命名/删除要宿主侧读口（`HostSummary` 目前只有 `createEntry`），
-    // 没有的口不摆成按钮 —— 摆了就是点了没反应。
-    sheetTarget?.let { target ->
-        ActionBottomSheet(
-            title = target.name,
-            onDismiss = { sheetTarget = null },
-        ) {
-            ActionBottomSheetItem(
-                label = "复制路径",
-                onClick = {
-                    copy.copy("已复制路径", target.relPath)
-                    sheetTarget = null
-                },
-            )
-            if (target.isDirectory) {
+        // 一行的操作面板（TG 底部操作面板：长按/点文件行弹出，动作是大触控目标的整行）。
+        // **只放今天真能做的**：复制路径（本屏自己就能做）+ 进文件夹（目录行才有）。
+        // 运行/重命名/删除要宿主侧读口（`HostSummary` 目前只有 `createEntry`），
+        // 没有的口不摆成按钮 —— 摆了就是点了没反应。
+        if (showOverlays) sheetTarget?.let { target ->
+            ActionBottomSheet(
+                title = target.name,
+                onDismiss = { sheetTarget = null },
+            ) {
                 ActionBottomSheetItem(
-                    label = "进入文件夹",
+                    label = "复制路径",
                     onClick = {
-                        currentFolder = target.relPath
-                        query = ""
-                        selected = emptySet()
+                        copy.copy("已复制路径", target.relPath)
                         sheetTarget = null
-                        scope.launch { listState.scrollToItem(0) }
                     },
                 )
+                if (target.isDirectory) {
+                    ActionBottomSheetItem(
+                        label = "进入文件夹",
+                        onClick = {
+                            query = ""
+                            sheetTarget = null
+                            enterFolder(target.relPath)
+                        },
+                    )
+                }
             }
-        }
     }
-    // 创建对话框在屏幕级（不在 Box 里 —— 它盖全屏，不该被列表的裁剪裁到）。
-    CreateEntryDialogs(
-        creating = creatingKind,
-        targetProject = targetProject,
-        onDismiss = { creatingKind = null },
-        onConfirm = { name, isFolder ->
-            creatingKind = null
-            onCreate(targetProject, name, isFolder)
+        // 创建对话框在屏幕级（不在 Box 里 —— 它盖全屏，不该被列表的裁剪裁到）。
+        if (showOverlays) CreateEntryDialogs(
+            creating = creatingKind,
+            targetProject = targetProject,
+            onDismiss = { creatingKind = null },
+            onConfirm = { name, isFolder ->
+                creatingKind = null
+                onCreate(targetProject, name, isFolder)
+            },
+        )
+    }
+
+    // 「文件列表 ⇄ 编辑面」那一层切换走 TG 那套（150ms 进出场 + 跟手预测式返回，
+    // `ManagementTransition` 逐值对着 `ActionBarLayout`）。返回键整条归它 —— 它把
+    // 非手势返回键与预测式手势合流（TG 是一个 `OnBackAnimationCallback` 管四态，
+    // `LaunchActivity:738-818`），所以**不能再挂 `BackHandler`**（LIFO 会吃掉手势）。
+    ManagementTransition(
+        page = editing,
+        active = active,
+        onAnimatingChanged = { editorAnimating = it },
+        onBackRequest = ::requestEditorClose,
+        modifier = modifier,
+        // 显式写 `content =`：尾随 lambda 只能绑到**签名里最后一个**形参，而这里最后
+        // 一个是 `modifier`（不是函数类型）—— 写尾随 lambda 会被判成「实参过多」。
+        content = { page ->
+            FileListLayer(showOverlays = page == null)
+            if (page != null) {
+                ScriptEditorScreen(
+                    projectId = page.projectId,
+                    relPath = page.relPath,
+                    displayName = page.name,
+                    onRead = onReadFile,
+                    onSave = onSaveFile,
+                    // `onClose` = **立即关**（不复查）：确认框的「放弃修改」与「没改动直接回」
+                    // 走这条。`requestEditorClose` 只留给手势那条路 —— 它要过守卫（有未
+                    // 保存改动先问）。**别把两者接成一条**：`close()` → `onClose()` →
+                    // `requestEditorClose()` → 守卫（`close()`）会无限递归（栈溢出，
+                    // 表现就是「退出的时候直接软件都退出了」）。
+                    onClose = { editing = null },
+                    onRegisterCloseGuard = { editorCloseGuard = it },
+                    modifier = Modifier,
+                )
+            }
         },
     )
 }
@@ -576,6 +728,12 @@ private fun FileRow(
     selected: Boolean,
     /** 是否画行尾的 ⋮（选择模式里不画 —— 那时行尾留给"已选 N 项"那套语义）。 */
     showMore: Boolean,
+    /** 是否画行尾的 ▶（只对可执行脚本；判据见调用点的 `ScriptRunnability`）。 */
+    showRun: Boolean,
+    /** 这个文件此刻在跑（▶ 换成转圈、按钮禁用）。 */
+    running: Boolean,
+    /** 行尾 ▶ 的落点（跑这个文件）。 */
+    onRun: () -> Unit,
     onClick: () -> Unit,
     /** 行尾 ⋮ 的落点（开操作面板）。 */
     onMore: () -> Unit,
@@ -619,6 +777,18 @@ private fun FileRow(
                 maxLines = 1,
             )
         }
+        if (showRun) {
+            // 行尾 ▶（跑这个文件；2026-10-13 用户口径「可执行文件在菜单栏左边加个执行图标按钮」）：
+            // 与任务中心那颗「立即执行」同一形态（实心三角、accent 蓝、44dp 触控目标），
+            // 只是它跑的是**这一行这个文件**、不需要先登记任务。
+            //
+            // 挂在 ⋮ **左边**：⋮ 是"这一行的其余动作"（TG 的溢出钮位），▶ 是主动作 ——
+            // 主动作排在溢出钮前面，与顶栏「外壳动作在左、本屏动作在右」是同一条读法。
+            //
+            // 跑动中换成转圈（0.9s 一圈线性，与任务中心那颗同一节奏）：宿主是挂起到
+            // 执行结算的，静止的 ▶ 会让人以为没点上。
+            RunScriptButton(running = running, onClick = onRun)
+        }
         if (showMore) {
             // 行尾 ⋮（TG 的溢出钮 `ic_ab_other`）：48dp 触控目标、居行右端。
             // 色取 `windowBackgroundWhiteBlackText`（[ThemeColors.text]：浅色下就是黑），
@@ -648,6 +818,54 @@ private fun FileRow(
         }
     }
 }
+
+/**
+ * 行尾那颗 ▶（跑这个文件）。跑动中换成开口弧转圈 —— 与任务中心那颗「立即执行」
+ * （[com.autoscript.ui.screens.TaskCenterScreen] 的 `PlayButton`）同一形态、同一节奏：
+ * 同一件事在两屏长得不一样，用户就得学两遍。
+ *
+ * 触控目标 44dp（与那颗一致），图标 20dp、accent 蓝（[ThemeColors.accent]）。
+ */
+@Composable
+private fun RunScriptButton(running: Boolean, onClick: () -> Unit) {
+    val accent = ThemeColors.accent
+    Box(
+        Modifier
+            .size(RunScriptTouch)
+            .semantics { contentDescription = if (running) "执行中" else "运行" }
+            .pressable(enabled = !running, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (running) {
+            // 色值在组合期取好再进绘制 lambda（`ThemeColors` 是 CompositionLocal 读口，
+            // 绘制帧里读不到组合环境）—— 与任务中心那颗逐字同一条理由。
+            val spin = rememberInfiniteTransition(label = "runSpin")
+            val angle by spin.animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(tween(durationMillis = 900, easing = LinearEasing)),
+                label = "runSpinAngle",
+            )
+            Canvas(Modifier.size(RunScriptIcon)) {
+                drawArc(
+                    color = accent,
+                    startAngle = angle,
+                    sweepAngle = 280f,
+                    useCenter = false,
+                    style = Stroke(width = this.size.minDimension * 0.16f, cap = StrokeCap.Round),
+                )
+            }
+        } else {
+            Glyph(kind = GlyphKind.RUN, tint = accent, size = RunScriptIcon)
+        }
+    }
+}
+
+/** 行尾 ▶ 的触控目标（与任务中心那颗「立即执行」同值）。 */
+private val RunScriptTouch = 44.dp
+
+/** 行尾 ▶ 的图标边长（同上）。 */
+private val RunScriptIcon = 20.dp
 
 /** 行尾 ⋮ 的触控目标（Material 最小可达性 48dp）。 */
 private val FileRowMoreTouch = 48.dp
@@ -706,48 +924,6 @@ private fun FolderAvatar(name: String) {
         contentAlignment = Alignment.Center,
     ) {
         Glyph(kind = GlyphKind.FOLDER, tint = Color.White, size = 26.dp, weight = 1.15f)
-    }
-}
-
-/**
- * 文件类型头像（TG `AvatarDrawable` 的取色 + `SharedDocumentCell.extTextView` 的白字）：
- * 底色 = 扩展名哈希取色表槽位（同一扩展名恒同色），字 = 扩展名（最多 4 字符），
- * JS/HTML/SH/MD 等常见类型换专属字形（白线画在色底上）。
- */
-@Composable
-private fun FileTypeAvatar(ext: String, name: String) {
-    val palette = ThemeColors
-    val colors = palette.fileAvatarColors
-    val slot = if (ext.isNotEmpty()) {
-        ext.first().code % colors.size
-    } else {
-        name.firstOrNull()?.code?.plus(1)?.mod(colors.size) ?: 0
-    }
-    val bg = colors[slot]
-    val knownGlyph = when (ext) {
-        "js", "mjs", "cjs", "ts", "json" -> GlyphKind.FILE_JS
-        "md", "txt", "log", "doc" -> GlyphKind.FILE_DOC
-        "html", "htm", "css" -> GlyphKind.FILE_HTML
-        "sh", "bash", "zsh" -> GlyphKind.FILE_SH
-        else -> null
-    }
-    Box(
-        Modifier
-            .size(52.dp)
-            .graphicsLayer { shape = CircleShape }
-            .background(bg, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (knownGlyph != null) {
-            // 常见类型：白线字形（比缩写字更一眼可辨 —— TG 文件页对图片/视频也是图标优先）。
-            Glyph(kind = knownGlyph, tint = Color.White, size = 26.dp, weight = 1.15f)
-        } else {
-            Text(
-                text = ext.take(4).ifEmpty { "?" },
-                color = Color.White,
-                style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
-            )
-        }
     }
 }
 

@@ -83,6 +83,16 @@ class RuntimeController(
      * 漏掉或抛异常都只影响那一条资源。这里是**执行终结路径**，绝不让它打断引擎收尾。
      */
     private val revokeRunResources: (Long) -> Unit = {},
+    /**
+     * **run 启动时的落盘口**（2026-10-13 执行日志持久化）：`start()` 的 Granted 分支、
+     * `startedAt` 记账之后调用一次。实现是 `ScriptLogStore::begin`（`:app` 的装配缝）。
+     *
+     * 与 [revokeRunResources] 对偶：那边是"终结时收"，这边是"开始时记" ——
+     * 两条都在 [guard] 临界区内与在途表同生共死。同样**幂等、不抛**：落盘是诊断面，
+     * 绝不掀翻启动路径（`ScriptLogStore` 自己也 runCatching，这里不再包一层）。
+     */
+    private val onRunStarted: (runId: Long, projectId: String, scriptPath: String, startedAtMillis: Long) -> Unit =
+        { _, _, _, _ -> },
 ) {
     private val guard = Mutex()
     private val active = HashMap<Long, PoolHandle>()
@@ -95,6 +105,67 @@ class RuntimeController(
      * 与在途表同生共死（[settleDone]/[killRun]/[killAll]/[forceStopAll] 都清在途表）。
      */
     private val startedAt = HashMap<Long, Long>()
+
+    /**
+     * 已 OS 冻结（SIGSTOP）的在途 run（2026-10-13 执行暂停；[guard] 下读写）。
+     *
+     * **为什么是旁账集合而不是状态**：`EngineStatus` 没有 SUSPENDED（P0 不存在，
+     * 见 implementation-notes L533）—— 引擎 `status()` 暂停中仍报 RUNNING，
+     * 池侧投影也是 RUNNING。暂停的全部特殊处理（看门狗锚点过滤、宽限重置、
+     * 期限顺延、await 冻结）都以"runId 在不在这个集合"为判据，状态机一字不动。
+     */
+    private val paused = HashSet<Long>()
+
+    /**
+     * 冻住一次在途执行（悬浮窗「暂停执行」；`HostSummary.pauseRun` 的落点）。
+     *
+     * 在途才问引擎：`engine.pause()` true → 进 [paused] 集。引擎 false
+     * （替身/离线/pid 拿不到/`kill` 缺席）→ 不进集，如实回 false ——
+     * "冻不住"与"已冻住"在账上必须是两件事，否则看门狗会把一个没冻住的 run
+     * 当暂停 run 排除掉（那就是 1.5s 必杀的反方向：该杀的不杀）。
+     */
+    suspend fun pauseRun(runId: Long): Boolean {
+        val handle = guard.withLock { active[runId] } ?: return false
+        val frozen = try {
+            handle.slot.engine.pause()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return false
+        }
+        if (!frozen) return false
+        guard.withLock { paused.add(runId) }
+        return true
+    }
+
+    /**
+     * 解冻 [pauseRun] 冻住的执行。
+     *
+     * 成功时**刷新两处时间账**（暂停多长的两条误杀陷阱都在这里收）：
+     * - `startedAt[runId] = clock()`：看门狗 noHeartbeat 宽限（`startedAt + 5s`）与
+     *   WATCHDOG 期限线（`startedAt + scriptTimeout`）都以它现算 —— 刷新等于把整个
+     *   暂停时长顺延出去，否则恢复瞬间宽限已过期/期限已到，当场被杀；
+     * - `heartbeats.rebase(runId)`：暂停期间首跳已"陈旧"（`sinceLastBeat` 停在冻住那一刻），
+     *   不 rebase 则恢复后第一轮就被判心跳失联。
+     * 非在途/引擎解冻失败 → false（集里那笔不动：冻住的仍是冻住的）。
+     */
+    suspend fun resumeRun(runId: Long): Boolean {
+        val handle = guard.withLock { active[runId] } ?: return false
+        val thawed = try {
+            handle.slot.engine.resume()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return false
+        }
+        if (!thawed) return false
+        guard.withLock {
+            paused.remove(runId)
+            startedAt[runId] = clock()
+        }
+        heartbeats.rebase(runId)
+        return true
+    }
 
     /**
      * 急停代次（[killAll]/[forceStopAll] 推进；读写都在 [guard] 临界区内）。
@@ -147,7 +218,11 @@ class RuntimeController(
                 } else {
                     val receipt = outcome.handle.receipt
                     active[receipt.runId] = outcome.handle
-                    startedAt[receipt.runId] = clock()
+                    val started = clock()
+                    startedAt[receipt.runId] = started
+                    // 落盘口（2026-10-13）：index 先行 —— 日志行随后经
+                    // ConsoleCollector.lineSink 落 `<runId>.log`，详情页靠它找文件。
+                    onRunStarted(receipt.runId, outcome.handle.request.projectId, outcome.handle.request.scriptPath, started)
                     StartOutcome.Started(receipt.runId, receipt.handle)
                 }
             }
@@ -202,6 +277,11 @@ class RuntimeController(
     suspend fun stop(runId: Long): StopOutcome {
         val handle = guard.withLock {
             startedAt.remove(runId)
+            // 过账：暂停中被停 —— 引擎侧 `stop()` 入口也会 auto-resume，这里清集是
+            // 为了让「它曾被暂停过」这个事实随 run 终结一起消失（集只装在途）。
+            paused.remove(runId)
+            // 必须放在最后：`withLock` 的值就是本块最后一个表达式 —— 放到 `paused.remove`
+            // 之后会把 `Boolean` 当成 `PoolHandle` 交出去（2026-10-13 CI 抓到）。
             active.remove(runId)
         } ?: return StopOutcome.AlreadyGone
         heartbeats.forget(runId)
@@ -234,6 +314,10 @@ class RuntimeController(
     suspend fun killRun(runId: Long, cause: KillCause): KillCause? {
         val handle = guard.withLock {
             startedAt.remove(runId)
+            // 与 [stop] 同一条过账：暂停中被强杀同理清集（`engine.kill` 的 SIGKILL
+            // 对 frozen 进程有效，不需要先解冻 —— 那是 SIGTERM 才有的问题）。
+            paused.remove(runId)
+            // 必须是最后一个表达式（`withLock` 的值 = 本块末值）。
             active.remove(runId)
         } ?: return null
         heartbeats.forget(runId)
@@ -256,6 +340,8 @@ class RuntimeController(
         val gone = active.keys.toList()
         active.clear()
         startedAt.clear()
+        // 暂停账与在途表同生共死：全清之后没有"曾暂停"的 run（与 startedAt 同口径）。
+        paused.clear()
         gone.forEach { heartbeats.forget(it) }
         gone.forEach { revokeRunResources(it) }
         withContext(NonCancellable) { pool.killAll(reason) }
@@ -275,6 +361,7 @@ class RuntimeController(
         val gone = active.keys.toList()
         active.clear()
         startedAt.clear()
+        paused.clear()
         gone.forEach { heartbeats.forget(it) }
         // A11：急停也是 run 终结 —— 与 killAll 同一收口口径（进程被杀/测试收口那条路上，
         // 宿主随后多半还会 close 整个壳，但那时连接已被强拆，收口已经晚了）。
@@ -334,7 +421,11 @@ class RuntimeController(
      * await 并超时强杀（§8.6 dispatcher），看门狗**不得**越过调用方去替它收账。
      */
     suspend fun watchAnchors(): List<WatchAnchor> = guard.withLock {
-        active.values.map {
+        // 暂停的 run 不进锚点（2026-10-13）：冻住的进程心跳必停，`WatchdogPolicy`
+        // 1.5s 即判 WATCHDOG_HEARTBEAT —— 不排除等于"暂停 1.5 秒就被杀"。这是
+        // 08-execution.md L140「看门狗判定只看 RUNNING」在本账上的落点：
+        // 暂停的 run 此刻不是"可被判定"的 RUNNING，故不在取数口出现。
+        active.values.filter { it.receipt.runId !in paused }.map {
             val started = startedAt[it.receipt.runId] ?: clock()
             WatchAnchor(it.receipt.runId, it.receipt.pid, started, deadlineOf(it.request, started))
         }
@@ -393,7 +484,7 @@ class RuntimeController(
      */
     suspend fun awaitCompletion(runId: Long, timeoutMillis: Long = 30_000): Completed {
         val handle = guard.withLock { active[runId] } ?: return Completed.UnknownRun(null)
-        val deadline = System.currentTimeMillis() + timeoutMillis
+        var deadline = System.currentTimeMillis() + timeoutMillis
         while (true) {
             val status = try {
                 handle.slot.engine.status()
@@ -410,7 +501,14 @@ class RuntimeController(
             if (!isWatchable(status)) {
                 return settleDone(runId)
             }
-            if (System.currentTimeMillis() >= deadline) return Completed.TimedOut
+            // 暂停期不计时（2026-10-13）：冻住的 run 的 status 仍是 RUNNING（引擎不报
+            // SUSPENDED），不冻结 deadline 的话，长暂停会被 dispatcher 以 REQUESTED 强杀 ——
+            // 用户按了暂停，宿主却替它收了尸。注意这里用 [guard] 快照判，不持锁过 delay。
+            if (guard.withLock { runId in paused }) {
+                deadline = System.currentTimeMillis() + timeoutMillis
+            } else if (System.currentTimeMillis() >= deadline) {
+                return Completed.TimedOut
+            }
             delay(POLL_INTERVAL_MILLIS)
         }
     }
@@ -448,7 +546,18 @@ class RuntimeController(
         }
         val pool = handle.slot.status()
         val drift = host != null && !agrees(host, pool)
-        return RunStatus(runId = runId, host = host, pool = pool, drift = drift)
+        // 暂停判据不同锁读两次（active 与 paused 各自持锁取）：中间被 resume/stop 摘走，
+        // 最坏是"暂停标记晚一轮" —— 现值每次现取的面，晚一轮不是错（与 host/pool 的
+        // 窗口期差距同一性质，不判 drift）。
+        return RunStatus(
+            runId = runId,
+            host = host,
+            pool = pool,
+            drift = drift,
+            projectId = handle.request.projectId,
+            scriptPath = handle.request.scriptPath,
+            paused = guard.withLock { runId in paused },
+        )
     }
 
     /** 在途 run 的全量状态对照（诊断/看门狗用；不在途 → 空）。 */
@@ -465,6 +574,15 @@ class RuntimeController(
         val pool: EngineStatus,
         /** 两侧是否**不一致**（host 读不到时不判分歧：那可能是宿主已死，见 [statusOf] KDoc）。 */
         val drift: Boolean,
+        /**
+         * 本次执行的归属（2026-10-13：悬浮窗标题与日志详情的"这是谁的输出"就靠它 ——
+         * `PoolHandle.request` 里本来就有，之前只是没带出来。现值每次现取）。
+         */
+        val projectId: String,
+        /** 同 [projectId]：项目内相对路径（如 `data/test.js`）。 */
+        val scriptPath: String,
+        /** 是否被 [pauseRun] 冻住（2026-10-13：暂停按钮的事实源，不另开读口）。 */
+        val paused: Boolean,
     )
 
     /**
@@ -519,6 +637,9 @@ class RuntimeController(
     private suspend fun settleDone(runId: Long): Completed {
         val handle = guard.withLock {
             startedAt.remove(runId)
+            // 暂停中自然退出的 run：集里那笔随终结消失（与 stop/killRun 同口径）。
+            paused.remove(runId)
+            // 必须是最后一个表达式（`withLock` 的值 = 本块末值）。
             active.remove(runId)
         } ?: return Completed.UnknownRun(null)
         heartbeats.forget(runId)
@@ -539,6 +660,8 @@ class RuntimeController(
     private suspend fun settleKilled(runId: Long): Completed {
         val handle = guard.withLock {
             startedAt.remove(runId)
+            paused.remove(runId)
+            // 必须是最后一个表达式（`withLock` 的值 = 本块末值）。
             active.remove(runId)
         } ?: return Completed.UnknownRun(null)
         heartbeats.forget(runId)

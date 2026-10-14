@@ -17,5 +17,14 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.androidx.activity.compose)
+    // 系统级悬浮窗的离屏 ComposeView 三 owner（Lifecycle + ViewModelStore +
+    // SavedStateRegistry）：窗外没有 Activity 的 ViewTree，宿主自己搭
+    // （见 SystemLogWindowHost.OverlayOwners）。activity-compose 只带 lifecycle-runtime，
+    // ViewModelStore 与 SavedStateRegistryOwner 要这两条显式依赖 —— 版本钉死
+    // activity-compose 1.9.2 传递的那一份（lifecycle 2.8.6 / savedstate 1.2.1，
+    // 本机 gradle 缓存里就是这两个版本），不引入第二套版本。
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation("androidx.lifecycle:lifecycle-viewmodel:2.8.6")
+    implementation("androidx.savedstate:savedstate:1.2.1")
     debugImplementation(libs.compose.ui.tooling)
 }

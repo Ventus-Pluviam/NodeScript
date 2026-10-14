@@ -65,4 +65,13 @@ data class ActiveRunRow(
     val host: EngineStatus?,
     val pool: EngineStatus,
     val drift: Boolean,
+    /**
+     * 本次执行的归属（2026-10-13：悬浮窗标题「这是谁的输出」与日志详情的标题就靠它 ——
+     * `RuntimeController.RunStatus` 里本来就有，之前只是没带出来。现值每次现取）。
+     */
+    val projectId: String,
+    /** 同 [projectId]：项目内相对路径（如 `data/test.js`）。 */
+    val scriptPath: String,
+    /** 是否被暂停（SIGSTOP 冻住；2026-10-13：暂停按钮的事实源，不另开读口）。 */
+    val paused: Boolean,
 )

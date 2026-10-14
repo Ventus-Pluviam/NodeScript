@@ -1,5 +1,47 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-14：固定开发签名密钥）
+
+- [2026-10-14 · 固定开发签名密钥](2026-10-14.md)：
+  用户令「不要每次编译出来的安装包签名都不一样」。病 = AGP 的 `debug` keystore 每台机器
+  各自生成 → 本机包与 CI 包签名不同、互相盖不上（装过 CI 真形态 APK 后本机包须**先卸载**，
+  卸载连 `filesDir` 一起清，真机复测每次从零）。药 = 仓库收
+  `keystore/autoscript-dev.keystore`（口令 `android`），`signingConfigs.dev` 供 debug/release
+  共用，`.gitignore` 对这一个路径开例外。**开发密钥非发行密钥**（公开仓人人可取，仅开发期
+  互相覆盖用）。与 `SECURITY.md`「密钥库绝不提交」那句的冲突留给维护者补口径。
+
+## 最新追记（2026-10-14：「点执行就闪退」四层收口）
+
+- [2026-10-14 · 点执行闪退修法](2026-10-14.md)：
+  离屏 `ComposeView.setContent` 跑的是组合，组合期一抛就从 `LaunchedEffect` 冒到进程
+  （组合协程域没有 `CoroutineExceptionHandler`，javap 核实）。此前内容效应键含 `lines`，
+  而轮询每轮都产出新的 `List` 实例 → 每 400ms 重跑一次裸 `setContent` 重喂分支。修成
+  fail-closed：行数据住 `LogWindowController.lines`（Compose 状态现读，`setContent`
+  次数 = 开窗次数）+ 重喂分支补 catch（失败落 in-app 回退）+ ▶ 链三条 ISE 逃逸路径
+  （`logWindowRef()` 在 try 外 / `scope.launch` 里 / catch 链没接 `IllegalStateException`）
+  收成失败 toast 或「没有悬浮窗的立即执行」。
+
+## 最新追记（2026-10-13：悬浮窗跟手拖动 + ▶ 链路径形状收口）
+
+- [2026-10-13 · 悬浮窗拖动跟手 + ▶ 链双前缀修复](2026-10-13.md)：
+  用户实测「悬浮窗不跟手」的两条真因一次修掉 —— ① 拖动改了状态 → 重喂内容 →
+  重组，而 `pointerInput` 的 key 是每帧新建的回调实例，检测协程当场被取消重启
+  （手指没抬手势就断）；② 窗跟着手指走时本地坐标系被同向抵消，逐帧差值只有真实
+  位移的一半（半速）。顺带把 in-app 兜底窗也接上拖动、位置跨窗存活、边界夹取
+  （两宿主的坐标系与让位口径对齐）。**同批修一处存量 bug**：`▶` 链把文件清单形状的
+  relPath（首段 = 项目名）直接透传给调度器/引擎，被拼成
+  `files/scripts/demo/demo/data/test.js` —— 一句 `ERR_FILE_NOT_FOUND`，编译期毫无
+  迹象（2026-10-06 编辑器那条链踩过同一个坑）。转换收在
+  `ScriptPaths.projectInternalOrNull`，削不出当场拒。
+
+## 最新追记（2026-10-13：执行日志悬浮窗 + 按执行持久化 + 暂停执行，用户令）
+
+- [2026-10-13 · 悬浮窗 + 落盘 + 暂停链](2026-10-13.md)：
+  系统级悬浮窗（切 App 也能看）+ `<runId>.log`/`index.jsonl` 落盘（只记脚本行）+
+  SIGSTOP/SIGCONT 暂停链（不加 SUSPENDED）+ 日志管理按执行列表 + 详情。
+  推翻批 74「不做 console 持久化」与「暂停未进 P0」（决策第 79 项）。
+  顺修 `onRunFile` 双 launch 假挂起。
+
 ## 最新追记（2026-10-12，批 109：typed ids，`ProjectId` / `RelPath` 值类）
 
 - [2026-10-12 · typed ids + 三份判据收一份](2026-10-11.md)：

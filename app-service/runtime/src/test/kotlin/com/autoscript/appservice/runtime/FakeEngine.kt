@@ -42,6 +42,16 @@ class FakeEngine(
     /** [ScriptEngine.lastRunSummary] 的返回值（backlog B11）：默认 null = 无事实；测试驱动。 */
     var summaryToReturn: RunSummary? = null
 
+    /**
+     * `pause()/resume()` 的返回值（缺省 false = 冻不住，与 `ScriptEngine` 的生产缺省同形）。
+     *
+     * 为什么缺省是 false 而不是 true：真实实现里 false 表示"pid 拿不到 / `kill` 二进制缺席"
+     * —— 替身若默认"冻得住"，那些**依赖「冻不住」**的判据（不进集、不排除锚点）就永远测不到。
+     * 要给"冻得住"那条路用例，把这两个开关打开即可（不必写子类）。
+     */
+    var pauseResult: Boolean = false
+    var resumeResult: Boolean = false
+
     override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
         if (failOnExecute) throw IllegalStateException("fake boot failure")
         executed += run
@@ -71,6 +81,10 @@ class FakeEngine(
         if (blowStatus) throw IllegalStateException("模拟宿主探针失败")
         return statusToReturn
     }
+
+    override suspend fun pause(): Boolean = pauseResult
+
+    override suspend fun resume(): Boolean = resumeResult
 
     override suspend fun lastRunSummary(): RunSummary? = summaryToReturn
 }

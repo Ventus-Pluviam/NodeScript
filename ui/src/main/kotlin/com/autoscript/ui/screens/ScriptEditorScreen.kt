@@ -1,6 +1,5 @@
 package com.autoscript.ui.screens
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -88,7 +87,6 @@ import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.LocalEditorHighlightHost
-import com.autoscript.ui.components.LocalTabBarHidden
 import com.autoscript.ui.components.LocalToast
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.color
@@ -100,7 +98,6 @@ import com.autoscript.ui.state.EditorScroll
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.state.SyntaxHighlightResult
 import com.autoscript.ui.theme.ThemeColors
-import com.autoscript.ui.theme.isDarkTheme
 import com.autoscript.ui.theme.syntaxColor
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
@@ -138,6 +135,15 @@ fun ScriptEditorScreen(
     onRead: suspend (projectId: String, relPath: String) -> String,
     onSave: suspend (projectId: String, relPath: String, content: String) -> Unit,
     onClose: () -> Unit,
+    /**
+     * 把本屏那条「能不能退」的判定（含未保存拦截）交给外层。批 115：外层包了一层
+     * [com.autoscript.ui.ManagementTransition]，**预测式手势的提交路径走的是它的
+     * `onBackRequest`**，不经本屏那颗 `BackHandler` —— 于是「有未保存改动先问一句」
+     * 那道门必须从这儿递出去，否则侧缘滑回来会**静默丢改动**。
+     *
+     * 用 `DisposableEffect` 注册：编辑器挂上树时把判定递出去，退出组合时收回。
+     */
+    onRegisterCloseGuard: ((() -> Unit)?) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
@@ -147,12 +153,12 @@ fun ScriptEditorScreen(
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     // **编辑面占整屏，底栏整条收掉**（用户口径）：编辑时那四个页签既点不到正文、又压着最后几行。
-    // 开关由外壳供（[LocalTabBarHidden]），只在进出时写它 —— 退出（含配置重建）自动还回去。
-    val tabBarHidden = LocalTabBarHidden.current
-    DisposableEffect(Unit) {
-        tabBarHidden.value = true
-        onDispose { tabBarHidden.value = false }
-    }
+    //
+    // **开关不在这里写**（原来是 `DisposableEffect` 进写 true、`onDispose` 写回 false，
+    // 已删）：`onDispose` 落在编辑面真正离开组合那一刻，而那是**切出动画走完**之后 ——
+    // 底栏于是要等那 380ms 飞出动画结束才突然冒出来（用户 2026-10-13 报的"等一会才突然
+    // 出现"）。现在归宿主 [ProjectScreen]：开编辑面时写 true（与 `editing` 同一拍），
+    // 关编辑面时写回 false（与"编辑面开始关"同一拍，不等动画）。
     // null = 还没读到（或正在读）：与「读到了但是空文件」（空串）必须区分开。
     //
     // 存的是 **TextFieldValue 而不是 String**：光标位置也是编辑器状态的一部分 ——
@@ -178,12 +184,23 @@ fun ScriptEditorScreen(
         loadError = read.error
     }
 
-    /** 退回上一层（返回键与 ‹ 共用）：有未保存改动先问一句，不静默丢。 */
+    /** 退回上一层（返回键、‹、跟手手势三者共用）：有未保存改动先问一句，不静默丢。 */
     fun close() {
         if (dirty) confirmDiscard = true else onClose()
     }
 
-    BackHandler { close() }
+    // **不再挂 `BackHandler`**：它是普通 `OnBackPressedCallback`，注册在外层的
+    // `PredictiveBackHandler` 之后（`OnBackPressedDispatcher` 是 LIFO）—— 系统手势
+    // 导航的**预测式返回会整个退化成普通返回**，跟手动画就不存在了。非手势返回键
+    // 同样会触发 `PredictiveBackHandler` 的流结束（`handleOnBackPressed` → onCommit），
+    // 所以整条返回路径都归外层那个 handler，这里只把「能不能退」递出去。
+    //
+    // 上一版还挂着它，且 `onClose` 链回外层 `requestEditorClose` → 再调回 `close()`
+    // —— 没改动直接返回时会无限递归（栈溢出），表现就是「退出的时候直接软件都退出了」。
+    DisposableEffect(Unit) {
+        onRegisterCloseGuard(::close)
+        onDispose { onRegisterCloseGuard(null) }
+    }
 
     // 局部 val：`value` 是可变的，下面 when 的分支里要的是"读到了"那一档的非空值。
     val loaded = value
@@ -1123,7 +1140,6 @@ private fun rememberEditorHighlight(text: String, relPath: String): AnnotatedStr
     // 语法高亮会话（组合期间持有，换文件时才换；正文变化时投进去）。factory 在会话的
     // worker 线程上被调用 —— 开原生会话（含 dlopen）不在组合线程上做。
     val host = LocalEditorHighlightHost.current
-    val dark = isDarkTheme()
     val session = remember(relPath) {
         host?.let { editorHost ->
             EditorHighlightSession(relPath, factory = { path: String -> editorHost.open(path) }).also { it.start() }
@@ -1139,7 +1155,7 @@ private fun rememberEditorHighlight(text: String, relPath: String): AnnotatedStr
     val highlightResult by (session?.result ?: NoHighlightResult).collectAsState()
     val spans = highlightResult?.spans.orEmpty()
     // 贴色：一行都没贴上（纯文本、非 JS、原生缺席、区间全非法）时回 null，走原来的纯 String 路径。
-    return if (spans.isEmpty()) null else highlightedText(text, spans) { kind -> syntaxColor(kind, dark) }
+    return if (spans.isEmpty()) null else highlightedText(text, spans) { kind -> syntaxColor(kind) }
 }
 
 /** 高亮会话缺席（未供宿主 / 非 JS / 原生库不可用）时代入的空流：值恒为 null = 纯文本。 */

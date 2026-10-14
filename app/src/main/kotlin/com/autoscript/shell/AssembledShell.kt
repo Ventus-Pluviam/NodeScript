@@ -2,24 +2,26 @@ package com.autoscript.shell
 
 import com.autoscript.appservice.npm.NpmCliDeployer
 import com.autoscript.appservice.runtime.EngineWatchdog
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.appservice.scheduler.persist.FileRunArchive
 import com.autoscript.appservice.scheduler.persist.PersistentIntentLog
 import com.autoscript.appservice.scheduler.recovery.ScriptDeployRecovery
 import com.autoscript.appservice.scriptrepo.core.BridgeAddonDeploy
 import com.autoscript.appservice.scriptrepo.core.BridgeDistDeploy
 import com.autoscript.domain.bridge.NamespaceHandler
-import com.autoscript.domain.scripts.TaskStore
-import com.autoscript.domain.host.TaskLogSnapshot
-import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.ConsoleSnapshot
+import com.autoscript.domain.host.TaskCenterSnapshot
+import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
-import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
+import com.autoscript.domain.scripts.ScriptPaths
+import com.autoscript.domain.scripts.ScriptRunnability
+import com.autoscript.domain.scripts.TaskStore
 import com.autoscript.domain.scripts.TimedSchedule
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 /**
  * 装壳产物与壳自己的协程域（2026-10-01 D7 自 `AppShellKit.kt` 原样外迁：它们与
@@ -257,6 +259,44 @@ class AssembledShell internal constructor(
     }
 
     /**
+     * 跑一个**没有登记过**的脚本文件（`HostSummary.runScriptFile` 的装配实现；项目页文件行尾 ▶）。
+     *
+     * 两道门都在**这里**，不往调度器里塞：
+     * 1. 扩展名可执行（判据唯一一份在 `:domain` 的 [ScriptRunnability.isRunnable]）——
+     *    引擎侧起的是 `node <路径>`，`.sh` 只会得到一句 SyntaxError，当场拒比假装跑过好；
+     * 2. 调度未收口 —— 交给 `Scheduler.onTriggerFile` 判（它才持有 `sinking`）。
+     *
+     * **文件在不在盘上不在这里判**：那件事引擎侧本来就要查（`NodeProcessEngine` 对
+     * 缺文件如实回 `ERR_FILE_NOT_FOUND`，带绝对路径），在这一层再查一遍等于把同一条
+     * 判据写成两份、还要为此把 `filesDir` 塞进本类。**"不存在"与"存在但跑不起来"两句话
+     * 由引擎侧原文区分**，不在这里替它说。
+     *
+     * **挂起到本次执行结算**（与 [runTaskNow] 逐字同一条口径）—— 调用方据此禁用那颗 ▶。
+     * 成败不由本口回报：结局在意图日志/控制台，调用方文案不得把"返回了"说成"跑成功了"。
+     *
+     * **两种路径形状在此收口**（2026-10-13）：本口收文件清单形状（首段 = 项目名），
+     * 往下（调度器/意图日志/在途表/引擎）一律项目内形状 —— 转换与判据都在
+     * [ScriptPaths.projectInternalOrNull]，这一层只负责"削不出就拒"。
+     */
+    suspend fun runScriptFile(projectId: String, relPath: String) {
+        require(ScriptRunnability.isRunnable(relPath)) {
+            "这个文件不能被引擎执行（引擎起的是 node，只认 ${ScriptRunnability.EXECUTABLE_EXTENSIONS.joinToString("/") { ".$it" }}）：$relPath"
+        }
+        // **形状转换在这一层收口**（2026-10-13 修）：本口收的是文件清单那条 relPath
+        // （`files/scripts/` 之下，首段 = 项目名 —— 与 `readScriptFile` 同一个形状，
+        // 见 `HostSummary.runScriptFile` 的 @param），而调度器与引擎按**项目内**路径说。
+        // 直接透传的后果是引擎把 `demo/data/test.js` 拼成
+        // `files/scripts/demo/demo/data/test.js` —— 一句 ERR_FILE_NOT_FOUND，
+        // 且**编译期毫无迹象**。削不出（首段不是本项目）当场拒，不静默当项目内路径跑。
+        val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath)
+        require(internalPath != null) {
+            "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
+                "（relPath 是 files/scripts/ 之下的相对路径，首段应为项目名）"
+        }
+        shell.scheduler.onTriggerFile(projectId = projectId, relPath = internalPath)
+    }
+
+    /**
      * 停止一次在途执行（`HostSummary.stopRun` 的装配实现，§8.2 池四步 quiesce）。
      *
      * 走的是**在途表**（`RuntimeController.stop`），不是调度单槽
@@ -270,4 +310,16 @@ class AssembledShell internal constructor(
         is com.autoscript.appservice.runtime.RuntimeController.StopOutcome.StoppedTimeout -> true
         com.autoscript.appservice.runtime.RuntimeController.StopOutcome.AlreadyGone -> false
     }
+
+    /**
+     * 冻住/解冻一次在途执行（`HostSummary.pauseRun`/`resumeRun` 的装配实现；2026-10-13）。
+     *
+     * 与 [stopRun] 同一条"在途表精确命中"口径：false = 已结算/从未存在，或引擎冻不住
+     * （pid 拿不到 / `kill` 二进制缺席）—— 调用方（悬浮窗按钮）按 false 反馈
+     * 「该执行不支持暂停」，不抛。壳的判据一律在 `RuntimeController`，这里只转调。
+     */
+    suspend fun pauseRun(runId: Long): Boolean = shell.controller.pauseRun(runId)
+
+    /** 与 [pauseRun] 对偶（解冻）。 */
+    suspend fun resumeRun(runId: Long): Boolean = shell.controller.resumeRun(runId)
 }

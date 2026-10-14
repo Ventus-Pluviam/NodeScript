@@ -296,6 +296,11 @@ object AppShellKit {
     ): AssembledShell {
         val nsDir = filesDir.resolve(".ns")
         Files.createDirectories(nsDir)
+        // 执行日志落盘（2026-10-13）：`nsDir/script-logs`，`AppShell.assemble` 的
+        // scriptLogs 缝吃这份 —— 目录在这里建（与 nsDir 同一条"配方管目录"纪律），
+        // store 本身不建目录（`begin`/`appendLine` 里 `createDirectories` 兜底，
+        // 装配失败路径下也不炸）。
+        val scriptLogs = ScriptLogStore(nsDir.resolve("script-logs"))
 
         // 装配期脚本补部署（§9.6）：排期/意向持久了但脚本内容可能已被清掉
         // （用户"清除数据"、系统回收空间、预装包升级），先补缺再装配 —— 否则装配出的壳
@@ -427,6 +432,9 @@ object AppShellKit {
             systemHandlers = systemHandlers,
             authorization = authorization,
             capabilityMask = capabilityMask,
+            // 2026-10-13 落盘缝：见本函数头的 scriptLogs —— 单测/离线配方走同一条
+            // （store 无副作用，只在 begin/append 时建目录写文件）。
+            scriptLogs = scriptLogs,
         )
         // 看门狗开机即转（§8.4）：不转的话三路判据就只是"可以转"——在途 run 的出格行为
         // 没有一个周期性的观察者，`awaitCompletion` 的等待超时是唯一兜底（而它只管
