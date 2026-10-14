@@ -1,6 +1,5 @@
 package com.autoscript.ui.overlay
 
-import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.ui.state.ActiveRunState
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -143,6 +142,4 @@ class LogWindowStateTest {
         timeText = "00:00:00",
     )
 
-    @Suppress("UNUSED_EXPRESSION")
-    private val engineStatusRef = EngineStatus.RUNNING
 }

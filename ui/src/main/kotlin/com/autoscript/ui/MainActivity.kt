@@ -544,7 +544,8 @@ class MainActivity : ComponentActivity() {
                                 Tab.TASKS -> TaskCenterScreen(
                                     state = taskState,
                                     console = consoleState,
-                                    onRunNow = { task -> scope.launch { runTaskNowOp(task) } },                                    onCancel = { task -> scope.launch { cancelTaskOp(task) } },
+                                    onRunNow = { task -> scope.launch { runTaskNowOp(task) } },
+                                    onCancel = { task -> scope.launch { cancelTaskOp(task) } },
                                     onRegister = { form -> scope.launch { registerTaskOp(form) } },
                                     onStopRun = { run -> scope.launch { stopRunOp(run) } },
                                     modifier = Modifier,
@@ -1198,7 +1199,10 @@ class MainActivity : ComponentActivity() {
         logWindowRef().open(projectId, internalPath)
         try {
             runScriptFileOp(projectId, relPath)
-        } catch (t: Throwable) {
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            logWindowRef().close()
+            throw t
+        } catch (t: Exception) {
             logWindowRef().close()
             throw t
         }

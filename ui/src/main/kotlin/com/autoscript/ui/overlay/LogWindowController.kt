@@ -158,8 +158,9 @@ class LogWindowController(
                 toast(if (current.paused) "恢复失败：该执行已结算或不支持" else "该执行不支持暂停（本设备冻不住该进程）")
             }
             // 成败都由下一次 bind 刷新 paused（现值现取，不在这里猜）。
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            throw t
         } catch (t: Exception) {
-            if (t is kotlinx.coroutines.CancellationException) throw t
             toast("暂停失败：${t.message ?: t.javaClass.simpleName}")
         }
     }

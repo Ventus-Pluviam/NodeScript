@@ -26,6 +26,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.Glyph
@@ -131,7 +133,12 @@ fun LogWindowContent(
     }
 }
 
-/** 悬浮窗标题行的一颗图标钮（28dp 触控格 + 按压缩放反馈走全仓 `pressable`）。 */
+/**
+ * 悬浮窗标题行的一颗图标钮（28dp 触控格 + 按压缩放反馈走全仓 `pressable`）。
+ *
+ * [description] 进 `contentDescription`（读屏据此念「暂停执行」而不是「按钮」）——
+ * 图标钮没有文字，无障碍名只能从这儿来。
+ */
 @Composable
 private fun WindowIconButton(
     kind: GlyphKind,
@@ -142,6 +149,7 @@ private fun WindowIconButton(
     Box(
         modifier
             .size(36.dp)
+            .semantics { contentDescription = description }
             .pressable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

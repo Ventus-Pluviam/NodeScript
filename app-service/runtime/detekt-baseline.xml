@@ -22,5 +22,6 @@
     <ID>UseRequire:EnginesNamespaceHandler.kt$EnginesNamespaceHandler$throw IllegalArgumentException("timeoutMillis 必须 &gt; 0：$timeout")</ID>
     <ID>UseRequire:EnginesNamespaceHandler.kt$EnginesNamespaceHandler$throw IllegalArgumentException("字段 $key 必须是数组")</ID>
     <ID>UseRequire:EnginesNamespaceHandler.kt$EnginesNamespaceHandler$throw IllegalArgumentException("缺 payload")</ID>
+    <ID>TooManyFunctions:RuntimeController.kt$RuntimeController</ID>
   </CurrentIssues>
 </SmellBaseline>

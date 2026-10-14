@@ -31,6 +31,19 @@ class ConsoleReadTest {
         runStatuses: suspend () -> List<RuntimeController.RunStatus> = { emptyList() },
     ) = ConsoleRead.snapshot(collector, sinceSeq, maxLines, runStatuses)
 
+    /** 一条在途状态（本文件里那三条断言用的形状；参数短名省得每行都超长）。 */
+    private fun runStatus(
+        runId: Long,
+        host: EngineStatus?,
+        pool: EngineStatus,
+        drift: Boolean,
+        path: String,
+        paused: Boolean = false,
+    ) = RuntimeController.RunStatus(
+        runId = runId, host = host, pool = pool, drift = drift,
+        projectId = "demo", scriptPath = path, paused = paused,
+    )
+
     @Test
     fun `游标拉取只回新行 且推到本批最大 seq`() = runBlocking {
         val c = ConsoleCollector()
@@ -98,9 +111,12 @@ class ConsoleReadTest {
             c,
             runStatuses = {
                 statuses(
-                    RuntimeController.RunStatus(runId = 11L, host = null, pool = EngineStatus.IDLE, drift = false, projectId = "demo", scriptPath = "a.js", paused = false),
-                    RuntimeController.RunStatus(runId = 12L, host = EngineStatus.RUNNING, pool = EngineStatus.RUNNING, drift = false, projectId = "demo", scriptPath = "b.js", paused = true),
-                    RuntimeController.RunStatus(runId = 13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true, projectId = "demo", scriptPath = "c.js", paused = false),
+                    runStatus(11L, host = null, pool = EngineStatus.IDLE, drift = false, path = "a.js"),
+                    runStatus(
+                        12L, host = EngineStatus.RUNNING, pool = EngineStatus.RUNNING,
+                        drift = false, path = "b.js", paused = true,
+                    ),
+                    runStatus(13L, host = EngineStatus.IDLE, pool = EngineStatus.RUNNING, drift = true, path = "c.js"),
                 )
             },
         )

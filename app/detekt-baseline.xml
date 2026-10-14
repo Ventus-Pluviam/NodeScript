@@ -38,5 +38,7 @@
     <ID>UseCheckOrError:FakeEngines.kt$FakeEngineForDispatcher$throw IllegalStateException("fake boot failure")</ID>
     <ID>UseRequire:TaskCenterOps.kt$TaskCenterOps$throw IllegalArgumentException("once 需要非负 delaySeconds：${s.delaySeconds}")</ID>
     <ID>UseRequire:TaskCenterOps.kt$TaskCenterOps$throw IllegalArgumentException("scriptTimeoutMillis 必须 &gt; 0：$it")</ID>
+    <ID>UseCheckOrError:AppShellApplication.kt$AppShellApplication$throw IllegalStateException("壳未装配（装配中或失败）：无法暂停执行")</ID>
+    <ID>UseCheckOrError:AppShellApplication.kt$AppShellApplication$throw IllegalStateException("壳未装配（装配中或失败）：无法恢复执行")</ID>
   </CurrentIssues>
 </SmellBaseline>

@@ -741,14 +741,14 @@ class AppShellApplication : Application(), HostSummary {
      */
     override suspend fun pauseRun(runId: Long): Boolean {
         val built = assembled
-            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法暂停执行")
+            ?: error("壳未装配（装配中或失败）：无法暂停执行")
         return built.pauseRun(runId)
     }
 
     /** 与 [pauseRun] 对偶（解冻）。 */
     override suspend fun resumeRun(runId: Long): Boolean {
         val built = assembled
-            ?: throw IllegalStateException("壳未装配（装配中或失败）：无法恢复执行")
+            ?: error("壳未装配（装配中或失败）：无法恢复执行")
         return built.resumeRun(runId)
     }
 
