@@ -153,14 +153,24 @@ object ScriptLogRead {
         return null
     }
 
+    /**
+     * 取一个数字字段。**只认裸数字**（与 [ScriptLogStore] 的 writer 严格同源：
+     * 它写的是 `{"run":7`，不带引号）—— `run` 是行内首键、后面跟 `,`；`at` 是尾键、
+     * 后面跟 `}`。形状不对（半行/截断）回 null（调用方跳过整行）。
+     *
+     * **为什么不能照抄 `ConsoleHistory.longField`**：那边的键是裸数字、值却要求带引号
+     * （历史账的畸形形状）；本面的 writer 从生下来就是裸数字 —— 抄那份等于让每一行
+     * index 都解析失败、列表恒空（正是 2026-10-14 那 6 条全红的根因）。
+     */
     private fun longField(text: String, name: String): Long? {
         val key = "\"" + name + "\":"
         val start = text.indexOf(key)
         if (start < 0) return null
         val from = start + key.length
-        if (from >= text.length || text[from] != '"') return null
-        val end = text.indexOf('"', from + 1)
+        if (from >= text.length) return null
+        val comma = text.indexOf(',', from)
+        val end = if (comma >= 0) comma else text.indexOf('}', from)
         if (end < 0) return null
-        return text.substring(from + 1, end).toLongOrNull()
+        return text.substring(from, end).trim().toLongOrNull()
     }
 }
