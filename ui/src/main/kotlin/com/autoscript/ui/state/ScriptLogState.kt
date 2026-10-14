@@ -12,7 +12,7 @@ import java.time.ZoneId
  *
  * 三落点与 `TaskLogState` 同构：未读取 / 失败（保留已读到的行）/ 成功。
  * 标题形态在这里定（`/$projectId/$scriptPath`，与悬浮窗标题同一归一化点 ——
- * 见 `LogWindowState.title`）：快照层只给事实，斜杠形态是呈现偏好。
+ * 见 `LogWindowState.titleText`）：快照层只给事实，斜杠形态是呈现偏好。
  */
 data class ScriptLogState(
     val load: LoadState,

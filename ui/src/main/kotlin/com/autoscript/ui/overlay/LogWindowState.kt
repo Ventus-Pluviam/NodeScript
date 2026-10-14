@@ -56,7 +56,11 @@ data class LogWindowState(
      * 日志还在，但不把「已经跑完了」说成「还在跑」。**还没绑上过**（boundRunId
      * null，窗刚开、执行还没起来）不缀 —— 那是"未开始"，不是"已结束"。
      */
-    val titleText: String get() = if (running || boundRunId == null) title else "$title · 已结束"
+    val titleText: String
+        get() {
+            val plain = "/$projectId/$relPath"
+            return if (running || boundRunId == null) plain else "$plain · 已结束"
+        }
 
     /**
      * 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。
