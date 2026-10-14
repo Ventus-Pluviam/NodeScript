@@ -637,7 +637,10 @@ class RuntimeControllerCancellationTest {
 
     @Test
     fun `pauseRun 非在途与引擎冻不住都回 false 且不进集`() = runBlocking {
-        val (c, _) = controller()
+        // **不能调上面那个 `controller()`**：它是 `RuntimeControllerTest` 的私有成员，
+        // 本类（`RuntimeControllerCancellationTest`）看不到 —— 就地建，与同类其余用例同形。
+        val pool = FixedEnginePool({ id -> FakeEngine(EngineId(id.poolIndex)) }, 1)
+        val c = RuntimeController(pool, WatchdogPolicy())
         assertFalse(c.pauseRun(999L), "从未存在 → false，不抛")
         val started = assertInstanceOf(
             RuntimeController.StartOutcome.Started::class.java,

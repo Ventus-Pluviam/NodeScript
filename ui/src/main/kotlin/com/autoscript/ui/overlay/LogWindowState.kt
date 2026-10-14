@@ -45,9 +45,14 @@ data class LogWindowState(
      */
     val title: String get() = "/$projectId/$relPath"
 
-    /** 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。 */
+    /**
+     * 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。
+     *
+     * **`substringAfterLast('/')` 不带第二参数**（缺省 = 整串）：传 `""` 会让没有斜杠的
+     * 路径整个变成空串（`main.js` 于是"没有扩展名"）—— `ScriptRunnability` 踩过同一个坑。
+     */
     val ext: String get() = relPath
-        .substringAfterLast('/', "")
+        .substringAfterLast('/')
         .substringAfterLast('.', "")
         .lowercase()
 

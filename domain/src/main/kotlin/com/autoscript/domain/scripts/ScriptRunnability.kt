@@ -35,7 +35,15 @@ object ScriptRunnability {
      */
     fun isRunnable(relPath: String): Boolean = extensionOf(relPath) in EXECUTABLE_EXTENSIONS
 
-    /** 项目内相对路径 → 小写扩展名（无扩展名 / 点开头无扩展名都给空串）。 */
+    /**
+     * 项目内相对路径 → 小写扩展名（无扩展名 / 点开头无扩展名都给空串）。
+     *
+     * **`substringAfterLast('/')` 不带第二参数**（缺省 = 整串）：第二参数是
+     * `missingDelimiterValue`，传 `""` 会让**没有斜杠**的路径整个变成空串 ——
+     * `main.js` 于是没有扩展名，`isRunnable("main.js") == false`。原写法就是这个坑，
+     * 而调用方传的 relPath 恰好**总带斜杠**（首段 = 项目名），所以界面上看不出来；
+     * 只有单测直接传 `"main.js"` 才把它暴露出来。
+     */
     private fun extensionOf(relPath: String): String =
-        relPath.substringAfterLast('/', "").substringAfterLast('.', "").lowercase()
+        relPath.substringAfterLast('/').substringAfterLast('.', "").lowercase()
 }

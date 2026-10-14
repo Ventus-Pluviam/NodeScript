@@ -50,8 +50,10 @@ data class ScriptLogRowUi(
         fun of(row: ScriptLogRow, zone: ZoneId) = ScriptLogRowUi(
             runId = row.runId,
             title = "/${row.projectId}/${row.scriptPath}",
+            // 同 `LogWindowState.ext`：`substringAfterLast('/')` 不能带第二参数
+            // （传 "" 会让没有斜杠的路径整个变空串）。
             ext = row.scriptPath
-                .substringAfterLast('/', "")
+                .substringAfterLast('/')
                 .substringAfterLast('.', "")
                 .lowercase(),
             startedText = ScheduleText.absolute(row.startedAtMillis, zone),
