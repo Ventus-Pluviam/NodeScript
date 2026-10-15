@@ -42,7 +42,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.FocusDismissState
 import com.autoscript.ui.components.LogLineRow
+import com.autoscript.ui.components.Separator
+import com.autoscript.ui.components.dismissFocusOnTapOutside
+import com.autoscript.ui.components.rememberFocusDismissState
+import com.autoscript.ui.components.reportFocusBounds
 import com.autoscript.ui.components.pressableLongPress
 import com.autoscript.ui.state.ConsoleLineState
 import com.autoscript.ui.theme.ThemeColors
@@ -113,19 +118,20 @@ fun LogWindowContent(
     onImeFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 窗底 = **白 + 一圈淡灰描边**；里面两块胶囊是**灰底、无描边**
-    // （2026-10-15 用户第二轮口径「背景换成白色（要有描边），胶囊框灰色，不要有描边试试」）。
-    //
-    // 第一轮是反过来的（灰窗底 + 白胶囊 + 阴影），用户看过说"效果不太好"——
-    // 两块的色差在浅色档下太弱（白胶囊压浅灰底），加阴影也只是勉强分开。
-    // 这一轮把层次反过来：**窗整体是"一张白卡片"，靠描边从页面里浮起来；
-    // 内部两块用灰块分区**——灰压白的分辨率比白压灰高得多，且不用阴影。
+    // 窗底 = **白 + 一圈淡灰描边**；里面三块（标题行 / 日志 / 输入行）**同色白**
+    // （2026-10-16 用户第三轮口径「胶囊框换白色」，问询确认「窗底保持白+描边，胶囊也白」；
+    // 前两轮的取舍逐条记在 [WindowSurface] 那处）。
     //
     // 描边用 [ThemeColors.editorChipBorder]（编辑器那颗白圆钮的"淡淡灰边"，
     // 浅色 `0xFFDCDCDC` / 深色 `0xFF4A5563`）—— 仓里现成的"白底 + 淡灰边"配方，
     // 不新造色键（深浅两档都是调好的）。
+    //
+    // 点输入行外面就收键盘（2026-10-16 用户报"焦点转移后光标还在闪"）：一份 state 管
+    // 窗里那一个输入框；容器侧挂在下面这个 Column 上（Initial 趟只读不消费，日志拖选照旧）。
+    val focusDismiss = rememberFocusDismissState()
     Column(
         modifier
+            .dismissFocusOnTapOutside(focusDismiss)
             // 顺序照 `ScriptEditorScreen` 那颗白圆钮的先例：`background(shape)` → `border(…, shape)`
             // —— 两者各带形状，不用再套一层 `clip`（多一层只是多一次绘制指令）。
             .background(WindowSurface, WindowShape)
@@ -133,50 +139,65 @@ fun LogWindowContent(
             .padding(WindowBlockGap),
         verticalArrangement = Arrangement.spacedBy(WindowBlockGap),
     ) {
-        // 头部（拖拽区）：标题 + 四钮。顺序用户令固定：暂停 / 清空 / 关闭 / 全屏。
-        Row(
+        // 头部（拖拽区）：标题 + 四钮 + **底缘一条分隔线**（2026-10-16 用户令
+        // 「悬浮窗标题下面加个分隔线」）。顺序用户令固定：暂停 / 清空 / 关闭 / 全屏。
+        //
+        // 线画在**这一块的底缘之内**（不是两块之间另起一个子项）：三块现在同色
+        // （第三轮配色「胶囊也白」），中间那 8dp 缝里悬一条线会像"飘着"；贴着底缘
+        // 才是"标题栏下面有一条"的读法。`clip` 的圆角会把线的两端裁掉一点，
+        // 这正是卡片内分隔线该有的样子。
+        //
+        // `dragHandle` 从原来的 Row 挪到这一层（拖拽区仍是整块头部，含那条线）。
+        Column(
             Modifier
                 .fillMaxWidth()
                 .clip(WindowBlockShape)
                 .background(WindowBlockSurface)
-                .dragHandle(onDrag)
-                .padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .dragHandle(onDrag),
         ) {
-            Text(
-                text = state.titleText,
-                color = ThemeColors.text,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            // 第一颗钮位：暂停/继续/重跑三态（2026-10-15 用户令）。
-            // - 在途且没暂停 → 暂停（点 = 暂停）；在途且已暂停 → 继续（点 = 恢复）；
-            // - 已结算（跑完/被停/崩溃）→ **重跑**（用户令「执行完变重跑图标」）：
-            //   点 = 重新执行同一文件，长按 = 也是重跑（同一语义，防"没长按对"）。
-            WindowIconButton(
-                kind = when {
-                    state.paused -> GlyphKind.RESUME
-                    state.running -> GlyphKind.PAUSE
-                    else -> GlyphKind.RUN
-                },
-                description = when {
-                    state.paused -> "继续执行"
-                    state.running -> "暂停执行"
-                    else -> "重新执行"
-                },
-                enabled = state.running || state.boundRunId != null,
-                onClick = onFirstAction,
-                onLongClick = onFirstAction,
-            )
-            WindowIconButton(kind = GlyphKind.CLEAR, description = "清空日志", onClick = onClear)
-            WindowIconButton(kind = GlyphKind.CLOSE, description = "关掉悬浮窗", onClick = onClose)
-            WindowIconButton(
-                kind = GlyphKind.FULLSCREEN,
-                description = if (state.fullscreen) "退出全屏" else "打开全屏",
-                onClick = onFullscreenToggle,
-            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = state.titleText,
+                    color = ThemeColors.text,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                // 第一颗钮位：暂停/继续/重跑三态（2026-10-15 用户令）。
+                // - 在途且没暂停 → 暂停（点 = 暂停）；在途且已暂停 → 继续（点 = 恢复）；
+                // - 已结算（跑完/被停/崩溃）→ **重跑**（用户令「执行完变重跑图标」）：
+                //   点 = 重新执行同一文件，长按 = 也是重跑（同一语义，防"没长按对"）。
+                WindowIconButton(
+                    kind = when {
+                        state.paused -> GlyphKind.RESUME
+                        state.running -> GlyphKind.PAUSE
+                        else -> GlyphKind.RUN
+                    },
+                    description = when {
+                        state.paused -> "继续执行"
+                        state.running -> "暂停执行"
+                        else -> "重新执行"
+                    },
+                    enabled = state.running || state.boundRunId != null,
+                    onClick = onFirstAction,
+                    onLongClick = onFirstAction,
+                )
+                WindowIconButton(kind = GlyphKind.CLEAR, description = "清空日志", onClick = onClear)
+                WindowIconButton(kind = GlyphKind.CLOSE, description = "关掉悬浮窗", onClick = onClose)
+                WindowIconButton(
+                    kind = GlyphKind.FULLSCREEN,
+                    description = if (state.fullscreen) "退出全屏" else "打开全屏",
+                    onClick = onFullscreenToggle,
+                )
+            }
+            // 分隔线（`indentDp = 0`：通宽 —— 窗内的线是"标题栏的底边"，不是列表行那种缩进线）。
+            Separator(indentDp = 0)
         }
         // 日志块：同一套胶囊（底 + 圆角），内容按状态三选一。
         Box(
@@ -195,6 +216,7 @@ fun LogWindowContent(
             onDraftChange = onInputDraft,
             onSend = onSendInput,
             onImeFocusChange = onImeFocusChange,
+            focusDismiss = focusDismiss,
         )
     }
 }
@@ -220,6 +242,8 @@ private fun InputRow(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onImeFocusChange: (Boolean) -> Unit,
+    /** 「点外面收键盘」的共享状态（见 `FocusDismiss`）；窗里唯一那个输入框报给它。 */
+    focusDismiss: FocusDismissState,
 ) {
     val palette = ThemeColors
     Row(
@@ -259,7 +283,11 @@ private fun InputRow(
                 keyboardActions = KeyboardActions(onSend = { onSend() }),
                 // 焦点变化上报给宿主：系统窗要靠它把 `FLAG_NOT_FOCUSABLE` 摘掉，
                 // 否则输入法根本不会起来（见 [onImeFocusChange] 的 KDoc）。
-                modifier = Modifier.fillMaxWidth().onFocusChanged { onImeFocusChange(it.isFocused) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { onImeFocusChange(it.isFocused) }
+                    // 上报 bounds 与聚焦态：窗根据此判"这一下点在输入行外"（见 `FocusDismiss`）
+                    .reportFocusBounds(focusDismiss),
             )
         }
         // 蓝色箭头（用户口径「蓝色的箭头」）：**用强调色**（`ThemeColors.accent`，

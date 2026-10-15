@@ -80,6 +80,9 @@ import com.autoscript.ui.components.BAR_MORE_DOTS_WEIGHT
 import com.autoscript.ui.components.BarMoreDotsSize
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.centerInRoot
+import com.autoscript.ui.components.dismissFocusOnTapOutside
+import com.autoscript.ui.components.rememberFocusDismissState
+import com.autoscript.ui.components.reportFocusBounds
 import com.autoscript.ui.components.EaseOutQuint
 import com.autoscript.ui.components.OvershootEasing
 import com.autoscript.ui.components.rememberPressIndication
@@ -176,6 +179,9 @@ fun ProjectScreen(
     // 搜索词/当前目录/多选集合都是本屏私有的现值：过滤、下钻、选中都是**呈现**
     // （TG 文件页"仅应用于此文件夹"），不是读取 —— 不进读口。
     var query by rememberSaveable { mutableStateOf("") }
+    // 「点输入框外面就收键盘/撤光标」（2026-10-16 用户报"焦点转移后光标还在闪"）：
+    // 一份 state 管本屏那一个搜索框，见 `FocusDismiss` 的 KDoc。
+    val focusDismiss = rememberFocusDismissState()
     // 当前目录 = relPath 的**全路径前缀**（含项目名，如 "demo/"、"demo/lib/"）；
     // null = 全库根。目录行的 relPath 本身就是合格的前缀，进层就是直接赋值。
     var currentFolder by rememberSaveable { mutableStateOf<String?>(null) }
@@ -415,6 +421,7 @@ fun ProjectScreen(
                 SearchField(
                     query = query,
                     onChange = { query = it },
+                    focusDismiss = focusDismiss,
                 )
                 Box(Modifier.weight(1f)) {
                     // **列表全程都画**，编辑面盖住时也不省 —— 进出动画期间底下这份就是
@@ -539,7 +546,8 @@ fun ProjectScreen(
         active = active,
         onAnimatingChanged = { editorAnimating = it },
         onBackRequest = ::requestEditorClose,
-        modifier = modifier,
+        // 点搜索框外面就收键盘（含点在编辑面上那一下）—— 容器侧手势见 `FocusDismiss`。
+        modifier = modifier.dismissFocusOnTapOutside(focusDismiss),
         // 显式写 `content =`：尾随 lambda 只能绑到**签名里最后一个**形参，而这里最后
         // 一个是 `modifier`（不是函数类型）—— 写尾随 lambda 会被判成「实参过多」。
         content = { page ->
@@ -671,6 +679,8 @@ private fun ProjectMenu(
 private fun SearchField(
     query: String,
     onChange: (String) -> Unit,
+    /** 「点外面收键盘」的共享状态（见 `FocusDismiss`）；本屏唯一那个搜索框报给它。 */
+    focusDismiss: com.autoscript.ui.components.FocusDismissState,
 ) {
     val palette = ThemeColors
     Row(
@@ -700,7 +710,8 @@ private fun SearchField(
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.text),
                 // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色**不是一个键**。
                 cursorBrush = SolidColor(palette.cursor),
-                modifier = Modifier.fillMaxWidth(),
+                // 上报自己的 bounds 与聚焦态：容器据此判"这一下点在框外"（见 `FocusDismiss`）。
+                modifier = Modifier.fillMaxWidth().reportFocusBounds(focusDismiss),
             )
         }
         Spacer(Modifier.width(12.dp))

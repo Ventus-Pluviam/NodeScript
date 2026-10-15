@@ -74,6 +74,9 @@ import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.ContextMenu
+import com.autoscript.ui.components.dismissFocusOnTapOutside
+import com.autoscript.ui.components.rememberFocusDismissState
+import com.autoscript.ui.components.reportFocusBounds
 import com.autoscript.ui.components.CountBadge
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
@@ -198,6 +201,9 @@ fun TaskCenterScreen(
     // 搜索词/排序档/两组展开态：本屏私有的现值，不进读口（与项目页 FileSort 同分工）。
     // 排序缺省 = 按时间（TG SharedConfig.sortContactsByName 缺省 false 的同款取向）。
     var query by rememberSaveable { mutableStateOf("") }
+    // 「点输入框外面就收键盘/撤光标」（2026-10-16 用户报"焦点转移后光标还在闪"）：
+    // 一份 state 管本屏那一个搜索框，见 `FocusDismiss` 的 KDoc。
+    val focusDismiss = rememberFocusDismissState()
     var sort by rememberSaveable { mutableStateOf(TaskSort.TIME) }
     // 两组缺省**收起**（批 45 用户口径）：进屏先看见两张干净的卡，展开是用户自己按的。
     var runsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -232,7 +238,9 @@ fun TaskCenterScreen(
     // 而是卡片 Column 的子级 —— boundsInParent 会差一层卡片偏移）。
     var containerOrigin by remember { mutableStateOf(Offset.Zero) }
 
-    Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted)) {
+    // 点搜索框外面就收键盘（容器侧手势见 `FocusDismiss`）—— 挂在根 Column 上，
+    // 列表滚动/行长按照旧（Initial 趟只读不消费）。
+    Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted).dismissFocusOnTapOutside(focusDismiss)) {
         // 顶栏跟页面同灰（批 41 用户拍板）：传 `background` 覆盖 `actionBarDefault`，
         // 栏与列表连成一块灰，不再是"白栏压灰页"。
         ActionBar(
@@ -379,6 +387,7 @@ fun TaskCenterScreen(
             SearchField(
                 query = query,
                 onChange = { query = it },
+                focusDismiss = focusDismiss,
                 modifier = Modifier.align(Alignment.TopCenter),
             )
             ScrollToTopButton(
@@ -870,6 +879,8 @@ private fun TaskAvatar(scriptPath: String, name: String) {
 private fun SearchField(
     query: String,
     onChange: (String) -> Unit,
+    /** 「点外面收键盘」的共享状态（见 `FocusDismiss`）；本屏唯一那个搜索框报给它。 */
+    focusDismiss: com.autoscript.ui.components.FocusDismissState,
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
@@ -907,7 +918,8 @@ private fun SearchField(
                     textStyle = TextStyle(fontSize = 15.sp, color = palette.text),
                     // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色不是一个键。
                     cursorBrush = SolidColor(palette.cursor),
-                    modifier = Modifier.fillMaxWidth(),
+                    // 上报自己的 bounds 与聚焦态：容器据此判"这一下点在框外"（见 `FocusDismiss`）。
+                    modifier = Modifier.fillMaxWidth().reportFocusBounds(focusDismiss),
                 )
             }
             Spacer(Modifier.width(12.dp))
