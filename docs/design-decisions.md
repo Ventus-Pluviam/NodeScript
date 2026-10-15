@@ -12,6 +12,39 @@
 
 ---
 
+## 85. 「该执行不支持暂停」的真因是 pid 反射阶梯方向反了（2026-10-15，用户报，已修）
+
+**推翻的旧口径**：决策 83 与本日切片第 3 条目记的是「本台云手机无 root、引擎子进程独立 uid，
+`kill -STOP` 冻不住」——**误判**。设备实测：以 app 自己的 uid
+`run-as com.autoscript /system/bin/kill -STOP <pid>` → rc=0、`ps` 状态变 `T`；
+引擎进程自己 `exec kill -STOP 自身` 同样 rc=0 且此后一直 `T`。**同 uid 冻得住。**
+
+**真因**：`ProcessLauncher.pidOf` 恒 null（`pauseExecution` 第一句 `val target = pid ?: return false`）。
+为什么恒 null —— 第二级反射阶梯**从 `Process::class.java` 起步、每轮 `cls.superclass` 往上走**，
+而 `getDeclaredField` 只看该类自己声明的成员：这条循环走 `Process → Object`，**永远够不着子类**。
+而 pid 住在**子类**上（设备 Android 13 libcore = `java.lang.UNIXProcess.pid`，dexdump 实证；
+桌面 JDK = `java.lang.ProcessImpl.pid`，javap 实证）。**这条阶梯从来没生效过**，
+而 `pid()` 又不在 Android 平台 API 表里（android-36 api-versions.xml 实查）→ 设备上必然 null。
+
+**影响面（三条同时静默降级，不止暂停按钮）**：看门狗走 `noPid` 清单**从不判死**；
+`RunIdentityRegistry` 的防劫持检查整段跳过；悬浮窗暂停恒回 false（UI 话术把「拿不到 pid」
+说成「不支持暂停」）。
+
+**药**：从 `process.javaClass` 起步（与 `:platform:process` 的 `ProcOps.pidOf` 同形 ——
+那份方向一直是对的）。类级 val 改按调用查（字段住运行时类上，运行时类每次 spawn 才知道）。
+
+**教训两条**：
+1. **"手法同款、代码两份"的代价是"一处抄漏一行，另一处不会红"** —— 两份 pidOf 一直并存，
+   `ProcOps` 那份对、引擎那份错，两边测试都绿。
+2. **测试形状要照事实抄，不能照实现抄** —— 全仓没有一条测 pid 取值的用例
+   （只有 `receipt.pid > 0`，桌面 JDK 走 tier 1 就过），tier 2 从没被执行过。
+   新加的两条方向门把**子类持字段**这个事实本身钉住（隔两层继承，照设备形状）。
+
+**守卫**：`ProcessLauncherPidTest`（取到 / 诚实 null 两例）+ `ProcOpsTest` 同形状方向门。
+本机用等价 Java 程序验证「旧写法在这条用例上回 null」= 修复前会红。
+
+---
+
 ## 84. 裸 `console.log` 走桥：脚本侧语法零改动，通道在引导期换（2026-10-15，用户令「js 的语法都要和原来的调用方式一样，不然写脚本还得兼容语法」）
 
 **病**：脚本写裸 `console.log('x')` 走 Node 原生 stdout，而引擎排水线程对它**读即弃**
@@ -93,6 +126,9 @@ console.log 仍写 stdout。
    （无 root，引擎子进程是独立 uid）`kill -STOP` 冻不住 → `pauseRun` 回 false → 如实 toast
    「该执行不支持暂停（本设备冻不住该进程）」。已结算的 run 由第 82 项的 `settledRunIds`
    静默早退，不再把「已结束」翻译成「不支持暂停」。
+   ~~**2026-10-15 晚作废**：「本台云手机冻不住」是误判 —— 本台同 uid 冻得住
+   （`run-as` 发 STOP → rc=0、状态变 `T`），真因是 `pid` 反射阶梯方向反了、`pid` 恒 null，
+   见决策 85。~~
 3. **重跑 = 真实再跑**：`windowFirstAction` 对已结算态先 `LogWindowController.rerun`
    （窗切到新归属的重跑态，图标回重跑；跑起来后轮询 `bind` 看到同归属新 run 在途，自动换绑
    到新号、图标回暂停）再走 `runScriptFileOp`（与 ▶ 同一条执行链）。**路径形状在重跑链上
