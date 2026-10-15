@@ -322,4 +322,13 @@ class AssembledShell internal constructor(
 
     /** 与 [pauseRun] 对偶（解冻）。 */
     suspend fun resumeRun(runId: Long): Boolean = shell.controller.resumeRun(runId)
+
+    /**
+     * 往一次在途执行的脚本进程 stdin 送一行（`HostSummary.sendInput` 的装配实现；
+     * 2026-10-16 悬浮窗底部输入框）。
+     *
+     * 与 [pauseRun] 同一条"在途表精确命中"口径：false = 已结算/从未存在，或管道
+     * 已随进程关闭 —— 调用方（悬浮窗）按 false 如实报，不抛。
+     */
+    suspend fun sendInput(runId: Long, line: String): Boolean = shell.controller.sendInput(runId, line)
 }

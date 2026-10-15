@@ -121,6 +121,9 @@ enum class GlyphKind {
 
     /** 全屏（悬浮窗「打开全屏」钮）：四角向外（展开；已全屏时同一颗钮画反向）。 */
     FULLSCREEN,
+
+    /** 发送（悬浮窗底部输入框右侧那颗箭头）：一条横杆 + 箭头。 */
+    SEND,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -475,6 +478,14 @@ fun Glyph(
                 drawPath(path(0.68f to 0.42f, 0.78f to 0.32f, 0.78f to 0.22f, 0.68f to 0.22f), tint, style = stroke)
                 drawPath(path(0.32f to 0.58f, 0.22f to 0.68f, 0.22f to 0.78f, 0.32f to 0.78f), tint, style = stroke)
                 drawPath(path(0.68f to 0.58f, 0.78f to 0.68f, 0.78f to 0.78f, 0.68f to 0.78f), tint, style = stroke)
+            }
+
+            // 发送：一条横杆 + 右侧箭头。**不用纸飞机** —— 那是"发消息出去"的语义，
+            // 而这一颗是"把这一行送进正在跑的那个脚本"，一支直白的箭头最不容易读错
+            // （与 `arrow_more` 那种装饰性 chevron 也分得开：它有杆）。
+            GlyphKind.SEND -> {
+                drawPath(path(0.16f to 0.50f, 0.80f to 0.50f), tint, style = stroke)
+                drawPath(path(0.58f to 0.28f, 0.82f to 0.50f, 0.58f to 0.72f), tint, style = stroke)
             }
         }
     }

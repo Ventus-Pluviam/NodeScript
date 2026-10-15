@@ -5,6 +5,7 @@ import android.graphics.PixelFormat
 import android.os.Bundle
 import android.view.Gravity
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
@@ -157,6 +158,55 @@ class SystemLogWindowHost(
             p.y = compactY
         }
         runCatching { manager.updateViewLayout(v, p) }
+    }
+
+    /**
+     * **输入焦点开关**（2026-10-16 用户令：悬浮窗底部输入框要能打字）。
+     *
+     * 病：本窗全程带 `FLAG_NOT_FOCUSABLE`（见类 KDoc —— 悬浮窗是"贴在旁边看"的，
+     * 抢焦点会把用户正在操作的输入法顶掉），而**不可聚焦的窗口拿不到输入法**
+     * （`FLAG_NOT_FOCUSABLE` 单独在场时 IME 不与会话交互）—— 输入框能画、能点，
+     * 就是打不出字。
+     *
+     * 药：**只在用户真的要打字的那段时间**把窗口变可聚焦 —— 与"全程可聚焦"相比，
+     * 原设计那条理由（看日志时不抢别人的焦点）一字不动：
+     * - `on = true`：清 `FLAG_NOT_FOCUSABLE`、加 `FLAG_NOT_TOUCH_MODAL`
+     *   （窗外触摸仍落到下层 App，否则整个屏幕都被这颗窗吃掉），并把
+     *   `softInputMode` 设成 `ADJUST_RESIZE | STATE_ALWAYS_VISIBLE`；
+     * - `on = false`：原样加回 `FLAG_NOT_FOCUSABLE`、去掉 `FLAG_NOT_TOUCH_MODAL`。
+     *
+     * **为什么还要 `requestFocus` + `showSoftInput`**：Compose 的文本框在拿到焦点时
+     * 自己会要输入法，但那一刻窗口还不可聚焦 —— 那次请求是**空放**的（窗口没资格）。
+     * 这里在把窗口变可聚焦之后补一次，顺序才对得上。两个调用都包 `runCatching`：
+     * 拿不到 IME（无输入法的设备）不该把开窗路径带崩。
+     *
+     * 幂等：目标 flags 与现值相同即早退（拖动每帧都走 `updateViewLayout`，这里不必凑热闹）。
+     */
+    fun setImeFocus(on: Boolean) {
+        val manager = wm ?: return
+        val v = view ?: return
+        val p = params ?: return
+        val notFocusable = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        val notTouchModal = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        val flags = if (on) {
+            (p.flags and notFocusable.inv()) or notTouchModal
+        } else {
+            (p.flags or notFocusable) and notTouchModal.inv()
+        }
+        if (flags == p.flags) return
+        p.flags = flags
+        if (on) {
+            p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+        }
+        runCatching { manager.updateViewLayout(v, p) }
+        if (!on) return
+        // 窗口此刻才可聚焦：补一次"要焦点 + 起输入法"（见本函数 KDoc 的那段顺序说明）。
+        runCatching {
+            v.requestFocus()
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            v.post { runCatching { imm?.showSoftInput(v, 0) } }
+        }
     }
 
     /**

@@ -770,6 +770,19 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 往一次在途执行的脚本进程 stdin 送一行（[HostSummary] 的生产实现；2026-10-16
+     * 悬浮窗底部输入框那颗蓝色箭头）。
+     *
+     * 壳没装好就抛（与 [pauseRun] 同一条纪律）；false = 已结算/从未存在，或管道已随
+     * 进程关闭 —— 引擎侧如实回，UI 按 false 反馈。
+     */
+    override suspend fun sendInput(runId: Long, line: String): Boolean {
+        val built = assembled
+            ?: error("壳未装配（装配中或失败）：无法把输入送进脚本")
+        return built.sendInput(runId, line)
+    }
+
+    /**
      * 脚本输出日志的文件列表（[HostSummary] 的生产实现；2026-10-13）。
      *
      * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：只读 `filesDir/.ns/script-logs/`

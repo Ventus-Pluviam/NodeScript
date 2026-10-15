@@ -120,6 +120,19 @@ interface HostSummary {
     suspend fun resumeRun(runId: Long): Boolean
 
     /**
+     * 往一次**在途**执行的脚本进程 stdin 送一行（悬浮窗底部输入框那颗蓝色箭头；
+     * 2026-10-16 用户令）。
+     *
+     * 走的是 OS 管道（引擎 spawn 时本来就 `Redirect.PIPE`），脚本侧用 `process.stdin`
+     * 照常读 —— **不是桥调用**，脚本零改动。行尾由实现补（调用方给的是"用户敲的那一行"）。
+     *
+     * @return true = 已写进管道；false = 它不在途（已结算/从未存在）或管道已随进程关闭。
+     * 缺省实现回 false：**未接线的替身零改动即可编译**，且不静默 —— UI 按 false 如实报
+     * （与 [pauseRun] 的 false 同一条"不假装"纪律）。
+     */
+    suspend fun sendInput(runId: Long, line: String): Boolean = false
+
+    /**
      * 本机有没有弹**系统级**悬浮窗的资格（执行日志悬浮窗的宿主二选一；2026-10-13 用户令）。
      *
      * 同步、便宜：就是 `Settings.canDrawOverlays` 那一句（`:ui` 不碰 `Settings`，

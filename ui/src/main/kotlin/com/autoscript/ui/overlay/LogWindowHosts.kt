@@ -80,6 +80,11 @@ fun LogWindowInAppHost(
      * 夹取由状态层做（它才知道窗多宽）—— 两边各答一半，谁都不抄对方的数。
      */
     onDrag: (dx: Float, dy: Float, boundsW: Float, boundsH: Float) -> Unit,
+    /** 底部输入框的草稿变更 / 送行（2026-10-16；两个宿主都往同一份状态写）。 */
+    onInputDraft: (String) -> Unit,
+    onSendInput: () -> Unit,
+    /** 输入框焦点变化（系统窗要靠它开输入法；in-app 宿主只转发，见 `LogWindowContent` 的 KDoc）。 */
+    onImeFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shown = state.visible(lines)
@@ -136,6 +141,9 @@ fun LogWindowInAppHost(
                         // 量到的边界做。
                         with(density) { onDrag(d.x.toDp().value, d.y.toDp().value, boxW, boxH) }
                     },
+                    onInputDraft = onInputDraft,
+                    onSendInput = onSendInput,
+                    onImeFocusChange = onImeFocusChange,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -166,6 +174,11 @@ fun LogWindowInAppHost(
 fun SystemWindowSync(
     controller: LogWindowController,
     onFirstAction: () -> Unit,
+    /** 底部输入框的草稿变更 / 送行（2026-10-16 用户令；离屏窗里同样是这一份状态）。 */
+    onInputDraft: (String) -> Unit,
+    onSendInput: () -> Unit,
+    /** 输入框焦点变化（离屏窗靠它摘掉 `FLAG_NOT_FOCUSABLE`，否则输入法不起来）。 */
+    onImeFocusChange: (Boolean) -> Unit,
 ) {
     val state = controller.state
     val host = controller.systemHost
@@ -209,6 +222,9 @@ fun SystemWindowSync(
                     onDrag = { d ->
                         with(density) { controller.drag(d.x.toDp().value, d.y.toDp().value) }
                     },
+                    onInputDraft = onInputDraft,
+                    onSendInput = onSendInput,
+                    onImeFocusChange = onImeFocusChange,
                 )
             },
             now.x,

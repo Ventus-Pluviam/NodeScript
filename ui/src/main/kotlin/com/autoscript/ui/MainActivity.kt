@@ -493,6 +493,11 @@ class MainActivity : ComponentActivity() {
             com.autoscript.ui.overlay.SystemWindowSync(
                 controller = logWindow,
                 onFirstAction = { scope.launch { windowFirstAction(logWindow) { toast.show(it) } } },
+                // 底部输入框（2026-10-16）：草稿写状态、送行走控制器（它按"在途/已结算"
+                // 决定发不发、成功才清草稿，见 `LogWindowController.sendInput`）。
+                onInputDraft = { logWindow.updateInputDraft(it) },
+                onSendInput = { scope.launch { logWindow.sendInput() } },
+                onImeFocusChange = { logWindow.setImeFocus(it) },
             )
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
@@ -540,6 +545,9 @@ class MainActivity : ComponentActivity() {
                     logWindow = logWindow,
                     logLines = { consoleState.lines },
                     onFirstAction = { scope.launch { windowFirstAction(logWindow) { toast.show(it) } } },
+                    onInputDraft = { logWindow.updateInputDraft(it) },
+                    onSendInput = { scope.launch { logWindow.sendInput() } },
+                    onImeFocusChange = { logWindow.setImeFocus(it) },
                     modifier = themeSwitch.modifier,
                 ) { shellModifier ->
                         // 页内滚动容器要用的「露出来」口径（光标入视等）：pager 自己换成
@@ -1731,6 +1739,11 @@ private fun MainShell(
     logLines: () -> List<com.autoscript.ui.state.ConsoleLineState>,
     /** 悬浮窗第一颗钮的动作（在途 = 暂停/继续，已结算 = 重跑；Activity 的 windowFirstAction）。 */
     onFirstAction: () -> Unit,
+    /** 悬浮窗底部输入框的草稿变更 / 送行（2026-10-16 用户令）。 */
+    onInputDraft: (String) -> Unit,
+    onSendInput: () -> Unit,
+    /** 输入框焦点变化（系统窗要靠它摘掉 `FLAG_NOT_FOCUSABLE`，否则输入法不起来）。 */
+    onImeFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
 ) {
@@ -1770,6 +1783,9 @@ private fun MainShell(
                         onClose = { logWindow.close() },
                         onFullscreenToggle = { logWindow.toggleFullscreen() },
                         onDrag = { dx, dy, w, h -> logWindow.dragInApp(dx, dy, w, h) },
+                        onInputDraft = onInputDraft,
+                        onSendInput = onSendInput,
+                        onImeFocusChange = onImeFocusChange,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

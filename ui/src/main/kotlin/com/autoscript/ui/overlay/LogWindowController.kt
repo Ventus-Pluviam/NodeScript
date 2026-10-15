@@ -197,6 +197,71 @@ class LogWindowController(
     }
 
     /**
+     * 底部输入框拿到/失去焦点 → 系统窗的输入法开关（2026-10-16）。
+     *
+     * 只在走系统窗时往下传：in-app 兜底窗是普通 Compose 树（在 Activity 窗口里），
+     * 输入法本来就能用；往下传等于给一个不需要它的宿主发指令。
+     */
+    fun setImeFocus(on: Boolean) {
+        if (!usingSystemWindow) return
+        systemHost?.setImeFocus(on)
+    }
+
+    /** 底部输入框的草稿变更（每次敲键一次；草稿住 [LogWindowState.inputDraft]）。 */
+    fun updateInputDraft(text: String) {
+        val current = state ?: return
+        if (current.inputDraft == text) return
+        state = current.copy(inputDraft = text)
+    }
+
+    /**
+     * 把输入框那一行送进脚本进程的 stdin（底部那颗蓝色箭头；2026-10-16 用户令）。
+     *
+     * 四件事按序：
+     * 1. **空行不发**（trim 后为空就早退）：敲一下空格再点箭头不该在脚本那头造出一个
+     *    空行 —— 脚本的 `readline` 会照收，那是用户没表达的输入；
+     * 2. **没绑上/已结算不发**（`boundRunId` null 或不在 [settledRunIds] 之外）：
+     *    与 [togglePause] 同一条"在途才动"的口径，但那一条靠宿主查，这一条本地就能判
+     *    —— 结算不解绑，窗里绑着一个跑完的号是常态；
+     * 3. **成功才清空草稿**：失败（管道已关/壳没装配）留着原文，用户不必重敲；
+     * 4. **失败如实 toast**：不假装送到 —— 与「该执行不支持暂停」那条同一条纪律，
+     *    但**话术不同**：那条说的是能力不支持，这条说的是"这次没送进去"。
+     */
+    suspend fun sendInput() {
+        val current = state ?: return
+        val line = current.inputDraft.trim()
+        if (line.isEmpty()) return
+        val runId = current.boundRunId ?: run {
+            toast("还没有在跑的执行：输入无处可送")
+            return
+        }
+        if (runId in settledRunIds) {
+            toast("这次执行已经结束了：输入无处可送")
+            return
+        }
+        val host = hostSummary() ?: run {
+            toast("宿主摘要未接线（Application 未实现 HostSummary）")
+            return
+        }
+        val ok = try {
+            host.sendInput(runId, line)
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            throw t
+        } catch (t: Exception) {
+            toast("输入发送失败：${t.message ?: t.javaClass.simpleName}")
+            return
+        }
+        if (ok) {
+            // **现读再清**：上面那句 `host.sendInput` 是挂起的，期间轮询那一轮可能已经
+            // 推过新 state（`running`/`paused`/绑定都变）—— 拿挂起前那份 `current` 去
+            // `copy` 会把那一轮的结果抹掉（本仓反复踩过的"捕获值 vs 现读"）。
+            state = state?.copy(inputDraft = "")
+        } else {
+            toast("输入没送进脚本（它已退出，或这条执行不接受输入）")
+        }
+    }
+
+    /**
      * 暂停/继续（悬浮窗第一颗钮；boundRunId null 时不问宿主 —— 没绑上就没有可停的东西）。
      *
      * **已结算（[settledRunIds] 里有它）→ 静默早退**：暂停钮的可用态按 `state.running`

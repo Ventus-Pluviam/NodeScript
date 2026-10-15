@@ -76,6 +76,9 @@ open class FakeHost(
     override suspend fun resumeRun(runId: Long): Boolean =
         throw UnsupportedOperationException("本替身未提供 resumeRun（用例按需覆盖）")
 
+    override suspend fun sendInput(runId: Long, line: String): Boolean =
+        throw UnsupportedOperationException("本替身未提供 sendInput（用例按需覆盖）")
+
     override fun overlayAllowed(): Boolean = false
 
     override suspend fun scriptFiles(): ScriptFilesSnapshot =

@@ -358,6 +358,22 @@ class NodeProcessEngine(
     }
 
     /**
+     * 往这次执行的脚本进程 stdin 送一行（2026-10-16 用户令；SPI [ScriptEngine.sendInput]
+     * 的真实现）。
+     *
+     * 与 [pause]/[resume] 同一条"当前执行体"口径：没有在跑的执行 → false。
+     * 管道写本身可能阻塞（脚本不读且缓冲满），故落在 `Dispatchers.IO` —— 与
+     * [stop]/[kill] 同一条纪律，不让它占住调用方的线程。
+     *
+     * **不检查 `stopRequested`**：正在收尸的执行写 stdin 只会拿到 false（管道已关），
+     * 多一个判据就多一处会漂的状态；真实判据是"管道还在不在"，那由写本身回答。
+     */
+    override suspend fun sendInput(line: String): Boolean = withContext(Dispatchers.IO) {
+        val current = execution ?: return@withContext false
+        current.process.writeStdin(line)
+    }
+
+    /**
      * 四步 quiesce 的「请求退出」步（§8.3）：SIGTERM → [NodeEngineConfig.stopGraceMillis] 内退净
      * 回 [StopResult.Clean]；超时回 [StopResult.TimedOut]（partial=true = 尚有残留），
      * 池侧 `PoolSlot.quiesce` 据此 kill 兜底。从未启动/已退净 → 如实 Clean（无事可停）。

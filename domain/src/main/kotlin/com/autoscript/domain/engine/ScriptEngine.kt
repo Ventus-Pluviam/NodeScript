@@ -43,6 +43,23 @@ interface ScriptEngine {
     /** 解冻 [pause] 冻住的执行（SIGCONT）。语义与 [pause] 对偶，缺省同样 false。 */
     suspend fun resume(): Boolean = false
 
+    /**
+     * 往这次执行的**脚本进程 stdin 送一行**（2026-10-16 用户令：悬浮窗底部输入框 →
+     * 脚本的 `process.stdin`；缺省实现回 false）。
+     *
+     * 语义边界三条：
+     * - **送一行**：实现负责补行尾（`\n`）—— 调用方给的是"用户敲的那一行"，不是字节流；
+     * - **不是桥调用**：走的是 OS 管道（`ProcessBuilder` 本来就 `Redirect.PIPE`），
+     *   脚本侧用 `process.stdin` / `readline` 照常读，**零改动**（与裸 `console.log`
+     *   走桥那次同一条判据：让通道迁就脚本的原生写法）；
+     * - **false 不抛**：没有在跑的执行 / 管道已随进程退出关闭 / 实现方不支持（替身）
+     *   —— 调用方（悬浮窗）按 false 如实报，不假装送到。
+     *
+     * 缺省 false：与 [pause]/[lastRunSummary] 同一条"替身零改动"纪律 ——
+     * FakeEngine/UnavailableEngine 不必动，UI 按 false 反馈。
+     */
+    suspend fun sendInput(line: String): Boolean = false
+
     /** 当前状态快照（事件推送走 bridge EventBus，不在此轮询建模）。 */
     suspend fun status(): EngineStatus
 

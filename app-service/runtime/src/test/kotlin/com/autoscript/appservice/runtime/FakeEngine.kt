@@ -86,5 +86,20 @@ class FakeEngine(
 
     override suspend fun resume(): Boolean = resumeResult
 
+    /**
+     * `sendInput` 的账（2026-10-16）：收到的行按序记下来，返回值由 [sendInputResult] 定。
+     *
+     * 缺省 true（写成功）与 `pauseResult` 的缺省相反，是刻意的：那条"在途才送得到"
+     * 的判据住在 `RuntimeController`（不在途直接回 false，根本不问引擎），引擎这一层
+     * 的缺省该是"我这边没问题"；要测"管道关了"那条路再把开关关掉。
+     */
+    val sentInputs = mutableListOf<String>()
+    var sendInputResult: Boolean = true
+
+    override suspend fun sendInput(line: String): Boolean {
+        sentInputs += line
+        return sendInputResult
+    }
+
     override suspend fun lastRunSummary(): RunSummary? = summaryToReturn
 }

@@ -54,6 +54,23 @@ interface SpawnedProcess {
     /** 解冻 [pauseExecution] 冻住的进程（SIGCONT）。缺省同样 false。 */
     fun resumeExecution(): Boolean = false
 
+    /**
+     * 往子进程 **stdin 写一行**（2026-10-16 用户令：悬浮窗底部输入框 → 脚本的
+     * `process.stdin`）。自动补一个 `\n` —— 调用方的语义是"送一行"，行边界只在这里定。
+     *
+     * **为什么走 OS 管道而不是桥**：脚本读输入的原生写法就是 `process.stdin`
+     * （`readline`/`on('data')` 都建在它上面），宿主替它另开一条面等于让脚本改写法。
+     * 管道本来就在（`ProcessBuilder` 缺省 `Redirect.PIPE`），此前没人写过而已 ——
+     * 宿主侧零新协议、脚本侧零改动，与裸 `console.log` 那次同一条判据。
+     *
+     * 返回 false 的三种情形都**不抛**：没有活着的进程（实现方自判）/ 管道已随进程
+     * 退出关闭（写抛 IOException）/ 实现方不支持（缺省实现）。调用方（UI）按 false
+     * 如实报，不假装送到。
+     *
+     * 缺省 false：替身进程没有 stdin，与 [pauseExecution] 同一条"替身零改动"纪律。
+     */
+    fun writeStdin(line: String): Boolean = false
+
     /** 等待退出，[timeoutMillis] 内退出回 true，超时回 false（不抛）。 */
     fun waitFor(timeoutMillis: Long): Boolean
 
@@ -237,6 +254,31 @@ class ProcessBuilderLauncher : ProcessLauncher {
 
         /** `kill -CONT <pid>`（与 [pauseExecution] 对偶）。 */
         override fun resumeExecution(): Boolean = signal("-CONT")
+
+        /**
+         * 写一行进子进程 stdin（utf-8 + `\n` + flush）。
+         *
+         * 三个坑各有一句交代：
+         * - **必须 flush**：`Process.getOutputStream()` 是带缓冲的包装流，不 flush 就
+         *   攒在 8KiB 缓冲里 —— 脚本那头永远等不到这一行（"点了没反应"的经典形态）；
+         * - **写失败吞成 false**：进程已退出时管道写端关闭，写会抛 `IOException`
+         *   （或触发 SIGPIPE 被 JVM 折成 IOException）—— 那是"这次执行没了"的正常终点，
+         *   不是宿主故障，如实回 false 让 UI 说话；
+         * - **可能阻塞**：管道写满（脚本一直不读且已灌满 64KiB）时 `write` 会阻塞到读端
+         *   腾地方。调用链是挂起的（`NodeProcessEngine.sendInput` 走 `Dispatchers.IO`），
+         *   阻塞的是 IO 线程而不是主线程；这里不做超时/丢弃 —— 丢用户敲的那行比慢更坏。
+         */
+        override fun writeStdin(line: String): Boolean {
+            if (!process.isAlive) return false
+            return try {
+                val out = process.outputStream
+                out.write((line + "\n").toByteArray(StandardCharsets.UTF_8))
+                out.flush()
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
 
         private fun signal(flag: String): Boolean {
             val target = pid ?: return false

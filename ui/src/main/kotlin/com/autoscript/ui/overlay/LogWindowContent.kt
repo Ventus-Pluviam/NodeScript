@@ -9,10 +9,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -24,13 +28,16 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.Glyph
@@ -43,10 +50,11 @@ import com.autoscript.ui.theme.ThemeColors
 /**
  * 执行日志悬浮窗的**内容**（2026-10-13 用户令；两个宿主共用同一份）。
  *
- * 版式（2026-10-15 用户令第二轮）：**窗 = 一张白卡片**（[WindowSurface] + 一圈淡灰描边
- * [ThemeColors.editorChipBorder]），里面两块**灰胶囊**（[WindowBlockSurface]，
- * [RoundedCornerShape] + 内缩边距、**无描边**）：上面一块装标题行（标题 + 四颗图标钮），
- * 下面一块装日志。两轮口径的取舍写在 [WindowSurface] 那处。
+ * 版式（2026-10-16 用户令第三轮）：**窗 = 一张白卡片**（[WindowSurface] + 一圈淡灰描边
+ * [ThemeColors.editorChipBorder]），里面**三块**同色白胶囊（[WindowBlockSurface]，
+ * [RoundedCornerShape] + 内缩边距、**无描边**）：上面一块装标题行（标题 + 四颗图标钮）、
+ * 中间一块装日志、最下面一块是**给脚本发输入的输入行**（输入框 + 蓝色箭头）。
+ * 三轮口径的取舍写在 [WindowSurface] 那处。
  * 未绑定（执行还没进在途表 / **从开窗起一次都没绑上过**）→ 空态「本次执行未开始」。
  * 绑定那条跑完（结算）后窗口**保持**绑定、输出照常可见（用户令「脚本执行完不要
  * 自动清理输出」）—— 标题照旧只写路径，行区照常画；没出过一行且已结算的
@@ -85,6 +93,24 @@ fun LogWindowContent(
     onFullscreenToggle: () -> Unit,
     /** 头部拖拽：本次的位移增量（px，屏幕上的真实位移）。 */
     onDrag: (Offset) -> Unit,
+    /**
+     * 底部输入框的草稿变更（2026-10-16 用户令「在悬浮窗最下面放一个输入框」）。
+     *
+     * 草稿由调用方持有（`LogWindowState.inputDraft`）而不是内容层 `remember`：
+     * 内容层是**无状态**的（两个宿主画同一个窗，见文件头 KDoc），`remember` 会在
+     * 系统窗那次 `setContent` 重喂时把敲了一半的一行丢掉。
+     */
+    onInputDraft: (String) -> Unit,
+    /** 底部那颗蓝色箭头（与输入框回车同一个动作）：把草稿那一行送进脚本进程的 stdin。 */
+    onSendInput: () -> Unit,
+    /**
+     * 输入框拿到/失去焦点（2026-10-16）。**系统宿主必须接**：那颗窗全程带
+     * `FLAG_NOT_FOCUSABLE`（"贴在旁边看"的窗不抢输入法），而不可聚焦的窗口打不出字 ——
+     * 宿主要在拿到焦点那段时间把窗口变可聚焦（`SystemLogWindowHost.setImeFocus`）。
+     * in-app 宿主是普通 Compose 树，输入法本来就能用，接了也只是转给控制器（它按
+     * `usingSystemWindow` 决定要不要往下传）。
+     */
+    onImeFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 窗底 = **白 + 一圈淡灰描边**；里面两块胶囊是**灰底、无描边**
@@ -155,13 +181,97 @@ fun LogWindowContent(
         // 日志块：同一套胶囊（底 + 圆角），内容按状态三选一。
         Box(
             Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .weight(1f)
                 .clip(WindowBlockShape)
                 .background(WindowBlockSurface),
         ) {
             LogBlock(state = state, lines = lines)
         }
+        // 输入行（2026-10-16 用户令「在悬浮窗最下面放一个输入框，输入框右边放一个蓝色的
+        // 箭头用于输入」）：**第三块**，与上面两块同一套胶囊几何。
+        InputRow(
+            draft = state.inputDraft,
+            onDraftChange = onInputDraft,
+            onSend = onSendInput,
+            onImeFocusChange = onImeFocusChange,
+        )
+    }
+}
+
+/**
+ * 底部输入行：灰底胶囊 + 裸 `BasicTextField` + 右侧蓝色箭头（[GlyphKind.SEND]）。
+ *
+ * **样式照首页搜索框**（用户口径）：`ThemeColors.fieldBackground` 那一档灰
+ * （项目页/任务中心/控制台三处的输入框都是它）+ 两端全圆的药丸，高度 36dp
+ * —— 比搜索栏矮一档，因为窗外框紧凑态只有 340×420dp，第三块再占 52dp 就把日志
+ * 挤掉一行半（控制台的命令输入行也是 36dp，同一条取舍）。
+ *
+ * **回车即发送**（`ImeAction.Send`）：与右侧那颗箭头同一个动作 —— 敲完直接回车是
+ * 输入框的肌肉记忆，不给它一条路等于逼用户每次把手移到箭头上（控制台的命令行
+ * 同样是"回车即执行"）。
+ *
+ * **不自己管草稿**：`value`/`onValueChange` 全由调用方接（草稿住
+ * `LogWindowState.inputDraft`，见那处的 KDoc —— 两个宿主画同一个窗，切宿主不该丢字）。
+ */
+@Composable
+private fun InputRow(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onImeFocusChange: (Boolean) -> Unit,
+) {
+    val palette = ThemeColors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(WindowBlockShape)
+            .background(WindowBlockSurface)
+            .padding(horizontal = WindowBlockGap, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .weight(1f)
+                .height(36.dp)
+                .background(palette.fieldBackground, RoundedCornerShape(18.dp))
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            if (draft.isEmpty()) {
+                Text(
+                    text = "给脚本发一行输入",
+                    color = palette.text.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                )
+            }
+            BasicTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.text),
+                // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色不是一个键
+                // —— 与项目页/控制台两处输入框同一条口径。
+                cursorBrush = SolidColor(palette.cursor),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() }),
+                // 焦点变化上报给宿主：系统窗要靠它把 `FLAG_NOT_FOCUSABLE` 摘掉，
+                // 否则输入法根本不会起来（见 [onImeFocusChange] 的 KDoc）。
+                modifier = Modifier.fillMaxWidth().onFocusChanged { onImeFocusChange(it.isFocused) },
+            )
+        }
+        // 蓝色箭头（用户口径「蓝色的箭头」）：**用强调色**（`ThemeColors.accent`，
+        // 浅色 #238AE3 / 深色 #5CC1FF —— 全仓的"可点的主色"就是它，不新造蓝）。
+        // 触控格 36dp 与输入框同高（图标 20dp 居中），与标题行四颗钮同一套
+        // [WindowIconButton] —— 按压缩放反馈、`contentDescription` 都跟着来。
+        WindowIconButton(
+            kind = GlyphKind.SEND,
+            description = "把这一行送进脚本",
+            onClick = onSend,
+            tint = palette.accent,
+        )
     }
 }
 
@@ -250,27 +360,36 @@ private val WindowBlockShape = RoundedCornerShape(12.dp)
 private val WindowBlockGap = 8.dp
 
 /**
- * 窗底与块底的**两个档**（2026-10-15 用户第二轮口径）。
+ * 窗底与块底（**三轮口径的落点**，2026-10-15 → 2026-10-16）。
  *
- * - [WindowSurface]：**窗**底 —— 白（浅色档 `0xFFFFFFFF`；深色档跟着主题走 `0xFF232326`），
- *   配外圈 [WindowBorderWidth] 的淡灰描边（`editorChipBorder`）从页面里浮起来；
- * - [WindowBlockSurface]：**块**底 —— 灰（`surfaceMuted`：任务中心页底/顶栏那个键），
- *   **无描边**（用户口径「不要有描边试试」）。
+ * 三轮都是"哪一层是白的"这一个问题的不同答案：
+ * 1. **第一轮**（用户令「背景改成任务栏背景一样的灰色，然后用胶囊框包裹起来控件」）：
+ *    灰窗底（`surfaceMuted`）+ **白胶囊**（`surface`）+ 2dp 阴影 —— 用户看过说
+ *    「效果不太好」：浅色档下白压浅灰只差一点点，阴影只是勉强补一点；
+ * 2. **第二轮**（用户令「背景换成白色（要有描边），胶囊框灰色，不要有描边试试」）：
+ *    白窗 + 1dp 淡灰描边 + **灰胶囊**（无描边、无阴影）—— 灰压白的分辨率高得多；
+ * 3. **第三轮**（用户令「胶囊框换白色」；问询确认「窗底保持白+描边，胶囊也白」）：
+ *    两块也回白 —— 于是整张卡片是**一个白面 + 一圈描边**，胶囊的形状不再可见。
+ *    **这是用户的明确选择，不是漏改**：8dp 的块间距与 12dp 圆角仍在（结构没变），
+ *    只是三块同色；要再把两块分出来，改 [WindowBlockSurface] 这一个键即可。
  *
- * **两档的方向在两种主题下一致**（块永远比窗暗一档），这是刻意的：
- * 浅色 = 白窗 `0xFFFFFFFF` 压灰块 `0xFFF1F1F3`；深色 = 灰窗 `0xFF232326` 压深块
- * `0xFF161E27`（`surfaceMuted` 在深色下与屏底同值，比 `surface` 暗一档）。
- *
- * **为什么窗底不写死白色**（用户口径是"白色"，但这里跟主题走）：深色档的正文色
- * `ThemeColors.text` 是**白**的 —— 硬把窗底钉成白，标题与日志就白字白底，看不见。
- * 仓里那个"用户要求白色、深色也保持白"的先例（`editorChipBackground`）不适用：
- * 那颗圆钮里画的是**图标**（有独立 tint），不是正文。用户在浅色档下看到的正是白色。
+ * **为什么两处都跟主题走、不写死白**：深色档的正文色 `ThemeColors.text` 是**白**的
+ * —— 硬把底钉成白，标题与日志就白字白底，看不见。仓里那个"用户要求白色、深色也保持白"
+ * 的先例（`editorChipBackground`）不适用：那颗圆钮里画的是**图标**（有独立 tint），
+ * 不是正文。用户在浅色档下看到的正是白色（`surface` 浅色 = `0xFFFFFFFF`）。
  */
 private val WindowSurface: Color
     @Composable @ReadOnlyComposable get() = ThemeColors.surface
 
+/**
+ * 三块（标题行 / 日志 / 输入行）的底。
+ *
+ * 当前值与 [WindowSurface] **同键**（第三轮口径：胶囊也白）—— 分成两个名字而不是
+ * 直接复用，是因为它们是**两个可独立变的口径**（"窗多白、块多白"），三轮里已经
+ * 各变过一次；合成一个常量下次再改就得先拆回来。
+ */
 private val WindowBlockSurface: Color
-    @Composable @ReadOnlyComposable get() = ThemeColors.surfaceMuted
+    @Composable @ReadOnlyComposable get() = ThemeColors.surface
 
 /** 外窗描边宽（编辑器那颗白圆钮同款 1dp）。 */
 private val WindowBorderWidth = 1.dp
@@ -289,6 +408,12 @@ private fun WindowIconButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onLongClick: () -> Unit = {},
+    /**
+     * 图标色。缺省 = 次级灰（标题行那四颗的档）；底部那颗**发送箭头**用强调色
+     * （用户口径「蓝色的箭头」）—— 它在这一行里是唯一的主动作，与四颗工具钮
+     * 不是一个层级。
+     */
+    tint: Color? = null,
 ) {
     Box(
         modifier
@@ -302,7 +427,8 @@ private fun WindowIconButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Glyph(kind = kind, tint = if (enabled) ThemeColors.textSecondary else ThemeColors.textTertiary, size = 20.dp)
+        val fallback = if (enabled) ThemeColors.textSecondary else ThemeColors.textTertiary
+        Glyph(kind = kind, tint = tint ?: fallback, size = 20.dp)
     }
 }
 

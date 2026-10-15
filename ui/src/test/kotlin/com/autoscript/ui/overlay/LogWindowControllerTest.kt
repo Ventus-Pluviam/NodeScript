@@ -85,4 +85,64 @@ class LogWindowControllerTest {
         ctl.togglePause()                          // 8 号在途 → 落到宿主分支 → toast 宿主摘要未接线
         assertEquals(1, toasts, "换绑只换绑，不把仍在在途表的旧号当结算")
     }
+
+    /**
+     * 底部输入框的送行（2026-10-16 用户令「在悬浮窗最下面放一个输入框，输入框右边放
+     * 一个蓝色的箭头」）。
+     *
+     * 钉四件，都是"不假装送到"这条纪律的分支：
+     * 1. **在途 + 成功** → 宿主收到原文（trim 过），草稿清空；
+     * 2. **不在途（从没绑上过）** → 一条 toast，宿主**一次都没被问**；
+     * 3. **已结算**（结算不解绑，窗里还绑着一个跑完的号）→ 同样不问宿主 ——
+     *    这正是本地判据的价值：不靠宿主查、也不写进一个已死的管道；
+     * 4. **空白行** → 连 toast 都不弹（敲一下空格不该在脚本那头造出一个空行）。
+     */
+    @Test
+    fun `sendInput 在途成功才清草稿 不在途与已结算与空白行都不发`() = runBlocking {
+        val sent = mutableListOf<Pair<Long, String>>()
+        var toasts = 0
+        val ctl = LogWindowController(
+            hostSummary = {
+                object : FakeHost() {
+                    override suspend fun sendInput(runId: Long, line: String): Boolean {
+                        sent += runId to line
+                        return true
+                    }
+                }
+            },
+            toast = { toasts++ },
+            systemHost = null,
+        )
+        ctl.open("demo", "data/test.js")
+
+        // ① 从没绑上过：不发、问都不问
+        ctl.updateInputDraft("甲")
+        ctl.sendInput()
+        assertEquals(0, sent.size, "没有在跑的执行时不该问宿主")
+        assertEquals("甲", ctl.state?.inputDraft, "没发出去就留着草稿，用户不必重敲")
+        assertEquals(1, toasts, "要有一条话术说清为什么没发")
+
+        // ② 在途：发原文（trim），成功才清
+        ctl.bind(listOf(run(7L)))
+        ctl.updateInputDraft("  乙  ")
+        ctl.sendInput()
+        assertEquals(listOf(7L to "乙"), sent, "送的是 trim 过的原文")
+        assertEquals("", ctl.state?.inputDraft, "送成功了才清草稿")
+
+        // ③ 已结算（结算不解绑）：不问宿主、留草稿
+        ctl.bind(emptyList())
+        assertEquals(7L, ctl.state?.boundRunId, "前提：结算不解绑，号还留着")
+        ctl.updateInputDraft("丙")
+        ctl.sendInput()
+        assertEquals(1, sent.size, "已结算的号不再往管道里写")
+        assertEquals("丙", ctl.state?.inputDraft)
+        assertEquals(2, toasts)
+
+        // ④ 空白行：连话术都不弹
+        ctl.bind(listOf(run(8L)))
+        ctl.updateInputDraft("   ")
+        ctl.sendInput()
+        assertEquals(1, sent.size, "空白行不发")
+        assertEquals(2, toasts, "空白行是「没什么可发」不是错误 —— 不弹话术")
+    }
 }

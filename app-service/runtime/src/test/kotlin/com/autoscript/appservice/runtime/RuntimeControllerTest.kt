@@ -653,4 +653,35 @@ class RuntimeControllerCancellationTest {
         c.killAll(KillCause.REQUESTED)
         Unit
     }
+
+    /**
+     * stdin 送行（2026-10-16）：`sendInput` 与 `pauseRun` 同一条"在途表精确命中"口径 ——
+     * 在途才转给引擎、不在途直接 false 不问引擎、引擎说写不进也如实 false。
+     *
+     * 三条都要钉：窗里的 `boundRunId` **结算后仍留着**（结算不解绑），那时用户敲进
+     * 输入框的一行必须落空而不是写进一个已死的管道 —— 这正是"不问引擎"那条的价值。
+     */
+    @Test
+    fun `sendInput 只在途转给引擎 不在途与写不进都回 false`() = runBlocking {
+        val engines = MutableList(1) { FakeEngine(EngineId(it)) }
+        val pool = FixedEnginePool({ id -> engines[id.poolIndex] }, 1)
+        val c = RuntimeController(pool, WatchdogPolicy())
+
+        assertFalse(c.sendInput(999L, "甲"), "从未存在 → false，不抛")
+        assertTrue(engines.single().sentInputs.isEmpty(), "不在途的号根本不该问引擎")
+
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("demo", "a.js", runNonce = "ns")),
+        )
+        assertTrue(c.sendInput(started.runId, "甲"), "在途 → 转给引擎并如实回它的 true")
+        assertEquals(listOf("甲"), engines.single().sentInputs)
+
+        engines.single().sendInputResult = false
+        assertFalse(c.sendInput(started.runId, "乙"), "管道关了（引擎回 false）→ 如实 false，不假装送到")
+
+        c.killAll(KillCause.REQUESTED)
+        assertFalse(c.sendInput(started.runId, "丙"), "结算后离开在途表 → false，不再问引擎")
+        assertEquals(listOf("甲", "乙"), engines.single().sentInputs, "结算后那行没有落到引擎上")
+    }
 }

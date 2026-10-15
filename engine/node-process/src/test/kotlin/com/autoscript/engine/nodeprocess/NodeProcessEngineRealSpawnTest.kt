@@ -273,6 +273,56 @@ class NodeProcessEngineRealSpawnTest {
 
     private fun outOf(args: List<String>): Path = Path.of(args[0])
 
+    /**
+     * stdin 送行（2026-10-16 用户令：悬浮窗底部输入框 → 脚本的 `process.stdin`）。
+     *
+     * 钉三件，都是**真管道**上的事实（假缝钉不了 —— `SpawnedProcess.writeStdin` 的
+     * 全部内容就是"往那个 OutputStream 写并 flush"）：
+     * 1. **脚本真的收得到**：脚本把 stdin 收到的行原样打到自己写的文件里，测试读文件
+     *    —— 不经 stdout（那条被排空丢弃，正是本仓的老坑）；
+     * 2. **行尾是宿主补的**：调用方给 `"甲"`，脚本 `readline` 收到的是完整一行
+     *    （没有 `\n` 就永远不触发 line 事件）；
+     * 3. **多行按序**：两行分别送，脚本看到的次序与送出的次序一致。
+     *
+     * **为什么脚本用 `readline` 而不是 `process.stdin.on('data')`**：前者正是脚本作者
+     * 会用的写法（行语义），也顺带证明"宿主补的 `\n` 真的构成行边界"。
+     *
+     * 轮询落盘文件（上限 10s）而不是 `delay` 定长：真进程的调度
+     * 不由测试摆布，定长等待是"本机绿、CI 红"的经典来源。
+     */
+    @Test
+    fun `真起 node——sendInput 的行真的进脚本的 stdin，行尾由宿主补`() {
+        val got = dir.resolve("got.txt")
+        writeScript(
+            """
+            const fs = require('fs');
+            const readline = require('readline');
+            const out = [];
+            const rl = readline.createInterface({ input: process.stdin });
+            rl.on('line', (l) => {
+              out.push(l);
+              fs.writeFileSync(${jsStringLiteral(got.toString())}, out.join('|'));
+              if (out.length === 2) process.exit(0);
+            });
+            """.trimIndent(),
+        )
+        val e = engine()
+        runBlocking {
+            e.execute(request())
+            assertTrue(e.sendInput("甲"), "在途时送行必须成功")
+            assertTrue(e.sendInput("乙"), "第二行同样成功")
+            // 轮询上限就地写（与 `awaitStatus` 的缺省超时同一档：真进程调度不由测试摆布）
+            val deadline = System.currentTimeMillis() + 10_000L
+            while (System.currentTimeMillis() < deadline && !Files.exists(got)) delay(20)
+            assertEquals(EngineStatus.STOPPED, awaitStatus(e, EngineStatus.STOPPED), "脚本收满两行后自退")
+        }
+        assertEquals("甲|乙", Files.readString(got), "脚本侧 readline 收到两行，行尾是宿主补的")
+    }
+
+    /** 把 JVM 字符串转成 JS 单引号字面量（路径里的反斜杠/引号在 Windows 上会咬人）。 */
+    private fun jsStringLiteral(raw: String): String =
+        "'" + raw.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
     @Test
     fun `PATH 名宿主缺位——spawn IOException 折叠 ERR_IO 点名 cmd`() {
         writeScript("process.exit(0)")

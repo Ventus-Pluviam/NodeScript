@@ -52,6 +52,18 @@ data class LogWindowState(
      */
     val x: Float = 0f,
     val y: Float = 0f,
+    /**
+     * 底部输入框里正在敲的那一行（2026-10-16 用户令：悬浮窗最下面放输入框 + 蓝色箭头）。
+     *
+     * **为什么草稿住状态里而不是内容层 `remember`**：两个宿主画的是**同一个窗**
+     * （系统离屏 `ComposeView` 与 in-app 兜底窗），切宿主不该把敲了一半的一行弄丢；
+     * 而内容层是**无状态**的（全由参数进，见 `LogWindowContent` 的 KDoc）——
+     * 草稿放进去就等于"系统窗那次 `setContent` 重喂会清空输入框"。
+     *
+     * 送出去之后由调用方清空（[LogWindowController.sendInput] 成功才清）：失败还留着，
+     * 用户不必重敲 —— 与"失败不假装送到"同一条纪律。
+     */
+    val inputDraft: String = "",
 ) {
     /**
      * 窗标题（**单一归一化点**）：`/$projectId/$relPath` —— 用户口径的
