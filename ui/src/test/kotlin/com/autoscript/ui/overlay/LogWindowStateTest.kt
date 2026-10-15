@@ -95,6 +95,18 @@ class LogWindowStateTest {
     }
 
     @Test
+    fun `bind 兜底补位号不假充在途 runId`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val bound = s.bind(listOf(run(5L, scriptPath = "other.js")), fallbackRunId = 12L)
+        assertEquals(12L, bound.boundRunId)
+        assertFalse(bound.running, "补位号只画日志，不冒充在途")
+        // 下一轮同归属在途出现 → 换到真在途（补位不挡真实绑定）。
+        val next = bound.bind(listOf(run(13L)))
+        assertEquals(13L, next.boundRunId)
+        assertTrue(next.running)
+    }
+
+    @Test
     fun `bind 未绑上且无补位 落空态`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
         val unbound = s.bind(emptyList(), fallbackRunId = null)

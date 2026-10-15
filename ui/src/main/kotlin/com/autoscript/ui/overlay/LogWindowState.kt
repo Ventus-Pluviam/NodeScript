@@ -110,7 +110,9 @@ data class LogWindowState(
         return copy(
             // 补绑只在「从开窗起一次都没绑上过」时生效：keep 非空（绑过）就不碰 ——
             // 已绑的那条再快也不能被行里摘出的号顶掉（同一归属重复触发时行按实际归属画）。
-            boundRunId = match?.runId ?: keep ?: fallbackRunId,
+            // **0 不作补位**（引擎外哨兵，防御性兜底：调用方已滤、这里再滤一道，
+            // 0 落进来会把窗绑到"引擎外行"上，标题会说谎）。
+            boundRunId = match?.runId ?: keep ?: fallbackRunId?.takeIf { it != 0L },
             running = match != null,
             paused = match?.paused == true,
         )
