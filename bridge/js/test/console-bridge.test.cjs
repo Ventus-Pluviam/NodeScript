@@ -11,7 +11,12 @@
  *    原样保留"`console.log(x).then` 当场 TypeError"这条原生语义）；
  * 4. **双写**：`warn`/`error` 除桥之外**仍写原生 stderr**（诊断面不能被包装掐断 ——
  *    §8.3 的 `crashSummary` 尾摘要与 kBootstrap 自己的诊断都读 stderr），
- *    而 `log`/`info`/`debug` 不写（它们的原生去处 stdout 本就被排空丢弃）。
+ *    而 `log`/`info`/`debug` 不写（它们的原生去处 stdout 本就被排空丢弃）；
+ * 5. **"只换五档" ≠ "只有五档可见"**：Node 的 `Console` 里一批方法**转发**到这五档上
+ *    （`table`/`group`/`time`/`count` → `log`，`assert(false)` → `warn`，`trace` → `error`），
+ *    它们跟着一起可见；真正直写 stdout 的只有 `dir`/`dirxml` 与 `process.stdout.write`。
+ *    这条**必须钉**：包装前 `table` 写 stdout（被排空）、包装后它进桥 —— 谁把包装改成
+ *    "只拦脚本直接调的五个属性"（比如加自己的转发判定），这一条就红。
  *
  * **装一次就够**：`installConsoleBridge` 带 `Symbol.for` 幂等标记，装完本文件里
  * 全局 console 就一直是包装版 —— 所以断言集中在前面几个 test 里按序做完，
@@ -35,14 +40,26 @@ auto.install((ns, method, payloadJson, reqId) => {
   return {} // 内联答案：包装体是 fire-and-forget，不关心回包形状
 })
 
-/** 原生的 warn/error（双写断言要盯的就是它们）。 */
-const nativeWarn = console.warn
-const nativeError = console.error
+/**
+ * 已经装好的包装版 warn/error —— 第一个用例的探针要从它们**外面**套一层，
+ * 收尾时也必须还原成**包装版**（不是装之前的原生版）。
+ *
+ * 这里踩过一次：初版把 `console.warn/error` 在装之前存成 `nativeWarn/nativeError`、
+ * 在 `finally` 里还原回去 —— 于是本文件从第二个用例起，全局的 warn/error **就不再是
+ * 包装版了**（探针自己把包装摘了）。前三个用例不碰 warn/error 所以没露头，
+ * 「转发链」那条（`assert(false)` → warn、`trace` → error）一上来就红。
+ * 探针的写法因此改成：**先装、再在包装版外面套**，收尾还原包装版。
+ */
+installConsoleBridge()
+const wrappedWarn = console.warn
+const wrappedError = console.error
 
 test('包装：五档都经桥出，log/info/debug 不写原生', () => {
   const seen = []
-  console.warn = (...a) => seen.push(['warn', ...a])
-  console.error = (...a) => seen.push(['error', ...a])
+  // 探针套在**包装版外面**并原样转发：包装体调到的仍是它，桥那一路与原生那一路都照走
+  // （只记账不转发的话，warn/error 就压根到不了桥上，这个用例反而假红）。
+  console.warn = (...a) => { seen.push(['warn', ...a]); wrappedWarn(...a) }
+  console.error = (...a) => { seen.push(['error', ...a]); wrappedError(...a) }
   try {
     installConsoleBridge()
     calls.length = 0
@@ -70,8 +87,8 @@ test('包装：五档都经桥出，log/info/debug 不写原生', () => {
       '只有 warn/error 留原生旁路（诊断面）；log/info/debug 不写',
     )
   } finally {
-    console.warn = nativeWarn
-    console.error = nativeError
+    console.warn = wrappedWarn
+    console.error = wrappedError
   }
 })
 
@@ -100,6 +117,30 @@ test('幂等：再装一次不翻倍（Symbol.for 标记）', () => {
   calls.length = 0
   console.log('once')
   assert.equal(calls.length, 1, '重复安装必须只留一层包装 —— 套两层会让每条日志出两份')
+})
+
+test('范围：转发到五档的方法跟着可见，直写 stdout 的 dir 不进来', () => {
+  calls.length = 0
+  // NativeConsole 把 table/group/time/count 转发到 log、assert(false) 到 warn、trace 到 error
+  // —— 包装的是**属性**，转发链自然一起收编（见文件头第 5 条）。
+  console.table([{ a: 1 }])
+  console.group('g')
+  console.time('t'); console.timeEnd('t')
+  console.count('c')
+  console.assert(false, 'boom')
+  console.trace('tr')
+  const forwarded = calls.map((c) => c.payload.level)
+  assert.equal(forwarded.length >= 6, true, '转发进来的那几条都该在桥上：' + JSON.stringify(calls))
+  assert.equal(forwarded.includes('warn'), true, 'assert(false) 走 warn 档')
+  assert.equal(forwarded.includes('error'), true, 'trace 走 error 档')
+  assert.equal(
+    forwarded.filter((l) => l === 'log').length >= 4, true,
+    'table/group/time/count 走 log 档：' + JSON.stringify(forwarded),
+  )
+  // dir 直写 stdout（不经全局 console 对象）—— 桥上看不见它，这是**范围边界**不是缺陷。
+  const before = calls.length
+  console.dir({ b: 2 })
+  assert.equal(calls.length, before, 'dir 直写 stream，不经五档 —— 它不该出现在桥上（要可见需另行排期）')
 })
 
 test('脚本侧仍可 await auto.console.log —— 与裸 console.log 落到同一条面', async () => {

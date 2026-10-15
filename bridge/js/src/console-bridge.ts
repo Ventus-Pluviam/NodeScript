@@ -27,10 +27,23 @@
  * - **`log`/`info`/`debug` 纯走桥**：它们的原生去处（stdout）本来就被排空丢弃，没有第二读者；
  * - **异步**：桥是 fire-and-forget 数据面（§7.3 可丢包、TTL 2s、失败经 `onQueueError`），
  *   行不保证在 `process.exit` 之前送达 —— 与 `auto.console.*` 同一条契约，不是新缺口；
- * - **范围**：只换五档。`console.table/dir/trace/assert/group/time/count` 与脚本直接写的
- *   `process.stdout.write` **仍走原生**（stdout 仍被排空丢弃）—— 五档之外要可见需另行排期；
- * - **只包装脚本显式调用的 `console.*`**：Node 自身写 stdout 的路径（启动噪声、`--trace`
- *   之类）不经全局 console 对象，照旧走排空 —— 窗口里不会混进引擎/Node 的内部输出。
+ * - **范围**：只换五档（`log/info/warn/error/debug` 这五个属性）。但**"只换五档"不等于
+ *   "只有这五个方法可见"** —— Node 的 `Console` 里有一批方法是**转发**到这五档上的
+ *   （`table`/`group`/`groupCollapsed`/`time`/`timeLog`/`timeEnd`/`count` 走 `log`，
+ *   `assert(false)` 走 `warn`，`trace` 走 `error`），它们因此**跟着一起可见**；
+ *   真正绕开全局 console 对象**直写 stdout 的只有 `dir`/`dirxml` 与脚本自己的
+ *   `process.stdout.write`**，那几条仍落排空通道、设备上看不见（要可见需另行排期）。
+ *   `profile`/`profileEnd`/`clear`/`countReset`/`groupEnd` 本就不产出行。
+ *   **设备实测（2026-10-15，装真形态 APK 逐个方法跑一遍）**：`table`/`trace`/`assert`/
+ *   `group`/`time`/`count` 全部按上面的档位出现在悬浮窗与落盘日志里，`dir` 与
+ *   `process.stdout.write` 不出现 —— 与本节描述逐条一致（`console-bridge.test.cjs`
+ *   把这条转发关系钉成了用例）；
+ * - **Node 自身的输出分两类**：**进程级 warning**（`process.emitWarning`，如
+ *   "No such label 'T' for console.timeLog()"）走的是全局 `console.error`，因此**会**
+ *   进桥 —— 同时经双写那条留在 stderr，诊断面无损（设备实测确认）；而 **stdout 直写**
+ *   路径（内部 `_rawDebug`、启动噪声、脚本的 `dir`/`stdout.write`）不经全局 console
+ *   对象，照旧排空。「窗口里绝不混进非脚本输出」这句因此**不成立**：warning 会进来，
+ *   这是有意的取舍 —— 它是诊断，且 stderr 那份仍在。
  * - **只在生产 spawn 路径装**：本函数由 main.cpp 的 kBootstrap 调，**不挂在 [attachNative]
  *   里** —— 后者在 JVM/桌面测试进程里也被调（`native-bootstrap.test.cjs` 等），在那儿包装
  *   会把测试进程自己的 `console.log`（`CHILD_DONE` 那类 stdout 标记）也劫走。
