@@ -316,7 +316,14 @@ class NodeProcessEngineRealSpawnTest {
             while (System.currentTimeMillis() < deadline && !Files.exists(got)) delay(20)
             assertEquals(EngineStatus.STOPPED, awaitStatus(e, EngineStatus.STOPPED), "脚本收满两行后自退")
         }
-        assertEquals("甲|乙", Files.readString(got), "脚本侧 readline 收到两行，行尾是宿主补的")
+        // `String(Files.readAllBytes(...))` 而不是 `Files.readString`：后者是 Java 11 API，
+        // **android.jar 桩面里没有**（CI 实测 `Unresolved reference 'readString'` ——
+        // 本机不编译、detekt 又不做类型解析，两道本机预检都抓不到这类）。全仓惯例同此。
+        assertEquals(
+            "甲|乙",
+            String(Files.readAllBytes(got), Charsets.UTF_8),
+            "脚本侧 readline 收到两行，行尾是宿主补的",
+        )
     }
 
     /** 把 JVM 字符串转成 JS 单引号字面量（路径里的反斜杠/引号在 Windows 上会咬人）。 */
