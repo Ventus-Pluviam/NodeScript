@@ -49,7 +49,7 @@ class DemoScriptTest {
      *
      * 两条命名空间：`device.*` 回假设备值；`console.log` 回空并把**文本原样打到 stdout**
      * —— 于是本测断言的正是用户在控制台屏上会看到的那几行（示例脚本的输出走桥上
-     * `console` namespace，不是裸 console.log：引擎的排水线程对子进程 stdout 读即弃）。
+     * `console` namespace；裸 console.log 自 2026-10-15 起也落这条面，见下段）。
      *
      * **2026-10-15 起示例脚本那五行走的就是这条 `console` namespace 的 `log`**：kBootstrap
      * 在 require 真脚本之前装了全局 console 包装（`installConsoleBridge`，用户令「js 的语法
