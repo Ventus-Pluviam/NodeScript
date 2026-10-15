@@ -14,17 +14,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.TabBarBottomClearance
-import com.autoscript.ui.components.rememberCopyAction
 import com.autoscript.ui.state.ConsoleLineState
 import kotlinx.coroutines.delay
 
@@ -65,8 +61,9 @@ fun LogWindowPoll(
  *
  * 位置：紧凑态 = 左上起算的 `state.x/y`（**可拖**，跟手）；全屏态 = 铺满内容区。
  * 让位与夹取同一套坐标：外层先让出顶栏与底栏/导航栏，位置与边界都算在让完位的内容区里
- * （与 toast 同一条让位口径）。内容与系统窗同一份 `LogWindowContent`
- * （复制走 `rememberCopyAction` 那套）。
+ * （与 toast 同一条让位口径）。内容与系统窗同一份 `LogWindowContent`。
+ * **复制不由宿主接**（2026-10-15 起）：日志块包在 `SelectionContainer` 里，
+ * 复制走系统的选择菜单 —— 两个宿主因此都不需要剪贴板回调。
  */
 @Composable
 fun LogWindowInAppHost(
@@ -85,7 +82,6 @@ fun LogWindowInAppHost(
     onDrag: (dx: Float, dy: Float, boundsW: Float, boundsH: Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val copy = rememberCopyAction()
     val shown = state.visible(lines)
     val density = LocalDensity.current
     // 兜底窗也**跟手**（2026-10-13 用户反馈"不跟手"）：它是"窗"不是"面板"，
@@ -134,7 +130,6 @@ fun LogWindowInAppHost(
                     onClear = { onClear(shown.maxOfOrNull { it.seq } ?: state.watermarkSeq) },
                     onClose = onClose,
                     onFullscreenToggle = onFullscreenToggle,
-                    onCopyLine = { copy.copy("已复制该行", it) },
                     onDrag = { d ->
                         // 手势层给的是屏幕上的真实位移（见 `LogWindowContent.dragHandle`
                         // 的 KDoc），这里只换成 dp 交给状态层；夹取由状态层按本宿主
@@ -162,9 +157,10 @@ fun LogWindowInAppHost(
  * `updateViewLayout`；若把位置也算进内容键，拖动每一帧都会重跑一遍 `setContent`
  * （整列日志白重组一次）—— 窗越大越卡，表现为"拖起来一顿一顿"。
  *
- * 点行复制在系统窗里走直连剪贴板（离屏拿不到 `LocalToast`，故复制成功不弹 toast ——
- * 窗内无浮层口；见 `LogWindowContent` KDoc）。暂停按钮的协程入口由调用方包
- * （`togglePause` 是挂起的，效应里 `launch`）。
+ * 暂停按钮的协程入口由调用方包（`togglePause` 是挂起的，效应里 `launch`）。
+ * **复制不经本效应**：日志块的选择/复制由 `SelectionContainer` 自己管（见
+ * `LogWindowContent` 的「日志可拖选」），离屏 `ComposeView` 里同样能用 ——
+ * 系统的选择菜单是平台面，不依赖 `LocalToast`/`LocalClipboardManager`。
  */
 @Composable
 fun SystemWindowSync(
@@ -174,7 +170,6 @@ fun SystemWindowSync(
     val state = controller.state
     val host = controller.systemHost
     val density = LocalDensity.current
-    val put = rememberCopyPut()
     // **内容与位置分两条效应**：内容键里**没有位置** —— 拖动每帧都改 x/y，
     // 若算进内容键就会每帧重跑 `setContent`（整列日志白重组一次），窗越大越卡。
     // 位置那条只调 `updateViewLayout`（便宜）。
@@ -208,7 +203,6 @@ fun SystemWindowSync(
                     onClear = { controller.clearLogs(shown.maxOfOrNull { it.seq } ?: live.watermarkSeq) },
                     onClose = { controller.close() },
                     onFullscreenToggle = { controller.toggleFullscreen() },
-                    onCopyLine = { put(it) },
                     // 拖动走**状态层**（`controller.drag`）而不是直连宿主：状态层知道窗多大、
                     // 屏幕多宽，夹取只有在那里做才不用把尺寸抄两份；宿主只把算好的坐标落到窗口上。
                     // 窗内的坐标是 px（离屏 ComposeView 的密度与主界面同一台设备，故换算同源）。
@@ -229,14 +223,6 @@ fun SystemWindowSync(
         if (host == null || !controller.usingSystemWindow) return@LaunchedEffect
         host.moveTo(s0.x, s0.y)
     }
-}
-
-/** 剪贴板直写（系统窗内用：不要 toast 回执，只要进剪贴板）。 */
-@Composable
-private fun rememberCopyPut(): (String) -> Unit {
-    val clipboard = LocalClipboardManager.current
-    val latest = rememberUpdatedState(clipboard)
-    return { latest.value.setText(AnnotatedString(it)) }
 }
 
 /** 轮询间隔（与命令面 `LIVE_POLL_INTERVAL_MILLIS` 同值：手感与成本的折中）。 */
