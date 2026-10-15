@@ -191,12 +191,21 @@ fun SystemWindowSync(
             {
                 // **窗内现读**（不是把本轮的行快照喂进来）：`lines` 是 Compose 状态，
                 // 轮询推新值时这里自动重组 —— 于是 `show` 只需在开窗/改画态时跑一次。
-                val shown = state.visible(controller.lines)
+                //
+                // **`state` 也必须现读**（2026-10-15 用户报「执行完毕暂停键没变执行键」）：
+                // 外面那个 `val state` 是**捕获值**，只在上面那条效应的**键变了**时才会更新
+                // —— 而「脚本跑完」恰好一个键都不变（`boundRunId` 结算不解绑、
+                // `paused`/`watermarkSeq`/`fullscreen` 都不动），于是离屏窗永远停在旧态：
+                // 标题不缀「· 已结束」、第一颗钮还画着暂停。窗内**现读** `controller.state`
+                // 把它变成一次 Compose 状态读，任何字段变（含 `running`）都会让离屏组合重组。
+                // 与 `lines` 同一条纪律，也与上面位置效应那句「落位时现取」同一理由。
+                val live = controller.state ?: state
+                val shown = live.visible(controller.lines)
                 LogWindowContent(
-                    state = state,
+                    state = live,
                     lines = shown,
                     onFirstAction = onFirstAction,
-                    onClear = { controller.clearLogs(shown.maxOfOrNull { it.seq } ?: state.watermarkSeq) },
+                    onClear = { controller.clearLogs(shown.maxOfOrNull { it.seq } ?: live.watermarkSeq) },
                     onClose = { controller.close() },
                     onFullscreenToggle = { controller.toggleFullscreen() },
                     onCopyLine = { put(it) },
