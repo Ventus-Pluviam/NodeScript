@@ -9,6 +9,8 @@
   **用户向 API 参考**（逐方法签名与说明；本卷只讲设计）：[`docs/api/`](../api/index.md) —— 由 `bridge/js` 的公开注释经 typedoc 生成（backlog C7），**生成物**、手改无意义。
 - **错误码**：`ERR_*` 目录 + `instanceof AutojsError`，可 try/catch 策略化。
 - 兼容垫片：对知名差异（如 `uc_obj` 语义）通过 `compat` 标志位提供，**不反向攻坚原生语义**。
+- **全局 `console.*` 与 `auto.console.*` 落到同一条数据面（2026-10-15 用户令「js 的语法都要和原来的调用方式一样，不然写脚本还得兼容语法」）**：引导期（main.cpp kBootstrap，`attachNative` 之后、require 真脚本之前）调 `installConsoleBridge()`（`bridge/js/src/console-bridge.ts`），全局 console 的 **log/info/warn/error/debug 五档**换成走桥的实现 —— 脚本写裸 `console.log('x')` 与 `auto.console.log('x')` 等价，**脚本侧零改动**。
+  动机：裸 `console.log` 写的是子进程 stdout，而引擎排水线程对它**读即弃**（§8.3，防反压），输出在悬浮窗/控制台一处看不见（设备实测 2026-10-15）。**边界四条**：① 格式化用 `node:util.format`（与原生 Console 同一份），返回 `undefined` 不是 Promise（保住「`.then` 当场 TypeError」的原生语义）；② `warn`/`error` **双写** —— 桥一份 + 原生 stderr 一份（stderr 是诊断面，§8.3 的 `crashSummary` 与 kBootstrap 自身诊断都读它）；③ 只包五档，`table`/`dir`/`trace`/`assert`/`group`/`time` 与 `process.stdout.write` 仍走原生（stdout 仍被排空）；④ 装的条件三道守卫（dist env 在位 / `installed` 为真 / 包装体幂等），任一不满足就退回"裸 console.log 看不见"的旧形态而不是让日志进一条投不出去的面。不挂 `attachNative`（那里在测试进程里也被调，包装会劫走测试自己的 stdout 标记）。
 
 ### 12.2 命名空间清单（对应 AutoJsPro v9，含设计说明）
 - `auto.a11y` —— 无障碍（选择器/控件/手势/事件 + 输入通道选路 `setInputChannel`，§9.3）

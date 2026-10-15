@@ -12,6 +12,50 @@
 
 ---
 
+## 84. 裸 `console.log` 走桥：脚本侧语法零改动，通道在引导期换（2026-10-15，用户令「js 的语法都要和原来的调用方式一样，不然写脚本还得兼容语法」）
+
+**病**：脚本写裸 `console.log('x')` 走 Node 原生 stdout，而引擎排水线程对它**读即弃**
+（`ProcessBuilderLauncher`，它存在的唯一目的是防管道写满反压 —— 见 §8.3）。行打进了没人看的
+管道：**设备实测**（2026-10-15）同一段倒数脚本，裸 `console.log` 版窗口显示「本次执行没有
+输出（已结束）」、日志文件 0 字节；只把五处换成 `auto.console.log` 的版本五行齐全带秒差。
+「要让每个脚本写 `auto.` 前缀才看得见输出」= 让用户迁就通道实现。
+
+**拍板（方案 B，用户选定）**：换通道而不换语法 —— 引导期把全局 console 五档接到桥上。
+- **落点**：`main.cpp` kBootstrap，`attachNative` 之后、`require(真脚本)` 之前调
+  `require($DIST/console-bridge.js).installConsoleBridge()`（`bridge/js/src/console-bridge.ts`）。
+- **范围（用户拍板）**：五档全包（log/info/warn/error/debug）；**只包脚本显式调用的
+  `console.*`** —— Node 自身写 stdout 的路径不经全局 console 对象，照旧走排空，
+  窗口里不会混进引擎/Node 的内部输出。`table`/`dir`/`trace`/`assert`/`group`/`time` 与
+  `process.stdout.write` 不包（仍走原生 → 仍被排空），要可见需另行排期。
+- **保真**：格式化用 `node:util.format`（原生 Console 内部同一份）；返回 `undefined`
+  不是 Promise（保住「`console.log(x).then` 当场 TypeError」这条原生语义，不让包装"多出
+  一个可 await 的面"）；`warn`/`error` **双写**桥 + 原生 stderr（stderr 是诊断面 ——
+  §8.3 的 `crashSummary` 尾摘要、kBootstrap 自己的诊断都读它）；`log`/`info`/`debug`
+  纯走桥（原生去处 stdout 本就被排空，没有第二读者）。
+- **三道守卫，缺一不装**：dist env 在位 / `runtimeBridge.installed` 为真 / 包装体自带
+  `Symbol.for` 幂等。理由是代价不对称 —— 装了而桥没活着，日志会从「进 stdout（今天被
+  排空，但至少是真 stdout）」变成「进一条投不出去的数据面」而且**静默**。守卫不满足就
+  退回今天形态。失败只打一行 stderr，**脚本照跑**（与 addon/dist 缺位的「选填件不杀
+  执行」同纪律）。
+- **不挂 `attachNative`**：它在 JVM/桌面测试进程里也被调（`native-bootstrap.test.cjs`
+  等），在那儿包装会劫走测试进程自己的 `console.log`（`CHILD_DONE` 那类 stdout 标记）。
+  桌面 `connectBootstrap` 同理不装 —— 那条路 stdout 有人看（终端），没有要解决的问题。
+
+**为什么不是方案 A（引擎把 stdout 接进 ConsoleCollector）**：那条要在排水线程里做行边界
+解析 + 归属绑定 + 落盘口径，且把「Node 自身噪声」一并接进来；方案 B 改动面在 facade 一个
+新文件 + 引导串一句，且语义边界（哪些走桥、哪些留原生）由包装自己一句话说清。
+
+**守卫**：`console-bridge.test.cjs` 4 例（五档都经桥出且 log/info/debug 不写原生 /
+util.format 保真 + 返回 undefined / 幂等不翻倍 / 与 `auto.console.log` 同一条面）；
+`BridgeDistPackagingEntryTest` 改断言（裸 console.log 的文本**不该**再出现在 stdout +
+显式 `process.stdout.write` 仍在 stdout，一进一出互为对照）；`DemoScriptTest` 的五行断言
+同时成为这条包装的回归门。**本机先证伪**（CI 是红绿权威）：真 dist + 抽自 main.cpp 的
+kBootstrap + 假 addon 起真 node —— 正例 EXIT=0；反证「摘掉包装那一句」→ EXIT=6 且裸
+console.log 出现在 stdout；反证「dist/bootstrap.js 打坏（桥装不上）」→ 守卫挡下、
+console.log 仍写 stdout。
+
+---
+
 ## 83. 悬浮窗第一颗钮三态（暂停/继续/重跑）+ 重跑走引擎真实再跑（2026-10-15，用户令「执行完变重跑图标」）
 
 用户问「暂停功能是有效的吗」，并下令：脚本**执行完**，悬浮窗第一颗钮从暂停图标变成**重新运行**
