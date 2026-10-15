@@ -1,5 +1,16 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-16：悬浮窗底部输入框 → 脚本 stdin + 胶囊框换白）
+
+- [2026-10-16 · 悬浮窗输入行](2026-10-16.md) 一条目：
+  ① **胶囊框换白**（用户令，问询确认「窗底保持白+描边，胶囊也白」）：`WindowBlockSurface`
+  从 `surfaceMuted` 换成 `surface`，整张卡片一个白面 + 一圈 1dp 淡灰描边（三轮配色的
+  取舍逐条记在 `WindowSurface` KDoc）。
+  ② **底部输入框 + 蓝色箭头 → 脚本的 `process.stdin`**：五层全走 OS 管道
+  （`writeStdin` → `ScriptEngine.sendInput` → `RuntimeController.sendInput` →
+  `HostSummary.sendInput` → 控制器），脚本侧零改动；系统窗那颗全程 `FLAG_NOT_FOCUSABLE`
+  的窗在输入框拿到焦点时才摘掉它（否则打不出字）。
+
 ## 最新追记（2026-10-15：「脚本执行完不要自动清理输出」+ 脚本输出详情闪退修法）
 
 - [2026-10-15 · 统一页](2026-10-15.md) 两条目：
