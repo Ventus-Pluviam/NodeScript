@@ -1257,11 +1257,14 @@ class MainActivity : ComponentActivity() {
         if (state.running) {
             logWindow.togglePause()
         } else {
-            // 重跑 = **引擎再跑同一文件**（用户选定；不是重放旧日志）。归属取窗里的
-            // 项目内形状（`/demo/data/test.js`，与开窗/在途表同一口径）。
+            // 重跑 = **引擎再跑同一文件**（用户选定；不是重放旧日志）。
+            // 窗里的 relPath 是**项目内**形状（`data/test.js`，与开窗/在途表同一口径），
+            // 而 `runScriptFileOp` 收**文件清单**形状（首段 = 项目名，`demo/data/test.js`，
+            // 与 `readScriptFileOp` 同契约）—— 反推首段即 `projectInternalOrNull` 的逆运算
+            // （窗的 relPath 恒为削过前缀的形状，不会双份前缀）。
             logWindow.rerun(state.projectId, state.relPath)
             try {
-                runScriptFileOp(state.projectId, state.relPath)
+                runScriptFileOp(state.projectId, "${state.projectId}/${state.relPath}")
             } catch (t: kotlinx.coroutines.CancellationException) {
                 throw t
             } catch (t: Exception) {
