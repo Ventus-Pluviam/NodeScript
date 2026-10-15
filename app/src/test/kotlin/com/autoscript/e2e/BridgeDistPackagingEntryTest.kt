@@ -16,7 +16,12 @@ import org.junit.jupiter.api.io.TempDir
  * 1. `require('auto')` 解析得到（`filesDir/node_modules/auto/index.js`，Node 目录缺省入口）；
  * 2. `auto.bridge.installed == true`（kBootstrap 调了 `attachNative({addon})` →
  *    runtimeBridge 装上 handler —— 这正是"打包入口接线"本身）；
- * 3. addon 的 `setup` 被调（TSF 结算面先就位的装配顺序在真 require 下走通）。
+ * 3. addon 的 `setup` 被调（TSF 结算面先就位的装配顺序在真 require 下走通）；
+ * 4. **全局 `console.*` 已接到桥上**（2026-10-15 用户令「js 的语法都要和原来的调用方式
+ *    一样」）：`kBootstrap` 在 `require(真脚本)` 之前调 `installConsoleBridge()`，
+ *    于是脚本里裸 `console.log('x')` 经桥出、**不再出现在 stdout**。最后那条断言是本测
+ *    唯一能证伪「包装没接上」的观察点：包装缺席时裸 console.log 仍写 stdout，
+ *    `out` 里就会多出那一行。
  *
  * addon 用假 JS 模块冒充（`AUTOSCRIPT_BRIDGE_ADDON` 是 require 路径，系统 node 下
  * `.js` 即可）—— 本测证的是 **JS 消费面接线**，不是 NAPI；真 addon 全环归
@@ -32,17 +37,32 @@ class BridgeDistPackagingEntryTest {
         module.exports = {
           setSocketFd(fd) { global.__fd = fd },
           setup(onFrame) { global.__frame = onFrame },
-          invoke(ns, method, payload, reqId, ttl) { (global.__invokes || (global.__invokes = [])).push(ns + '.' + method) },
+          invoke(ns, method, payload, reqId, ttl) {
+            (global.__invokes || (global.__invokes = [])).push({ ns: ns, m: method, payload: payload });
+          },
         };
     """.trimIndent()
 
-    /** 断言用脚本：解析 / installed / setup 三关，任一不过给可检索的退出码与 stderr。 */
+    /**
+     * 断言用脚本：解析 / installed / setup / console 接桥四关，任一不过给可检索的退出码与 stderr。
+     *
+     * 成功标记分两条路写，**两条都是断言对象**：
+     * - `console.log`（**包装后经桥**）→ 进假 addon 的 `__invokes`，JVM 侧**不该**在 stdout 见到；
+     * - `process.stdout.write`（**刻意不包装**，见 console-bridge 的「范围」那条）→ 进 stdout。
+     * 一进一出互为对照：只要包装没接上，第一条就会重新出现在 stdout 里，本测当场红。
+     */
     private fun assertScript(): String = """
         const { auto } = require('auto');
         if (!auto || !auto.bridge) { console.error('FAIL: auto 根缺 bridge'); process.exit(2) }
         if (typeof global.__frame !== 'function') { console.error('FAIL: addon.setup 未被调用（attachNative 装配顺序没走通）'); process.exit(4) }
         if (!auto.bridge.installed) { console.error('FAIL: runtimeBridge 未安装（打包入口没调 attachNative）'); process.exit(3) }
         console.log('packaging-entry ok');
+        const bridged = (global.__invokes || []).filter(function (c) { return c.ns === 'console' });
+        if (bridged.length !== 1 || bridged[0].m !== 'log') {
+          console.error('FAIL: 裸 console.log 未经桥出（console 包装没接上）: ' + JSON.stringify(global.__invokes || []));
+          process.exit(6);
+        }
+        process.stdout.write('stdout-marker-ok\n');
         process.exit(0);
     """.trimIndent()
 
@@ -69,7 +89,11 @@ class BridgeDistPackagingEntryTest {
 
         val (code, out, err) = runEntry(bootstrap, script, addon, bridgeDist = autoRoot)
         assertEquals(0, code, "exit=$code out=$out err=$err")
-        assertTrue(out.contains("packaging-entry ok"), "out=$out err=$err")
+        assertTrue(out.contains("stdout-marker-ok"), "显式 stdout 仍是 stdout（包装不管这条路）：out=$out err=$err")
+        assertTrue(
+            !out.contains("packaging-entry ok"),
+            "裸 console.log 不该再写 stdout —— 它该走桥（出现即包装没接上）：out=$out err=$err",
+        )
         assertTrue(err.isEmpty(), "成功路径不该有 stderr 噪声：$err")
     }
 

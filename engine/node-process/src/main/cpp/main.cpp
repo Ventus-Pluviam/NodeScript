@@ -31,6 +31,11 @@
 //  3) dlsym node::Start（§7.8 符号表实证 mangled 名 _ZN4node5StartEiPPc，即契约）
 //     → node::Start 单 isolate，argv = node -e BOOTSTRAP -- <script> [args...]
 //     （BOOTSTRAP 预载 addon + setSocketFd + require 真脚本；无 addon 时直接跑 script）；
+//     桥装上之后、require 真脚本之前顺带 `installConsoleBridge()`（§7.3/§12.1，
+//     2026-10-15 用户令「js 的语法都要和原来的调用方式一样」）：把全局 console 五档
+//     接到桥上，脚本写裸 `console.log(...)` 与 `auto.console.log(...)` 落到同一条
+//     数据面 —— 否则裸 console.log 写的是子进程 stdout，而排水线程对它读即弃
+//     （§8.3，防反压），输出在悬浮窗/控制台一处都看不见。
 //  4) Start 返回即收宿主退出码（四步 quiesce 由脚本侧/看门狗驱动，禁直接 kill §5 推论 A）；
 //     ppid 探活/心跳/pid 上送属 Kotlin 侧 spawn 契约（§8.4），本文件不越界。
 //
@@ -90,6 +95,20 @@ constexpr const char kNodeStartSymbol[] = "_ZN4node5StartEiPPc";
 //     addon 缺位同纪律）。这层查"内容能不能 attach"。
 // 故 kBootstrap 仍保留 require($DIST/bootstrap.js).attachNative({addon}) 的 try/catch ——
 // preflight 拦不住"路径在但内容坏"，那是这一层的事。
+//
+// **全局 console → 桥**（§7.3 数据面；2026-10-15 用户令「js 的语法都要和原来的调用方式
+// 一样」）：桥装上之后、require 真脚本之前调 `installConsoleBridge()`，脚本写裸
+// `console.log(...)` 与 `auto.console.log(...)` 落到同一条数据面 —— 否则裸 console.log
+// 写的是子进程 stdout，而排水线程对它读即弃（§8.3，防反压），输出在悬浮窗/控制台
+// 一处都看不见（设备实测 2026-10-15：裸 console.log 版脚本窗口显示「没有输出」、
+// 日志文件 0 字节）。**三道守卫，缺一不装** —— 装了而桥没活着，脚本的 log/info/debug
+// 会从"进 stdout（今天被排空丢弃）"变成"进一条投不出去的数据面"，而且**静默**：
+//   · dist env 在位（没落位时整条 facade 都不在，包装体 require 不到）；
+//   · `runtimeBridge.installed` 为真（attachNative 抛过错的半接线形态 —— 上面那个
+//     catch 已经点名过，这里不再装作桥活着）；
+//   · 包装体自带 `Symbol.for` 幂等标记（重复装才是真会翻车的形态）。
+// 这一条失败只打一行 stderr、**脚本照跑**：最坏退化成"裸 console.log 看不见"的今天
+// 形态，与 addon/dist 缺位同一条选择纪律（选填件不杀执行）。
 constexpr const char kBootstrap[] =
     "const a=require(process.env.AUTOSCRIPT_BRIDGE_ADDON);"
     "if(process.env.AUTOSCRIPT_SOCK_FD)a.setSocketFd(+process.env.AUTOSCRIPT_SOCK_FD);"
@@ -99,6 +118,10 @@ constexpr const char kBootstrap[] =
     "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
     "if(d)require(d+\"/bootstrap.js\").attachNative({addon:a})"
     "}catch(e){console.error('bridge-dist attachNative 未接上: '+(e&&e.message||e))}"
+    "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
+    "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
+    "require(d+\"/console-bridge.js\").installConsoleBridge()"
+    "}catch(e){console.error('console 未接到桥上（裸 console.log 不出现在悬浮窗）: '+(e&&e.message||e))}"
     "require(process.argv[1]);";
 
 // 连 :main 的 unix socket；成功返回 fd，失败 -1（errno 保留给调用方打印）。
