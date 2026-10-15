@@ -159,9 +159,13 @@ fun LogWindowContent(
  *
  * 抽出来是因为 `LogWindowContent` 的主体已贴着 detekt 的 `LongMethod` 阈值（120），
  * 而这里三态各自还带一段"为什么这么画"的理由 —— 摊在主函数里两边都读不清。
+ *
+ * **是 `BoxScope` 的扩展**（不是普通 composable）：空态那两句要 `Modifier.align(Center)`
+ * 居中，而 `align` 只有 `BoxScope` 里有 —— 调用点就在那个 `Box { }` 里面，
+ * 这个 receiver 是白拿的（CI 第一轮编译报 `Unresolved reference 'BlockHint'` 就是漏了它）。
  */
 @Composable
-private fun LogBlock(state: LogWindowState, lines: List<ConsoleLineState>) {
+private fun BoxScope.LogBlock(state: LogWindowState, lines: List<ConsoleLineState>) {
     if (state.boundRunId == null) {
         // **只有「从开窗起一次都没绑上过、兜底补绑也没补上」才到这里**：跑过的那条
         // 即使结算了也保持绑定（用户令「执行完不要自动清理输出」），起跑即结算的
