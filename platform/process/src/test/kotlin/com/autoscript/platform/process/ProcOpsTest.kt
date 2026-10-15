@@ -95,7 +95,11 @@ class ProcOpsTest {
      * 但引擎那份副本抄成了从 `Process::class.java` 起步（够不着子类），
      * 代价是设备上 pid 恒 null、暂停恒失败 —— 那处已同批修正。
      * 本用例把那处踩过的坑在这里钉住：形状**照设备抄**（字段声明在自己身上），不照实现抄。
+     *
+     * `@Suppress("UnusedPrivateProperty")`：这个字段的**唯一读者是反射**
+     * （`pidOf` 按名字 `getDeclaredField("pid")`），静态分析看不见那条路。
      */
+    @Suppress("UnusedPrivateProperty")
     private class PidBearingProcess(private val pid: Int) : Process() {
         override fun getOutputStream() = java.io.ByteArrayOutputStream()
         override fun getInputStream() = java.io.ByteArrayInputStream(ByteArray(0))

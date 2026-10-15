@@ -45,7 +45,14 @@ class ProcessLauncherPidTest {
         override fun isAlive(): Boolean = false
     }
 
-    /** `pid` 与运行时类**隔着两层**：只有从运行时类起往上走才摸得到（照实现抄就永远测不到）。 */
+    /**
+     * `pid` 与运行时类**隔着两层**：只有从运行时类起往上走才摸得到（照实现抄就永远测不到）。
+     *
+     * `@Suppress("UnusedPrivateProperty")` 是**必须**的而不是偷懒：这个字段的**唯一读者是反射**
+     * （`pidFieldOf` 按名字 `getDeclaredField("pid")`），静态分析看不见那条路 ——
+     * 去掉它测试就失去意义（没有字段可读 = 退化成"探不到"那一例）。
+     */
+    @Suppress("UnusedPrivateProperty")
     private class PidBearingProcess(private val pid: Int) : MidProcess()
 
     @Test
