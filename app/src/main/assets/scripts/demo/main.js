@@ -17,8 +17,9 @@
  * 裸 `console.log` **同样能出到控制台**（2026-10-15 起 kBootstrap 装了全局 console 包装，
  * 见 `installConsoleBridge`）—— 它走的是同一条数据面，只是**返回 undefined、await 不到**，
  * 在"打完就 exit"的脚本里可能丢尾行。本示例因此保留 `auto.console.*`：它给得出那个
- * Promise。（`process.stdout.write` 与 `table`/`dir` 之类仍走原生 stdout —— 那条通道
- * 引擎**读即弃**，设备上看不见。）
+ * Promise。（`console.dir`/`table` 之类**也接上了同一条桥**，一样看得见；仍看不见的只有
+ * 流对象直写 `process.stdout.write` —— 那条通道引擎**读即弃**，且它的入口不在 console
+ * 对象上，收编要给流 API 造一份假的背压契约，本仓不做。）
  *
  * 约定（§12.1）：CJS 具名解构 `const { auto } = require('auto')`；脚本自行
  * `process.exit` 结束进程（引擎按退出码结算，别让进程挂着）。

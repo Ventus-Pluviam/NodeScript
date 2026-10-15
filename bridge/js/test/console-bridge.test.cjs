@@ -12,11 +12,15 @@
  * 4. **双写**：`warn`/`error` 除桥之外**仍写原生 stderr**（诊断面不能被包装掐断 ——
  *    §8.3 的 `crashSummary` 尾摘要与 kBootstrap 自己的诊断都读 stderr），
  *    而 `log`/`info`/`debug` 不写（它们的原生去处 stdout 本就被排空丢弃）；
- * 5. **"只换五档" ≠ "只有五档可见"**：Node 的 `Console` 里一批方法**转发**到这五档上
+ * 5. **"只换这几条" ≠ "可见面就这几条"**：Node 的 `Console` 里一批方法**转发**到五档上
  *    （`table`/`group`/`time`/`count` → `log`，`assert(false)` → `warn`，`trace` → `error`），
- *    它们跟着一起可见；真正直写 stdout 的只有 `dir`/`dirxml` 与 `process.stdout.write`。
- *    这条**必须钉**：包装前 `table` 写 stdout（被排空）、包装后它进桥 —— 谁把包装改成
- *    "只拦脚本直接调的五个属性"（比如加自己的转发判定），这一条就红。
+ *    它们跟着一起可见；`dir`/`dirxml` 原本**直写 stdout**（不经五档），但入口仍是 console
+ *    对象上的自有可写属性，所以单独换得掉（2026-10-15 用户令追加）。
+ *    这两条**必须钉**：包装前 `table` 写 stdout（被排空）、包装后它进桥 —— 谁把包装改成
+ *    "只拦脚本直接调的五个属性"，这两条就红。
+ * 6. **`dir` 的渲染保真**：`util.inspect(obj, {customInspect:false, ...options})` 与原生
+ *    `Console.prototype.dir` 的源是同一行（原生那句还多一个 `inspectOptions(stream)`，
+ *    在引擎里同值 `{colors:false}`）；族里挑几种（嵌套/深度/选项/字符串）对拍。
  *
  * **装一次就够**：`installConsoleBridge` 带 `Symbol.for` 幂等标记，装完本文件里
  * 全局 console 就一直是包装版 —— 所以断言集中在前面几个 test 里按序做完，
@@ -119,7 +123,7 @@ test('幂等：再装一次不翻倍（Symbol.for 标记）', () => {
   assert.equal(calls.length, 1, '重复安装必须只留一层包装 —— 套两层会让每条日志出两份')
 })
 
-test('范围：转发到五档的方法跟着可见，直写 stdout 的 dir 不进来', () => {
+test('范围：转发到五档的方法跟着可见，dir/dirxml 也接上了', () => {
   calls.length = 0
   // NativeConsole 把 table/group/time/count 转发到 log、assert(false) 到 warn、trace 到 error
   // —— 包装的是**属性**，转发链自然一起收编（见文件头第 5 条）。
@@ -137,10 +141,58 @@ test('范围：转发到五档的方法跟着可见，直写 stdout 的 dir 不�
     forwarded.filter((l) => l === 'log').length >= 4, true,
     'table/group/time/count 走 log 档：' + JSON.stringify(forwarded),
   )
-  // dir 直写 stdout（不经全局 console 对象）—— 桥上看不见它，这是**范围边界**不是缺陷。
-  const before = calls.length
+})
+
+test('dir/dirxml：原本直写 stdout 的两条也接上了（用户令）', () => {
+  calls.length = 0
   console.dir({ b: 2 })
-  assert.equal(calls.length, before, 'dir 直写 stream，不经五档 —— 它不该出现在桥上（要可见需另行排期）')
+  console.dirxml({ c: 3 })
+  assert.deepEqual(
+    calls.map((c) => [c.payload.level, c.payload.text]),
+    [['log', '{ b: 2 }'], ['log', '{ c: 3 }']],
+    'dir 与 dirxml 都走 log 档（dirxml 在 Node 里就是 log；dir 的原生去处同样是 stdout）',
+  )
+})
+
+test('dir 保真：与原生 Console.prototype.dir 同一份 inspect（嵌套/深度/选项/字符串）', () => {
+  // 原生 dir 的源就是 inspect(obj, {customInspect:false, ...inspectOptions(stream), ...options})；
+  // 这里挑几族对拍**文本**，不是"跑通就行"：渲染换了实现（比如误用 format）当场红。
+  const cases = [
+    [{ a: 1, b: { c: [1, 2, 3] } }, undefined, '{ a: 1, b: { c: [ 1, 2, 3 ] } }'],
+    [{ a: 1, b: { c: [1, 2, 3] } }, { depth: 0 }, '{ a: 1, b: [Object] }'],
+    [{ a: 1, b: { c: [1, 2, 3] } }, { depth: null }, '{ a: 1, b: { c: [ 1, 2, 3 ] } }'],
+    ['hi', undefined, "'hi'"],                       // dir 对字符串加引号；format 不加
+    [42, undefined, '42'],
+    [null, undefined, 'null'],
+    [{ a: 1 }, 'x', '{ a: 1 }'],                     // 非对象 options：被展开成空，不抛
+    [{ a: 1 }, null, '{ a: 1 }'],
+  ]
+  for (const [obj, opts, want] of cases) {
+    calls.length = 0
+    if (opts === undefined) console.dir(obj)
+    else console.dir(obj, opts)
+    assert.equal(calls.length, 1, '每次 dir 只出一行：' + JSON.stringify(calls))
+    assert.equal(calls[0].payload.text, want, 'dir 渲染与原生同形（obj=' + JSON.stringify(obj) + '）')
+  }
+})
+
+test('dir 的 options 是第二个参数（不是第二个值）—— 与 log 的分野', () => {
+  calls.length = 0
+  console.dir({ x: 1 }, { depth: null })   // 第二参是配置，不出现在文本里
+  console.log({ x: 1 }, { depth: null })   // log 的两个都打
+  assert.equal(calls[0].payload.text, '{ x: 1 }', 'dir 只渲染第一参')
+  assert.equal(calls[1].payload.text, '{ x: 1 } { depth: null }', 'log 两个都渲染（这条分野要保住）')
+})
+
+test('dir 不抛：inspect 自己炸（自定义 inspect 抛错）时降级，不当成脚本异常', () => {
+  const evil = {}
+  Object.defineProperty(evil, Symbol.for('nodejs.util.inspect.custom'), {
+    value() { throw new Error('evil') },
+    enumerable: false,
+  })
+  calls.length = 0
+  console.dir(evil)   // 原生 dir 默认 customInspect:false，本来也不炸；这里证的是**永不炸**
+  assert.equal(calls.length, 1, '降级也要出一行：' + JSON.stringify(calls))
 })
 
 test('脚本侧仍可 await auto.console.log —— 与裸 console.log 落到同一条面', async () => {

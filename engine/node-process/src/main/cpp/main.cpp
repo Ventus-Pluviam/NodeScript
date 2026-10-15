@@ -32,10 +32,12 @@
 //     → node::Start 单 isolate，argv = node -e BOOTSTRAP -- <script> [args...]
 //     （BOOTSTRAP 预载 addon + setSocketFd + require 真脚本；无 addon 时直接跑 script）；
 //     桥装上之后、require 真脚本之前顺带 `installConsoleBridge()`（§7.3/§12.1，
-//     2026-10-15 用户令「js 的语法都要和原来的调用方式一样」）：把全局 console 五档
-//     接到桥上，脚本写裸 `console.log(...)` 与 `auto.console.log(...)` 落到同一条
-//     数据面 —— 否则裸 console.log 写的是子进程 stdout，而排水线程对它读即弃
-//     （§8.3，防反压），输出在悬浮窗/控制台一处都看不见。
+//     2026-10-15 用户令「js 的语法都要和原来的调用方式一样」）：把全局 console 的
+//     log/info/warn/error/debug 五档**加上直写 stdout 的 dir/dirxml** 接到桥上，
+//     脚本写裸 `console.log(...)` 与 `auto.console.log(...)` 落到同一条数据面 ——
+//     否则裸 console.log 写的是子进程 stdout，而排水线程对它读即弃（§8.3，防反压），
+//     输出在悬浮窗/控制台一处都看不见。**唯一仍看不见的是流对象直写**
+//     （`process.stdout.write`）：入口不在 console 对象上，本包装碰不到（范围见 §12.1）。
 //  4) Start 返回即收宿主退出码（四步 quiesce 由脚本侧/看门狗驱动，禁直接 kill §5 推论 A）；
 //     ppid 探活/心跳/pid 上送属 Kotlin 侧 spawn 契约（§8.4），本文件不越界。
 //

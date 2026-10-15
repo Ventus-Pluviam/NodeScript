@@ -23,13 +23,25 @@
 **拍板（方案 B，用户选定）**：换通道而不换语法 —— 引导期把全局 console 五档接到桥上。
 - **落点**：`main.cpp` kBootstrap，`attachNative` 之后、`require(真脚本)` 之前调
   `require($DIST/console-bridge.js).installConsoleBridge()`（`bridge/js/src/console-bridge.ts`）。
-- **范围（用户拍板）**：五档全包（log/info/warn/error/debug）。**"只换五档属性" ≠
-  "只有五个方法可见"**（2026-10-15 逐个方法设备实测后订正）：Node 的 `Console` 里一批
-  方法**转发**到这五档上 —— `table`/`group`/`groupCollapsed`/`time`/`timeLog`/`timeEnd`/
-  `count` 走 `log`、`assert(false)` 走 `warn`、`trace` 走 `error` —— 它们**跟着一起可见**；
-  真正绕开全局 console 对象**直写 stdout 的只有 `dir`/`dirxml` 与脚本自己的
-  `process.stdout.write`**，仍被排空、设备上看不见（要可见需另行排期）。
-  `profile`/`profileEnd`/`clear`/`countReset`/`groupEnd` 本就不产出行。
+- **范围（用户拍板）**：五档全包（log/info/warn/error/debug），**外加 `dir`/`dirxml`**
+  （2026-10-15 用户追加「好」）。**"换了这几条属性" ≠ "可见面就这几条"**（逐个方法设备
+  实测后订正）：Node 的 `Console` 里一批方法**转发**到这五档上 —— `table`/`group`/
+  `groupCollapsed`/`time`/`timeLog`/`timeEnd`/`count` 走 `log`、`assert(false)` 走 `warn`、
+  `trace` 走 `error` —— 它们**跟着一起可见**。
+- **`dir`/`dirxml` 为什么收编得了**（我先判过一次"收编不了"，是错的）：两条**原生的确是
+  直写 stdout**（`kWriteToConsole(kUseStdout, …)`，不经五档），但**入口是 console 对象上的
+  自有可写属性**（实测 `own=true writable=true`），所以换得掉。`dir` 的渲染用
+  `util.inspect(obj, {customInspect:false, ...options})` —— 与原生 `Console.prototype.dir`
+  的源**同一行**（原生多一个 `inspectOptions(stream)`，在引擎里同值 `{colors:false}`）；
+  `dirxml` 在 Node 里**就是** `log`（`Console.prototype.dirxml === Console.prototype.log`）。
+  保真对拍 640 组（32 种值 × 20 种选项）**零差异**；差异只在一处且生产形态下不可见：
+  原生按流能力自动上色（TTY/`FORCE_COLOR`），本包装不上色 —— 引擎 stdout 是管道、脚本 env
+  不带 `FORCE_COLOR`（全仓无该变量注入），故逐字节一致。
+- **唯一仍看不见的：`process.stdout.write`**（用户追问后一并记）：它的入口在**流对象**上，
+  不在 console 对象上，本包装碰不到。收编它要接管整个流的契约 —— `write()` 的布尔返回值是
+  Node 文档里的**背压协议**（false = 等 `drain`）、还收 Buffer（二进制通道）、可挂 `cb`；
+  包装等于**伪造一个 Node 流 API**，且「脚本显式写 stdout」正是这次要消灭的那类"替用户改
+  通道"。**不做**（`docs/backlog.md` 也不登记 —— 它不是欠账，是裁定不做）。
   **另一条同样要如实记**：**进程级 warning**（`process.emitWarning`，例如
   "No such label 'T' for console.timeLog()"）走的是全局 `console.error`，因此**会**
   进桥。初版写的「窗口里不会混进引擎/Node 的内部输出」**不成立**（设备实测两条 node
@@ -52,9 +64,11 @@
 解析 + 归属绑定 + 落盘口径，且把「Node 自身噪声」一并接进来；方案 B 改动面在 facade 一个
 新文件 + 引导串一句，且语义边界（哪些走桥、哪些留原生）由包装自己一句话说清。
 
-**守卫**：`console-bridge.test.cjs` 5 例（五档都经桥出且 log/info/debug 不写原生 /
+**守卫**：`console-bridge.test.cjs` 8 例（五档都经桥出且 log/info/debug 不写原生 /
 util.format 保真 + 返回 undefined / 幂等不翻倍 / **转发链**：`table`/`group`/`time`/`count`
-跟着可见而 `dir` 不进来 / 与 `auto.console.log` 同一条面）；
+跟着可见 / **`dir`+`dirxml` 走 log 档** / **`dir` 渲染与原生同形**（4 族对拍，含 `depth` 与
+非对象 options）/ **`dir` 的 options 是第二参不是第二个值**（与 `log` 的分野）/ `dir` 永不抛 /
+与 `auto.console.log` 同一条面）；
 `BridgeDistPackagingEntryTest` 改断言（裸 console.log 的文本**不该**再出现在 stdout +
 显式 `process.stdout.write` 仍在 stdout，一进一出互为对照）；`DemoScriptTest` 的五行断言
 同时成为这条包装的回归门。**本机先证伪**（CI 是红绿权威）：真 dist + 抽自 main.cpp 的

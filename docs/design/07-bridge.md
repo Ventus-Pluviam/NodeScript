@@ -472,10 +472,11 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
    `require($DIST/console-bridge.js).installConsoleBridge()`（守卫：dist env 在位 +
    `runtimeBridge.installed` 为真；失败只打一行 stderr、脚本照跑）把全局 console
    五档接到本命名空间上 —— 否则裸 console.log 写的是子进程 stdout，而排水线程对
-   它读即弃（§8.3），输出在悬浮窗/控制台一处看不见。**接到的是"五档属性"，不是
-   "只有五个方法"**：`table`/`group`/`time`/`count` 等转发到 `log` 的方法跟着一起
-   可见，`dir`/`dirxml`/`process.stdout.write` 直写 stdout 仍看不见（逐方法设备实测
-   2026-10-15）。语义边界见 §12.1；
+   它读即弃（§8.3），输出在悬浮窗/控制台一处看不见。**换的是 console 上的七条
+   属性（五档 + 直写 stdout 的 `dir`/`dirxml`），可见面还不止这七条**：
+   `table`/`group`/`time`/`count` 等转发到 `log` 的方法跟着一起可见；**唯一仍看不见
+   的是流对象直写 `process.stdout.write`**（入口不在 console 对象上，收编要造假背压
+   契约 —— 不做）。语义边界见 §12.1；
 4. 停机走四步 quiesce（SINKING → generation 排空/超时斩杀 → 释 TSF/句柄——addon 侧
    环境 cleanup hook 已接（换代 + 释 TSF，读线程先断源不再触已释放句柄）→
    `node::Stop` + 回调归档），禁直接 kill（§5 推论 A）。
