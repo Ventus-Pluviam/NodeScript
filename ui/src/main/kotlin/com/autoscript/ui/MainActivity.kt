@@ -492,7 +492,7 @@ class MainActivity : ComponentActivity() {
             // （窗内现读的 Compose 状态，刷新即普通重组，见 `SystemWindowSync` KDoc）。
             com.autoscript.ui.overlay.SystemWindowSync(
                 controller = logWindow,
-                onPauseToggle = { scope.launch { logWindow.togglePause() } },
+                onFirstAction = { scope.launch { windowFirstAction(logWindow, consoleState) } },
             )
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
@@ -1242,6 +1242,38 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 悬浮窗第一颗钮的动作分派（2026-10-15 用户令「执行完变重跑图标」）。
+     *
+     * 在途 → 暂停/继续（[LogWindowController.togglePause] 按 `state.paused` 自己选）；
+     * 已结算（跑完/被停/崩溃，`state.running == false`）→ **重跑**：同一文件再执行一次。
+     * 内容层只按 `state` 画图标（在途没暂停 = 暂停 / 已暂停 = 继续 / 已结算 = 重跑），
+     * 动作在这一个地方分派 —— 点与长按同一个动作（重跑没有第二种语义）。
+     */
+    private suspend fun windowFirstAction(
+        logWindow: com.autoscript.ui.overlay.LogWindowController,
+        consoleState: com.autoscript.ui.state.ConsoleState,
+    ) {
+        val state = logWindow.state ?: return
+        if (state.running) {
+            logWindow.togglePause()
+        } else {
+            // 重跑 = **引擎再跑同一文件**（用户选定；不是重放旧日志）。归属取窗里的
+            // 项目内形状（`/demo/data/test.js`，与开窗/在途表同一口径）。
+            logWindow.rerun(state.projectId, state.relPath)
+            try {
+                runScriptFileOp(state.projectId, state.relPath)
+            } catch (t: kotlinx.coroutines.CancellationException) {
+                throw t
+            } catch (t: Exception) {
+                // 重跑没起来：窗已是新归属的重跑态（还没跑起来过），下一次轮询
+                // `bind` 会把它留在「从没绑上过」→ 图标仍画重跑，用户可再点 ——
+                // 失败原文走 toast，不让用户以为"点了没反应"。
+                toast.show(t.message ?: t.javaClass.simpleName)
+            }
+        }
+    }
+
+    /**
      * 立即执行（`USER_CLICK`）：**挂起到执行结算**（排队 10s + 脚本超时/默认 30s，
      * 见 `HostSummary.runTaskNow` KDoc），期间 `opInFlight` 禁用按钮。
      *
@@ -1730,7 +1762,7 @@ private fun MainShell(
                     com.autoscript.ui.overlay.LogWindowInAppHost(
                         state = logState,
                         lines = logLines(),
-                        onPauseToggle = { logScope.launch { logWindow.togglePause() } },
+                        onFirstAction = { logScope.launch { windowFirstAction(logWindow, consoleState) } },
                         onClear = { logWindow.clearLogs(it) },
                         onClose = { logWindow.close() },
                         onFullscreenToggle = { logWindow.toggleFullscreen() },

@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.LogLineRow
-import com.autoscript.ui.components.pressable
+import com.autoscript.ui.components.pressableLongPress
 import com.autoscript.ui.state.ConsoleLineState
 import com.autoscript.ui.theme.ThemeColors
 
@@ -56,7 +56,12 @@ import com.autoscript.ui.theme.ThemeColors
 fun LogWindowContent(
     state: LogWindowState,
     lines: List<ConsoleLineState>,
-    onPauseToggle: () -> Unit,
+    /**
+     * 第一颗钮位的统一动作（2026-10-15 用户令「执行完变重跑」）：在途 = 暂停/继续
+     * （[LogWindowController.togglePause]），已结算 = 重新执行（`LogWindowController.rerun`）。
+     * 内容层只看 [state] 决定画什么图标与文案，动作本身由调用方按 [LogWindowState] 分派。
+     */
+    onFirstAction: () -> Unit,
     onClear: () -> Unit,
     onClose: () -> Unit,
     onFullscreenToggle: () -> Unit,
@@ -86,11 +91,24 @@ fun LogWindowContent(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            // 第一颗钮位：暂停/继续/重跑三态（2026-10-15 用户令）。
+            // - 在途且没暂停 → 暂停（点 = 暂停）；在途且已暂停 → 继续（点 = 恢复）；
+            // - 已结算（跑完/被停/崩溃）→ **重跑**（用户令「执行完变重跑图标」）：
+            //   点 = 重新执行同一文件，长按 = 也是重跑（同一语义，防"没长按对"）。
             WindowIconButton(
-                kind = if (state.paused) GlyphKind.RESUME else GlyphKind.PAUSE,
-                description = if (state.paused) "继续执行" else "暂停执行",
-                enabled = state.running,
-                onClick = onPauseToggle,
+                kind = when {
+                    state.paused -> GlyphKind.RESUME
+                    state.running -> GlyphKind.PAUSE
+                    else -> GlyphKind.RUN
+                },
+                description = when {
+                    state.paused -> "继续执行"
+                    state.running -> "暂停执行"
+                    else -> "重新执行"
+                },
+                enabled = state.running || state.boundRunId != null,
+                onClick = onFirstAction,
+                onLongClick = onFirstAction,
             )
             WindowIconButton(kind = GlyphKind.CLEAR, description = "清空日志", onClick = onClear)
             WindowIconButton(kind = GlyphKind.CLOSE, description = "关掉悬浮窗", onClick = onClose)
@@ -162,12 +180,18 @@ private fun WindowIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    onLongClick: () -> Unit = {},
 ) {
     Box(
         modifier
             .size(36.dp)
             .semantics { contentDescription = description }
-            .pressable(enabled = enabled, role = Role.Button, onClick = onClick),
+            .pressableLongPress(
+                enabled = enabled,
+                role = Role.Button,
+                onLongClick = onLongClick,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Glyph(kind = kind, tint = if (enabled) ThemeColors.textSecondary else ThemeColors.textTertiary, size = 20.dp)

@@ -110,6 +110,19 @@ class LogWindowController(
     }
 
     /**
+     * 重跑（已结算态第一颗钮；2026-10-15 用户令「执行完变重跑图标」）。
+     *
+     * 只**换到重跑态**，真跑由调用方触发（`MainActivity.windowFirstAction` 走
+     * `runScriptFileOp`，与开窗同一条执行链；会把这个窗切到新归属）。跑起来后轮询的
+     * `bind` 看到同归属新 run 在途，自动换绑到新号（`running` 回 true、图标回暂停）。
+     * startup failure 落在"新窗从没绑上过" → 重跑态恢复：图标回重跑，用户可再点
+     * （不是「点一下重跑失败就永远卡死在暂停位」）。
+     */
+    fun rerun(projectId: String, relPath: String) {
+        state = LogWindowState(projectId = projectId, relPath = relPath, x = lastX, y = lastY)
+    }
+
+    /**
      * 窗内日志行的**事实源**（`consoleState.lines` 的现值；调用方每次拉取后 [updateLines]）。
      *
      * 为什么行数据住控制器而不是"由调用方当参数喂进系统窗内容"（2026-10-14「点执行就闪退」）：

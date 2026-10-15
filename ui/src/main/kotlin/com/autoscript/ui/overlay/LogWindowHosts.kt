@@ -72,7 +72,7 @@ fun LogWindowPoll(
 fun LogWindowInAppHost(
     state: LogWindowState,
     lines: List<ConsoleLineState>,
-    onPauseToggle: () -> Unit,
+    onFirstAction: () -> Unit,
     onClear: (Long) -> Unit,
     onClose: () -> Unit,
     onFullscreenToggle: () -> Unit,
@@ -130,7 +130,7 @@ fun LogWindowInAppHost(
                 LogWindowContent(
                     state = state,
                     lines = shown,
-                    onPauseToggle = onPauseToggle,
+                    onFirstAction = onFirstAction,
                     onClear = { onClear(shown.maxOfOrNull { it.seq } ?: state.watermarkSeq) },
                     onClose = onClose,
                     onFullscreenToggle = onFullscreenToggle,
@@ -169,7 +169,7 @@ fun LogWindowInAppHost(
 @Composable
 fun SystemWindowSync(
     controller: LogWindowController,
-    onPauseToggle: () -> Unit,
+    onFirstAction: () -> Unit,
 ) {
     val state = controller.state
     val host = controller.systemHost
@@ -195,7 +195,7 @@ fun SystemWindowSync(
                 LogWindowContent(
                     state = state,
                     lines = shown,
-                    onPauseToggle = onPauseToggle,
+                    onFirstAction = onFirstAction,
                     onClear = { controller.clearLogs(shown.maxOfOrNull { it.seq } ?: state.watermarkSeq) },
                     onClose = { controller.close() },
                     onFullscreenToggle = { controller.toggleFullscreen() },
