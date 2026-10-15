@@ -94,6 +94,7 @@ import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.ConsoleState
+import com.autoscript.ui.state.scriptOutputLines
 import com.autoscript.ui.state.filterAudit
 import com.autoscript.ui.state.loadAudit
 import com.autoscript.ui.state.reclaimNpmCacheOp
