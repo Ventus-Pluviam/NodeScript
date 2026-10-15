@@ -38,8 +38,9 @@ data class LogWindowState(
      * 绑定那条 run 此刻还在不在途（false = 已结算：跑完/被停/崩溃）。
      *
      * 结算**不解绑**（用户令「脚本执行完不要自动清理输出」），窗口继续画刚跑完的
-     * 输出 —— 于是「还在跑」与「跑完了」必须另有一处说得清：[titleText] 的
-     * 「· 已结束」后缀、暂停钮的诚实回执都以本字段为判据。
+     * 输出 —— 于是「还在跑」与「跑完了」必须另有一处说得清：**第一颗钮**（在途画暂停、
+     * 已结算画重跑）与它的可用态以本字段为判据（2026-10-15 用户令后标题不再缀后缀，
+     * 见 [titleText]）。
      */
     val running: Boolean = false,
     /**
@@ -57,15 +58,14 @@ data class LogWindowState(
      * `/data/test.js` 就是这个形状（relPath 是项目内路径，首段不是项目名，
      * 见 `ScriptLogRead` 的 KDoc；`/` 前缀是显示形态，落盘/索引一律不用它）。
      *
-     * 结算不解绑后（[running] = false 且绑过），标题缀「· 已结束」：窗口还开着、
-     * 日志还在，但不把「已经跑完了」说成「还在跑」。**还没绑上过**（boundRunId
-     * null，窗刚开、执行还没起来）不缀 —— 那是"未开始"，不是"已结束"。
+     * **不缀「· 已结束」**（2026-10-15 用户令「不需要在悬浮窗路径栏那里加已结束三个字」）。
+     * 曾缀过（结算不解绑那批加的，理由是把「跑完了」与「还在跑」在标题上分开）——
+     * 用户不要它：路径栏就是**路径**，状态由第一颗钮自己说（跑完 = 重跑图标、
+     * 在途 = 暂停图标，那颗钮本来就是三态的事实源），标题再缀一遍是重复且占宽。
+     * 「已结算」这个事实仍留在状态里（[running]，暂停钮的可用态与
+     * 「本次执行没有输出」那句仍读它），只是不再上标题。
      */
-    val titleText: String
-        get() {
-            val plain = "/$projectId/$relPath"
-            return if (running || boundRunId == null) plain else "$plain · 已结束"
-        }
+    val titleText: String get() = "/$projectId/$relPath"
 
     /**
      * 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。
@@ -96,7 +96,7 @@ data class LogWindowState(
      *   约束 —— 归属不会错，最多是"跑了 A 又紧跟跑 B、A 的行先到"把 B 的窗先指向 A，
      *   下一轮同归属在途 B 现身后立刻换回（误绑窗口只存在一帧，且输出仍如实按行归属画）。
      *   **它不被当作"跑起来过"**：[running]/[paused] 都只看在途表（match），补绑号
-     *   running 恒 false —— 标题缀「· 已结束」、暂停钮置灰，画的是"刚跑完"不是"正在跑"；
+     *   running 恒 false —— 第一颗钮画重跑、暂停钮置灰，画的是"刚跑完"不是"正在跑"；
      * - paused 随绑定 run 同步（run 结算消失后 paused 回 false，不留僵尸态）。
      */
     fun bind(activeRuns: List<ActiveRunState>, fallbackRunId: Long? = null): LogWindowState {

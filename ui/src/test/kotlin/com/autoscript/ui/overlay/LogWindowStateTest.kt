@@ -72,10 +72,10 @@ class LogWindowStateTest {
         assertEquals(12L, bound.boundRunId, "行里摘出的归属补位，窗口不落空态")
         assertFalse(bound.running, "补绑不代表在途")
         assertFalse(bound.paused)
-        // 补绑后同归属行照常可见；标题如实缀「· 已结束」（跑完了不是未开始）。
+        // 补绑后同归属行照常可见；标题**只写路径**（2026-10-15 用户令去掉「· 已结束」）。
         val lines = listOf(line(seq = 1L, runId = 12L), line(seq = 2L, runId = 12L))
         assertEquals(listOf(1L, 2L), bound.visible(lines).map { it.seq })
-        assertEquals("/demo/data/test.js · 已结束", bound.titleText)
+        assertEquals("/demo/data/test.js", bound.titleText)
     }
 
     @Test
@@ -138,9 +138,10 @@ class LogWindowStateTest {
         // 有行照常可见（水位之上）；没有同归属也不画空态。
         val lines = listOf(line(seq = 1L, runId = 7L), line(seq = 2L, runId = 7L))
         assertEquals(listOf(1L, 2L), done.visible(lines).map { it.seq })
-        // 标题如实缀「· 已结束」：不把「已经跑完了」说成「还在跑」。
-        assertEquals("/demo/data/test.js · 已结束", done.titleText)
-        assertEquals("/demo/data/test.js", s.titleText, "在途不缀")
+        // 标题**恒为路径**（2026-10-15 用户令）：跑完/在途/未开始三种态标题一样 ——
+        // 「在不在跑」由第一颗钮（暂停/继续/重跑三态）自己说，不在路径栏重复。
+        assertEquals("/demo/data/test.js", done.titleText)
+        assertEquals("/demo/data/test.js", s.titleText)
     }
 
     @Test
@@ -154,9 +155,15 @@ class LogWindowStateTest {
     }
 
     @Test
-    fun `从没绑上过（启动失败）标题不缀已结束`() {
+    fun `标题恒为路径——三态都不缀后缀（用户令）`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
-        assertEquals("/demo/data/test.js", s.titleText, "未开始 ≠ 已结束")
+        assertEquals("/demo/data/test.js", s.titleText, "未开始")
+        assertEquals("/demo/data/test.js", s.bind(listOf(run(3L))).titleText, "在途")
+        assertEquals(
+            "/demo/data/test.js",
+            s.bind(listOf(run(3L))).bind(emptyList()).titleText,
+            "已结算：路径栏只写路径（用户令「不需要加已结束三个字」）",
+        )
     }
 
     @Test
