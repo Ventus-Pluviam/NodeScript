@@ -492,7 +492,7 @@ class MainActivity : ComponentActivity() {
             // （窗内现读的 Compose 状态，刷新即普通重组，见 `SystemWindowSync` KDoc）。
             com.autoscript.ui.overlay.SystemWindowSync(
                 controller = logWindow,
-                onFirstAction = { scope.launch { windowFirstAction(logWindow, consoleState) } },
+                onFirstAction = { scope.launch { windowFirstAction(logWindow, consoleState) { toast.show(it) } } },
             )
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
@@ -540,6 +540,7 @@ class MainActivity : ComponentActivity() {
                     logWindow = logWindow,
                     logLines = { consoleState.lines },
                     logScope = scope,
+                    onFirstAction = { scope.launch { windowFirstAction(logWindow, consoleState) { toast.show(it) } } },
                     modifier = themeSwitch.modifier,
                 ) { shellModifier ->
                         // 页内滚动容器要用的「露出来」口径（光标入视等）：pager 自己换成
@@ -1252,6 +1253,7 @@ class MainActivity : ComponentActivity() {
     private suspend fun windowFirstAction(
         logWindow: com.autoscript.ui.overlay.LogWindowController,
         consoleState: com.autoscript.ui.state.ConsoleState,
+        failToast: (String) -> Unit,
     ) {
         val state = logWindow.state ?: return
         if (state.running) {
@@ -1268,7 +1270,7 @@ class MainActivity : ComponentActivity() {
                 // 重跑没起来：窗已是新归属的重跑态（还没跑起来过），下一次轮询
                 // `bind` 会把它留在「从没绑上过」→ 图标仍画重跑，用户可再点 ——
                 // 失败原文走 toast，不让用户以为"点了没反应"。
-                toast.show(t.message ?: t.javaClass.simpleName)
+                failToast(t.message ?: t.javaClass.simpleName)
             }
         }
     }
@@ -1726,8 +1728,10 @@ private fun MainShell(
     logWindow: com.autoscript.ui.overlay.LogWindowController,
     /** 悬浮窗可见行的事实源（consoleState.lines 的呈现态；Activity 字段现读）。 */
     logLines: () -> List<com.autoscript.ui.state.ConsoleLineState>,
-    /** 悬浮窗按钮的协程入口（togglePause 是挂起的；Activity 的 scope）。 */
+    /** 悬浮窗按钮的协程入口（togglePause/windowFirstAction 是挂起的；Activity 的 scope）。 */
     logScope: kotlinx.coroutines.CoroutineScope,
+    /** 悬浮窗第一颗钮的动作（在途 = 暂停/继续，已结算 = 重跑；Activity 的 windowFirstAction）。 */
+    onFirstAction: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
 ) {
@@ -1762,7 +1766,7 @@ private fun MainShell(
                     com.autoscript.ui.overlay.LogWindowInAppHost(
                         state = logState,
                         lines = logLines(),
-                        onFirstAction = { logScope.launch { windowFirstAction(logWindow, consoleState) } },
+                        onFirstAction = onFirstAction,
                         onClear = { logWindow.clearLogs(it) },
                         onClose = { logWindow.close() },
                         onFullscreenToggle = { logWindow.toggleFullscreen() },
