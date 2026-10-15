@@ -38,6 +38,11 @@
 //     否则裸 console.log 写的是子进程 stdout，而排水线程对它读即弃（§8.3，防反压），
 //     输出在悬浮窗/控制台一处都看不见。**唯一仍看不见的是流对象直写**
 //     （`process.stdout.write`）：入口不在 console 对象上，本包装碰不到（范围见 §12.1）。
+//     暂停（§8.4 的 SIGSTOP 一路）另有前置：Kotlin 侧 `SpawnedProcess.pid` 必须拿得到 ——
+//     而设备 libcore 的 `java.lang.Process` **没有 `pid()` 方法**（android-36 的
+//     api-versions.xml 实查），pid 只以**私有字段**形式住在**子类** `java.lang.UNIXProcess`
+//     上（Android 13 core-oj.jar 反编译实证）。故取 pid 靠反射，且反射必须**从运行时类
+//     起步往上走**（2026-10-15 方向订正：原实现从 `Process::class.java` 起步，够不着子类）。
 //  4) Start 返回即收宿主退出码（四步 quiesce 由脚本侧/看门狗驱动，禁直接 kill §5 推论 A）；
 //     ppid 探活/心跳/pid 上送属 Kotlin 侧 spawn 契约（§8.4），本文件不越界。
 //

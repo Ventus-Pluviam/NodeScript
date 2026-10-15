@@ -77,9 +77,12 @@ class ProcOps(
      * [process] 的 pid；取不到回 null（**诚实降级，不回 0/自身** —— §8.4 同一条纪律）。
      *
      * 两级反射阶梯（`:engine:node-process` 的 `ProcessLauncher` 同手法、同理由，那处是
-     * 为身份绑定，这里为杀树）：`pid()` 方法（JDK 9+ / Android 14+ 运行时有）→ 私有
-     * 字段 `pid`（Android 13 libcore 的 `ProcessImpl` 有）。本模块是纯 JVM 模块，编译
-     * 按桌面 JDK 放行，直调 `process.pid()` 在设备桩面上根本不存在。
+     * 为身份绑定，这里为杀树）：`pid()` 方法（桌面 JDK 有；**Android 平台 API 表里没有**
+     * —— android-36 的 `api-versions.xml` 实查）→ 私有字段 `pid`，**从运行时类起步往上走**
+     * （2026-10-15 订正措辞：字段住**子类**上 —— Android 13 libcore 是
+     * `java.lang.UNIXProcess.pid`，桌面 JDK 是 `java.lang.ProcessImpl.pid`；
+     * 那处引擎副本原先从 `Process::class.java` 起步，够不着子类，已同批修正）。
+     * 本模块是纯 JVM 模块，编译按桌面 JDK 放行，直调 `process.pid()` 在设备桩面上根本不存在。
      */
     fun pidOf(process: Process): Long? {
         pidMethod?.let { m ->

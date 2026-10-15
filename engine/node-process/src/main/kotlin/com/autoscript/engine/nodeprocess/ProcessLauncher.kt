@@ -90,32 +90,42 @@ private val jdkProcessPidMethod: java.lang.reflect.Method? = try {
 }
 
 /**
- * 私有字段 `pid` 的反射句柄（2026-10-11 批 97，外审 M5 的**第二级阶梯**）。
+ * 私有字段 `pid` 的反射查找（2026-10-11 批 97，外审 M5 的**第二级阶梯**；
+ * 2026-10-15 方向订正 —— 见下）。
  *
- * 为什么加这一级：`pid()` 方法在 Android 上只有 API 33+ 才有（`api-versions.xml` 实查），
- * 而 minSdk 26 —— 于是 Android 8–12 上 [SpawnedProcess.pid] 恒 null，看门狗走 noPid 清单，
- * **且 [com.autoscript.bridge.RunIdentityRegistry] 的防劫持检查整段被跳过**（`peerPid != null
- * && spawn.pid != null` 两条件）。Android 13 libcore 的 `ProcessImpl` 有 `pid` 这个字段 ——
- * 与批 95 的 `ProcOps.pidOf` 同一手法、同一理由（那处是为了杀树，这里是为了身份绑定）；
- * 批 105 起那处住 `:platform:process`（两份副本合并），本模块这份**仍留** ——
- * `:platform:*` 是引擎的下层，引擎不得反向依赖它（§6 + 本模块 ArchitectureTest 黑名单），
- * 一份纯反射阶梯的拷贝比那条越界依赖便宜。
+ * 为什么加这一级：`pid()` 方法**不在 Android 平台 API 表里**（`api-versions.xml` 实查，
+ * android-36 的 `java/lang/Process` 仍只有 destroy/isAlive/waitFor 那几个），minSdk 26 ——
+ * 于是设备上 tier 1 恒缺席，[SpawnedProcess.pid] 会恒 null：看门狗走 noPid 清单、
+ * **[com.autoscript.bridge.RunIdentityRegistry] 的防劫持检查整段被跳过**
+ * （`peerPid != null && spawn.pid != null` 两条件），**悬浮窗「暂停」也恒回 false**
+ * （`pauseExecution` 第一句就是 `val target = pid ?: return false`）。
+ *
+ * **方向订正（2026-10-15，设备实测）**：原实现从 `Process::class.java` 起步、每轮
+ * `cls.superclass` 往上走 —— 而 `getDeclaredField` **只看该类自己声明的成员**，
+ * 于是这条循环走的是 `Process → Object`，**永远够不着子类**。设备 libcore 的真实形状是
+ * 字段声明在**子类**上（Android 13 `core-oj.jar` 反编译实证：`java.lang.UNIXProcess`
+ * 有 `private final int pid`，而 `java.lang.Process` 一个字段都没有；
+ * 桌面 JDK 同形 —— `java.lang.ProcessImpl.pid`），所以这条阶梯**从来没生效过**。
+ * 与批 95 的 `ProcOps.pidOf` 同一手法（那处从**运行时类** `process.javaClass` 起步，
+ * 方向本来就是对的）—— 批 105 起那处住 `:platform:process`（两份副本合并），
+ * 本模块这份**仍留**：`:platform:*` 是引擎的下层，引擎不得反向依赖它
+ * （§6 + 本模块 ArchitectureTest 黑名单），一份纯反射阶梯的拷贝比那条越界依赖便宜。
+ *
+ * **为什么不缓存成类级 val**：字段住**运行时类**上，而运行时类是每次 spawn 才知道的
+ * （且同一 JVM 里可能不止一种）—— 这里按调用查，代价是每个进程一次 `getDeclaredField`。
  *
  * **桌面 JDK 上这一级是死代码**：模块系统拒 `setAccessible`，但那时 tier 1 已经成了。
  */
-private val jdkProcessPidField: java.lang.reflect.Field? = run {
-    var cls: Class<*>? = Process::class.java
+private fun pidFieldOf(process: Process): java.lang.reflect.Field? {
+    var cls: Class<*>? = process.javaClass
     while (cls != null && cls != Any::class.java) {
         val found = runCatching {
             cls!!.getDeclaredField("pid").apply { isAccessible = true }
         }.getOrNull()
-        if (found != null) {
-            found
-        } else {
-            cls = cls.superclass
-        }
+        if (found != null) return found
+        cls = cls.superclass
     }
-    null
+    return null
 }
 
 /**
@@ -309,6 +319,8 @@ private class StderrTail(
  * 与 `:platform:process` 的 `ProcOps.pidOf`（批 105 的合并落点）同一手法、同一理由，
  * 仍抄一份在本地：**两处抽不出共享模块** —— 引擎在 `:platform` 之上，反向依赖即破 §6 依赖
  * 方向（本模块 ArchitectureTest 把 `com.autoscript.platform..` 钉在黑名单里）。
+ * **两份的方向都对**（都从运行时类起步）；引擎这份 2026-10-15 才改对，`ProcOps` 那份一直是对的
+ * —— 这正说明"手法同款、代码两份"的真实代价：**一处抄漏一行，另一处不会红**。
  *
  * @return null = 运行时两个 tier 都探不到（诚实 noPid，**绝不给 0/自身**）。
  */
@@ -317,7 +329,7 @@ internal fun pidOf(process: Process): Int? {
         val viaMethod = runCatching { (m.invoke(process) as? Number)?.toLong() }.getOrNull()
         if (viaMethod != null && viaMethod > 0) return viaMethod.toInt()
     }
-    jdkProcessPidField?.let { f ->
+    pidFieldOf(process)?.let { f ->
         val viaField = runCatching { (f.get(process) as? Number)?.toLong() }.getOrNull()
         if (viaField != null && viaField > 0) return viaField.toInt()
     }
