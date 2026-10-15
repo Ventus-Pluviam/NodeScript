@@ -1,6 +1,7 @@
 package com.autoscript.ui.overlay
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -18,12 +19,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.semantics.Role
@@ -41,9 +43,10 @@ import com.autoscript.ui.theme.ThemeColors
 /**
  * 执行日志悬浮窗的**内容**（2026-10-13 用户令；两个宿主共用同一份）。
  *
- * 版式（2026-10-15 用户令改）：**窗底 = 任务中心那种灰**（[ThemeColors.surfaceMuted]，
- * 与任务中心页底/顶栏同一个键），里面两块**胶囊框**（[RoundedCornerShape] + 内缩边距）：
- * 上面一块装标题行（标题 + 四颗图标钮），下面一块装日志。
+ * 版式（2026-10-15 用户令第二轮）：**窗 = 一张白卡片**（[WindowSurface] + 一圈淡灰描边
+ * [ThemeColors.editorChipBorder]），里面两块**灰胶囊**（[WindowBlockSurface]，
+ * [RoundedCornerShape] + 内缩边距、**无描边**）：上面一块装标题行（标题 + 四颗图标钮），
+ * 下面一块装日志。两轮口径的取舍写在 [WindowSurface] 那处。
  * 未绑定（执行还没进在途表 / **从开窗起一次都没绑上过**）→ 空态「本次执行未开始」。
  * 绑定那条跑完（结算）后窗口**保持**绑定、输出照常可见（用户令「脚本执行完不要
  * 自动清理输出」）—— 标题照旧只写路径，行区照常画；没出过一行且已结算的
@@ -84,13 +87,23 @@ fun LogWindowContent(
     onDrag: (Offset) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 窗底 = 任务中心的灰（[ThemeColors.surfaceMuted]：页底/顶栏同一个键），
-    // 里面两块胶囊（头部、日志）各是一块浮起来的底 —— 用户口径「背景改成任务栏背景
-    // 一样的灰色，然后用胶囊框包裹起来控件」。
+    // 窗底 = **白 + 一圈淡灰描边**；里面两块胶囊是**灰底、无描边**
+    // （2026-10-15 用户第二轮口径「背景换成白色（要有描边），胶囊框灰色，不要有描边试试」）。
+    //
+    // 第一轮是反过来的（灰窗底 + 白胶囊 + 阴影），用户看过说"效果不太好"——
+    // 两块的色差在浅色档下太弱（白胶囊压浅灰底），加阴影也只是勉强分开。
+    // 这一轮把层次反过来：**窗整体是"一张白卡片"，靠描边从页面里浮起来；
+    // 内部两块用灰块分区**——灰压白的分辨率比白压灰高得多，且不用阴影。
+    //
+    // 描边用 [ThemeColors.editorChipBorder]（编辑器那颗白圆钮的"淡淡灰边"，
+    // 浅色 `0xFFDCDCDC` / 深色 `0xFF4A5563`）—— 仓里现成的"白底 + 淡灰边"配方，
+    // 不新造色键（深浅两档都是调好的）。
     Column(
         modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(ThemeColors.surfaceMuted)
+            // 顺序照 `ScriptEditorScreen` 那颗白圆钮的先例：`background(shape)` → `border(…, shape)`
+            // —— 两者各带形状，不用再套一层 `clip`（多一层只是多一次绘制指令）。
+            .background(WindowSurface, WindowShape)
+            .border(WindowBorderWidth, ThemeColors.editorChipBorder, WindowShape)
             .padding(WindowBlockGap),
         verticalArrangement = Arrangement.spacedBy(WindowBlockGap),
     ) {
@@ -98,9 +111,8 @@ fun LogWindowContent(
         Row(
             Modifier
                 .fillMaxWidth()
-                .shadow(elevation = WindowBlockElevation, shape = WindowBlockShape, clip = false)
                 .clip(WindowBlockShape)
-                .background(ThemeColors.surface)
+                .background(WindowBlockSurface)
                 .dragHandle(onDrag)
                 .padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -145,9 +157,8 @@ fun LogWindowContent(
             Modifier
                 .fillMaxSize()
                 .weight(1f)
-                .shadow(elevation = WindowBlockElevation, shape = WindowBlockShape, clip = false)
                 .clip(WindowBlockShape)
-                .background(ThemeColors.surface),
+                .background(WindowBlockSurface),
         ) {
             LogBlock(state = state, lines = lines)
         }
@@ -229,21 +240,40 @@ private fun BoxScope.BlockHint(text: String) {
     )
 }
 
-/** 窗内两块胶囊（头部/日志）的圆角。比外窗的 16dp 小一档 —— 胶囊套在胶囊里。 */
+/** 外窗圆角（16dp，与改版前一致）。 */
+private val WindowShape = RoundedCornerShape(16.dp)
+
+/** 窗内两块（头部/日志）的圆角。比外窗小一档 —— 块套在卡片里。 */
 private val WindowBlockShape = RoundedCornerShape(12.dp)
 
-/** 外窗内边距 = 两块胶囊之间、以及胶囊离窗边的距离（同一份，四周看起来才匀）。 */
+/** 外窗内边距 = 两块之间、以及块离窗边的距离（同一份，四周看起来才匀）。 */
 private val WindowBlockGap = 8.dp
 
 /**
- * 胶囊的抬起量（`TaskCenterScreen` 的搜索框同款 2dp）。
+ * 窗底与块底的**两个档**（2026-10-15 用户第二轮口径）。
  *
- * 为什么要有它：胶囊与窗底是**同一套主题键的两个档**（`surface` 压在 `surfaceMuted` 上），
- * 浅色档下 `0xFFFFFFFF` 与 `0xFFF1F1F3` 只差一点点 —— 不给一点阴影，两块会糊成一片。
- * 深色档同理（`0xFF232326` vs `0xFF161E27`）。分层靠"底差一档 + 极轻阴影"，
- * 不靠第三档灰（与底页签胶囊同一条口径，见 `Chrome.kt` 的 `MainTabsShape` 那处）。
+ * - [WindowSurface]：**窗**底 —— 白（浅色档 `0xFFFFFFFF`；深色档跟着主题走 `0xFF232326`），
+ *   配外圈 [WindowBorderWidth] 的淡灰描边（`editorChipBorder`）从页面里浮起来；
+ * - [WindowBlockSurface]：**块**底 —— 灰（`surfaceMuted`：任务中心页底/顶栏那个键），
+ *   **无描边**（用户口径「不要有描边试试」）。
+ *
+ * **两档的方向在两种主题下一致**（块永远比窗暗一档），这是刻意的：
+ * 浅色 = 白窗 `0xFFFFFFFF` 压灰块 `0xFFF1F1F3`；深色 = 灰窗 `0xFF232326` 压深块
+ * `0xFF161E27`（`surfaceMuted` 在深色下与屏底同值，比 `surface` 暗一档）。
+ *
+ * **为什么窗底不写死白色**（用户口径是"白色"，但这里跟主题走）：深色档的正文色
+ * `ThemeColors.text` 是**白**的 —— 硬把窗底钉成白，标题与日志就白字白底，看不见。
+ * 仓里那个"用户要求白色、深色也保持白"的先例（`editorChipBackground`）不适用：
+ * 那颗圆钮里画的是**图标**（有独立 tint），不是正文。用户在浅色档下看到的正是白色。
  */
-private val WindowBlockElevation = 2.dp
+private val WindowSurface: Color
+    @Composable @ReadOnlyComposable get() = ThemeColors.surface
+
+private val WindowBlockSurface: Color
+    @Composable @ReadOnlyComposable get() = ThemeColors.surfaceMuted
+
+/** 外窗描边宽（编辑器那颗白圆钮同款 1dp）。 */
+private val WindowBorderWidth = 1.dp
 
 /**
  * 悬浮窗标题行的一颗图标钮（28dp 触控格 + 按压缩放反馈走全仓 `pressable`）。
