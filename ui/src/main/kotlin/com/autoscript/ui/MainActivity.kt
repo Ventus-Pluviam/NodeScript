@@ -499,7 +499,18 @@ class MainActivity : ComponentActivity() {
                 // 结算不解绑（用户令「脚本执行完不要自动清理输出」）：绑定随在途表
                 // 现取，但同归属 run 跑完离开在途表时**保持**窗口绑在它上面、
                 // 输出照常可见（详见 `LogWindowState.bind`）。
-                logWindow.bind(consoleState.activeRuns)
+                //
+                // **快速脚本的兜底补绑**（用户令「有时点执行日志不显示在悬浮窗上」）：
+                // 起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间，在途表
+                // 一次都没见过它 —— 从已读行里摘"本次归属最近一条非引擎外行"的 runId
+                // 补绑（窗口没绑上时用；规则与风险见 `LogWindowState.bind` 的 KDoc）。
+                logWindow.bind(
+                    consoleState.activeRuns,
+                    fallbackRunId = consoleState.scriptOutputLines()
+                        .asSequence()
+                        .filter { it.runId != 0L }
+                        .maxByOrNull { it.runId }?.runId,
+                )
             }
             // 系统栏图标的明暗跟**本 App 的主题档位**走，不是跟系统深色开关走：
             // 用户在顶栏把主题切成浅色、而系统还是深色时，状态栏图标必须转深色，

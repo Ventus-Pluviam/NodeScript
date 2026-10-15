@@ -59,6 +59,49 @@ class LogWindowStateTest {
     }
 
     /**
+     * 2026-10-15 用户令「有时点执行日志不显示在悬浮窗上」：**起跑即结算的快速脚本**。
+     *
+     * 脚本整个生命周期落在两轮轮询（400ms）之间 —— 在途表从开窗起一次都没见过它，
+     * 「结算不解绑」救不到（它从没绑上过）。兜底补绑从行里摘归属：[fallbackRunId]
+     * 只在「没绑上过」时补位；已绑过的 keep 不被行摘顶掉（同归属重复触发时行按实际归属画）。
+     */
+    @Test
+    fun `bind 没绑上过但行里有归属 兜底补绑`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val bound = s.bind(emptyList(), fallbackRunId = 12L)
+        assertEquals(12L, bound.boundRunId, "行里摘出的归属补位，窗口不落空态")
+        assertFalse(bound.running, "补绑不代表在途")
+        assertFalse(bound.paused)
+        // 补绑后同归属行照常可见；标题如实缀「· 已结束」（跑完了不是未开始）。
+        val lines = listOf(line(seq = 1L, runId = 12L), line(seq = 2L, runId = 12L))
+        assertEquals(listOf(1L, 2L), bound.visible(lines).map { it.seq })
+        assertEquals("/demo/data/test.js · 已结束", bound.titleText)
+    }
+
+    @Test
+    fun `bind 已绑过时行摘不顶掉 keep`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+            .bind(listOf(run(7L)), fallbackRunId = 12L)
+        val next = s.bind(emptyList(), fallbackRunId = 12L)
+        assertEquals(7L, next.boundRunId, "结算不解绑优先于行摘补绑")
+        assertFalse(next.running)
+    }
+
+    @Test
+    fun `bind 引擎外行号不进补位 仍空态`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val bound = s.bind(emptyList(), fallbackRunId = 0L)
+        assertEquals(null, bound.boundRunId, "引擎外行（runId 0）不是可补的归属")
+    }
+
+    @Test
+    fun `bind 未绑上且无补位 落空态`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val unbound = s.bind(emptyList(), fallbackRunId = null)
+        assertEquals(null, unbound.boundRunId)
+    }
+
+    /**
      * 2026-10-15 用户令「脚本执行完不要自动清理输出」：**结算不解绑**。
      *
      * 在途表是"正在跑的"这一句 —— run 跑完离开在途表是执行完成，不是「没有这回事」；

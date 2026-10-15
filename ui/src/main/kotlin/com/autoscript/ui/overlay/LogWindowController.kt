@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleLineState
+import java.util.HashSet
 
 /**
  * 执行日志悬浮窗的**控制器**（2026-10-13 用户令；Activity `remember` 一份）。
@@ -136,11 +137,32 @@ class LogWindowController(
      *
      * 结算**不解绑**（用户令「执行完不要自动清理输出」）：绑定 run 跑完离开在途表后
      * 窗口仍绑在它上面、输出照常可见（详见 `LogWindowState.bind` 的 KDoc）。
+     *
+     * [fallbackRunId] 是快速脚本的兜底补绑（用户令「有时点执行日志不显示在悬浮窗上」）：
+     * 起跑即结算的脚本在途表一次都没见过 → 从行里摘出归属补绑。兜底补位号（结算为
+     * false 的 runId）**不进 [settledRunIds]** —— 那只是"还没在途过"的补位，不是被
+     * 摘走的事实。
      */
-    fun bind(activeRuns: List<ActiveRunState>) {
+    fun bind(activeRuns: List<ActiveRunState>, fallbackRunId: Long? = null) {
         val current = state ?: return
-        state = current.bind(activeRuns)
+        val before = current.boundRunId
+        val next = current.bind(activeRuns, fallbackRunId)
+        state = next
+        // 被在途表摘走的号（结算/被停/崩溃）记进账：之后任何宿主读口按它查都是"不在途"
+        // （走 `RuntimeController` 的都在途表里）—— 暂停按钮据此**静默早退**，不再把
+        // 「已结算」翻译成「该执行不支持暂停」那句给用户看（2026-10-15 用户令）。
+        //
+        // 判据：**仍绑着（boundRunId 没变）但不再 running** —— 结算不解绑，正是这个
+        // 形状：run 离开在途表时绑定保持、running 回 false。反例都不记：
+        // - 换绑（boundRunId 变了）：暂停按钮只作用于**当前**绑定，旧号已不可达，
+        //   记不记都无差别（且串行池下新 run 起跑前旧的必然先让位，见 `LogWindowState.bind`）；
+        // - 兜底补位号（from null → fallback）：那只是"还没在途过"的补位，不是被摘走
+        //   （且它 running 恒 false，暂停钮从画出来起就是置灰的，点不到）。
+        if (before != null && next.boundRunId == before && !next.running) settledRunIds += before
     }
+
+    /** 已结算（离开在途表）的 runId 集；[bind] 维护，只进不退（runId 不重用）。 */
+    private val settledRunIds = HashSet<Long>()
 
     /**
      * 清空日志（**只推水位，不删文件**）：`watermarkSeq` 推到当前可见最大 seq ——
@@ -164,11 +186,19 @@ class LogWindowController(
     /**
      * 暂停/继续（悬浮窗第一颗钮；boundRunId null 时不问宿主 —— 没绑上就没有可停的东西）。
      *
-     * false（冻不住/已结算）→ toast 如实说，不假装成功。
+     * **已结算（[settledRunIds] 里有它）→ 静默早退**：暂停钮的可用态按 `state.running`
+     * 画，但轮询 400ms 一轮，用户点击可以落在"最后一轮还见它在途、这一下已结算"的窗口
+     * 里 —— 按钮此刻仍可点，宿主一查就 false。把那个 false 翻译成「该执行不支持暂停」
+     * 是撒谎（2026-10-15 用户令）：它已经**结束**了，不是"不支持"，结算本来就是暂停的
+     * 终态。静默早退让按钮在这几帧里点了等于没点；下一轮 `running` 回 false、钮置灰，
+     * 没有误导性的话术。
+     *
+     * false（冻不住/已结算，但**还没被在途表摘走**）→ toast 如实说，不假装成功。
      */
     suspend fun togglePause() {
         val current = state ?: return
         val runId = current.boundRunId ?: return
+        if (runId in settledRunIds) return
         val host = hostSummary() ?: run {
             toast("宿主摘要未接线（Application 未实现 HostSummary）")
             return

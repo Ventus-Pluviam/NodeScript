@@ -17,6 +17,11 @@ import com.autoscript.ui.state.ConsoleLineState
  * 按归属找到"这次触发起来的那条 run"（同归属取最大 runId = 最近一次）。
  * 定时任务在后台自己跑起来时**不调 open**（用户令：后台不弹窗），故误绑窗口不存在 ——
  * 窗开着的时候同归属的新 run 只可能是用户刚点的那一次（池容量默认 1，串行）。
+ *
+ * **快速脚本的兜底补绑**（2026-10-15 用户令「有时点执行日志不显示在悬浮窗上」）：
+ * 起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间 —— 在途表一次都没
+ * 见过它，从开窗起一次都没绑上过。此时 [bind] 收一个从行里摘出的 [fallbackRunId]
+ * 补绑（详见 [bind] 的 KDoc），窗口仍能画刚跑完的输出，而不是永远停在「未开始」。
  */
 data class LogWindowState(
     val projectId: String,
@@ -83,9 +88,18 @@ data class LogWindowState(
      *   等于把刚跑完的日志在用户眼前自动清掉。窗口保持绑在最后一条同归属 run 上，
      *   输出照常可见；只有一种情况落空态：**从开窗起一次都没绑上过**（启动失败/
      *   门禁拒 —— 失败 toast 已经说了原因，窗再自关等于抢话，故留空态手动关）；
+     * - [fallbackRunId]：快速脚本的兜底（用户令「有时点执行日志不显示在悬浮窗上」）。
+     *   起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间 —— 在途表从开窗起
+     *   一次都没见过它，上面那层"结算不解绑"救不到（它**从没绑上过**）。此时从行里摘
+     *   出的归属（调用方现算，见 `MainActivity` 轮询处）**补绑**：仍为 null（没绑上也没
+     *   补位）才落空态。行摘的 risk 受「池容量默认 1 串行 + 窗只开给用户刚点的那一次」
+     *   约束 —— 归属不会错，最多是"跑了 A 又紧跟跑 B、A 的行先到"把 B 的窗先指向 A，
+     *   下一轮同归属在途 B 现身后立刻换回（误绑窗口只存在一帧，且输出仍如实按行归属画）。
+     *   **它不被当作"跑起来过"**：[running]/[paused] 都只看在途表（match），补绑号
+     *   running 恒 false —— 标题缀「· 已结束」、暂停钮置灰，画的是"刚跑完"不是"正在跑"；
      * - paused 随绑定 run 同步（run 结算消失后 paused 回 false，不留僵尸态）。
      */
-    fun bind(activeRuns: List<ActiveRunState>): LogWindowState {
+    fun bind(activeRuns: List<ActiveRunState>, fallbackRunId: Long? = null): LogWindowState {
         val match = activeRuns
             .filter { it.projectId == projectId && it.scriptPath == relPath }
             .maxByOrNull { it.runId }
@@ -94,7 +108,9 @@ data class LogWindowState(
         // 取最大），故不存在"keep 在表里而 match 为 null"的第三态。
         val keep = boundRunId
         return copy(
-            boundRunId = match?.runId ?: keep,
+            // 补绑只在「从开窗起一次都没绑上过」时生效：keep 非空（绑过）就不碰 ——
+            // 已绑的那条再快也不能被行里摘出的号顶掉（同一归属重复触发时行按实际归属画）。
+            boundRunId = match?.runId ?: keep ?: fallbackRunId,
             running = match != null,
             paused = match?.paused == true,
         )
