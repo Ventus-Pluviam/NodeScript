@@ -419,6 +419,10 @@ fun ProjectScreen(
                             // 删除**排在后面**（右端）：破坏性动作不放在拇指先够到的位置上。
                             // 删完**退出选择模式** —— 行没了，选中集里不能留幽灵键
                             // （留着的话顶栏还写"已选 N 项"，而列表里一行都没选上）。
+                            // 目标清单在**这里**算一次、同一次组合里既驱动禁用态又被点击用掉：
+                            // 「取消全选」之后选中集可以是空的（选择模式还在），那时这格若仍可点，
+                            // 用户按下去只会什么都不发生 —— 破坏性动作的哑火比灰着更难懂。
+                            val targets = deleteTargets(selected, state.files)
                             Row {
                                 ActionBarAction(
                                     text = if (allSelected) "取消全选" else "选择全部",
@@ -427,8 +431,8 @@ fun ProjectScreen(
                                 ActionBarAction(
                                     text = "删除",
                                     tone = StatusTone.PROBLEM,
+                                    enabled = targets.isNotEmpty(),
                                     onClick = {
-                                        val targets = deleteTargets(selected, state.files)
                                         selected = emptySet()
                                         scope.launch { onDelete(targets) }
                                     },
