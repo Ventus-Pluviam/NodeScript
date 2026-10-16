@@ -109,6 +109,11 @@ data class LogWindowState(
      *   下一轮同归属在途 B 现身后立刻换回（误绑窗口只存在一帧，且输出仍如实按行归属画）。
      *   **它不被当作"跑起来过"**：[running]/[paused] 都只看在途表（match），补绑号
      *   running 恒 false —— 第一颗钮画重跑、暂停钮置灰，画的是"刚跑完"不是"正在跑"；
+     *   **归属过滤是硬要求**（2026-10-16 修）：调用方给的这个号必须已经按
+     *   `projectId` + `relPath` 过滤过（见 `fallbackRunIdFor`）—— 此前调用方取的是
+     *   全库最新非引擎外行，窗刚开时会被补到**上一次别的脚本**的输出上，
+     *   用户读到的是「它跑了上一次那个脚本」。本函数**不替调用方补这道过滤**：
+     *   它只看得到 runId，看不到归属（行里没有归属字段）；
      * - paused 随绑定 run 同步（run 结算消失后 paused 回 false，不留僵尸态）。
      */
     fun bind(activeRuns: List<ActiveRunState>, fallbackRunId: Long? = null): LogWindowState {

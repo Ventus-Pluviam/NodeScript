@@ -508,15 +508,22 @@ class MainActivity : ComponentActivity() {
                 //
                 // **快速脚本的兜底补绑**（用户令「有时点执行日志不显示在悬浮窗上」）：
                 // 起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间，在途表
-                // 一次都没见过它 —— 从已读行里摘"本次归属最近一条非引擎外行"的 runId
-                // 补绑（窗口没绑上时用；规则与风险见 `LogWindowState.bind` 的 KDoc）。
-                logWindow.bind(
-                    consoleState.activeRuns,
-                    fallbackRunId = consoleState.scriptOutputLines()
-                        .asSequence()
-                        .filter { it.runId != 0L }
-                        .maxByOrNull { it.runId }?.runId,
-                )
+                // 一次都没见过它 —— 从落盘执行索引里挑**同归属**最近一条 run 补位
+                // （见 `fallbackRunIdFor`；2026-10-16 修：此前取的是全库最新行，
+                // 没有归属过滤，于是窗刚开时会被补到**上一次别的脚本**的输出上，
+                // 用户读到的是「它跑了上一次那个脚本」）。
+                //
+                // **只在窗从没绑上过时查**（`boundRunId == null`）：这条读口要读一次
+                // index.jsonl，绑上之后每轮再读纯属白花。
+                val pending = logWindow.state
+                val fallback = if (pending != null && pending.boundRunId == null) {
+                    runCatching { hostSummary()?.scriptLogIndex() }.getOrNull()?.let { snapshot ->
+                        com.autoscript.ui.overlay.fallbackRunIdFor(pending, snapshot.rows)
+                    }
+                } else {
+                    null
+                }
+                logWindow.bind(consoleState.activeRuns, fallbackRunId = fallback)
             }
             // 系统栏图标的明暗跟**本 App 的主题档位**走，不是跟系统深色开关走：
             // 用户在顶栏把主题切成浅色、而系统还是深色时，状态栏图标必须转深色，
@@ -892,6 +899,31 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         homeState = HomeState.read(hostSummary())
         resumeTick++
+    }
+
+    /**
+     * 应用窗口的触摸入口（2026-10-16 用户报「点击软件非悬浮窗界面的时候，悬浮窗输入框还有光标」）。
+     *
+     * **为什么在这一层**：悬浮窗是**另一个窗口**（`TYPE_APPLICATION_OVERLAY`），它收不到
+     * 本窗口的指针事件，而本窗口的 Compose 树也看不到那一边 —— 跨窗口唯一确定的事实是
+     * "用户的手指点在了本窗口里"，那个事实只有 `Activity.dispatchTouchEvent` 说得清。
+     * 这里只做一件事：**通知注册表清掉独立窗口（系统悬浮窗）的焦点**
+     * （`FocusDismissRegistry.clearSeparateWindows`）。**应用侧各面一个不碰** ——
+     * 本窗口的 Compose 树自己看得见这一下点按（`dismissFocusOnTapOutside` 按 bounds 判），
+     * 在这里再清一次会与那次"清 → 重新聚焦"打架（在输入框里点一下放光标时输入法闪一下）。
+     *
+     * 与 `DismissFocusOnWindowBlur`（窗口焦点那一路）**并存不重复**：那条管"整个应用切到
+     * 后台/别的应用"这类窗口焦点变化，这条管"点在应用里、但悬浮窗盖在上面"——
+     * 后者窗口焦点**不变**（悬浮窗带 `FLAG_NOT_FOCUSABLE`，从不抢窗口焦点），
+     * 靠窗口焦点那一路永远收不到。两条合起来才盖全。
+     *
+     * **只通知、不消费**：事件照常往下走（返回 super），列表滚动/点按/长按一字不动。
+     */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        if (ev?.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            com.autoscript.ui.components.FocusDismissRegistry.clearSeparateWindows()
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     /**
@@ -1272,6 +1304,12 @@ class MainActivity : ComponentActivity() {
             // （窗的 relPath 恒为削过前缀的形状，不会双份前缀）。
             logWindow.rerun(state.projectId, state.relPath)
             try {
+                // **重跑前先确认窗里那个文件还在**（2026-10-16 用户报「运行的时候会执行上一次
+                // 执行成功的脚本」）：窗绑的是"上一次那条执行的文件"，它可能已被改名/删掉。
+                // 缺文件的真相只有引擎侧那句 `ERR_FILE_NOT_FOUND`（落在意图日志/档案里），
+                // 窗里看到的是"没有任何新输出"—— 读起来正是"它跑了上一次那个脚本"。
+                // 这里先读一次（读口与引擎侧同一条 `ScriptFileOps` 判据），不在就当场说清楚。
+                hostSummary()?.readScriptFile(state.projectId, "${state.projectId}/${state.relPath}")
                 runScriptFileOp(state.projectId, "${state.projectId}/${state.relPath}")
             } catch (t: kotlinx.coroutines.CancellationException) {
                 throw t
@@ -1300,6 +1338,11 @@ class MainActivity : ComponentActivity() {
             // `logWindowRef()` 抛 ISE，而本函数跑在 `scope.launch` 里（组合作用域），
             // 上抛 = 终结进程。开窗是**回执**不是执行的前提 —— 它失败就退成
             // 「没有悬浮窗的那次立即执行」（任务照跑，结局在控制台/任务日志里）。
+            // **立即执行也开窗**（2026-10-16 用户口径：执行了就要看得见输出、收得到输入）——
+            // 此前只有项目页那颗 ▶ 开窗，任务中心「立即执行」跑完没有任何输出面。
+            // 归属形状与开窗那一套同源：`TaskRowState.scriptPath` 是**项目内**路径
+            // （任务登记那条链，与在途表 `ActiveRunRow.scriptPath` 同一口径），
+            // 不必再削首段前缀。
             val window = runCatching { logWindowRef() }.getOrNull()
             window?.open(task.projectId, task.scriptPath)
             performTaskOp { host ->
