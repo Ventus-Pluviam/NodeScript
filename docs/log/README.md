@@ -1,6 +1,19 @@
 # 流水切片（按日期）
 
-## 最新追记（2026-10-16：崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
+## 最新追记（2026-10-16：readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
+
+- [2026-10-16 · readline 提示语/回显 与 触摸穿透](2026-10-16.md) 一条目（最新）：
+  ① **readline 的提示语走桥**：`createInterface({input})` 没给 output 时 `rl.question('请输入：')`
+  的提示语写进虚空（`terminal:false` 下 output 缺位；给了 `process.stdout` 也进排水管道）—— 药 =
+  引导期包 `createInterface`，脚本没给 output 时补一个假 output 把提示语送 console 数据面
+  （给了 output 的一概不碰；只包 `readline` 与 `readline/promises` 两条工厂）；
+  ② **窗口侧回显**：`terminal:false` 下 readline 从不回显用户敲的行（那是 TTY 驱动的事）——
+  `LogWindowState.echoes` + `rows` 按 `atSeq` 归并进行流（不缀末尾，否则因果读反）；
+  ③ **子页空白处不再穿透到底下面板**：病在 `hitTestChild`（子页空白无 pointerInput 节点 →
+  `hasHit()` false → 继续试下面的兄弟，同坐标恰是「依赖管理」入口行）—— 药 = `Modifier.claimPointerHits`
+  挂在子页那层根上（**不消费事件**，只占位；下层 `consume()` 的上一版会连子页自己的点击一起废掉，
+  错法留证在 KDoc）。
+
 
 - [2026-10-16 · 三条用户报](2026-10-16.md) 三条目（最新一条）：
   ① **崩溃病因进悬浮窗**：脚本抛错的 `stderrTail` 此前只进档案 `crashSummary`（要翻任务日志
