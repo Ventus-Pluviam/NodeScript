@@ -183,8 +183,12 @@ data class LogWindowState(
      * 日志块的**行流**：脚本输出与用户输入回显按 seq 归并（[echoes] 的 KDoc 讲了
      * 为什么回显必须存在）。
      *
-     * [lines] 传的是**已过滤**的可见行（宿主那一份 `visible(lines)`）——本函数只做归并，
-     * 不再过滤一次：把"未绑定 → 空表"那条口径抄成两份，两处迟早会不一致。
+     * [lines] 传**未过滤**的 console 行现值（宿主手里那份）—— 过滤由本函数**自己**做
+     * （[visible]）：调用方手里已经过滤过一遍也照样对（过滤是幂等的），而"忘了先过滤"
+     * 不会再悄悄把别条 run 的行画进窗里。
+     *
+     * **未绑定 → 空表，回显也不例外**（与 [visible] 同一条口径：空态由内容层画，
+     * 不在这里编一行假的）。
      *
      * 归并键是 [InputEcho.atSeq]：一条回显插在**"最后一条 seq ≤ atSeq 的脚本行"之后**。
      * 这个位置不是装饰 —— 回显要是统一缀在末尾，「提示语 → 脚本结果 → 我刚敲的那一行」
@@ -192,18 +196,20 @@ data class LogWindowState(
      * （同值保持送出顺序）。
      */
     fun rows(lines: List<ConsoleLineState>): List<LogWindowRow> {
-        if (echoes.isEmpty()) return lines.map(LogWindowRow::Output)
-        val out = ArrayList<LogWindowRow>(lines.size + echoes.size)
+        if (boundRunId == null) return emptyList()
+        val shown = visible(lines)
+        if (echoes.isEmpty()) return shown.map(LogWindowRow::Output)
+        val out = ArrayList<LogWindowRow>(shown.size + echoes.size)
         var i = 0
         for (e in echoes.sortedBy { it.atSeq }) {
-            while (i < lines.size && lines[i].seq <= e.atSeq) {
-                out += LogWindowRow.Output(lines[i])
+            while (i < shown.size && shown[i].seq <= e.atSeq) {
+                out += LogWindowRow.Output(shown[i])
                 i++
             }
             out += LogWindowRow.Input(e.text)
         }
-        while (i < lines.size) {
-            out += LogWindowRow.Output(lines[i])
+        while (i < shown.size) {
+            out += LogWindowRow.Output(shown[i])
             i++
         }
         return out

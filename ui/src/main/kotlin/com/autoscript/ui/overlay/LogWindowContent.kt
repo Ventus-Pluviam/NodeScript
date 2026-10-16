@@ -359,7 +359,7 @@ private fun BoxScope.LogBlock(state: LogWindowState, lines: List<ConsoleLineStat
         BlockHint("本次执行未开始（启动失败、未通过门禁，或起跑即被停止）")
         return
     }
-    // 行流 = 脚本输出 + 用户输入回显（`LogWindowState.rows` 按 seq 归并两者）。
+    // 行流 = 脚本输出 + 用户输入回显（`LogWindowState.rows` 自己按绑定/水位过滤后再按 seq 归并）。
     val rows = state.rows(lines)
     if (rows.isEmpty()) {
         BlockHint(
