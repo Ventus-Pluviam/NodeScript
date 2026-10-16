@@ -26,6 +26,7 @@ import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -1275,6 +1276,29 @@ class InstallCoordinatorTest {
         assertTrue(
             journal.all().map { it.state } == listOf(InstallJournal.State.BEGIN, InstallJournal.State.COMMIT),
             "一致即照常进事务",
+        )
+    }
+
+    @Test
+    fun `取 packument 不落在调用线程上（Android 主线程禁用网络，2026-10-17 设备实测）`() = runBlocking {
+        // 「调用线程」在这里冒充「主线程」：界面（`rememberCoroutineScope()` = Main）与控制台
+        // 都是拿自己那条协程**直接 await 整条 install 链**的，所以「verify 跑在调用方线程上」
+        // 就等价于「取 packument 落在主线程上」—— 而 Android 上那就是
+        // NetworkOnMainThreadException（设备实测：装依赖当场报，一个包都还没发出去）。
+        // 本机 JVM 没有那道守门人，这条断言是它在单测里的替身。
+        val caller = Thread.currentThread()
+        val seen = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val v = RegistryVerifier { name, _, _ ->
+            seen.set(Thread.currentThread())
+            NpmRegistryVerifier.Verdict.Agreed(name, "1.7.0", I, "https://x.tgz", false)
+        }
+        val c = coordinator(executor = FakeExecutor(), registryVerifier = v)
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        assertNotNull(seen.get(), "校验缝必须真被调到 —— 没调到的话这条断言是在自欺")
+        assertNotSame(
+            caller,
+            seen.get(),
+            "取 packument 落在调用方线程上了：Android 上就是 NetworkOnMainThreadException",
         )
     }
 

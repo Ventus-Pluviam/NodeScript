@@ -276,13 +276,24 @@ class InstallCoordinator(
      *
      * [IllegalArgumentException]（包名形态非法）不在这层兜：调用方拿它当 ERR_INVALID_PARAM
      * （§7），与 git: 依赖的入口即拒同一路径。
+     *
+     * **取 packument 必须离开调用线程**（2026-10-17 设备实测的 `NetworkOnMainThreadException`）：
+     * [NpmRegistryVerifier.verify] 是**同步阻塞**的 `HttpURLConnection`（每个包两趟 packument，
+     * 5s + 8s 超时），而这条链从界面/控制台一路 suspend 下来 —— suspend 只给"可挂起"的许可，
+     * **不搬线程**。界面那条协程是 `MainActivity` 的 `rememberCoroutineScope()`（= Main），
+     * 于是取 packument 落在主线程上，Android 当场抛：装依赖一个包都还没发出去就没了。
+     * 包在 `Dispatchers.IO` 上是本文件既有的写法（见 [cacheStorage]），这条只是先前漏了。
      */
     private suspend fun crossCheckRegistry(projectId: String, specs: List<PackageSpec>, args: List<String>) {
         val verifier = registryVerifier ?: return
         val primary = registryOf(projectId)
         val downgraded = ArrayList<String>()
         for (spec in specs) {
-            val verdict = verifier.verify(spec.name, spec.version, primary)
+            // 离开调用线程（理由见 KDoc：主线程禁用网络）。每个包两趟往返都可能阻塞
+            // 十几秒，所以整趟都放 IO 上，不只是"发请求那一行"。
+            val verdict = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                verifier.verify(spec.name, spec.version, primary)
+            }
             when (verdict) {
                 is NpmRegistryVerifier.Verdict.Agreed -> Unit   // 一致即放行（不广播成功）
                 is NpmRegistryVerifier.Verdict.Disagreed -> {
