@@ -184,7 +184,7 @@ fun ProjectScreen(
      * （本屏拿不到 `filesDir`，也不该拿到 —— 它连 `files/scripts` 这个约定都不该知道）。
      * 失败原文抛，本屏把原因说出来（不静默复制一条空串）。
      */
-    onAbsolutePath: suspend (projectId: String, relPath: String) -> Unit,
+    onAbsolutePath: suspend (projectId: String, relPath: String) -> String,
     /**
      * 删除条目（菜单「删除」与选择模式顶栏那一格；2026-10-17 用户口径）。
      *
