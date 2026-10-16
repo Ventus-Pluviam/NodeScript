@@ -1,5 +1,18 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-17：CI 红修——`onAbsolutePath` 返回类型写成 `Unit`（本机把真错误滤掉了）；文件列表菜单三项 + 多选批量删除）
+
+- [2026-10-17 · CI 红修：`onAbsolutePath` 的返回类型](2026-10-17.md) 一条目（最新）：
+  `:ui:compileDebugKotlin` 红 —— 呈现层接缝 `onAbsolutePath` 写成了 `suspend (String, String) -> Unit`
+  （`onDelete` 是 Unit，抄顺手了），而 `copy.copy("已复制绝对路径", onAbsolutePath(...))` 要的是被复制
+  的**那条路径**；`MainActivity` 的 lambda 返回 String 而 Kotlin 允许往 Unit 上强转 ⇒ 只有真正取值
+  那一处炸（JVM 单测 + Android 构建两个 job 同一条红，engine-native 随之失败；**这次不是测试红**，
+  本机跑过的 92 例全绿）。药：类型改回 `-> String` + 按签名原文匹配的两条 detekt baseline 重生成。
+  **最值钱的一课**：本机没有 Android SDK/Compose，这两个文件只能"带已编好的 state 类空编一遍看有没有
+  真错误"，而上轮用的是**过窄的黑名单过滤**（`expecting|unresolved reference: <新符号>`）——
+  `Argument type mismatch` 这类**两边类型都解析得到**的错误一条都没进过滤表，**编译器报了、我没看**；
+  改成白名单式过滤（只滤 cascading 的 unresolved/infer）后立刻浮出，并与改动前的同一份文件对拍过。
+
 ## 最新追记（2026-10-17：文件列表菜单改三项（复制相对/绝对路径 + 删除）+ 多选批量删除）
 
 - [2026-10-17 · 文件列表菜单三项 + 多选批量删除](2026-10-17.md) 一条目（最新）：
