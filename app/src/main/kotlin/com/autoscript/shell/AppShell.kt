@@ -366,7 +366,15 @@ class AppShell(
                 if (powerManagerHandler != null) router.register("power_manager", powerManagerHandler)
                 systemHandlers?.registerAll(router::register)
 
-                val dispatcher = ControllerRunDispatcher(controller, screenGate)
+                // 崩溃行出口（2026-10-16 用户报「有不支持的函数应该在悬浮窗里输出报错」）：
+                // 脚本抛错的 stderr 尾部按 error 档写进控制台，归属仍是这次 runId ——
+                // 于是悬浮窗/控制台/日志管理同时看得见病因，而不是只在档案的 crashSummary 里
+                // （那份要翻到任务日志详情才读得到，悬浮窗画的是「没有输出」）。
+                val dispatcher = ControllerRunDispatcher(
+                    controller,
+                    crashLine = { runId, level, text -> console.append(runId, level, text) },
+                    screenGate = screenGate,
+                )
                 // §8.6 同源接线：deadline（恢复判过期）与排队上限（dispatcher 在途等多久）
                 // 是同一张表（`DEFAULT_QUEUE_TIMEOUTS === DefaultDeadlines`），这里显式喂给两边 ——
                 // 缺省参数恰好相同是巧合，写出来才是契约。

@@ -45,6 +45,21 @@ import com.autoscript.domain.scripts.EngineRunLink
  */
 class ControllerRunDispatcher(
     private val controller: RuntimeController,
+    /**
+     * 崩溃行出口（2026-10-16 用户报「有不支持的函数应该在悬浮窗里输出报错」）。
+     *
+     * 病：脚本抛错（`ReferenceError: prompt is not defined` 这类）的**唯一**去处是
+     * `RunSummary.stderrTail` —— 它进档案的 `crashSummary`（任务日志/日志管理看得见），
+     * 但**不进控制台**，于是悬浮窗里那条执行一行输出都没有，画的是
+     * 「本次执行没有输出（已结束）」。用户看见的是"脚本没反应"，而真相（哪一行、
+     * 什么错）就躺在没人读的 stderr 尾部。
+     *
+     * 药：结算为 Failed/Crashed 且有 stderr 尾部时，把它按 `error` 档写一行进控制台，
+     * **归属仍是这次 runId**（与脚本自己的 console 行同一条数据面、同一个归属过滤），
+     * 于是悬浮窗/控制台/日志管理三处同时看得见。缺省 `{ _, _, _ -> }` = 不写
+     * （单测/骨架零改动），生产在 `AppShell.assemble` 接 `ConsoleCollector::append`。
+     */
+    private val crashLine: (runId: Long, level: String, text: String) -> Unit = { _, _, _ -> },
     private val screenGate: ScreenGate = ScreenGate.AllowAll,
     private val defaultAwaitTimeoutMillis: Long = DEFAULT_AWAIT_TIMEOUT_MILLIS,
     /** 满池排队上限的显式覆盖；null = 按触发源分级取 [queueTimeoutFor]（§8.6 默认有界）。 */
@@ -96,13 +111,18 @@ class ControllerRunDispatcher(
         val awaitTimeout = pending.timeoutMillis ?: defaultAwaitTimeoutMillis
         return when (val completed = controller.awaitCompletion(started.runId, awaitTimeout)) {
             RuntimeController.Completed.StoppedClean -> DispatchReport(RunOutcome.Succeeded, link, stop)
-            is RuntimeController.Completed.StopTimeout ->
+            is RuntimeController.Completed.StopTimeout -> {
+                crashLine(started.runId, "error", crashText(completed.summary, started.runId))
                 DispatchReport(
                     RunOutcome.Failed(completed.summary?.exitCode, completed.summary?.stderrTail),
                     link,
                     stop,
                 )
-            is RuntimeController.Completed.Killed ->
+            }
+            is RuntimeController.Completed.Killed -> {
+                // 病因进控制台（见 [crashLine]）：脚本抛错时 stderr 尾部是**唯一**写着
+                // "哪一行、什么错"的地方，不写出去等于把病因留在没人读的档案里。
+                crashLine(started.runId, "error", crashText(completed.summary, started.runId))
                 // Completed.Killed 两条来路：自然 CRASHED（脚本抛错/宿主 exit≠0）与真被强杀 ——
                 // 措辞必须同时盖住，否则"脚本自己崩了"被日志写成"被强杀"就是撒谎（§1 诚实）。
                 // summary（进程侧退出码 + stderr 尾部）随 outcome 折进档案与意图日志（backlog B11）。
@@ -115,6 +135,7 @@ class ControllerRunDispatcher(
                     link,
                     stop,
                 )
+            }
             is RuntimeController.Completed.UnknownRun ->
                 DispatchReport(
                     RunOutcome.Crashed(
@@ -130,6 +151,21 @@ class ControllerRunDispatcher(
                 DispatchReport(RunOutcome.Crashed("完成等待超时，已强杀 runId=${started.runId}"), link, stop)
             }
         }
+    }
+
+    /**
+     * 崩溃行的**一句话**（见 [crashLine]）：stderr 尾部（引擎侧已截到
+     * `RunSummary.MAX_DETAIL`）拼上退出码；没有 stderr 尾部时不编一句"崩了"——
+     * 空话会让用户以为看见了病因，而实际什么都没说（此时退回只报退出码）。
+     *
+     * 退出码缺席（仍存活/强杀路径不填摘要）同样如实略过，不写 `exit=null`。
+     */
+    private fun crashText(summary: com.autoscript.domain.engine.RunSummary?, runId: Long): String {
+        val tail = summary?.stderrTail?.trim().orEmpty()
+        val code = summary?.exitCode
+        val head = if (code != null) "脚本异常退出（exit $code）" else "脚本异常结束"
+        val who = "#$runId "
+        return if (tail.isEmpty()) "$who$head（引擎未捕获到错误输出）" else "$who$head：\n$tail"
     }
 
     companion object {
