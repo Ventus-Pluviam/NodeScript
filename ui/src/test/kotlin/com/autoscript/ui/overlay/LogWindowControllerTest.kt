@@ -230,6 +230,59 @@ class LogWindowControllerTest {
         assertEquals(4L, ctl.state?.watermarkSeq, "水位只进不退（退着调会让旧行又回来）")
     }
 
+    /**
+     * 顶栏「结束脚本」（2026-10-16 用户令）：与 [LogWindowController.togglePause] 同一条
+     * "在途才动"口径 —— 在途才问宿主，已结算**静默早退**（结算不解绑，窗里还绑着一个
+     * 跑完的号是常态），宿主说"已不在途"时话术如实、不替它宣布成功。
+     *
+     * 为什么窗口要有这颗钮：脚本卡在 stdin 等输入时引擎那条自动 EOF 帮不上忙
+     * （正卡着读的脚本"读者还在"），用户只能停掉它。
+     */
+    @Test
+    fun `stop 在途问宿主 已结算静默早退 宿主回 false 不假称成功`() = runBlocking {
+        val stopped = mutableListOf<Long>()
+        val toasts = mutableListOf<String>()
+        var hostResult = true
+        val ctl = LogWindowController(
+            hostSummary = {
+                object : FakeHost() {
+                    override suspend fun stopRun(runId: Long): Boolean {
+                        stopped += runId
+                        return hostResult
+                    }
+                }
+            },
+            toast = { toasts += it },
+            systemHost = null,
+        )
+        ctl.open("demo", "data/test.js")
+
+        // ① 从没绑上过：不问宿主、也不弹话术（点了等于没点，没有可停的东西）
+        ctl.stop()
+        assertEquals(0, stopped.size, "没绑上就没有可停的东西 —— 不该去猜一个 runId")
+        assertEquals(0, toasts.size)
+
+        // ② 在途：转给宿主；true = 已请求停止（不赌停没停，与控制台那颗停止钮同一套话术）
+        ctl.bind(listOf(run(7L)))
+        ctl.stop()
+        assertEquals(listOf(7L), stopped)
+        assertEquals(1, toasts.size)
+        assertTrue(toasts[0].contains("已请求结束"), "true 时说「已请求」，不替宿主宣布「已停」：${toasts[0]}")
+
+        // ②b 宿主回 false（AlreadyGone）：话术如实，不假称成功
+        hostResult = false
+        ctl.stop()
+        assertEquals(2, toasts.size)
+        assertTrue(toasts[1].contains("不在途"), "宿主回 false 时不许假称成功：${toasts[1]}")
+
+        // ③ 已结算（结算不解绑）：静默早退，一条话术都不多
+        ctl.bind(emptyList())
+        assertEquals(7L, ctl.state?.boundRunId, "前提：结算不解绑，号还留着")
+        ctl.stop()
+        assertEquals(2, stopped.size, "已结算的号不再问宿主")
+        assertEquals(2, toasts.size, "静默早退：不把「已结束」翻译成一句误导的话术")
+    }
+
     /** 一行脚本输出的呈现态（本文件只关心 seq/runId）。 */
     private fun line(seq: Long, runId: Long) = com.autoscript.ui.state.ConsoleLineState(
         seq = seq,

@@ -113,6 +113,9 @@ enum class GlyphKind {
     /** 继续（已暂停时的同一颗钮位）：右侧三角（与 [PLAY] 同形，悬浮窗内自足）。 */
     RESUME,
 
+    /** 结束脚本（悬浮窗顶栏「结束脚本」钮）：实心方块 —— 停止的通用字形。 */
+    STOP,
+
     /** 清空（悬浮窗「清空日志」钮）：垃圾桶（桶身 + 桶盖 + 两条竖纹）。 */
     CLEAR,
 
@@ -450,6 +453,16 @@ fun Glyph(
                 drawPath(
                     path(0.34f to 0.22f, 0.34f to 0.78f, 0.76f to 0.50f).apply { close() },
                     tint,
+                )
+            }
+
+            // 结束脚本：实心方块（停止的通用字形 —— 与 PLAY/RUN 那颗三角互为对偶，
+            // 窗里两颗都在时一眼读得出"这颗是停"）。画法照 PLAY：实心而非描边。
+            GlyphKind.STOP -> {
+                drawPath(
+                    path(0.31f to 0.31f, 0.69f to 0.31f, 0.69f to 0.69f, 0.31f to 0.69f).apply { close() },
+                    tint,
+                    style = Fill,
                 )
             }
 

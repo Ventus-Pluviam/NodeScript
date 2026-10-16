@@ -498,6 +498,8 @@ class MainActivity : ComponentActivity() {
                 onInputDraft = { logWindow.updateInputDraft(it) },
                 onSendInput = { scope.launch { logWindow.sendInput() } },
                 onImeFocusChange = { logWindow.setImeFocus(it) },
+                // 顶栏「结束脚本」（2026-10-16 用户令）：与暂停/继续同一条协程域。
+                onStop = { scope.launch { logWindow.stop() } },
             )
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
@@ -555,6 +557,7 @@ class MainActivity : ComponentActivity() {
                     onInputDraft = { logWindow.updateInputDraft(it) },
                     onSendInput = { scope.launch { logWindow.sendInput() } },
                     onImeFocusChange = { logWindow.setImeFocus(it) },
+                    onStop = { scope.launch { logWindow.stop() } },
                     modifier = themeSwitch.modifier,
                 ) { shellModifier ->
                         // 页内滚动容器要用的「露出来」口径（光标入视等）：pager 自己换成
@@ -1787,6 +1790,8 @@ private fun MainShell(
     onSendInput: () -> Unit,
     /** 输入框焦点变化（系统窗要靠它摘掉 `FLAG_NOT_FOCUSABLE`，否则输入法不起来）。 */
     onImeFocusChange: (Boolean) -> Unit,
+    /** 悬浮窗顶栏「结束脚本」的动作（2026-10-16 用户令；Activity 的 `logWindow.stop`）。 */
+    onStop: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
 ) {
@@ -1829,6 +1834,7 @@ private fun MainShell(
                         onInputDraft = onInputDraft,
                         onSendInput = onSendInput,
                         onImeFocusChange = onImeFocusChange,
+                        onStop = onStop,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

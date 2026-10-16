@@ -63,7 +63,7 @@ import com.autoscript.ui.theme.ThemeColors
  *
  * 版式（2026-10-16 用户令第三轮）：**窗 = 一张白卡片**（[WindowSurface] + 一圈淡灰描边
  * [ThemeColors.editorChipBorder]），里面**三块**同色白胶囊（[WindowBlockSurface]，
- * [RoundedCornerShape] + 内缩边距、**无描边**）：上面一块装标题行（标题 + 四颗图标钮）、
+ * [RoundedCornerShape] + 内缩边距、**无描边**）：上面一块装标题行（标题 + 五颗图标钮）、
  * 中间一块装日志、最下面一块是**给脚本发输入的输入行**（输入框 + 蓝色箭头）。
  * 三轮口径的取舍写在 [WindowSurface] 那处。
  * 未绑定（执行还没进在途表 / **从开窗起一次都没绑上过**）→ 空态「本次执行未开始」。
@@ -87,7 +87,7 @@ import com.autoscript.ui.theme.ThemeColors
  * **全回调化、不读任何 CompositionLocal**：系统宿主是离屏 `ComposeView`
  * （没有 MainActivity 的 `Theme` 之外的提供链 —— `Theme` 由宿主自己包，
  * 见 `SystemLogWindowHost`；`LocalToast`/`LocalClipboardManager` 在窗外拿不到）。
- * 四个按钮全部经参数进来。
+ * 五个按钮全部经参数进来。
  */
 @Composable
 fun LogWindowContent(
@@ -122,6 +122,15 @@ fun LogWindowContent(
      * `usingSystemWindow` 决定要不要往下传）。
      */
     onImeFocusChange: (Boolean) -> Unit,
+    /**
+     * **结束脚本**（顶栏那颗停止钮；2026-10-16 用户令）。
+     *
+     * 调 `LogWindowController.stop`（→ `HostSummary.stopRun` 的四步停走）。脚本卡在
+     * stdin 等输入时，引擎那条自动 EOF 帮不上忙（正卡着读的脚本"读者还在"）——
+     * 这颗钮是那个形态下唯一能收场的手段，也是"死循环/卡网络"的停止入口。
+     * 可用态按 [LogWindowState.running] 画（已结算就没得停了，第一颗钮那时画的是重跑）。
+     */
+    onStop: () -> Unit,
     /**
      * 本窗住在**独立窗口**里吗（系统悬浮窗 = true，in-app 兜底窗 = false）。
      *
@@ -161,8 +170,9 @@ fun LogWindowContent(
             .padding(WindowBlockGap),
         verticalArrangement = Arrangement.spacedBy(WindowBlockGap),
     ) {
-        // 头部（拖拽区）：标题 + 四钮 + **底缘一条分隔线**（2026-10-16 用户令
-        // 「悬浮窗标题下面加个分隔线」）。顺序用户令固定：暂停 / 清空 / 关闭 / 全屏。
+        // 头部（拖拽区）：标题 + 五钮 + **底缘一条分隔线**（2026-10-16 用户令
+        // 「悬浮窗标题下面加个分隔线」）。顺序：暂停·重跑 / **结束脚本** / 清空 / 关闭 / 全屏
+        // —— 前两颗是"跑"这一档（2026-10-16 用户令加第二颗），后三颗是窗自己的。
         //
         // 线画在**这一块的底缘之内**（不是两块之间另起一个子项）：三块现在同色
         // （第三轮配色「胶囊也白」），中间那 8dp 缝里悬一条线会像"飘着"；贴着底缘
@@ -209,6 +219,15 @@ fun LogWindowContent(
                     enabled = state.running || state.boundRunId != null,
                     onClick = onFirstAction,
                     onLongClick = onFirstAction,
+                )
+                // 第二颗钮位：结束脚本（2026-10-16 用户令）。与第一颗同属"跑"这一档
+                // （暂停/重跑、结束），所以挨着放；后面三颗是窗自己的（清空/关闭/全屏）。
+                // 只在途可点：已结算时它没有任何可停的东西（那时第一颗画的是重跑）。
+                WindowIconButton(
+                    kind = GlyphKind.STOP,
+                    description = "结束脚本",
+                    enabled = state.running,
+                    onClick = onStop,
                 )
                 WindowIconButton(kind = GlyphKind.CLEAR, description = "清空日志", onClick = onClear)
                 WindowIconButton(kind = GlyphKind.CLOSE, description = "关掉悬浮窗", onClick = onClose)

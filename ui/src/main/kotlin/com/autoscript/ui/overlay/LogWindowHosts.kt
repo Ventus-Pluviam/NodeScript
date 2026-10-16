@@ -85,6 +85,8 @@ fun LogWindowInAppHost(
     onSendInput: () -> Unit,
     /** 输入框焦点变化（系统窗要靠它开输入法；in-app 宿主只转发，见 `LogWindowContent` 的 KDoc）。 */
     onImeFocusChange: (Boolean) -> Unit,
+    /** 顶栏「结束脚本」（2026-10-16 用户令；两个宿主同一份动作）。 */
+    onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shown = state.visible(lines)
@@ -144,6 +146,7 @@ fun LogWindowInAppHost(
                     onInputDraft = onInputDraft,
                     onSendInput = onSendInput,
                     onImeFocusChange = onImeFocusChange,
+                    onStop = onStop,
                     // in-app 兜底窗与 Activity 同一个窗口（见 `LogWindowContent` 的形参 KDoc）。
                     separateWindow = false,
                     modifier = Modifier.fillMaxSize(),
@@ -181,6 +184,8 @@ fun SystemWindowSync(
     onSendInput: () -> Unit,
     /** 输入框焦点变化（离屏窗靠它摘掉 `FLAG_NOT_FOCUSABLE`，否则输入法不起来）。 */
     onImeFocusChange: (Boolean) -> Unit,
+    /** 顶栏「结束脚本」（2026-10-16 用户令；离屏窗里同样是这一份动作）。 */
+    onStop: () -> Unit,
 ) {
     val state = controller.state
     val host = controller.systemHost
@@ -227,6 +232,7 @@ fun SystemWindowSync(
                     onInputDraft = onInputDraft,
                     onSendInput = onSendInput,
                     onImeFocusChange = onImeFocusChange,
+                    onStop = onStop,
                     // 离屏 `ComposeView` + `TYPE_APPLICATION_OVERLAY`：独立窗口。
                     separateWindow = true,
                 )

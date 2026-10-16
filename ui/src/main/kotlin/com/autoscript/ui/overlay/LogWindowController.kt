@@ -283,6 +283,45 @@ class LogWindowController(
     }
 
     /**
+     * **结束脚本**（悬浮窗顶栏「结束脚本」钮；2026-10-16 用户令）。
+     *
+     * 与 [togglePause] 同一条"在途才动"口径：没绑上（`boundRunId` null）或已结算
+     * （[settledRunIds] 里有它）一律**静默早退** —— 那颗钮的可用态按 `state.running` 画，
+     * 而轮询 400ms 一轮，点击可以落在"这一轮还见它在途、这一下已结算"的窗口里。
+     *
+     * **为什么窗口需要这颗钮**（它不是"再给一次停止的机会"那么随意）：脚本卡在 stdin 上
+     * 等输入时，引擎侧那条**自动 EOF** 帮不上忙（自动判据是"stdin 上没有读者了"，
+     * 而正卡着读的脚本读者还在）—— 用户唯一能收场的手段就是停掉它。另外它也是
+     * "脚本进了死循环/卡在网络"这类停止入口（控制台在途块那颗停止钮管的是命令面，
+     * 窗里得有自己的）。
+     *
+     * `stopRun` 的 three-state 如实转述（与控制台 [stopRunOp] 同一口径、同一措辞骨架）：
+     * true = 已请求停止（四步 quiesce 异步走，不赌停没停）；false = 点的时候已不在途
+     * （`AlreadyGone` 的诚实投影，不是失败）；抛 → 原文进 toast。成败都由下一次
+     * `bind` 刷（run 离开在途表 → `running` 回 false、第一颗钮画重跑）。
+     */
+    suspend fun stop() {
+        val current = state ?: return
+        val runId = current.boundRunId ?: return
+        if (runId in settledRunIds) return
+        val host = hostSummary() ?: run {
+            toast("宿主摘要未接线（Application 未实现 HostSummary）")
+            return
+        }
+        try {
+            val stopped = host.stopRun(runId)
+            toast(
+                if (stopped) "已请求结束脚本（停走由引擎完成，成败见日志）"
+                else "这次执行已不在途（已结算或还没开始）",
+            )
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            throw t
+        } catch (t: Exception) {
+            toast("结束脚本失败：${t.message ?: t.javaClass.simpleName}")
+        }
+    }
+
+    /**
      * 暂停/继续（悬浮窗第一颗钮；boundRunId null 时不问宿主 —— 没绑上就没有可停的东西）。
      *
      * **已结算（[settledRunIds] 里有它）→ 静默早退**：暂停钮的可用态按 `state.running`
