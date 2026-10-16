@@ -144,6 +144,8 @@ fun LogWindowInAppHost(
                     onInputDraft = onInputDraft,
                     onSendInput = onSendInput,
                     onImeFocusChange = onImeFocusChange,
+                    // in-app 兜底窗与 Activity 同一个窗口（见 `LogWindowContent` 的形参 KDoc）。
+                    separateWindow = false,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -225,6 +227,8 @@ fun SystemWindowSync(
                     onInputDraft = onInputDraft,
                     onSendInput = onSendInput,
                     onImeFocusChange = onImeFocusChange,
+                    // 离屏 `ComposeView` + `TYPE_APPLICATION_OVERLAY`：独立窗口。
+                    separateWindow = true,
                 )
             },
             now.x,

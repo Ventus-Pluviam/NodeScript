@@ -80,6 +80,8 @@ import com.autoscript.ui.components.BAR_MORE_DOTS_WEIGHT
 import com.autoscript.ui.components.BarMoreDotsSize
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.centerInRoot
+import com.autoscript.ui.components.DismissFocusOnWindowBlur
+import com.autoscript.ui.components.RegisterFocusDismiss
 import com.autoscript.ui.components.dismissFocusOnTapOutside
 import com.autoscript.ui.components.rememberFocusDismissState
 import com.autoscript.ui.components.reportFocusBounds
@@ -541,6 +543,10 @@ fun ProjectScreen(
     // `ManagementTransition` 逐值对着 `ActionBarLayout`）。返回键整条归它 —— 它把
     // 非手势返回键与预测式手势合流（TG 是一个 `OnBackAnimationCallback` 管四态，
     // `LaunchActivity:738-818`），所以**不能再挂 `BackHandler`**（LIFO 会吃掉手势）。
+    // 窗口失焦也收键盘（跨窗口那一半：点悬浮窗 = 本窗口失焦，见 `DismissFocusOnWindowBlur`）——
+    // 与下面同窗口那条是一对，缺一个就有"点了别处光标还在闪"的方向漏网。
+    RegisterFocusDismiss(focusDismiss)
+    DismissFocusOnWindowBlur(focusDismiss)
     ManagementTransition(
         page = editing,
         active = active,

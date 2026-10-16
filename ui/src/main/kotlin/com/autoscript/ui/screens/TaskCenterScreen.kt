@@ -74,6 +74,8 @@ import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.ContextMenu
+import com.autoscript.ui.components.DismissFocusOnWindowBlur
+import com.autoscript.ui.components.RegisterFocusDismiss
 import com.autoscript.ui.components.dismissFocusOnTapOutside
 import com.autoscript.ui.components.rememberFocusDismissState
 import com.autoscript.ui.components.reportFocusBounds
@@ -240,6 +242,10 @@ fun TaskCenterScreen(
 
     // 点搜索框外面就收键盘（容器侧手势见 `FocusDismiss`）—— 挂在根 Column 上，
     // 列表滚动/行长按照旧（Initial 趟只读不消费）。
+    // 窗口失焦也收键盘（跨窗口那一半：点悬浮窗 = 本窗口失焦，见 `DismissFocusOnWindowBlur`）——
+    // 与下一行的同窗口那条是一对，缺一个就有"点了别处光标还在闪"的方向漏网。
+    RegisterFocusDismiss(focusDismiss)
+    DismissFocusOnWindowBlur(focusDismiss)
     Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted).dismissFocusOnTapOutside(focusDismiss)) {
         // 顶栏跟页面同灰（批 41 用户拍板）：传 `background` 覆盖 `actionBarDefault`，
         // 栏与列表连成一块灰，不再是"白栏压灰页"。

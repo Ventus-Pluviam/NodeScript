@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -42,9 +43,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.FocusDismissRegistry
 import com.autoscript.ui.components.FocusDismissState
 import com.autoscript.ui.components.LogLineRow
 import com.autoscript.ui.components.Separator
+import com.autoscript.ui.components.DismissFocusOnWindowBlur
+import com.autoscript.ui.components.RegisterFocusDismiss
 import com.autoscript.ui.components.dismissFocusOnTapOutside
 import com.autoscript.ui.components.rememberFocusDismissState
 import com.autoscript.ui.components.reportFocusBounds
@@ -116,6 +120,16 @@ fun LogWindowContent(
      * `usingSystemWindow` 决定要不要往下传）。
      */
     onImeFocusChange: (Boolean) -> Unit,
+    /**
+     * 本窗住在**独立窗口**里吗（系统悬浮窗 = true，in-app 兜底窗 = false）。
+     *
+     * 只喂给 [RegisterFocusDismiss]：独立窗口那份焦点**收不到**应用里的点按
+     * （两棵组合、两个窗口），要靠 `MainActivity.dispatchTouchEvent` 通知；
+     * 而 in-app 兜底窗就在 Activity 窗口里，自己那棵组合看得见点按 —— 混为一谈会让
+     * "在兜底窗自己的输入框里点一下"被判成"点了应用"，清一次再聚焦（输入法闪一下）。
+     * 内容层是**共用**的（两个宿主画同一份），所以这个角色只能由宿主传进来。
+     */
+    separateWindow: Boolean,
     modifier: Modifier = Modifier,
 ) {
     // 窗底 = **白 + 一圈淡灰描边**；里面三块（标题行 / 日志 / 输入行）**同色白**
@@ -129,9 +143,15 @@ fun LogWindowContent(
     // 点输入行外面就收键盘（2026-10-16 用户报"焦点转移后光标还在闪"）：一份 state 管
     // 窗里那一个输入框；容器侧挂在下面这个 Column 上（Initial 趟只读不消费，日志拖选照旧）。
     val focusDismiss = rememberFocusDismissState()
+    // 窗口失焦也收键盘（跨窗口那一半：点应用界面 = 本窗失焦，见 `DismissFocusOnWindowBlur`）——
+    // 系统窗与 in-app 兜底窗都走这一份内容，两处一并接上。
+    RegisterFocusDismiss(focusDismiss, separateWindow = separateWindow)
+    DismissFocusOnWindowBlur(focusDismiss)
     Column(
         modifier
-            .dismissFocusOnTapOutside(focusDismiss)
+            // `clearAppFaces = true`：窗里点输入框外那一下要**连应用的搜索框一起收**
+            // （用户报「点击搜索框时，再点击悬浮窗也不会消失」）—— 见那条修饰符的 KDoc。
+            .dismissFocusOnTapOutside(focusDismiss, clearAppFaces = true)
             // 顺序照 `ScriptEditorScreen` 那颗白圆钮的先例：`background(shape)` → `border(…, shape)`
             // —— 两者各带形状，不用再套一层 `clip`（多一层只是多一次绘制指令）。
             .background(WindowSurface, WindowShape)
@@ -246,6 +266,9 @@ private fun InputRow(
     focusDismiss: FocusDismissState,
 ) {
     val palette = ThemeColors
+    // 本面的 FocusManager（下面输入框那条"拿到焦点就清别的窗口"要用它排除自己，
+    // 否则刚点中就清掉自己 = 输入法起不来）。
+    val focusManagerOfThisFace = LocalFocusManager.current
     Row(
         Modifier
             .fillMaxWidth()
@@ -285,7 +308,14 @@ private fun InputRow(
                 // 否则输入法根本不会起来（见 [onImeFocusChange] 的 KDoc）。
                 modifier = Modifier
                     .fillMaxWidth()
-                    .onFocusChanged { onImeFocusChange(it.isFocused) }
+                    .onFocusChanged {
+                        onImeFocusChange(it.isFocused)
+                        // 窗里这个输入框**拿到**焦点 = 用户的手已经在这一边了：把应用窗口
+                        // 那边的焦点收掉（用户报「点击搜索框时，再点击悬浮窗也不会消失」——
+                        // 点悬浮窗那一刻应用还在闪光标）。只做单向：这边拿到才清别人，
+                        // 失去焦点时不动别人（那时候用户可能正回到应用里打字）。
+                        if (it.isFocused) FocusDismissRegistry.clearAppFaces(except = focusManagerOfThisFace)
+                    }
                     // 上报 bounds 与聚焦态：窗根据此判"这一下点在输入行外"（见 `FocusDismiss`）
                     .reportFocusBounds(focusDismiss),
             )
