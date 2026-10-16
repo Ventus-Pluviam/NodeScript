@@ -56,6 +56,15 @@ import com.autoscript.domain.permission.BridgeCapability
  * - `channelDrain`：payload `{channelId,sinceSeq?,max?}` → 游标拉取（供 :app 层经
  *   EventBus/TSF 转发给订阅端，见领域注释：退出/事件推送走桥 EventBus）；同上按所有者校验；
  * - `channelClose`：payload `{channelId}` → 关闭并丢弃缓冲 → Ok `true`；同上按所有者校验；
+ * - `stdinIdle`：无参（**也没有 runId**）→ 关掉**调用方自己**那条执行的 stdin 写端
+ *   （发 EOF，[RuntimeController.closeStdin]）→ Ok `true|false`。报的是脚本侧的事实
+ *   「这次执行的 stdin 上没有读者了」（`bridge/js/stdin-idle.ts` 数监听器，`'pause'`
+ *   当闹钟，报一次即止），动作由宿主定 —— 脚本自己不 unref、不自己退，进程按标准流语义
+ *   （`process.stdin 'end'` → readline `'close'`）退干净。**目标恒是自己**：runId 取自
+ *   认证连接身份而不是 payload，所以不存在"关别人的 stdin"这条路，目录级能力位也因此
+ *   是 NONE（见 `BridgeCapabilityCatalog`）。false = 没有可关的写端（不在途 / 此前已关 /
+ *   替身引擎）—— **不是错误码**：脚本那边已经关掉读口了，如实回一个布尔即可
+ *   （与 `heartbeat` 的 `Ok false` 同一条"如实告知未被采纳"口径）；
  * - 未知方法 → Err ERR_NOT_IMPLEMENTED；非法载荷 → Err ERR_INVALID_PARAM。
  */
 class EnginesNamespaceHandler(
@@ -76,6 +85,7 @@ class EnginesNamespaceHandler(
         "channelEmit" -> channelEmit(request)
         "channelDrain" -> channelDrain(request)
         "channelClose" -> channelClose(request)
+        "stdinIdle" -> stdinIdle(request)
         else -> err(request, ErrorCode.ERR_NOT_IMPLEMENTED, "未知 engines 方法: ${request.method}")
     }
 
@@ -182,6 +192,19 @@ class EnginesNamespaceHandler(
         }
         val accepted = controller.heartbeat(runId, seq)
         return ok(request, DomainJson.encode(accepted))
+    }
+
+    /**
+     * 关掉调用方**自己**那条执行的 stdin 写端（发 EOF；见类 KDoc 的 `stdinIdle` 条）。
+     *
+     * **不用 payload**：目标 runId 只认认证连接的 `engineRunId`（`heartbeat` 同一条
+     * "不可自报"纪律）—— 少一个字段就少一条"脚本关别人 stdin"的路。缺身份（宿主直调 /
+     * 未认证）→ ERR_PERMISSION_DENIED，不猜它想关谁。
+     */
+    private suspend fun stdinIdle(request: BridgeRequest): BridgeResponse {
+        val caller = coroutineContext[AuthenticatedRunContext]
+            ?: return err(request, ErrorCode.ERR_PERMISSION_DENIED, "stdinIdle 缺执行身份")
+        return ok(request, DomainJson.encode(controller.closeStdin(caller.engineRunId)))
     }
 
     private fun parseExec(payload: String?): PoolAcquireRequest {

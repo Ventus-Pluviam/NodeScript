@@ -374,6 +374,22 @@ class NodeProcessEngine(
     }
 
     /**
+     * 关掉这次执行的 stdin 写端发 EOF（2026-10-16 用户令「答完自己退」；SPI
+     * [ScriptEngine.closeStdin] 的真实现）。宿主侧那条链的终点：脚本答完最后一个问题、
+     * 关掉 readline 之后，`stdin-idle.ts` 报上来的"没有读者了"在这里落成真 EOF。
+     *
+     * 与 [sendInput] 同一条"当前执行体"口径（没有在跑的执行 → false），也同一条
+     * `Dispatchers.IO` 纪律：关流可能等内核缓冲落地，不该占调用方的线程。
+     *
+     * **不检查 `stopRequested`**：正在收尸的执行关 stdin 只会拿到 false（进程没了/管道已关），
+     * 与 [sendInput] 同 —— 真实判据是"管道还在不在"，那由关流本身回答。
+     */
+    override suspend fun closeStdin(): Boolean = withContext(Dispatchers.IO) {
+        val current = execution ?: return@withContext false
+        current.process.closeStdin()
+    }
+
+    /**
      * 四步 quiesce 的「请求退出」步（§8.3）：SIGTERM → [NodeEngineConfig.stopGraceMillis] 内退净
      * 回 [StopResult.Clean]；超时回 [StopResult.TimedOut]（partial=true = 尚有残留），
      * 池侧 `PoolSlot.quiesce` 据此 kill 兜底。从未启动/已退净 → 如实 Clean（无事可停）。

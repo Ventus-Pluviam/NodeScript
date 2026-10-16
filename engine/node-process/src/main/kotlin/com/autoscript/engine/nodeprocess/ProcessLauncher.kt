@@ -71,6 +71,24 @@ interface SpawnedProcess {
      */
     fun writeStdin(line: String): Boolean = false
 
+    /**
+     * **关掉子进程 stdin 的写端**（发 EOF；2026-10-16 用户令「答完自己退」）。
+     *
+     * 语义就是终端的 Ctrl-D：管道读端（脚本的 `process.stdin`）收到流结束 ——
+     * `readline` 随之发 `'close'`、脚本里 `process.stdin.on('end')` 也照常触发，
+     * 于是"读完了"这件事按**标准流语义**到达脚本，进程自己退干净（本地实测：
+     * 引擎关写端后脚本 408ms、code 0 退出）。这是"脚本答完一个问题就不结束"那条
+     * 病症的正路 —— 上一版让脚本自己 `process.stdin.unref()`（提交 `91929b1d`，同日
+     * revert）既让脚本看不见 `'end'`，又要换全局 `readline.createInterface`。
+     *
+     * **不可逆**：关掉的写端打不开，之后 `writeStdin` 一律 false。所以调用方必须
+     * 有"确实没人再读了"的判据（JS 侧 `stdin-idle.ts` 的监听器计数，报一次即止）。
+     *
+     * 返回 false 的三种情形都**不抛**：没有活着的进程 / 写端已关（重复调用、进程已退）/
+     * 实现方不支持（缺省实现）。缺省 false：与 [writeStdin] 同一条"替身零改动"纪律。
+     */
+    fun closeStdin(): Boolean = false
+
     /** 等待退出，[timeoutMillis] 内退出回 true，超时回 false（不抛）。 */
     fun waitFor(timeoutMillis: Long): Boolean
 
@@ -274,6 +292,29 @@ class ProcessBuilderLauncher : ProcessLauncher {
                 val out = process.outputStream
                 out.write((line + "\n").toByteArray(StandardCharsets.UTF_8))
                 out.flush()
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        /**
+         * 关掉 stdin 写端发 EOF（见接口那处的 KDoc）。
+         *
+         * **先 flush 再关**：`close()` 自己会冲缓冲，但显式 flush 把"上一行还在缓冲里"
+         * 和"流结束"两件事的先后写在明处 —— 用户敲的最后一行不许被 EOF 追尾丢掉。
+         *
+         * **进程没了 / 已经关过 → false 不抛**：与 [writeStdin] 同一条口径
+         * （`IOException`、"Stream closed"都是"这次执行没了"的正常终点）。
+         * `close()` 是幂等的（重复关不抛），但这里仍以 `isAlive` 与异常兜底 ——
+         * 调用方拿 false 时不该以为"EOF 送到了"。
+         */
+        override fun closeStdin(): Boolean {
+            if (!process.isAlive) return false
+            return try {
+                val out = process.outputStream
+                out.flush()
+                out.close()
                 true
             } catch (_: Exception) {
                 false

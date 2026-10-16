@@ -101,5 +101,18 @@ class FakeEngine(
         return sendInputResult
     }
 
+    /**
+     * `closeStdin` 的账（2026-10-16「答完自己退」）：关了几次由 [closeStdinCalls] 记，
+     * 返回值由 [closeStdinResult] 定 —— 缺省 true 与 [sendInputResult] 同一条口径
+     * （引擎这一层该答的是"我这边没问题"，要测"写端已关/替身关不了"再关掉开关）。
+     */
+    var closeStdinCalls = 0
+    var closeStdinResult: Boolean = true
+
+    override suspend fun closeStdin(): Boolean {
+        closeStdinCalls++
+        return closeStdinResult
+    }
+
     override suspend fun lastRunSummary(): RunSummary? = summaryToReturn
 }

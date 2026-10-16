@@ -117,6 +117,18 @@ constexpr const char kNodeStartSymbol[] = "_ZN4node5StartEiPPc";
 // 这一条失败只打一行 stderr、**脚本照跑**：最坏退化成"裸 console.log 看不见"的今天
 // 形态，与 addon/dist 缺位同一条选择纪律（选填件不杀执行）。
 //
+// **stdin 空闲 → 宿主发 EOF**（2026-10-16 用户令「答完自己退」）：
+// 同一段装配里再调 `installStdinIdleWatch()`。脚本 `rl.close()` 之后进程不结束 ——
+// 本地实测挂住的是 **stdin 管道句柄**而不是 readline（`rl.close()` / `stdin.pause()`
+// 两种写法都挂）；标准出路是引擎关掉**写端**发真 EOF：脚本收到 `process.stdin 'end'`
+// → readline `'close'` → 进程 408ms、code 0 干净退出（脚本能自己感知流结束）。
+// 观察面只往 `process.stdin` 挂一个 `'pause'` 监听 —— **不换 readline 模块、不 unref**
+// （上一版 unref 补丁同日被推翻：它让脚本看不见 `end`，还得换全局 `createInterface`）；
+// 判据 = `data`/`readable` 监听器归零（`'pause'` 只当闹钟），报一次即止（EOF 不可逆）。
+// 三道守卫与上面两条**逐条相同**（dist 在位 / `runtimeBridge.installed` / 包装体自带
+// `Symbol.for` 幂等标记），失败也同样是"只打一行 stderr、脚本照跑"—— 最坏退化成
+// "答完一直显示在跑"的今天形态。
+//
 // **readline 提示语 → 桥**（§7.3；2026-10-16 用户报「悬浮窗不会显示请输入这三个字」）：
 // 同一段装配里再调 `installReadlineShim()`。脚本 `readline.createInterface({input})`
 // **没给 output** 时，`rl.question('请输入：')` 的提示语写进虚空（`terminal:false` 下
@@ -141,6 +153,10 @@ constexpr const char kBootstrap[] =
     "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
     "require(d+\"/readline-bridge.js\").installReadlineShim()"
     "}catch(e){console.error('readline 未接到桥上（rl.question 的提示语不出现在悬浮窗）: '+(e&&e.message||e))}"
+    "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
+    "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
+    "require(d+\"/stdin-idle.js\").installStdinIdleWatch()"
+    "}catch(e){console.error('stdin 空闲观察未装上（脚本答完仍显示在跑）: '+(e&&e.message||e))}"
     "require(process.argv[1]);";
 
 // 连 :main 的 unix socket；成功返回 fd，失败 -1（errno 保留给调用方打印）。

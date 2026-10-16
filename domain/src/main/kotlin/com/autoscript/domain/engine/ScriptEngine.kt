@@ -60,6 +60,26 @@ interface ScriptEngine {
      */
     suspend fun sendInput(line: String): Boolean = false
 
+    /**
+     * **关掉这次执行的 stdin 写端**（发 EOF；2026-10-16 用户令「答完自己退」；
+     * 缺省实现回 false）。
+     *
+     * 语义 = 终端的 Ctrl-D，不是"停这次执行"（那是 [stop]/[kill]）：管道读端收到流结束，
+     * 脚本侧 `readline` 发 `'close'`、`process.stdin.on('end')` 照常触发 —— 脚本按**标准
+     * 流语义**自己退干净（本地实测：关写端后脚本 408ms、code 0 退出）。它治的是
+     * 「`rl.close()` 之后进程不结束」这条：挂住的是 stdin 管道句柄，不是 readline。
+     *
+     * **不可逆且无人可撤销**：关掉的写端打不开，此后的 [sendInput] 一律 false，
+     * 脚本若还在等输入就会静默丢掉那个问题（本地实测：EOF 到得早时挂着的
+     * `question` 回调永不触发）。所以**调用方必须先有"确实没有读者了"的判据**
+     * （脚本侧 `stdin-idle.ts` 数监听器，报一次即止），这里不替它判。
+     *
+     * @return true = 已关（EOF 送出去了）；false = 没有在跑的执行 / 写端此前已关 /
+     *   本引擎关不了（替身、离线实现 —— 原文由实现日志，调用方如实报"不支持"，不假装）。
+     * 缺省 false：与 [sendInput]/[pause] 同一条"替身零改动"纪律。
+     */
+    suspend fun closeStdin(): Boolean = false
+
     /** 当前状态快照（事件推送走 bridge EventBus，不在此轮询建模）。 */
     suspend fun status(): EngineStatus
 

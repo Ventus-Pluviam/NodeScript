@@ -191,6 +191,29 @@ class RuntimeController(
     }
 
     /**
+     * 关掉一次**在途**执行的 stdin 写端（发 EOF；2026-10-16 用户令「答完自己退」；
+     * `EnginesNamespaceHandler` 的 `stdinIdle` 落点）。
+     *
+     * 与 [sendInput] 同一条"在途表精确命中"口径：不在途（已结算/从未存在）→ false ——
+     * 脚本自己报上来的 runId 走的是**认证连接身份**（不是 payload），所以这里命中的
+     * 一定是调用方**自己**那条；引擎外/替身 run 拿不到写端，也如实回 false。
+     *
+     * **幂等但不重放**：写端只能关一次，第二次（或进程已退）由引擎回 false ——
+     * 调用方（`stdinIdle`）把它当成"没有可关的了"，不回错误码（脚本那边已经
+     * 关掉读口了，这不是它的问题，也不该让它的桥调用失败）。
+     */
+    suspend fun closeStdin(runId: Long): Boolean {
+        val handle = guard.withLock { active[runId] } ?: return false
+        return try {
+            handle.slot.engine.closeStdin()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
      * 急停代次（[killAll]/[forceStopAll] 推进；读写都在 [guard] 临界区内）。
      *
      * 为什么要它：本类是池的**唯一**调用方，而池侧「排队等证」与「execute 启动中」两个窗口
