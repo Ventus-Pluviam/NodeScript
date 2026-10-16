@@ -116,6 +116,14 @@ constexpr const char kNodeStartSymbol[] = "_ZN4node5StartEiPPc";
 //   · 包装体自带 `Symbol.for` 幂等标记（重复装才是真会翻车的形态）。
 // 这一条失败只打一行 stderr、**脚本照跑**：最坏退化成"裸 console.log 看不见"的今天
 // 形态，与 addon/dist 缺位同一条选择纪律（选填件不杀执行）。
+//
+// **readline 提示语 → 桥**（§7.3；2026-10-16 用户报「悬浮窗不会显示请输入这三个字」）：
+// 同一段装配里再调 `installReadlineShim()`。脚本 `readline.createInterface({input})`
+// **没给 output** 时，`rl.question('请输入：')` 的提示语写进虚空（`terminal:false` 下
+// output 缺位就是没人收）；而 readline 包的那一层在**脚本没给 output** 时补一个假 output
+// （`EventEmitter` + `write`，显式非 TTY），把写进去的文本送同一条 console 数据面。
+// 三道守卫与上一条**逐条相同**（dist 在位 / `runtimeBridge.installed` / 包装体自带
+// `Symbol.for` 幂等标记），失败也同样是"只打一行 stderr、脚本照跑"。
 constexpr const char kBootstrap[] =
     "const a=require(process.env.AUTOSCRIPT_BRIDGE_ADDON);"
     "if(process.env.AUTOSCRIPT_SOCK_FD)a.setSocketFd(+process.env.AUTOSCRIPT_SOCK_FD);"
@@ -129,6 +137,10 @@ constexpr const char kBootstrap[] =
     "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
     "require(d+\"/console-bridge.js\").installConsoleBridge()"
     "}catch(e){console.error('console 未接到桥上（裸 console.log 不出现在悬浮窗）: '+(e&&e.message||e))}"
+    "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
+    "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
+    "require(d+\"/readline-bridge.js\").installReadlineShim()"
+    "}catch(e){console.error('readline 未接到桥上（rl.question 的提示语不出现在悬浮窗）: '+(e&&e.message||e))}"
     "require(process.argv[1]);";
 
 // 连 :main 的 unix socket；成功返回 fd，失败 -1（errno 保留给调用方打印）。
