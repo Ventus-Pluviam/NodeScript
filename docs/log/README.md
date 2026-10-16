@@ -1,5 +1,25 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-17：设备实测——装依赖抛 `NetworkOnMainThreadException`（交叉校验取 packument 落在主线程上））
+
+- [2026-10-17 · 设备实测：装依赖抛 `NetworkOnMainThreadException`](2026-10-17.md) 一条目（最新）：
+  用户报（原文）「安装依赖报错，networkonmainthreadexception」，报源是上一版真机包的用户自测。
+  **病**：`InstallCoordinator.crossCheckRegistry`（§10.5-1 多镜像交叉校验）调
+  `NpmRegistryVerifier.verify` → `HttpRegistrySource.packument` —— **同步阻塞**的 `HttpURLConnection`
+  （每包两趟 packument，5s + 8s 超时）。整条链确实是 suspend 的，**但 suspend 只给「可挂起」的许可、
+  不搬线程** —— 界面那条协程是 `rememberCoroutineScope()`（Main），于是取 packument 落在主线程上，
+  Android 当场抛，**一个包都还没发出去**（交叉校验摆在 `enqueueHeavy` 之前，是"先校验再排队"的刻意次序）。
+  **本机与 CI 都抓不到**：JVM 没有那道守门人（它是 Android runtime 的），单测里也没有任何"谁在哪个线程
+  上跑"的断言 ⇒ 这一类只能设备实测发现。**药**：`verify` 包进 `withContext(Dispatchers.IO)` ——
+  **本文件既有写法**（`cacheStorage`/`HostNodeExecutor`/`NpmScriptExecutor` 早就这么做），这条只是漏了；
+  全仓 main 扫过，`HttpRegistrySource` 是唯一网络调用点，一处即够。**回归闸**：新用例在假校验缝里记
+  `Thread.currentThread()`、断言它 ≠ 调用方线程 —— **已对拍**（去掉那行 `withContext` 后该用例红，
+  `expected: not same but was: <Thread[main,5,main]>`；加回来 99 例全绿）。验：模块 main+test 全量编译
+  零 error、`InstallCoordinatorTest` 99 例全过、detekt main+test 零 findings；`NpmSpawnGate*`/`T1Bridge*`
+  四类本机红是环境（缺 shim/asset 树与 noden），**拿 HEAD 版对拍红数逐字相同**（4/2/6/6）。
+  另说清（**不是 bug 是设计**）：交叉校验排在 `enqueueHeavy` 之前且要联网 ⇒ 按了安装到 npm 真开始之前
+  最长等 (5s+8s)×2×包数，用户看到的是"按了没反应"。
+
 ## 最新追记（2026-10-17：CI 红修——`onAbsolutePath` 返回类型写成 `Unit`（本机把真错误滤掉了）；文件列表菜单三项 + 多选批量删除）
 
 - [2026-10-17 · CI 红修：`onAbsolutePath` 的返回类型](2026-10-17.md) 一条目（最新）：
