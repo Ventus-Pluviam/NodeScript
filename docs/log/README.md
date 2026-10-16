@@ -1,6 +1,23 @@
 # 流水切片（按日期）
 
-## 最新追记（2026-10-16：readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
+## 最新追记（2026-10-16：引擎关 stdin 写端发 EOF + 顶栏「结束脚本」；readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
+
+- [2026-10-16 · 引擎关写端发 EOF + 顶栏「结束脚本」](2026-10-16.md) 一条目（最新）：
+  **用户裁定**（对上一版 `unref` 补丁的评审）：四条排序 ① 引擎关 stdin 写端发真 EOF（最干净、
+  正路）② 宿主显式结束 ③ 专用 `ask()` API ④ 进程内 `unref`（排最后）；用户定 ① **+自动退**，
+  另在顶栏加一颗「结束脚本」。**① 为什么是正路**（本机实测）：关写端 → 脚本收 `stdin 'end'`
+  → readline `'close'` → **408ms、code 0 干净退出**，且脚本**能自己感知**流结束（`unref` 给不了）；
+  **代价**：EOF 到得早（问题还挂着）→ 那个 `question` 回调永不触发（一次性、不可逆，所以"什么时候发"
+  必须有判据）。**② 照字面做不到**：`rl.close()`/`unref()` 都在脚本进程内，宿主手里没有 rl ——
+  它只有「关管道写端」或「杀进程」两条路（超时 `destroyForcibly` 不做默认：长活脚本会被误杀）。
+  **药**：脚本侧只报事实（`stdin-idle.ts`：`'pause'` 当闹钟 + `data`/`readable` 监听器计数当判据，
+  报一次 `engines.stdinIdle`，`setImmediate` 延后一拍以免误判"同 tick 关一个立刻开下一个"；
+  **不碰 readline 模块、不 unref**）→ 引擎侧五层关写端（`engines.stdinIdle` 目标恒是自己 →
+  `RuntimeController.closeStdin` → `ScriptEngine.closeStdin` → `NodeProcessEngine` →
+  `SpawnedProcess.closeStdin`；能力位 `NONE`）→ 顶栏「结束脚本」（`HostSummary.stopRun`，
+  在途才可点；兜「正卡在 stdin 读」与死循环那两类）。上一版那条（`91929b1d`）**同日 revert
+  （`1e402701`）**，原条目原地标 `~~作废~~`。守卫 8 条（含闭环：报上来 → 宿主关写端 → 脚本收
+  `end`+`close` 并 code 0 退出）。
 
 - [2026-10-16 · readline 提示语/回显 与 触摸穿透](2026-10-16.md) 一条目（最新）：
   ① **readline 的提示语走桥**：`createInterface({input})` 没给 output 时 `rl.question('请输入：')`
