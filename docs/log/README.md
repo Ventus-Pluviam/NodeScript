@@ -1,8 +1,25 @@
 # 流水切片（按日期）
 
-## 最新追记（2026-10-16：项目页新建落当前层 + 弹窗白底/胶囊输入框；CI 红修（E2E 取件夹具换线性扫描）；引擎关 stdin 写端发 EOF + 顶栏「结束脚本」；readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
+## 最新追记（2026-10-16：首页可写（根层建文件/建文件夹 + 项目号判据放宽）；项目页新建落当前层 + 弹窗白底/胶囊输入框；CI 红修（E2E 取件夹具换线性扫描）；引擎关 stdin 写端发 EOF + 顶栏「结束脚本」；readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
 
-- [2026-10-16 · 新建落当前层 + 弹窗白底/胶囊输入框](2026-10-16.md) 一条目（最新）：
+- [2026-10-16 · 首页可写：根层建文件/建文件夹 + 项目号判据放宽](2026-10-16.md) 一条目（最新）：
+  用户裁定 **「根层可写（打通三条判据）」**（报源：实测「我在首页创建的，怎么进了 demo 里面」——
+  根层此前不可写，`targetProject` 留着 `files.firstOrNull()?.projectId ?: "demo"` 的顶替兜底），
+  并裁定根层**文件夹名允许中文**。**编码 = 空 `projectId`（`ProjectId.ROOT`）**：`Path.resolve("")`
+  恒等自身 ⇒ `projectRoot(filesDir, ROOT) == files/scripts/`、`scriptFile(..., ROOT, RelPath("x.js")) ==
+  files/scripts/x.js`，**引擎侧一行不用改**；危险面就地设闸（`FsProjectStore.create/delete` 拒绝空串 ——
+  `rootFor(ROOT)` 就是库根，否则 `delete` 删掉整个项目库）。三条判据各改一处：列（`ScriptFilesRead` 的
+  `projectId` 改成 `nameCount == 1 → ROOT`）/ 读写（`ScriptFileOps.resolveInProject` 根层分支换成
+  "必须正好一层"，防越界那道闸一字不动）/ 跑（`projectInternalOrNull` 根层回 relPath 自身且必须单段）。
+  **项目号判据 `[A-Za-z0-9_-]+` → `[^/\\p{Cntrl}.]+`**（放宽的只是字符集，批 84 的"拒 `.`"不动；
+  不能只放宽根层 —— 根层文件夹落盘就是项目目录，两套判据会造出"建得出、里面文件打不开"）；
+  根层建文件夹 = 建项目（名字要过 `isValidProjectId`、不许叫 `node_modules`），顺带堵"建了但看不见"
+  （不以点开头、UTF-8 ≤ 255 字节），**文件名不受项目名那两条限制**。前端：根层 FAB/对话框说「新建项目」、
+  日志面三处与**悬浮窗标题**不再渲染成 `//x.js`。验：本机 JUnit launcher 真跑 **118 例全绿**
+  （domain 44 / app 26 / ui 48，含新增 16）、detekt 四模块零 findings（`:ui` baseline 外科式改 2 行）、
+  文档链接门 786 条过。
+
+- [2026-10-16 · 新建落当前层 + 弹窗白底/胶囊输入框](2026-10-16.md) 一条目：
   用户四条口径：**① 新建落在"你按 FAB 的那一层"**（旧口径只取项目名，进了 `demo/lib/` 也落 `demo/`）
   —— 合约加末位参数 `HostSummary.createEntry(projectId, name, isFolder, dirRelPath = null)`，
   呈现层把 `currentFolder` 原样传下去、中间三层都不解释路径，裁决全在 `ScriptFileOps.resolveName`
