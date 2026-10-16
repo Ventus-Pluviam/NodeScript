@@ -12,7 +12,9 @@ import org.junit.jupiter.api.io.TempDir
 
 /**
  * 新建文件/文件夹落盘（[ScriptFileOps]）的裁决面：
- * - 合法名字落到 `files/scripts/<projectId>/<name>`（路径出处在 [com.autoscript.domain.scripts.ScriptPaths]）；
+ * - 合法名字落到 `files/scripts/<projectId>/<dirRelPath>/<name>`（路径出处在
+ *   [com.autoscript.domain.scripts.ScriptPaths]）；父文件夹由 `dirRelPath` 说（2026-10-16
+ *   用户口径「在当前进入的文件夹中新建」），**必须已存在**、不许越界、不许跨项目；
  * - 非法名字（含 `/`、`..`、空）拒绝 —— 原文抛，呈现层不写第二套判据；
  * - **不覆盖已存在**（撞名抛 `FileAlreadyExistsException`）；
  * - 项目目录不存在拒绝（而不是静默建到别处）。
@@ -39,6 +41,55 @@ class ScriptFileOpsTest {
         assertTrue(Files.isDirectory(dir.resolve("scripts/demo/lib")))
         // 新文件是空的（占位，不是模板）。
         assertEquals(0L, Files.size(dir.resolve("scripts/demo/main.js")))
+    }
+
+    @Test
+    fun `指定父文件夹时落在那一层`() {
+        Files.createDirectories(dir.resolve("scripts/demo/lib"))
+        ScriptFileOps.createFile(dir, "demo", "main.js", "demo/lib")
+        // 目录行的 relPath 带尾随 `/`（契约约定），新建那条链路原样传下来也要认。
+        ScriptFileOps.createFolder(dir, "demo", "deep", "demo/lib/")
+        assertTrue(Files.isRegularFile(dir.resolve("scripts/demo/lib/main.js")))
+        assertTrue(Files.isDirectory(dir.resolve("scripts/demo/lib/deep")))
+        // 项目根那一层**没有**多出来 —— "落错层"的典型形态就是文件出现在上一层。
+        assertTrue(!Files.exists(dir.resolve("scripts/demo/main.js")))
+        assertTrue(!Files.exists(dir.resolve("scripts/demo/deep")))
+    }
+
+    @Test
+    fun `父文件夹不存在拒绝且不顺路建层`() {
+        Files.createDirectories(dir.resolve("scripts/demo"))
+        val e = assertThrows(IllegalArgumentException::class.java) {
+            ScriptFileOps.createFile(dir, "demo", "main.js", "demo/nope")
+        }
+        // 原文给 UI：`Files.createFile` 自己抛的是一句机器话（NoSuchFileException）。
+        assertTrue(e.message?.contains("文件夹不存在") == true, "实际：${e.message}")
+        // 不用 createDirectories 顺路把中间层建出来（错字会静默变成一个目录层级）。
+        assertTrue(!Files.exists(dir.resolve("scripts/demo/nope")))
+    }
+
+    @Test
+    fun `父文件夹越界或跨项目拒绝`() {
+        Files.createDirectories(dir.resolve("scripts/demo"))
+        Files.createDirectories(dir.resolve("scripts/other"))
+        // `..` 穿出去 → 落到别的项目；首段不是本项目 → 直接对不上号。两条都拒。
+        assertThrows(IllegalArgumentException::class.java) {
+            ScriptFileOps.createFile(dir, "demo", "x.js", "demo/../other")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScriptFileOps.createFile(dir, "demo", "x.js", "other")
+        }
+        assertTrue(!Files.exists(dir.resolve("scripts/other/x.js")), "越界的落点一个都不许被写出来")
+    }
+
+    @Test
+    fun `父文件夹指向文件时拒绝`() {
+        Files.createDirectories(dir.resolve("scripts/demo"))
+        Files.write(dir.resolve("scripts/demo/main.js"), "x".toByteArray())
+        assertThrows(IllegalArgumentException::class.java) {
+            ScriptFileOps.createFile(dir, "demo", "y.js", "demo/main.js")
+        }
+        assertTrue(!Files.exists(dir.resolve("scripts/demo/y.js")))
     }
 
     @Test

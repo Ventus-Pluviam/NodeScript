@@ -38,7 +38,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.TextButton
@@ -156,8 +155,13 @@ fun ProjectScreen(
      * 而"当下是明是暗"这个事实在 `MainActivity` 里已经有了（`themeMode.isDark()`）。
      */
     themeSwitchLabel: String,
-    /** 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。 */
-    onCreate: (projectId: String, name: String, isFolder: Boolean) -> Unit,
+    /**
+     * 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。
+     *
+     * [dirRelPath] = **用户按下 FAB 时所在的那一层**（2026-10-16 用户口径「在当前进入的
+     * 文件夹中新建」）——本屏把当前目录原样交出去，不在这一层拼路径。
+     */
+    onCreate: (projectId: String, name: String, isFolder: Boolean, dirRelPath: String?) -> Unit,
     /** 读一个脚本文件的文本（**点文件**进编辑面时调；失败原文抛，本屏如实显示）。 */
     onReadFile: suspend (projectId: String, relPath: String) -> String,
     /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */
@@ -342,8 +346,9 @@ fun ProjectScreen(
         }
     }
 
-    // 新建落在**当前所在项目**（文件树按项目分目录，全库根不可写）—— 有文件取第一行的
-    // 项目，没文件回缺省目录名（首装用户先建项目文件夹）。
+    // 新建落在**当前所在项目 + 当前所在那一层**（文件树按项目分目录，全库根不可写）：
+    // 进了目录就是那一层（`currentFolder` 本身就是合格的 relPath 前缀），还在全库根时
+    // 有文件取第一行的项目、没文件回缺省目录名（首装用户先建项目文件夹）。
     val targetProject = currentFolder?.substringBefore('/')
         ?: state.files.firstOrNull()?.projectId
         ?: "demo"
@@ -530,11 +535,12 @@ fun ProjectScreen(
         // 创建对话框在屏幕级（不在 Box 里 —— 它盖全屏，不该被列表的裁剪裁到）。
         if (showOverlays) CreateEntryDialogs(
             creating = creatingKind,
-            targetProject = targetProject,
             onDismiss = { creatingKind = null },
             onConfirm = { name, isFolder ->
                 creatingKind = null
-                onCreate(targetProject, name, isFolder)
+                // 当前目录原样传下去（`currentFolder` = "demo/lib/" 这种 relPath 前缀）——
+                // 还在全库根（null）时落项目根，与旧口径一致。
+                onCreate(targetProject, name, isFolder, currentFolder)
             },
         )
     }
@@ -677,9 +683,9 @@ private fun ProjectMenu(
  * （[GlyphKind.SEARCH_FIELD]，`outline_search_1_24` 实测几何 —— 批 43 换掉旧的 SEARCH）、
  * 提示词 15sp 半透明、输入文字 15sp（`editText.setTextSize(15)`）。
  *
- * 不用 M3 `TextField`：它自带的 56dp 最小高与大内边距塞不进 40dp 的行高里
- * （批 25 实机：hint 文字被上下裁掉一截），而这页搜索框用不上它的 label/indicator
- * 那套装饰 —— 直接 `BasicTextField` + 自己摆 `Row`，内边距就是版式要的那几个 dp。
+ * 框本身的版式在 [CapsuleInputField]（2026-10-16 起与新建对话框共用同一份 —— 那一份
+ * 就是这里原先逐值写死的那几个数）；本函数只剩"搜索框这一处"的两件事：槽位内边距、
+ * 放大镜、以及把聚焦态报给「点外面收键盘」那套。
  */
 @Composable
 private fun SearchField(
@@ -688,36 +694,76 @@ private fun SearchField(
     /** 「点外面收键盘」的共享状态（见 `FocusDismiss`）；本屏唯一那个搜索框报给它。 */
     focusDismiss: com.autoscript.ui.components.FocusDismissState,
 ) {
+    CapsuleInputField(
+        value = query,
+        onValueChange = onChange,
+        placeholder = "搜索文件",
+        // 槽位内边距（水平 12 / 垂直 6）是**这一处**的（52dp 槽位里坐一个 40dp 的框），
+        // 版式本身在 [CapsuleInputField]。
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        leadingGlyph = GlyphKind.SEARCH_FIELD,
+        // 上报自己的 bounds 与聚焦态：容器据此判"这一下点在框外"（见 `FocusDismiss`）。
+        focusDismiss = focusDismiss,
+    )
+}
+
+/**
+ * 胶囊输入框 —— **搜索框与新建对话框共用这一份版式**（2026-10-16 用户口径：新建弹窗的
+ * 输入框"和搜索框一样"）。灰底（[Colors.fieldBackground]，白底压 5% 黑 —— 与任务中心那颗
+ * 白药丸不是一个键）、圆角 20dp（40dp 高上 20dp 圆角 = 两端全圆）、高 40dp、
+ * 槽内水平 12dp、文字与提示词 15sp（[MaterialTheme.typography.bodyLarge]）、
+ * 光标 [Colors.cursor]（`groupcreate_cursor`，与强调色不是一个键）、**无投影**。
+ *
+ * 为什么抽出来共用：用户要的是"一样"，两份拷贝只能靠"记得同步改两处"维持一样 ——
+ * 共用之后"一样"是结构上的事实。搜索框那颗放大镜由 [leadingGlyph] 给，新建对话框不给
+ * （那一格只有名字要填）。
+ *
+ * 不用 M3 `TextField`：它自带的 56dp 最小高与大内边距塞不进 40dp 的行高里
+ * （批 25 实机：hint 文字被上下裁掉一截），而这套输入用不上它的 label/indicator 装饰 ——
+ * 直接 `BasicTextField` + 自己摆 `Row`，内边距就是版式要的那几个 dp。
+ *
+ * @param focusDismiss 非 null 时这个框上报自己的 bounds/聚焦态（搜索框那一份，见
+ *   `FocusDismiss`）。新建对话框**不报**：它是模态，点外面就是关掉它，不参与那套判据。
+ */
+@Composable
+private fun CapsuleInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    leadingGlyph: GlyphKind? = null,
+    focusDismiss: com.autoscript.ui.components.FocusDismissState? = null,
+) {
     val palette = ThemeColors
     Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+        modifier
             .height(40.dp)
             .background(palette.fieldBackground, RoundedCornerShape(20.dp)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.width(12.dp))
-        Glyph(kind = GlyphKind.SEARCH_FIELD, tint = palette.text.copy(alpha = 0.6f))
-        Spacer(Modifier.width(12.dp))
+        if (leadingGlyph != null) {
+            Glyph(kind = leadingGlyph, tint = palette.text.copy(alpha = 0.6f))
+            Spacer(Modifier.width(12.dp))
+        }
         Box(Modifier.weight(1f)) {
-            if (query.isEmpty()) {
+            if (value.isEmpty()) {
                 Text(
-                    text = "搜索文件",
+                    text = placeholder,
                     color = palette.text.copy(alpha = 0.5f),
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1,
                 )
             }
             BasicTextField(
-                value = query,
-                onValueChange = onChange,
+                value = value,
+                onValueChange = onValueChange,
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.text),
-                // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色**不是一个键**。
                 cursorBrush = SolidColor(palette.cursor),
-                // 上报自己的 bounds 与聚焦态：容器据此判"这一下点在框外"（见 `FocusDismiss`）。
-                modifier = Modifier.fillMaxWidth().reportFocusBounds(focusDismiss),
+                modifier = Modifier.fillMaxWidth().then(
+                    if (focusDismiss == null) Modifier else Modifier.reportFocusBounds(focusDismiss),
+                ),
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -1146,12 +1192,21 @@ private fun FabSubStrokeTop(): Color =
 
 /**
  * 新建文件/文件夹对话框（TG 的 Alert 命名框分寸：标题点破建什么、输入框占位"名称"）。
+ *
+ * **2026-10-16 用户口径三条**：
+ * - **白底**（[Colors.sheetBackground]，TG 的 `dialogBackground`）。M3 的缺省底色是
+ *   `surfaceContainerHigh`，而本仓 `ColorScheme` 只映射了 primary/background/surface/error
+ *   （见 `Theme.kt`）—— 那个键落回 M3 基线色（浅色下偏紫的灰），与页面不成一族；
+ * - **标题下面不再有"将创建在项目「x」下"那一行**：落点改成"就在你按 FAB 的那一层"之后，
+ *   这句话要么与用户看到的一致（那就不用说）、要么说错（当前目录是子层时），两种都不该留；
+ * - **输入框与搜索框同一个胶囊灰底样式**（[CapsuleInputField] —— 共用同一份版式，
+ *   不是照着抄一份）。
+ *
  * 名字合法性在宿主侧裁决（`ScriptFileOps`），这里不预校验 —— 错误原文走 opError 行。
  */
 @Composable
 private fun CreateEntryDialogs(
     creating: ProjectState.CreationKind?,
-    targetProject: String,
     onDismiss: () -> Unit,
     onConfirm: (name: String, isFolder: Boolean) -> Unit,
 ) {
@@ -1165,23 +1220,15 @@ private fun CreateEntryDialogs(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = ThemeColors.sheetBackground,
         title = { Text(title) },
         text = {
-            Column {
-                Text(
-                    text = "将创建在项目「$targetProject」下",
-                    color = ThemeColors.textTertiary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    placeholder = { Text("名称") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            CapsuleInputField(
+                value = name,
+                onValueChange = { name = it },
+                placeholder = "名称",
+                modifier = Modifier.fillMaxWidth(),
+            )
         },
         confirmButton = {
             TextButton(

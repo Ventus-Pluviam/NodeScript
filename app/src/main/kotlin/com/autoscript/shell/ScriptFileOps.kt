@@ -35,22 +35,24 @@ object ScriptFileOps {
      * @param filesDir App 私有文件目录。
      * @param projectId 目标项目（`files/scripts/` 下第一级）。
      * @param name 文件名（单段；可带扩展名，扩展名决定列表里的类型图标）。
-     * @throws IllegalArgumentException 名字非法（含 `/`、`..` 等）。
+     * @param dirRelPath 目标文件夹（`files/scripts/` 之下相对路径，首段 = [projectId]，
+     *   尾随 `/` 可有可无）；`null`/空 = 项目根。详见 [resolveName]。
+     * @throws IllegalArgumentException 名字非法（含 `/`、`..` 等）/ 项目或文件夹不存在。
      * @throws java.nio.file.FileAlreadyExistsException 同名文件/文件夹已存在。
      */
-    fun createFile(filesDir: Path, projectId: String, name: String) {
-        val target = resolveName(filesDir, projectId, name)
+    fun createFile(filesDir: Path, projectId: String, name: String, dirRelPath: String? = null) {
+        val target = resolveName(filesDir, projectId, name, dirRelPath)
         Files.createFile(target)
     }
 
     /**
      * 新建文件夹。
      *
-     * @throws IllegalArgumentException 名字非法。
+     * @throws IllegalArgumentException 名字非法 / 项目或文件夹不存在。
      * @throws java.nio.file.FileAlreadyExistsException 同名文件/文件夹已存在。
      */
-    fun createFolder(filesDir: Path, projectId: String, name: String) {
-        val target = resolveName(filesDir, projectId, name)
+    fun createFolder(filesDir: Path, projectId: String, name: String, dirRelPath: String? = null) {
+        val target = resolveName(filesDir, projectId, name, dirRelPath)
         Files.createDirectory(target)
     }
 
@@ -159,15 +161,33 @@ object ScriptFileOps {
         return target
     }
 
-    /** 名字 → `files/scripts/<projectId>/<name>`：合法性裁决 + 落位唯一出口。 */
-    private fun resolveName(filesDir: Path, projectId: String, name: String): Path {
+    /**
+     * 名字 → `files/scripts/<projectId>/<dirRelPath>/<name>`：合法性裁决 + 落位唯一出口。
+     *
+     * [dirRelPath] 非空时**复用 [resolveInProject] 那套越界/归属判据**（同一条路径不该有两套
+     * 安全判断），只多一条"这一层得真在"：`Files.createFile` 对不存在的父目录抛的是
+     * `NoSuchFileException`（一句机器话），这里换成点破"文件夹不存在"的原文 —— 呈现层原样显示。
+     * **不顺路建中间层**（`createDirectories` 会把"名字打错一层"静默变成一个层级结构，
+     * 用户以为建了个文件、其实建了一串目录）。
+     */
+    private fun resolveName(
+        filesDir: Path,
+        projectId: String,
+        name: String,
+        dirRelPath: String?,
+    ): Path {
         require(name.isNotBlank()) { "名字不能为空" }
         // 单段校验在前：isSafeRelPath 是部署路径的判据（多段相对路径对部署合法），
         // `lib/main.js` 会穿过去、到 Files.createFile 才炸出 NoSuchFileException。
-        require('/' !in name) { "名字不能含 /（要进子文件夹先建文件夹）" }
+        require('/' !in name) { "名字不能含 /（要进子文件夹先在那一层新建）" }
         require(DeployPath.isSafeRelPath(name)) { "名字含非法字符（.. 不允许）" }
-        val root = ScriptPaths.projectRoot(filesDir, ProjectId(projectId))
-        require(Files.isDirectory(root)) { "项目不存在: $projectId" }
-        return root.resolve(name)
+        if (dirRelPath.isNullOrBlank()) {
+            val root = ScriptPaths.projectRoot(filesDir, ProjectId(projectId))
+            require(Files.isDirectory(root)) { "项目不存在: $projectId" }
+            return root.resolve(name)
+        }
+        val dir = resolveInProject(filesDir, projectId, dirRelPath)
+        require(Files.isDirectory(dir)) { "文件夹不存在：$dirRelPath" }
+        return dir.resolve(name)
     }
 }

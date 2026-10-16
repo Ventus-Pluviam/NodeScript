@@ -207,17 +207,30 @@ interface HostSummary {
     suspend fun scriptFiles(): ScriptFilesSnapshot
 
     /**
-     * 新建文件/文件夹（项目页 FAB 展开的两个动作；落盘 = `files/scripts/<projectId>/<name>`）。
+     * 新建文件/文件夹（项目页 FAB 展开的两个动作；落盘 =
+     * `files/scripts/<projectId>/<dirRelPath>/<name>`，[dirRelPath] 为空时就是项目根）。
      *
-     * 挂起：写盘（IO）。失败**抛**（名字非法/撞名/项目不存在 —— 原文给 UI）；
+     * 挂起：写盘（IO）。失败**抛**（名字非法/撞名/项目或文件夹不存在 —— 原文给 UI）；
      * **不覆盖已存在**（静默覆盖会把用户脚本换成空文件）。
      *
      * @param projectId 目标项目（`files/scripts/` 下第一级目录名）。
      * @param name 单段名字（用户输入的是名字不是路径；含 `/`/`..` 拒绝 ——
-     *   要进子文件夹先建子文件夹）。
+     *   落进哪一层由 [dirRelPath] 说，不由名字里的斜杠说）。
      * @param isFolder true = 建文件夹，false = 建空文件。
+     * @param dirRelPath **目标文件夹**的 `files/scripts/` 之下相对路径（与 [readScriptFile]
+     *   的 relPath 同一个形态：[ScriptFileRow.relPath]，首段就是 [projectId]，尾随 `/` 可有可无）；
+     *   `null`/空 = 项目根。**2026-10-16 用户口径**：项目页 FAB 落点从"项目根"改成"**当前进入的
+     *   那一层**"（用户在哪一层按的新建，就建在哪一层）—— 呈现层把当前目录原样传下来，
+     *   不再由它 `substringBefore('/')` 只取项目名。
+     *   实现方必须**防越界**（`..` 之类）并校验首段与 [projectId] 一致，且目标目录**必须已存在**
+     *   （不会顺路把中间层建出来：那是"建了个名字打错的层级"，不是新建条目）。
      */
-    suspend fun createEntry(projectId: String, name: String, isFolder: Boolean)
+    suspend fun createEntry(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String? = null,
+    )
 
     /**
      * 读一个脚本文件的文本内容（项目页**点文件进编辑**；TG 文件页点开文档的对应位）。

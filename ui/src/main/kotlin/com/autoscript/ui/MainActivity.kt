@@ -757,8 +757,8 @@ class MainActivity : ComponentActivity() {
                 // 菜单项写**目标模式**（TG 的日夜项同款）：
                 // 冷启缺省跟随系统，此时按"当下是不是深色"定文案。
                 themeSwitchLabel = themeSwitchLabel(dark),
-                onCreate = { projectId, name, isFolder ->
-                    scope.launch { createEntryOp(projectId, name, isFolder) }
+                onCreate = { projectId, name, isFolder, dirRelPath ->
+                    scope.launch { createEntryOp(projectId, name, isFolder, dirRelPath) }
                 },
                 // 点文件进编辑面：读/存都**不在这里落状态** —— 成败归编辑器自己显示
                 // （清单没变），保存成功后才重读一次清单（大小/时刻变了）。
@@ -970,11 +970,19 @@ class MainActivity : ComponentActivity() {
     /**
      * 新建文件/文件夹（项目页 FAB 操作面）。
      *
-     * 与 [performTaskOp] 同一条纪律的三落点：未接线 → opError；抛（名字非法/撞名）
+     * 与 [performTaskOp] 同一条纪律的三落点：未接线 → opError；抛（名字非法/撞名/层级不在）
      * → opError 原文、**不清清单**；成功 → opNotice 回执 + 现取一次（新条目要出现在
      * 列表里，回执在刷新之后盖上去）。成功时收掉创建对话框（[ProjectState.creating]）。
+     *
+     * [dirRelPath] = 用户按下 FAB 时所在的那一层（2026-10-16 用户口径「在当前进入的文件夹中
+     * 新建」）—— 本层与宿主都不解释它，一路透传到 [ScriptFileOps] 落位。
      */
-    private suspend fun createEntryOp(projectId: String, name: String, isFolder: Boolean) {
+    private suspend fun createEntryOp(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String?,
+    ) {
         val host = hostSummary()
         if (host == null) {
             projectState = projectState.copy(
@@ -984,7 +992,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         try {
-            host.createEntry(projectId, name, isFolder)
+            host.createEntry(projectId, name, isFolder, dirRelPath)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (t: Exception) {

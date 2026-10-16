@@ -846,12 +846,21 @@ class AppShellApplication : Application(), HostSummary {
      * 新建文件/文件夹（[HostSummary] 的生产实现，项目页 FAB 操作面）。
      *
      * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：落盘只看 `files/scripts/` 目录。
-     * 合法性/撞名裁决在 [ScriptFileOps]（原文抛给 UI）。
+     * 合法性/撞名/层级存在性裁决在 [ScriptFileOps]（原文抛给 UI）。
+     *
+     * [dirRelPath] 就是"用户在哪一层按的新建"（2026-10-16 用户口径）：透传给
+     * [ScriptFileOps]，本层不解释路径。
      */
-    override suspend fun createEntry(projectId: String, name: String, isFolder: Boolean) {
+    override suspend fun createEntry(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String?,
+    ) {
+        val files = filesDir.toPath()
         when (isFolder) {
-            true -> ScriptFileOps.createFolder(filesDir.toPath(), projectId, name)
-            false -> ScriptFileOps.createFile(filesDir.toPath(), projectId, name)
+            true -> ScriptFileOps.createFolder(files, projectId, name, dirRelPath)
+            false -> ScriptFileOps.createFile(files, projectId, name, dirRelPath)
         }
     }
 

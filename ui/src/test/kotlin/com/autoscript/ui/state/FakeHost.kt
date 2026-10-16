@@ -84,8 +84,12 @@ open class FakeHost(
     override suspend fun scriptFiles(): ScriptFilesSnapshot =
         throw UnsupportedOperationException("本替身未提供 scriptFiles（用例按需覆盖）")
 
-    override suspend fun createEntry(projectId: String, name: String, isFolder: Boolean): Unit =
-        throw UnsupportedOperationException("本替身未提供 createEntry（用例按需覆盖）")
+    override suspend fun createEntry(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String?,
+    ): Unit = throw UnsupportedOperationException("本替身未提供 createEntry（用例按需覆盖）")
 
     override suspend fun readScriptFile(projectId: String, relPath: String): String =
         throw UnsupportedOperationException("本替身未提供 readScriptFile（用例按需覆盖）")
