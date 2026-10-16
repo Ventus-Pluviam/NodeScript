@@ -1,8 +1,22 @@
 # 流水切片（按日期）
 
-## 最新追记（2026-10-16：CI 红修（E2E 取件夹具换线性扫描）；引擎关 stdin 写端发 EOF + 顶栏「结束脚本」；readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
+## 最新追记（2026-10-16：项目页新建落当前层 + 弹窗白底/胶囊输入框；CI 红修（E2E 取件夹具换线性扫描）；引擎关 stdin 写端发 EOF + 顶栏「结束脚本」；readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
 
-- [2026-10-16 · CI 红修：抽 kBootstrap 的正则打穿 JVM 栈](2026-10-16.md) 一条目（最新）：
+- [2026-10-16 · 新建落当前层 + 弹窗白底/胶囊输入框](2026-10-16.md) 一条目（最新）：
+  用户四条口径：**① 新建落在"你按 FAB 的那一层"**（旧口径只取项目名，进了 `demo/lib/` 也落 `demo/`）
+  —— 合约加末位参数 `HostSummary.createEntry(projectId, name, isFolder, dirRelPath = null)`，
+  呈现层把 `currentFolder` 原样传下去、中间三层都不解释路径，裁决全在 `ScriptFileOps.resolveName`
+  （非空时复用 `resolveInProject` 的越界/归属判据，多一条「这一层得真在」，**不用
+  `createDirectories` 顺路建中间层**：错字会静默变成一串目录）；**② 弹窗白底**
+  （`containerColor = sheetBackground`，M3 缺省的 `surfaceContainerHigh` 在本仓 ColorScheme 里
+  没映射、落回偏紫的基线灰）；**③ 删掉「将创建在项目「x」下」**那行（落点改了之后要么多余
+  要么说错）与只为它存在的 `targetProject` 参数；**④ 输入框 = 搜索框那颗胶囊** —— 抽出
+  `CapsuleInputField` **共用同一份版式**（灰底/圆角 20dp/高 40dp/15sp；放大镜走 `leadingGlyph`、
+  聚焦上报走 `focusDismiss`，对话框不报——它是模态）。验：`:domain` 全量编译零 error/warning、
+  `ScriptFileOpsTest` 用 JUnit launcher 真跑 15 例全过（含新增 4 例）、detekt 六模块零 findings
+  （`:ui` baseline 外科式 3 改 1 增）、文档链接门。
+
+- [2026-10-16 · CI 红修：抽 kBootstrap 的正则打穿 JVM 栈](2026-10-16.md) 一条目：
   CI run `38902403070` 红在 `:app:testDebugUnitTest` —— `BridgeDistPackagingEntryTest` 那条
   「dist env 缺席」炸 `StackOverflowError`，栈里一千多层**全是** `java.util.regex.Pattern$Loop`。
   病在**共用夹具** `E2EFixtures.extractBootstrap` 那串嵌套量词正则：JVM 引擎按字符递归，栈深随
