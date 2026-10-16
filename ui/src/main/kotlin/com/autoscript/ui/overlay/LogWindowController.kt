@@ -183,8 +183,13 @@ class LogWindowController(
      */
     fun clearLogs(visibleMaxSeq: Long) {
         val current = state ?: return
-        if (visibleMaxSeq > current.watermarkSeq) {
-            state = current.copy(watermarkSeq = visibleMaxSeq)
+        if (visibleMaxSeq > current.watermarkSeq || current.echoes.isNotEmpty()) {
+            // 回显跟着一起清（2026-10-16）：它们是窗里那本流水的一部分 —— 只推水位会留下
+            // 几条"上一轮对话的我说的话"浮在空窗里。水位仍只进不退（`maxOf`）。
+            state = current.copy(
+                watermarkSeq = maxOf(visibleMaxSeq, current.watermarkSeq),
+                echoes = emptyList(),
+            )
         }
     }
 
@@ -255,7 +260,23 @@ class LogWindowController(
             // **现读再清**：上面那句 `host.sendInput` 是挂起的，期间轮询那一轮可能已经
             // 推过新 state（`running`/`paused`/绑定都变）—— 拿挂起前那份 `current` 去
             // `copy` 会把那一轮的结果抹掉（本仓反复踩过的"捕获值 vs 现读"）。
-            state = state?.copy(inputDraft = "")
+            //
+            // 同时**把这一行回显进窗**（2026-10-16 用户报「输入框输进去的数字也没有显示在
+            // 悬浮窗里」）：引擎里脚本的 stdin/stdout 都是管道，`readline` 的 `terminal`
+            // 恒为 false —— "敲什么屏幕上就有什么"那份回显本来是 TTY 驱动做的，脚本侧没有
+            // 等价物（见 `LogWindowState.echoes` 的 KDoc）。窗口就是这里的终端。
+            //
+            // `atSeq` 同样**现读** `lines`：回显要插在"送出这一刻已有的最后一行"之后，
+            // 否则脚本随后的输出会跑到它上面去（因果读反，见 `LogWindowState.rows`）。
+            state = state?.let { cur ->
+                cur.copy(
+                    inputDraft = "",
+                    echoes = cur.echoes + InputEcho(
+                        atSeq = cur.visible(lines).maxOfOrNull { it.seq } ?: cur.watermarkSeq,
+                        text = line,
+                    ),
+                )
+            }
         } else {
             toast("输入没送进脚本（它已退出，或这条执行不接受输入）")
         }

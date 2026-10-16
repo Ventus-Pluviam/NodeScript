@@ -128,6 +128,11 @@ class LogWindowControllerTest {
         ctl.sendInput()
         assertEquals(listOf(7L to "乙"), sent, "送的是 trim 过的原文")
         assertEquals("", ctl.state?.inputDraft, "送成功了才清草稿")
+        assertEquals(
+            listOf(InputEcho(atSeq = 0L, text = "乙")),
+            ctl.state?.echoes,
+            "送出去了就回显一条（没有可见行时 atSeq = 水位）",
+        )
 
         // ③ 已结算（结算不解绑）：不问宿主、留草稿
         ctl.bind(emptyList())
@@ -137,6 +142,7 @@ class LogWindowControllerTest {
         assertEquals(1, sent.size, "已结算的号不再往管道里写")
         assertEquals("丙", ctl.state?.inputDraft)
         assertEquals(2, toasts)
+        assertEquals(1, ctl.state?.echoes?.size, "没送出去就不添回显：回显是“已经到脚本那一行”的账")
 
         // ④ 空白行：连话术都不弹
         ctl.bind(listOf(run(8L)))
@@ -144,5 +150,94 @@ class LogWindowControllerTest {
         ctl.sendInput()
         assertEquals(1, sent.size, "空白行不发")
         assertEquals(2, toasts, "空白行是「没什么可发」不是错误 —— 不弹话术")
+        assertEquals(1, ctl.state?.echoes?.size, "空白行也不添回显")
     }
+
+    /**
+     * 回显的**位置**（2026-10-16 同批）：`atSeq` = 送出那一刻窗里
+     * **可见**的最大 seq。
+     *
+     * 两件事在这里同时钉住：① 取的是**可见**那一分（别的 run 的行不算、
+     * 水位之下的行也不算）；② 每次送出各自算各自的（不是“第一次定下来就不变”）。
+     */
+    @Test
+    fun `回显位置取送出那一刻的可见最大 seq`() = runBlocking {
+        val ctl = LogWindowController(
+            hostSummary = {
+                object : FakeHost() {
+                    override suspend fun sendInput(runId: Long, line: String): Boolean = true
+                }
+            },
+            toast = {},
+            systemHost = null,
+        )
+        ctl.open("demo", "data/test.js")
+        ctl.bind(listOf(run(7L)))
+        ctl.updateLines(
+            listOf(
+                line(seq = 1L, runId = 7L),
+                line(seq = 2L, runId = 7L),
+                line(seq = 9L, runId = 8L), // 别的 run 的行：不是本窗的，不算进可见最大 seq
+            ),
+        )
+        ctl.updateInputDraft("甲")
+        ctl.sendInput()
+        assertEquals(listOf(InputEcho(atSeq = 2L, text = "甲")), ctl.state?.echoes)
+
+        // 又来一行输出，再送一行 —— atSeq 跟着现值走
+        ctl.updateLines(
+            listOf(
+                line(seq = 1L, runId = 7L),
+                line(seq = 2L, runId = 7L),
+                line(seq = 3L, runId = 7L),
+            ),
+        )
+        ctl.updateInputDraft("乙")
+        ctl.sendInput()
+        assertEquals(
+            listOf(InputEcho(atSeq = 2L, text = "甲"), InputEcho(atSeq = 3L, text = "乙")),
+            ctl.state?.echoes,
+        )
+    }
+
+    /**
+     * 清空日志连回显一起清（只推水位会留下几条“上一轮我说的话”浮在空窗里）；
+     * 水位本身仍只进不退（退着调 = “清空了又回来”）。
+     */
+    @Test
+    fun `clearLogs 清掉回显 水位只进不退`() = runBlocking {
+        val ctl = LogWindowController(
+            hostSummary = {
+                object : FakeHost() {
+                    override suspend fun sendInput(runId: Long, line: String): Boolean = true
+                }
+            },
+            toast = {},
+            systemHost = null,
+        )
+        ctl.open("demo", "data/test.js")
+        ctl.bind(listOf(run(7L)))
+        ctl.updateLines(listOf(line(seq = 4L, runId = 7L)))
+        ctl.updateInputDraft("甲")
+        ctl.sendInput()
+        assertEquals(1, ctl.state?.echoes?.size, "前提：送成了就有一条回显")
+
+        ctl.clearLogs(visibleMaxSeq = 4L)
+        assertEquals(0, ctl.state?.echoes?.size, "清空 = 窗里那本流水重来，回显跟着走")
+        assertEquals(4L, ctl.state?.watermarkSeq)
+
+        ctl.clearLogs(visibleMaxSeq = 2L)
+        assertEquals(4L, ctl.state?.watermarkSeq, "水位只进不退（退着调会让旧行又回来）")
+    }
+
+    /** 一行脚本输出的呈现态（本文件只关心 seq/runId）。 */
+    private fun line(seq: Long, runId: Long) = com.autoscript.ui.state.ConsoleLineState(
+        seq = seq,
+        runId = runId,
+        external = false,
+        level = "log",
+        levelLabel = "日志",
+        text = "t$seq",
+        timeText = "00:00:00",
+    )
 }

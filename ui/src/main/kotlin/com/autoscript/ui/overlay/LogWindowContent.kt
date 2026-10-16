@@ -46,6 +46,7 @@ import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.FocusDismissRegistry
 import com.autoscript.ui.components.FocusDismissState
 import com.autoscript.ui.components.LogLineRow
+import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.Separator
 import com.autoscript.ui.components.DismissFocusOnWindowBlur
 import com.autoscript.ui.components.RegisterFocusDismiss
@@ -54,6 +55,7 @@ import com.autoscript.ui.components.rememberFocusDismissState
 import com.autoscript.ui.components.reportFocusBounds
 import com.autoscript.ui.components.pressableLongPress
 import com.autoscript.ui.state.ConsoleLineState
+import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
 /**
@@ -354,7 +356,9 @@ private fun BoxScope.LogBlock(state: LogWindowState, lines: List<ConsoleLineStat
         BlockHint("本次执行未开始（启动失败、未通过门禁，或起跑即被停止）")
         return
     }
-    if (lines.isEmpty()) {
+    // 行流 = 脚本输出 + 用户输入回显（`LogWindowState.rows` 按 seq 归并两者）。
+    val rows = state.rows(lines)
+    if (rows.isEmpty()) {
         BlockHint(
             when {
                 state.paused -> "已暂停 —— 恢复后输出继续"
@@ -379,8 +383,8 @@ private fun BoxScope.LogBlock(state: LogWindowState, lines: List<ConsoleLineStat
     // 第一屏内容到底部时那一次滚动会滚到 0（= 不动）。maxValue 一变就重跑，
     // 首屏因此也能到底（`LazyColumn` 时代不需要这一步：`animateScrollToItem`
     // 自己知道布局后的位置）。
-    LaunchedEffect(lines.size, scroll.maxValue) {
-        if (lines.isNotEmpty()) scroll.animateScrollTo(scroll.maxValue)
+    LaunchedEffect(rows.size, scroll.maxValue) {
+        if (rows.isNotEmpty()) scroll.animateScrollTo(scroll.maxValue)
     }
     SelectionContainer {
         Column(
@@ -390,8 +394,22 @@ private fun BoxScope.LogBlock(state: LogWindowState, lines: List<ConsoleLineStat
                 .padding(vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            lines.forEach { line ->
-                LogLineRow(line = line, modifier = Modifier.fillMaxWidth())
+            rows.forEach { row ->
+                when (row) {
+                    is LogWindowRow.Output ->
+                        LogLineRow(line = row.line, modifier = Modifier.fillMaxWidth())
+
+                    // 用户送出去的那一行（窗口侧回显；见 `LogWindowState.echoes` 的 KDoc）。
+                    // 前缀 `›` + 次级灰：它不是脚本打印的，是"你说的话" —— 与输出行
+                    // 同色同宽会让人以为脚本自己打了这么一行。不带时间戳与级别：
+                    // 那两个字段属于脚本输出的账。
+                    is LogWindowRow.Input -> ToneText(
+                        text = "› ${row.text}",
+                        tone = StatusTone.MUTED,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 1.dp),
+                    )
+                }
             }
         }
     }

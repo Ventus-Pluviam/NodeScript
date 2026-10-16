@@ -185,6 +185,63 @@ class LogWindowStateTest {
         assertTrue(s.visible(listOf(line(1L, 7L))).isEmpty())
     }
 
+    /**
+     * 行流归并（2026-10-16 用户报「输入框输进去的数字也没有显示在悬浮窗里」）：
+     * 脚本输出 + 用户输入回显，回显按 `atSeq` 插在**送出那一刻的最后一行**之后。
+     *
+     * 位置是这条用例的全部意义 —— 回显要是一律缀在末尾，「提示语 → 脚本结果 →
+     * 我刚敲的那一行」会把因果读反（脚本明明是收到那一行才出的结果）。
+     */
+    @Test
+    fun `rows 把回显插在送出那一刻的最后一行之后`() {
+        val s = LogWindowState(
+            projectId = "demo",
+            relPath = "data/test.js",
+            echoes = listOf(InputEcho(atSeq = 2L, text = "1")),
+        ).bind(listOf(run(7L)))
+        assertEquals(
+            listOf("o:t1", "o:t2", "i:1", "o:t3"),
+            s.rows(listOf(line(1L, 7L), line(2L, 7L), line(3L, 7L))).map(::label),
+        )
+    }
+
+    @Test
+    fun `rows 没有回显时就是可见行原样`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js").bind(listOf(run(7L)))
+        assertEquals(listOf("o:t1", "o:t2"), s.rows(listOf(line(1L, 7L), line(2L, 7L))).map(::label))
+    }
+
+    /** 多条回显按 `atSeq` 升序各归各的位置（同值保持送出顺序）；`atSeq` 早于所有行 → 排在最前。 */
+    @Test
+    fun `rows 多条回显按 atSeq 归位`() {
+        val s = LogWindowState(
+            projectId = "demo",
+            relPath = "data/test.js",
+            // 故意乱序放进状态：归位靠 atSeq，不靠入列顺序
+            echoes = listOf(InputEcho(atSeq = 3L, text = "后"), InputEcho(atSeq = 0L, text = "先")),
+        ).bind(listOf(run(7L)))
+        assertEquals(
+            listOf("i:先", "o:t1", "o:t2", "o:t3", "i:后"),
+            s.rows(listOf(line(1L, 7L), line(2L, 7L), line(3L, 7L))).map(::label),
+        )
+    }
+
+    @Test
+    fun `rows 未绑定回空表（回显也不例外）`() {
+        val s = LogWindowState(
+            projectId = "demo",
+            relPath = "data/test.js",
+            echoes = listOf(InputEcho(atSeq = 0L, text = "1")),
+        )
+        assertTrue(s.rows(listOf(line(1L, 7L))).isEmpty())
+    }
+
+    /** 行流一项的短标签（`o:` 脚本输出、`i:` 用户输入回显）。 */
+    private fun label(row: LogWindowRow): String = when (row) {
+        is LogWindowRow.Output -> "o:${row.line.text}"
+        is LogWindowRow.Input -> "i:${row.text}"
+    }
+
     @Test
     fun `ext 取最后一段最后一个点之后小写`() {
         assertEquals("js", LogWindowState(projectId = "p", relPath = "a/b.C.JS".lowercase()).ext)

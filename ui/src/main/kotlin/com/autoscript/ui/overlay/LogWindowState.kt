@@ -64,6 +64,20 @@ data class LogWindowState(
      * 用户不必重敲 —— 与"失败不假装送到"同一条纪律。
      */
     val inputDraft: String = "",
+    /**
+     * 底部输入框**已经送出去**的那几行（宿主侧回显；2026-10-16 用户报「输入框输进去的
+     * 数字也没有显示在悬浮窗里」）。
+     *
+     * **为什么回显要由窗口做，而不是等脚本自己回声**：引擎里脚本的 stdin/stdout 都是
+     * 管道，`readline` 的 `terminal` 恒为 `false`（真终端才有 `isTTY`）—— 于是
+     * "敲什么屏幕上就有什么"这件终端的事**没有人做**：那份回显本来就是 TTY 驱动干的，
+     * 脚本侧没有等价物（`readline` 在 `terminal:false` 下不回显，见 `readline-bridge`
+     * 的 KDoc）。窗口在这个形态里**就是**那台终端，所以由它把送出去的行写进行流。
+     *
+     * 与 [inputDraft] 的分工：草稿是"还没送出去的"，[echoes] 是"已经送出去的" ——
+     * 送出成功才添（[LogWindowController.sendInput]），失败留在草稿里不添。
+     */
+    val echoes: List<InputEcho> = emptyList(),
 ) {
     /**
      * 窗标题（**单一归一化点**）：`/$projectId/$relPath` —— 用户口径的
@@ -165,6 +179,36 @@ data class LogWindowState(
         return lines.filter { it.runId == bound && it.seq > watermarkSeq }
     }
 
+    /**
+     * 日志块的**行流**：脚本输出与用户输入回显按 seq 归并（[echoes] 的 KDoc 讲了
+     * 为什么回显必须存在）。
+     *
+     * [lines] 传的是**已过滤**的可见行（宿主那一份 `visible(lines)`）——本函数只做归并，
+     * 不再过滤一次：把"未绑定 → 空表"那条口径抄成两份，两处迟早会不一致。
+     *
+     * 归并键是 [InputEcho.atSeq]：一条回显插在**"最后一条 seq ≤ atSeq 的脚本行"之后**。
+     * 这个位置不是装饰 —— 回显要是统一缀在末尾，「提示语 → 脚本结果 → 我刚敲的那一行」
+     * 会把因果读反（脚本明明是收到那一行才出的结果）。多条回显按 atSeq 升序插入
+     * （同值保持送出顺序）。
+     */
+    fun rows(lines: List<ConsoleLineState>): List<LogWindowRow> {
+        if (echoes.isEmpty()) return lines.map(LogWindowRow::Output)
+        val out = ArrayList<LogWindowRow>(lines.size + echoes.size)
+        var i = 0
+        for (e in echoes.sortedBy { it.atSeq }) {
+            while (i < lines.size && lines[i].seq <= e.atSeq) {
+                out += LogWindowRow.Output(lines[i])
+                i++
+            }
+            out += LogWindowRow.Input(e.text)
+        }
+        while (i < lines.size) {
+            out += LogWindowRow.Output(lines[i])
+            i++
+        }
+        return out
+    }
+
     companion object {
         /**
          * 紧凑尺寸（**dp 数**，日志窗是"盯着看"的面，不是阅读器 —— 默认不大）。
@@ -179,4 +223,28 @@ data class LogWindowState(
         const val COMPACT_WIDTH_DP: Float = 340f
         const val COMPACT_HEIGHT_DP: Float = 420f
     }
+}
+
+/**
+ * 一条**用户送回脚本的输入**（[LogWindowState.echoes] 的一项）。
+ *
+ * @property atSeq 送出那一刻窗里可见的**最大 seq**（一条可见行都没有时 = 水位）——
+ *   它决定这一行画在哪两条脚本输出之间（见 [LogWindowState.rows]）。
+ * @property text 送进脚本 stdin 的**那一行原文**（trim 之后的那份）：画的是
+ *   "脚本收到的是什么"，不是"输入框里看起来是什么"。
+ */
+data class InputEcho(val atSeq: Long, val text: String)
+
+/**
+ * 日志块行流的一项：脚本输出 / 用户输入回显（见 [LogWindowState.rows]）。
+ *
+ * 两态而非"再塞一条假的 [ConsoleLineState]"：后者得给回显编一个级别、一个时间戳，
+ * 于是它会跟着日志行一起进"按级别过滤/复制"那类面（那两样对用户输入都不成立）。
+ */
+sealed interface LogWindowRow {
+    /** 脚本进程的一行输出（绑定的那条 run）。 */
+    data class Output(val line: ConsoleLineState) : LogWindowRow
+
+    /** 用户送回脚本的一行（窗口侧回显；见 [LogWindowState.echoes]）。 */
+    data class Input(val text: String) : LogWindowRow
 }
