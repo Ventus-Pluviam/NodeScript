@@ -54,6 +54,38 @@ class ControllerRunDispatcherCrashLineTest {
         assertTrue(runId > 0L, "归属必须是这次执行的 runId，不能是 0（引擎外）")
         assertEquals("error", level)
         assertTrue(text.contains("ReferenceError: prompt is not defined"), "病因原文要在里面：$text")
+        assertTrue(text.startsWith("#$runId "), "行首写清归属：$text")
+        assertTrue(text.contains("exit 1"), "退出码作后缀一并给出：$text")
+    }
+
+    @Test
+    fun `没有 stderr 尾部时不编病因 如实说没捕获到`() = runBlocking {
+        // 退出码 1 但引擎没捕获到 stderr（子进程没来得及写/被强杀）：不许拿 exit 1
+        // 冒充病因 —— 那句空话会让用户以为看见了原因。
+        val lines = mutableListOf<String>()
+        val engines = listOf(
+            FakeEngineForDispatcher(EngineId(0), autoExitAfterMillis = 30).apply {
+                summaryToReturn = RunSummary(exitCode = 1, stderrTail = null)
+                statusAfterAutoExit = EngineStatus.CRASHED
+            },
+        )
+        val controller = RuntimeController(FixedEnginePool({ id -> engines[id.poolIndex] }, 1))
+        val dispatcher = ControllerRunDispatcher(
+            controller,
+            crashLine = { _, _, text -> lines += text },
+        )
+        dispatcher.dispatch(
+            PendingRun(
+                projectId = "p1",
+                scriptPath = "a.js",
+                runNonce = "n-3",
+                trigger = TriggerSource.USER_CLICK,
+                scheduledAtMillis = 0L,
+                screen = ScreenGuarantee.ANY,
+            ),
+        )
+        val text = lines.single()
+        assertTrue(text.contains("未捕获到错误输出"), "如实说没捕获到：$text")
     }
 
     @Test
