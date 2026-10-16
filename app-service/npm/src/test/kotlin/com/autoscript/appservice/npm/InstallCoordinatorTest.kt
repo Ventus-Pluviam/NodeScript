@@ -12,7 +12,6 @@ import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.npm.InstallHandle
-import com.autoscript.domain.npm.InstallHistoryOp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +52,32 @@ class InstallCoordinatorTest {
     private val staging get() = InstallStaging(layout)
 
     /** 假执行体：在暂存目录写包内容，模拟 reify 产物。 */
+    /**
+     * 记录型去向缝（原 `InstallHistory` 的替身；2026-10-17 用户令「去掉审计、改打系统日志」
+     * 之后这本"账"不再存在，事实只交给注入进去的缝，故替身就是这条缝本身）。
+     *
+     * **刻意不带时间戳**：时刻由去向侧盖（生产是 `HostLog` 自己取
+     * `System.currentTimeMillis()`，与 logcat 同源）—— 替身多记一个字段，等于替生产
+     * 决定了它并没有的东西。
+     */
+    private class RecordingOpLog : OpLogSink {
+        data class Entry(
+            val op: String,
+            val projectId: String,
+            val success: Boolean,
+            val detail: String?,
+        )
+
+        private val entries = mutableListOf<Entry>()
+
+        override fun log(op: String, projectId: String, success: Boolean, detail: String?) {
+            synchronized(entries) { entries += Entry(op, projectId, success, detail) }
+        }
+
+        /** 按写入序（最新在最后）—— 与去向侧拿到的顺序同一个。 */
+        fun all(): List<Entry> = synchronized(entries) { entries.toList() }
+    }
+
     private class FakeExecutor(
         val block: suspend (HeavyOp) -> Unit = {},
     ) : HeavyOpExecutor {
@@ -88,7 +113,7 @@ class InstallCoordinatorTest {
             }
         }
 
-    private fun newHistory() = InstallHistory(dir.resolve(".ns"))
+    private fun newOpLog() = RecordingOpLog()
 
     /** 造一个 bundle zip：entries = (path, bytes)。 */
     private fun bundleZip(vararg entries: Pair<String, ByteArray>): Path {
@@ -122,7 +147,7 @@ class InstallCoordinatorTest {
         executor: HeavyOpExecutor = FakeExecutor(),
         free: Long = 10L * 1024 * 1024 * 1024,
         cache: CacheIndex = CacheIndex { false },
-        history: InstallHistory? = newHistory(),
+        opLog: OpLogSink = newOpLog(),
         lockSigner: LockSigner? = null,
         snapshots: NpmSnapshot? = null,
         bundleImporter: NpmOfflineBundleImporter? = null,
@@ -147,7 +172,7 @@ class InstallCoordinatorTest {
             layout = layout,
             journal = journal,
             staging = staging,
-            history = history,
+            opLog = opLog,
             lockSigner = lockSigner,
             snapshots = snapshots,
             cacheIndex = cache,
@@ -394,7 +419,7 @@ class InstallCoordinatorTest {
         assertEquals(1, peak.get(), "同一项目出现并行安装：per-project 锁没生效")
     }
 
-    // ═══ 审计史（§10.2 install-history） ═══
+    // ═══ 操作事实的去向（§10.2；原「审计史」，2026-10-17 改打系统日志） ═══
 
     @Test
     fun `带 install 脚本的包装完发 SCRIPTS_SKIPPED 显式警告（禁止静默）`() = runBlocking {
@@ -437,39 +462,39 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `成功安装入史：op 名取 npm 子命令`() = runBlocking {
+    fun `成功安装留痕：op 名取 npm 子命令`() = runBlocking {
         val exec = FakeExecutor { op ->
             Files.write(op.stageDir.resolve("axios.js"), ("console.log(1)").toByteArray())
         }
-        val h = newHistory()
-        coordinator(executor = exec, history = h).install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        val h = newOpLog()
+        coordinator(executor = exec, opLog = h).install("p1", listOf(PackageSpec("axios", "1.7.0")))
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.INSTALL, e.op)
+        assertEquals(OpName.INSTALL, e.op)
         assertEquals("p1", e.projectId)
-        assertTrue(e.success, "成功安装必须如实入史")
+        assertTrue(e.success, "成功安装必须如实交给去向")
     }
 
     @Test
-    fun `失败安装也入史（审计不能只答成功面）`() = runBlocking {
-        val h = newHistory()
+    fun `失败安装也留痕（去向不能只答成功面）`() = runBlocking {
+        val h = newOpLog()
         val exec = FakeExecutor { throw RuntimeException("registry 502") }
         assertThrows(RuntimeException::class.java) {
-            runBlocking { coordinator(executor = exec, history = h).install("p1", listOf(PackageSpec("axios"))) }
+            runBlocking { coordinator(executor = exec, opLog = h).install("p1", listOf(PackageSpec("axios"))) }
         }
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.INSTALL, e.op)
-        assertTrue(!e.success, "失败也要入史")
+        assertEquals(OpName.INSTALL, e.op)
+        assertTrue(!e.success, "失败也要留痕")
         assertTrue(e.detail?.contains("registry 502") == true, "失败明细必须带得上：${e.detail}")
     }
 
     @Test
     fun `tarball 导入归并为 import op（路径只进 detail）`() = runBlocking {
-        val h = newHistory()
+        val h = newOpLog()
         val exec = FakeExecutor { /* 假执行 */ }
-        coordinator(executor = exec, history = h)
+        coordinator(executor = exec, opLog = h)
             .importTarball("p1", "/sdcard/Download/pkg.tgz")
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.IMPORT, e.op, "导入统一归 import（用户路径不是 op 名）")
+        assertEquals(OpName.IMPORT, e.op, "导入统一归 import（用户路径不是 op 名）")
         assertTrue(e.success)
     }
 
@@ -484,11 +509,11 @@ class InstallCoordinatorTest {
     fun `bundle 导入：合入缓存后按 lock 离线重建（导入 != 安装）`() = runBlocking {
         val payload = "bundle-tarball".toByteArray()
         val zip = bundleZip("_cacache/content-v2/sha512/" + segments(payload) to payload)
-        val h = newHistory()
+        val h = newOpLog()
         val exec = FakeExecutor { }
         val c = coordinator(
             executor = exec,
-            history = h,
+            opLog = h,
             bundleImporter = NpmOfflineBundleImporter,
         )
         c.importOfflineBundle("p1", zip.toString())
@@ -498,26 +523,26 @@ class InstallCoordinatorTest {
         assertTrue(Files.isRegularFile(cacheDir.resolve("_cacache/content-v2/sha512/" + segments(payload))))
         // 2) 随后走正规事务链：ci --offline（不是「解压即算装上」）
         assertEquals(listOf("ci", "--offline"), exec.calls.single().args)
-        // 3) 成败都入史：合入与重建各一条 import/ci
+        // 3) 成败都留痕：合入与重建各一条 import/ci
         assertEquals(
-            listOf(InstallHistory.Op.IMPORT, "ci"),
+            listOf(OpName.IMPORT, "ci"),
             h.all().map { it.op },
         )
         assertTrue(h.all().all { it.success })
     }
 
     @Test
-    fun `bundle 导入：有条目被拒则如实入史（不静默整包导入）`() = runBlocking {
+    fun `bundle 导入：有条目被拒则如实留痕（不静默整包导入）`() = runBlocking {
         val honest = "honest".toByteArray()
         val zip = bundleZip(
             ("_cacache/content-v2/sha512/" + segments(honest)) to honest,
             "../escape.bin" to "pwned".toByteArray(),
         )
-        val h = newHistory()
-        val c = coordinator(executor = FakeExecutor { }, history = h, bundleImporter = NpmOfflineBundleImporter)
+        val h = newOpLog()
+        val c = coordinator(executor = FakeExecutor { }, opLog = h, bundleImporter = NpmOfflineBundleImporter)
         c.importOfflineBundle("p1", zip.toString())
         val failed = h.all().first { !it.success }
-        assertEquals(InstallHistory.Op.IMPORT, failed.op)
+        assertEquals(OpName.IMPORT, failed.op)
         assertTrue(failed.detail!!.contains("被拒"), "拒收必须点名：${failed.detail}")
     }
 
@@ -546,23 +571,23 @@ class InstallCoordinatorTest {
         }
         assertTrue(Files.size(zip) > 512L * 1024 * 1024, "前提：包真的超顶")
 
-        val h = newHistory()
-        val c = coordinator(executor = FakeExecutor { }, history = h, bundleImporter = NpmOfflineBundleImporter)
+        val h = newOpLog()
+        val c = coordinator(executor = FakeExecutor { }, opLog = h, bundleImporter = NpmOfflineBundleImporter)
         val e = assertThrows(AutojsException::class.java) {
             runBlocking { c.importOfflineBundle("p1", zip.toString()) }
         }
         assertEquals(ErrorCode.ERR_INVALID_PARAM, e.error, "超限是**参数**问题（去重选文件），不是找不到文件")
         assertTrue(e.message!!.contains("超过上限"), "原文（含实际字节数与上限）要保留给用户：${e.message}")
         val failed = h.all().single { !it.success }
-        assertEquals(InstallHistory.Op.IMPORT, failed.op, "超限也要留痕")
+        assertEquals(OpName.IMPORT, failed.op, "超限也要留痕")
     }
 
     @Test
-    fun `registry 变更入史（可审计）`() = runBlocking {
-        val h = newHistory()
-        coordinator(history = h).config("p1", com.autoscript.domain.npm.NpmConfigKey.REGISTRY, "https://registry.npmjs.org")
+    fun `registry 变更留痕`() = runBlocking {
+        val h = newOpLog()
+        coordinator(opLog = h).config("p1", com.autoscript.domain.npm.NpmConfigKey.REGISTRY, "https://registry.npmjs.org")
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.REGISTRY, e.op)
+        assertEquals(OpName.REGISTRY, e.op)
         assertTrue(e.detail?.contains("registry=https://registry.npmjs.org") == true, "明细须含键值：${e.detail}")
     }
 
@@ -577,9 +602,9 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `设全局镜像源后读回且入史`() = runBlocking {
-        val h = newHistory()
-        val c = coordinator(history = h, globalConfig = NpmGlobalConfig(dir))
+    fun `设全局镜像源后读回且留痕`() = runBlocking {
+        val h = newOpLog()
+        val c = coordinator(opLog = h, globalConfig = NpmGlobalConfig(dir))
         c.setGlobalRegistry("  https://registry.npmmirror.com/  ")
         assertEquals(
             "https://registry.npmmirror.com/",
@@ -588,7 +613,7 @@ class InstallCoordinatorTest {
         )
         assertTrue(c.globalRegistry().customized)
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.REGISTRY, e.op)
+        assertEquals(OpName.REGISTRY, e.op)
         assertEquals("", e.projectId, "全局变更没有项目维度——空串是刻意的，不是漏填")
     }
 
@@ -698,7 +723,7 @@ class InstallCoordinatorTest {
         assertEquals(listOf("run", "build", "--", "--watch"), op.npmArgs, "少了 -- 的话 --watch 会被 npm 自己吃掉")
         assertEquals("p1|build", op.subject, "执行体要能复述「我跑的是哪一份」")
         assertEquals("build", op.what)
-        assertTrue(op.versionHash.startsWith("sha256:"), "内容哈希要随 op 走（审计要能回答「批的那份还在不在」）")
+        assertTrue(op.versionHash.startsWith("sha256:"), "内容哈希要随 op 走（日志要能回答「批的那份还在不在」）")
     }
 
     @Test
@@ -978,39 +1003,41 @@ class InstallCoordinatorTest {
         assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
     }
 
-    // ═══ 审计史读口（§10.5-2；2026-10-09 批 85） ═══
+    // ═══ 操作事实的去向（原「审计史」；2026-10-17 改打系统日志，§10.5-2） ═══
 
     @Test
-    fun `审计史按写入序返回全部项目，全局变更不因筛项目而掉出去`() = runBlocking {
+    fun `操作事实按写入序交给去向，全局变更的 projectId 是空串`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
         writeManifest("p2", """{"name":"p2","version":"1.0.0"}""")
-        val c = coordinator(globalConfig = NpmGlobalConfig(dir))
+        val h = newOpLog()
+        val c = coordinator(opLog = h, globalConfig = NpmGlobalConfig(dir))
         c.install("p1", listOf(PackageSpec("axios")))
         c.setGlobalRegistry("https://mirror.example.com/")
         c.install("p2", listOf(PackageSpec("dayjs")))
 
-        val all = c.history()
+        val all = h.all()
         assertEquals(
             listOf("install", "registry", "install"),
             all.map { it.op },
-            "按写入序（最新在最后）；registry 那条的 projectId 是空串（全局变更），" +
-                "读口无参正是为了让它不掉出去",
+            "按写入序（最新在最后）；registry 那条的 projectId 是空串（全局变更）—— " +
+                "去向侧（HostLog/系统日志）读作「全局」，写侧不另造哨兵值",
         )
         assertEquals(listOf("p1", "", "p2"), all.map { it.projectId })
-        assertEquals(true, all[1].success, "全局镜像源变更如实入史（§10.5-2）")
-        assertTrue(all.all { it.atMillis > 0L }, "每条都要有时间戳（审计要能排序）")
+        assertEquals(true, all[1].success, "全局镜像源变更如实记一条（§10.5-2）")
+        // 时间戳**不在这里断言**：事实不含时刻，时刻由去向侧盖（生产 = HostLog 自己取）。
+        // 原来那句 `all { it.atMillis > 0L }` 随审计账一起下线，判据搬去 HostLog 那侧。
     }
 
     @Test
-    fun `失败也入史：执行体失败与门禁拒绝两条路都留痕`() = runBlocking {
+    fun `失败也留痕：执行体失败与门禁拒绝两条路都交给去向`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
         // ① 执行体自己失败（runHeavy 的 catch 分支）
-        val boomHistory = InstallHistory(dir.resolve(".ns-boom"))
-        val boom = coordinator(executor = FakeExecutor { error("npm 挂了") }, history = boomHistory)
+        val boomLog = RecordingOpLog()
+        val boom = coordinator(executor = FakeExecutor { error("npm 挂了") }, opLog = boomLog)
         assertThrows(IllegalStateException::class.java) {
             runBlocking { boom.install("p1", listOf(PackageSpec("axios"))) }
         }
-        val execFail = boomHistory.all().single()
+        val execFail = boomLog.all().single()
         assertEquals("install", execFail.op)
         assertEquals(false, execFail.success)
         assertEquals("npm 挂了", execFail.detail, "失败原因是原文，不是重编的一句话")
@@ -1019,21 +1046,15 @@ class InstallCoordinatorTest {
         val nm = layout.nodeModules(ProjectId("full"))
         Files.createDirectories(nm)
         java.io.RandomAccessFile(nm.resolve("blob").toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
-        val gateHistory = InstallHistory(dir.resolve(".ns-gate"))
-        val tight = coordinator(history = gateHistory)
+        val gateLog = RecordingOpLog()
+        val tight = coordinator(opLog = gateLog)
         assertThrows(AutojsException::class.java) {
             runBlocking { tight.install("full", listOf(PackageSpec("axios"))) }
         }
-        val gateFail = gateHistory.all().single()
+        val gateFail = gateLog.all().single()
         assertEquals("full", gateFail.projectId)
         assertEquals(false, gateFail.success)
         assertTrue(gateFail.detail!!.contains("配额"), "预检拒绝也要说清为什么（实为 ${gateFail.detail}）")
-    }
-
-    @Test
-    fun `未注入 history 时审计史读口回空表（不是抛）`() = runBlocking {
-        val c = coordinator(history = null)
-        assertTrue(c.history().isEmpty(), "history 在构造里可空（测试替身不注入）：写侧静默，读侧如实回空")
     }
 
     // ═══ 缓存回收（§10.9 第 5 条的动作半边，2026-10-09 批 86） ═══
@@ -1103,35 +1124,35 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `lock 读不出来的项目如实入史点名（它的依赖没被保护）`() = runBlocking {
+    fun `lock 读不出来的项目如实留痕点名（它的依赖没被保护）`() = runBlocking {
         val orphan = seedCacheContent("orphan")
         // 半截 JSON：LockfileReader 不抛（手写解析尽力而为），故这里用「目录冒充 lockfile」
         // 制造真正的读失败 —— 用例要证明的是「读不到时不许当它不存在」。
         val bad = Files.createDirectories(layout.lockfile(ProjectId("p2")))
         assertTrue(Files.isDirectory(bad))
-        val h = newHistory()
+        val h = newOpLog()
 
-        val r = coordinator(history = h).reclaimCache()
+        val r = coordinator(opLog = h).reclaimCache()
 
         assertEquals(1, r.removedEntries)
         assertFalse(Files.exists(cacheContentFile(orphan)))
-        val e = h.all().single { it.op == InstallHistoryOp.CACHE_RECLAIM }
+        val e = h.all().single { it.op == OpName.CACHE_RECLAIM }
         assertTrue(e.success)
         assertTrue(e.detail!!.contains("p2"), "读不到 lock 的项目必须点名：${e.detail}")
         assertTrue(e.detail!!.contains("未被保护"), "且要说清后果：${e.detail}")
     }
 
     @Test
-    fun `回收入史：op 名 cache_reclaim 且明细带删与留两侧数字`() = runBlocking {
+    fun `回收留痕：op 名 cache_reclaim 且明细带删与留两侧数字`() = runBlocking {
         val kept = seedCacheContent("kept")
         seedCacheContent("gone")
         seedProjectLock("p1", "a" to kept)
-        val h = newHistory()
+        val h = newOpLog()
 
-        val r = coordinator(history = h).reclaimCache()
+        val r = coordinator(opLog = h).reclaimCache()
 
         val e = h.all().single()
-        assertEquals(InstallHistoryOp.CACHE_RECLAIM, e.op, "不许叫 cache_clean：那不是 npm 的 cache clean")
+        assertEquals(OpName.CACHE_RECLAIM, e.op, "不许叫 cache_clean：那不是 npm 的 cache clean")
         assertTrue(e.success)
         assertTrue(e.detail!!.contains("removed=1"), "删了多少要能回看：${e.detail}")
         assertTrue(e.detail!!.contains("保留 1 条"), "留了多少也要：${e.detail}")
@@ -1148,8 +1169,8 @@ class InstallCoordinatorTest {
         Files.write(bucket, ("\n" + "0".repeat(40) + "\t" + json).toByteArray())
         Files.delete(cacheContentFile(gone))   // 制造悬空：content 没了，index 行还在
 
-        val h = newHistory()
-        val r = coordinator(history = h).reclaimCache()
+        val h = newOpLog()
+        val r = coordinator(opLog = h).reclaimCache()
 
         assertTrue(r.indexRebuilt, "悬空引用必须被修掉")
         assertFalse(Files.exists(bucket), "全悬空的桶不留空壳")
@@ -1186,17 +1207,17 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `导出落地且入史（成败都审计）`() = runBlocking {
+    fun `导出落地且留痕（成败都记）`() = runBlocking {
         val exec = harvesting("axios" to "1.7.0")
-        val h = newHistory()
+        val h = newOpLog()
         val out = dir.resolve("out/snap.zip")
-        val c = coordinator(executor = exec, history = h, snapshots = snapshots())
+        val c = coordinator(executor = exec, opLog = h, snapshots = snapshots())
         c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
         val ref = c.exportSnapshot("p1", out.toString())
         assertTrue(Files.isRegularFile(out), "快照必须真的落盘（不是只返回一个 Ref）")
         assertTrue(ref.sha256.length == 64, "SnapshotRef 须带内容摘要，供导入侧比对")
-        val e = h.all().single { it.op == InstallHistory.Op.EXPORT }
-        assertTrue(e.success, "导出成功须入史")
+        val e = h.all().single { it.op == OpName.EXPORT }
+        assertTrue(e.success, "导出成功须留痕")
     }
 
     @Test
@@ -1315,8 +1336,8 @@ class InstallCoordinatorTest {
             ),
         )
         val exec = FakeExecutor()
-        val h = newHistory()
-        val c = coordinator(executor = exec, history = h, registryVerifier = v)
+        val h = newOpLog()
+        val c = coordinator(executor = exec, opLog = h, registryVerifier = v)
         val ex = assertThrows(AutojsException::class.java) {
             runBlocking { c.install("p1", listOf(PackageSpec("evil", "1.0.0"))) }
         }
@@ -1326,7 +1347,7 @@ class InstallCoordinatorTest {
         assertTrue(exec.calls.isEmpty(), "被拒的安装不进会话（否则 journal 会像成功一样推进）")
         assertTrue(journal.all().isEmpty(), "未进会话即无事务，也谈不上残骸")
         val e = h.all().single()
-        assertTrue(!e.success, "拒也要入史——审计要能回答「用户看到成功了吗」")
+        assertTrue(!e.success, "拒也要留痕——日志要能回答「用户看到成功了吗」")
         assertTrue(e.detail!!.contains("交叉校验不一致"))
     }
 
@@ -1340,7 +1361,7 @@ class InstallCoordinatorTest {
                 "axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", true),
             ),
         )
-        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val c = coordinator(executor = FakeExecutor(), opLog = newOpLog(), registryVerifier = v)
         val ex = assertThrows(AutojsException::class.java) {
             runBlocking { c.install("p1", listOf(PackageSpec("evil"), PackageSpec("axios"))) }
         }
@@ -1349,10 +1370,10 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `没验成 → TRUST_DOWNGRADED 告警且入史，但不拦安装（禁止静默）`() = runBlocking {
+    fun `没验成 → TRUST_DOWNGRADED 告警且留痕，但不拦安装（禁止静默）`() = runBlocking {
         val v = FakeVerifier(mapOf("axios" to NpmRegistryVerifier.Verdict.Unverifiable("axios", "第二意见未返回该版本（不可达或尚未同步），无法交叉校验")))
-        val h = newHistory()
-        val c = coordinator(executor = FakeExecutor(), history = h, registryVerifier = v)
+        val h = newOpLog()
+        val c = coordinator(executor = FakeExecutor(), opLog = h, registryVerifier = v)
         val events = mutableListOf<InstallEvent>()
         val collect = launch { c.progress("p1").collect { events += it } }
         kotlinx.coroutines.delay(50)
@@ -1366,7 +1387,7 @@ class InstallCoordinatorTest {
         assertTrue(w.single().message.contains("来源未校验"), "说清降的是什么级")
         assertTrue(events.any { it is InstallEvent.Finished && it.success }, "没验成不拦：装仍完成")
         val marked = h.all().first { it.detail?.contains("来源未校验") == true }
-        assertEquals(InstallHistory.Op.INSTALL, marked.op)
+        assertEquals(OpName.INSTALL, marked.op)
         assertTrue(marked.success, "「来源未校验」与「安装成功」是两件事，都要如实记")
     }
 
@@ -1378,7 +1399,7 @@ class InstallCoordinatorTest {
                 "b" to NpmRegistryVerifier.Verdict.Unverifiable("b", "无 integrity 锚点"),
             ),
         )
-        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val c = coordinator(executor = FakeExecutor(), opLog = newOpLog(), registryVerifier = v)
         val events = mutableListOf<InstallEvent>()
         val collect = launch { c.progress("p1").collect { events += it } }
         kotlinx.coroutines.delay(50)
@@ -1427,7 +1448,7 @@ class InstallCoordinatorTest {
     @Test
     fun `真校验器接上装路径：两镜像一致即放行（端到端零网络）`() = runBlocking {
         val v = agreeingSource("sha512-" + "a".repeat(24))
-        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val c = coordinator(executor = FakeExecutor(), opLog = newOpLog(), registryVerifier = v)
         val events = mutableListOf<InstallEvent>()
         val collect = launch { c.progress("p1").collect { events += it } }
         kotlinx.coroutines.delay(50)

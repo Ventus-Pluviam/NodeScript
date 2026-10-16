@@ -9,8 +9,6 @@ import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.SequencedInstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.InstallHandle
-import com.autoscript.domain.npm.InstallHistoryEntry
-import com.autoscript.domain.npm.InstallHistoryOp
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
@@ -124,7 +122,13 @@ class InstallCoordinator(
     private val layout: NpmProjectLayout = services.layout
     private val journal: InstallJournal = services.journal
     private val staging: InstallStaging = services.staging
-    private val history: InstallHistory? = services.history
+    /**
+     * 操作事实的去向（[NpmServices.opLog]）。
+     *
+     * 2026-10-17 用户令「去掉审计、改打系统日志」：这里原先是 `services.history`
+     * （一本落盘账）。现在协调器只把**事实**交出去（[OpLogSink]），去哪儿由装配层定。
+     */
+    private val opLog: OpLogSink = services.opLog
     private val lockSigner: LockSigner? = services.lockSigner
     private val snapshots: NpmSnapshot? = services.snapshots
     private val cacheIndex: CacheIndex = services.cacheIndex
@@ -310,7 +314,7 @@ class InstallCoordinator(
                         if (p != null) append("；首选 ${p.version} ${p.integrity}")
                         if (s != null) append("；第二 ${s.version} ${s.integrity}")
                     }
-                    history?.record(opName(args), projectId, false, "交叉校验不一致: $detail")
+                    opLog.log(opName(args), projectId, false, "交叉校验不一致: $detail")
                     throw AutojsException(ErrorCode.ERR_REGISTRY_UNAVAILABLE, detail)
                 }
                 is NpmRegistryVerifier.Verdict.Unverifiable -> {
@@ -319,7 +323,7 @@ class InstallCoordinator(
                     // 「到底想问的是 latest 还是范围」写进 message，不塞进 pkgs。
                     downgraded += spec.name
                     val asked = "${spec.name}@${spec.version ?: "latest"}"
-                    history?.record(opName(args), projectId, true, "来源未校验: $asked —— ${verdict.reason}")
+                    opLog.log(opName(args), projectId, true, "来源未校验: $asked —— ${verdict.reason}")
                 }
             }
         }
@@ -380,8 +384,8 @@ class InstallCoordinator(
         } catch (e: NpmOfflineBundleImporter.BundleTooLargeException) {
             // **超限是参数问题**（选错了文件 → 去重选），不是「文件不见了」（→ 去查 SAF
             // 副本有没有落地）—— 两者对用户的下一步动作完全不同，所以分错误码。原文
-            // （实际字节数与上限）照原样带给用户；超限同样入史，不留痕等于没发生。
-            history?.record(InstallHistory.Op.IMPORT, projectId, false, e.message ?: "")
+            // （实际字节数与上限）照原样带给用户；超限同样记一条，不留痕等于没发生。
+            opLog.log(OpName.IMPORT, projectId, false, e.message ?: "")
             throw AutojsException(ErrorCode.ERR_INVALID_PARAM, e.message ?: "离线 bundle 超过上限", e)
         } catch (e: IllegalArgumentException) {
             // 其余 IllegalArgumentException = 导入件对「文件不在那儿」的既有口径（§10.2）。
@@ -389,13 +393,13 @@ class InstallCoordinator(
         }
         if (!result.clean) {
             // §10.5-3 禁止静默：有拒收条目必须说，否则用户以为整包都进来了
-            history?.record(
-                InstallHistory.Op.IMPORT, projectId, false,
+            opLog.log(
+                OpName.IMPORT, projectId, false,
                 "bundle 有 ${result.rejected.size} 个条目被拒（路径非法或摘要不符）：${result.rejected.take(3)}",
             )
         }
-        history?.record(
-            InstallHistory.Op.IMPORT, projectId, true,
+        opLog.log(
+            OpName.IMPORT, projectId, true,
             "bundle 合入缓存 imported=${result.imported} skipped=${result.skipped} rejected=${result.rejected.size} bytes=${result.bytes}",
         )
         emit(
@@ -507,7 +511,7 @@ class InstallCoordinator(
         // 写盘走 NpmrcFile（与全局那份**同一份**实现）：两处各写一份「读全行 → removeIf
         // → 写回」必然漂，而漂的方向是「一处认 `registry = x` 带空格的写法、另一处不认」。
         NpmrcFile.writeKey(npmrc, keyName, value)
-        history?.record(InstallHistory.Op.REGISTRY, projectId, true, "$keyName=$value")
+        opLog.log(OpName.REGISTRY, projectId, true, "$keyName=$value")
     }
 
     /**
@@ -529,9 +533,9 @@ class InstallCoordinator(
      * 原文点名用户输入的那个串 —— 静默收下一个坏地址，后果是此后每次安装都失败，
      * 而用户不知道自己刚才那一步就是病因。
      *
-     * 审计行的 `projectId` 传**空串**，这不是笔误：全局变更没有项目维度，
-     * 而 [InstallHistory.Entry.projectId] 是非空 String。改行格式会动审计契约，
-     * 空串在审计页上正好读作「全局」。
+     * 记给去向的那条的 `projectId` 传**空串**，这不是笔误：全局变更没有项目维度，
+     * 而 [OpLogSink.log] 的 `projectId` 是非空 String。空串由去向侧（`HostLog`）
+     * 读作「全局」—— 判据只有那一条，不在写侧另造一个哨兵值。
      */
     override suspend fun setGlobalRegistry(raw: String?) {
         val cfg = globalConfig ?: throw AutojsException(
@@ -542,7 +546,7 @@ class InstallCoordinator(
         NpmRegistryKeys.reject(trimmed)?.let { throw IllegalArgumentException(it) }
         val value = trimmed.takeIf { it.isNotEmpty() }
         cfg.writeRegistry(value)
-        history?.record(InstallHistory.Op.REGISTRY, "", true, "registry=${value ?: "(恢复出厂)"}")
+        opLog.log(OpName.REGISTRY, "", true, "registry=${value ?: "(恢复出厂)"}")
     }
 
     /**
@@ -570,35 +574,6 @@ class InstallCoordinator(
         }
         return NpmPanelSnapshot(projects = projects)
     }
-
-    /**
-     * 安装审计史读数（§10.5-2；`:ui` 审计页，2026-10-09 批 85）。
-     *
-     * **为什么是 `snapshot()` 之外的第二条读口**：两者问的是两件事。`snapshot()` 答
-     * 「此刻装了什么」（当前事实，每次现算）；本口答「过去发生过什么」（历史事实，
-     * 落盘即定）。并进快照会让每次刷依赖面板都重读全部历史，而依赖面板根本不显示它。
-     *
-     * **无参**（与 `snapshot()` 里的待审队列同一取舍）：全量 + 呈现层筛，不按项目问 ——
-     * 按项目筛会让 `Op.REGISTRY` 那条（`projectId` 空串，全局变更）从任何一次筛选里
-     * 掉出去，而它恰恰是审计最该看见的。
-     *
-     * **未注入 history 时回空表**（不抛）：与 [snapshot] 的 `history` 用法一致 ——
-     * `history` 在构造里是可空的（测试替身不注入），审计史的「没有」与「读不到」在这里
-     * 合成一句「一条都没有」。这**不是**撒谎：`history?.record(...)` 在同一条路上写不进去时
-     * 也是静默的（可空注入的既有语义），读侧如实回它写下的那本账。
-     *
-     * 返回**按写入序**（最新在最后）：那是文件里真实的顺序，读口不替呈现层决定怎么排。
-     */
-    override suspend fun history(): List<InstallHistoryEntry> =
-        history?.all().orEmpty().map {
-            InstallHistoryEntry(
-                op = it.op,
-                projectId = it.projectId,
-                success = it.success,
-                detail = it.detail,
-                atMillis = it.atMillis,
-            )
-        }
 
     /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条那颗 cache clean 按钮）。
@@ -645,7 +620,7 @@ class InstallCoordinator(
         } catch (e: java.io.IOException) {
             throw AutojsException(ErrorCode.ERR_IO, "缓存回收失败（${cacheDir}）：${e.message}", e)
         }
-        // 入史：与 install/prune 同一条纪律 —— 「清了多少」是用户回看时唯一能对上的凭据。
+        // 记一条：与 install/prune 同一条纪律 —— 「清了多少」是用户回看时唯一能对上的凭据。
         // detail 里带上读不到 lock 的项目名：那些项目的包**没有**被保护，用户有权知道。
         val why = buildString {
             append("removed=${report.removedEntries} entries/")
@@ -654,7 +629,7 @@ class InstallCoordinator(
             if (report.indexRebuilt) append("；顺带修复了缓存索引里的悬空引用")
             if (unreadable.isNotEmpty()) append("；以下项目 lock 读不出来，其依赖未被保护：").append(unreadable.sorted())
         }
-        history?.record(InstallHistoryOp.CACHE_RECLAIM, "", true, why)
+        opLog.log(OpName.CACHE_RECLAIM, "", true, why)
         return NpmCacheReclaimReport(
             removedEntries = report.removedEntries,
             removedBytes = report.removedBytes,
@@ -738,7 +713,7 @@ class InstallCoordinator(
                     // 包说明符由 [NpmConsoleKeys.packageSpecsIn] 从原样透传的 argv 里取
                     // （argv 本身一个字不改，装的东西与手敲 npm 完全一致）。
                     //
-                    // 入史那一栏只给 `listOf(cmd.sub)` 而不是完整 argv：审计表要长期留存，
+                    // 记给去向的 op 段只给 `listOf(cmd.sub)` 而不是完整 argv：系统日志要长期留存，
                     // 而用户手敲的 argv 可能夹着凭据形态的参数（`--//registry/:_authToken=…`、
                     // `--otp`）—— 存原文等于把用户手滑敲进来的东西永久写进盘。真正的 argv
                     // 一个字不改地交给 npm（见下一行的 `listOf(cmd.sub) + cmd.args`）。
@@ -906,7 +881,7 @@ class InstallCoordinator(
         // npm 的分隔符在**参数之前**（`npm run build -- --watch`）：少了它，脚本名后的
         // `--watch` 会被 npm 自己吃掉而不是传给脚本，等于静默丢用户显式给的参数。
         val npmArgs = if (args.isEmpty()) listOf("run", name) else listOf("run", name, "--") + args
-        return runScriptOps(projectId, InstallHistoryOp.RUN_SCRIPT, name, args, s.pkg, s.versionHash, npmArgs)
+        return runScriptOps(projectId, OpName.RUN_SCRIPT, name, args, s.pkg, s.versionHash, npmArgs)
     }
 
     override suspend fun exec(projectId: String, bin: String, args: List<String>): InstallHandle {
@@ -923,7 +898,7 @@ class InstallCoordinator(
         )
         // 同上：`npm exec <args> -- <bin>`，分隔符必须在 bin 名之前，否则 bin 会被当 args 的一员。
         val npmArgs = if (args.isEmpty()) listOf("exec", "--", bin) else listOf("exec") + args + listOf("--", bin)
-        return runScriptOps(projectId, InstallHistoryOp.EXEC, bin, args, b.pkg, b.versionHash, npmArgs)
+        return runScriptOps(projectId, OpName.EXEC, bin, args, b.pkg, b.versionHash, npmArgs)
     }
 
     /**
@@ -936,7 +911,7 @@ class InstallCoordinator(
      * 人就是用户本人；要拦的是**脚本自己发起**的路径，而桥面根本没有 `runScript`/`exec`
      * 这两个方法（见 [NpmBridgeHandler.methods]），脚本到不了这里。
      *
-     * [versionHash] 仍然带上，但**不再是放行判据**：它随 [ScriptOp] 走到审计条目，
+     * [versionHash] 仍然带上，但**不再是放行判据**：它随 [ScriptOp] 走到操作事实，
      * 让「我当时跑的是哪一份脚本」有据可查（脚本改了哈希就变）。
      *
      * 执行体是 [scriptExecutor] 而不是 [executor]：npm CLI 走重操作通道（事务/staging/落位），
@@ -1004,7 +979,7 @@ class InstallCoordinator(
                             throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "脚本执行已取消（执行体已收尾，结果不采纳）")
                         }
                         tracked.finish()
-                        history?.record(action, projectId, true, summary)
+                        opLog.log(action, projectId, true, summary)
                         emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
                     } catch (e: CancellationException) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
@@ -1015,11 +990,11 @@ class InstallCoordinator(
                         val firstTerminal = !tracked.done
                         tracked.finish()
                         if (firstTerminal) {
-                            history?.record(action, projectId, false, e.message)
+                            opLog.log(action, projectId, false, e.message)
                             emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
                         } else {
-                            // 终态已发过：只把这次失败入史（审计要看到），不再重复发事件。
-                            history?.record(action, projectId, false, "取消后收尾失败: ${e.message}")
+                            // 终态已发过：只把这次失败记一条（日志里要能看到），不再重复发事件。
+                            opLog.log(action, projectId, false, "取消后收尾失败: ${e.message}")
                         }
                         throw e
                     }
@@ -1064,19 +1039,19 @@ class InstallCoordinator(
         try {
             val built = snapper.export(projectId, tmp)
             snapper.sync(built, uri)
-            history?.record(InstallHistory.Op.EXPORT, projectId, true, "entries=${built.entries} bytes=${built.contentBytes}")
+            opLog.log(OpName.EXPORT, projectId, true, "entries=${built.entries} bytes=${built.contentBytes}")
             return SnapshotRef(
                 uri = uri,
                 sizeBytes = built.sizeBytes,
                 sha256 = built.archiveSha256,
             )
         } catch (e: AutojsException) {
-            history?.record(InstallHistory.Op.EXPORT, projectId, false, e.message)
+            opLog.log(OpName.EXPORT, projectId, false, e.message)
             throw e
         } catch (e: CancellationException) {
             throw e        // 取消不是"快照导出失败"：不记历史、不折成 ERR_IO
         } catch (e: Exception) {
-            history?.record(InstallHistory.Op.EXPORT, projectId, false, e.message)
+            opLog.log(OpName.EXPORT, projectId, false, e.message)
             throw AutojsException(ErrorCode.ERR_IO, "快照导出失败：${e.message}", e)
         } finally {
             Files.deleteIfExists(tmp)
@@ -1107,17 +1082,17 @@ class InstallCoordinator(
         val free = freeSpaceProbe(root)
         if (free < config.minFreeBytes) {
             val why = "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装"
-            // 预检拒绝也入史（2026-10-09 批 85）：审计要能回答「用户当时看到成功了吗」，
-            // 而「被配额/磁盘挡住」正是最该被看见的那类失败 —— 它不留痕的话，用户在审计页
-            // 上看到的是「什么都没发生」，与他屏幕上那句报错对不上。与 `crossCheckRegistry`
+            // 预检拒绝也记一条（2026-10-09 批 85）：日志要能回答「用户当时看到成功了吗」，
+            // 而「被配额/磁盘挡住」正是最该被看见的那类失败 —— 它不留痕的话，用户在系统日志
+            // 里看到的是「什么都没发生」，与他屏幕上那句报错对不上。与 `crossCheckRegistry`
             // 的预检拒绝同一条口径（那条一直在记，这两条是漏的）。
-            history?.record(opName(args), projectId, false, why)
+            opLog.log(opName(args), projectId, false, why)
             throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
         val used = nodeModulesBytes(ProjectId(projectId))
         if (used >= config.projectQuotaBytes) {
             val why = "项目 node_modules 已达配额 ${config.projectQuotaBytes / 1024 / 1024}MB"
-            history?.record(opName(args), projectId, false, why)
+            opLog.log(opName(args), projectId, false, why)
             throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
         // 80% 黄（§10.2 「项目+全局配额(80%黄·100%拦）」）：不拦，发 Warning 事件
@@ -1212,7 +1187,7 @@ class InstallCoordinator(
             try {
                 lockSigner?.sign(projectId, layout.lockfile(ProjectId(projectId)))
             } catch (e: Exception) {
-                history?.record(opName(args), projectId, false, "lock 签名失败: ${e.message}")
+                opLog.log(opName(args), projectId, false, "lock 签名失败: ${e.message}")
                 emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = "lock 签名失败: ${e.message}"))
                 throw AutojsException(
                     ErrorCode.ERR_PERMISSION_DENIED,
@@ -1241,7 +1216,7 @@ class InstallCoordinator(
                     ),
                 )
             }
-            history?.record(opName(args), projectId, true, outcome.summary)
+            opLog.log(opName(args), projectId, true, outcome.summary)
             emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = outcome.summary))
         } catch (e: CancellationException) {
             // 事务与句柄须先收尾，再原样传播调用方取消。
@@ -1251,7 +1226,7 @@ class InstallCoordinator(
             journal.fail(nonce, projectId, stageDir.fileName.toString(), e.message)
             staging.sweep(projectId, setOf(nonce))
             tracked.finish()
-            history?.record(opName(args), projectId, false, e.message)
+            opLog.log(opName(args), projectId, false, e.message)
             emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
             throw e
         }
@@ -1323,13 +1298,13 @@ class InstallCoordinator(
     }
 
     /**
-     * 审计 op 名：取 npm CLI 子命令（install/ci/uninstall/prune/dedupe）；tarball/bundle 导入
-     * 统一归 [InstallHistory.Op.IMPORT]（args 里的路径是用户数据，不入 op 名——明细走 detail）。
+     * 操作名（[OpLogSink.log] 的 op 段）：取 npm CLI 子命令（install/ci/uninstall/prune/dedupe）；tarball/bundle 导入
+     * 统一归 [OpName.IMPORT]（args 里的路径是用户数据，不入 op 名——明细走 detail）。
      */
     private fun opName(args: List<String>): String {
         val sub = args.firstOrNull() ?: "unknown"
         return if (sub == "install" && args.any { it == "--from-bundle" || it.endsWith(".tgz") || it.endsWith(".tar.gz") })
-            InstallHistory.Op.IMPORT
+            OpName.IMPORT
         else sub
     }
 

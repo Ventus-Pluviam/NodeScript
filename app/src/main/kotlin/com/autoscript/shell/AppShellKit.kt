@@ -12,6 +12,7 @@ import com.autoscript.appservice.npm.NpmShellKit
 import com.autoscript.appservice.npm.ShellOpExecutor
 import com.autoscript.appservice.npm.NpmSpawnGate
 import com.autoscript.appservice.npm.NpmT1Bridge
+import com.autoscript.appservice.npm.OpLogSink
 import com.autoscript.appservice.npm.NpmScriptExecutor
 import com.autoscript.appservice.npm.ScriptOpExecutor
 import com.autoscript.appservice.npm.SocketT1Sessions
@@ -309,6 +310,17 @@ object AppShellKit {
          * **生产（`AppShellApplication`）恒传**：装了 CLI 却没有 libnode = 装不起来。
          */
         npmLibnode: Path? = null,
+        /**
+         * npm 操作事实的去向（[OpLogSink]）。
+         *
+         * **必须由调用方给**（缺省 [OpLogSink.None] 是给
+         * 测试替身留的）：本类够不着"事实该去哪儿"这个决定 —— 生产恒传
+         * [OpLogHostSink]（logcat + 日志管理页「系统日志」段）。
+         *
+         * 2026-10-17 用户令「去掉审计、改打系统日志」：原先这条链上没有这条缝，
+         * 事实由 `:app-service:npm` 自己写一本 `files/.ns/install-history.jsonl`。
+         */
+        opLog: OpLogSink = OpLogSink.None,
     ): AssembledShell {
         val nsDir = filesDir.resolve(".ns")
         Files.createDirectories(nsDir)
@@ -317,6 +329,10 @@ object AppShellKit {
         // store 本身不建目录（`begin`/`appendLine` 里 `createDirectories` 兜底，
         // 装配失败路径下也不炸）。
         val scriptLogs = ScriptLogStore(nsDir.resolve("script-logs"))
+        // 系统日志（runId 0）跨重启（2026-10-17 用户令「系统日志不要每次进 app 都清除」）：
+        // 与 script-logs 同住 `.ns`，但**是一个文件**而不是一次执行一个（系统日志
+        // 不按执行分节 —— 它记的是"引擎外"那些事，见 `HostLog` 的类 KDoc）。
+        val hostLogs = HostLogStore(nsDir.resolve(HostLogStore.FILE_NAME))
 
         // 装配期脚本补部署（§9.6）：排期/意向持久了但脚本内容可能已被清掉
         // （用户"清除数据"、系统回收空间、预装包升级），先补缺再装配 —— 否则装配出的壳
@@ -420,6 +436,8 @@ object AppShellKit {
                 // T1 脚本执行体（2026-10-10 批 91）：素材 + 宿主 + 桥 shim 三条齐才有值，
                 // 缺一条保持 `Unavailable`（如实 ERR_NOT_IMPLEMENTED）。
                 scriptExecutor = npmWiring!!.scriptExecutor,
+                // 操作事实的去向：装配层给（生产 = HostLog），本配方只转发。
+                opLog = opLog,
             )
         } else {
             null   // 调用方自带 handler：本配方不参与，呈现面读口随之缺席（如实 null）
@@ -453,6 +471,7 @@ object AppShellKit {
             // 2026-10-13 落盘缝：见本函数头的 scriptLogs —— 单测/离线配方走同一条
             // （store 无副作用，只在 begin/append 时建目录写文件）。
             scriptLogs = scriptLogs,
+            hostLogs = hostLogs,
         )
         // 看门狗开机即转（§8.4）：不转的话三路判据就只是"可以转"——在途 run 的出格行为
         // 没有一个周期性的观察者，`awaitCompletion` 的等待超时是唯一兜底（而它只管

@@ -1,5 +1,28 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-17：去掉审计改打系统日志（`OpLogSink` 缝 + `OpName`）+ 系统日志跨重启（`HostLogStore` + `ConsoleCollector.restored`））
+
+- [2026-10-17 · 去掉审计改打系统日志 + 系统日志跨重启](2026-10-17.md) 一条目（最新）：
+  用户口径原文「**去除审计这个东西，把这个日志输出到系统日志中**」+「**系统日志不要每次进 app 都清除**」；
+  追问裁定：去的是**依赖管理页顶栏那颗「审计」进的子页**，且背后那份只追加的落盘账
+  `files/.ns/install-history.jsonl` **一并去掉、改打系统日志**。
+  **药 = 形状之变：从「一本自己的文件」到「一条去向」** —— `:app-service:npm` 新增 `OpLogSink`
+  （`fun interface`）+ `OpName`（自 `:domain` 的 `InstallHistoryOp` 搬来、删掉 `install_script`），
+  写侧只交**事实**（op / projectId / 成败 / 明细），去哪儿由装配层定（生产 = `:app` 的
+  `OpLogHostSink` → `HostLog`：logcat + 日志管理页「系统日志」段 runId=0）；`:domain` 少 1 读口 + 2 DTO，
+  `:ui` 少一屏与顶栏那颗按钮。**三点刻意**：失败也记（执行体失败 / 门禁预检拒绝 / 交叉校验不一致 /
+  降信任四条路都留痕）、op 名**不再翻中文**（那张对照表随页面下线；字面量是可检索词，逐字钉在
+  `OpLogSinkTest`）、**时间戳不进缝**（时刻由去向侧盖，与 logcat 同源 —— 写侧再给一个就是两个时刻）。
+  **第二条口径（跨重启）**：系统日志此前只在内存（有界 2000 环）；新增 `:app` 的 `HostLogStore`
+  （`.ns/host-log.jsonl`，只追加无 retention）。接线是**一个收集器、两条去向**，按 `runId` 分道
+  （0 → host-log，否则 → 既有 `ScriptLogStore`；两边守卫**对偶**）；回放走 `ConsoleCollector` 新增的
+  `restored` —— **构造期预置进环、不回调 lineSink**（回调了就是每次启动把盘上那批再抄一遍）、
+  **seq 重新分配**（seq 是本次进程的游标空间），回读**只读尾部 1 MiB**。
+  **代价如实记**：文件随宿主事件一直长（伤磁盘，不伤启动耗时）。**未动**：`npm audit`/`AuditReport`
+  （那是包的安全审计，同名不同物）。**回归闸**：`OpLogSinkTest` 2 + `HostLogStoreTest` 6 +
+  `ConsoleCollectorTest` +2 + `NpmSnapshotTest` 一条反向断言（导出的 zip 里不许再有 `install-history.jsonl`），
+  **已对拍两条**（去掉 `restored` 预置 → CC 两例红；去掉 `HostLogStore` 的 runId 守卫 → 对应例红）。
+
 ## 最新追记（2026-10-17：项目缺 `package.json` 时自动补一份最小骨架；设备实测——装依赖报「getFileStore」；装依赖抛 `NetworkOnMainThreadException`）
 
 - [2026-10-17 · 项目缺 `package.json` 时自动补一份最小骨架](2026-10-17.md) 一条目（最新）：

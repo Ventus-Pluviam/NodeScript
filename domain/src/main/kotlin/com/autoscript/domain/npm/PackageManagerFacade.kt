@@ -345,8 +345,8 @@ interface PackageManagerFacade {
      * （§10.2）—— 把它按项目铺开就是同一个数字抄 N 份，而那 N 份会让人以为
      * 「删掉这个项目的缓存」是件说得通的事。
      *
-     * `projectId` 传空串（全局读数没有项目），与 [InstallHistoryEntry] 里 `registry`
-     * 那条全局变更传空串是同一手法。
+     * `projectId` 传空串（全局读数没有项目）—— 与 `InstallCoordinator.setGlobalRegistry`
+     * 记全局变更时传空串是同一手法。
      *
      * **只报 content-v2 的体积**（[NodeModulesStats.pkgCount] 为 0、`cacheBytes` 为 0）：
      * 这个数字的用途是回答「回收缓存能腾出多少」，而回收动的正是 content-v2
@@ -474,10 +474,11 @@ interface PackageManagerFacade {
      * 与 [consoleOutput] 是两件事：**那个是环、这个是盘**。环随进程消失，而"关掉控制台
      * 再进来还能翻回上次敲的那条"正是这个读口存在的唯一理由。
      *
-     * **按项目分开**（与 [history] 的无参全量刻意相反）：控制台的命令跑在某个项目上
-     * （顶部先选项目），历史跟着同一个作用域走 —— 在 A 项目敲的 `npm install axios`
-     * 翻到 B 项目去点，落的是 B 的 `node_modules`，而按钮上那行字一模一样。
-     * [history] 问的是"这个宿主发生过什么"（审计），本口问的是"我在这个项目里敲过什么"。
+     * **按项目分开**：控制台的命令跑在某个项目上（顶部先选项目），历史跟着同一个
+     * 作用域走 —— 在 A 项目敲的 `npm install axios` 翻到 B 项目去点，落的是 B 的
+     * `node_modules`，而按钮上那行字一模一样。本口问的是"我在这个项目里敲过什么"；
+     * "这个宿主发生过什么"（一次操作的最终结局）2026-10-17 起由系统日志那条去向承载
+     * （见 `:app-service:npm` 的 `OpLogSink`），不再是这个门面上的一个读口。
      *
      * 缺省实现回空表：未接线的替身零改动即可编译。空表 = "没有历史可补"，
      * 与"读不到"在界面上长得一样 —— 这是**刻意**的：历史是便利面，
@@ -524,101 +525,6 @@ interface PackageManagerFacade {
     // —— 快照（高信任通道）——
     suspend fun exportSnapshot(projectId: String, uri: String): SnapshotRef
 
-    // —— 审计史（§10.5-2「审计日志落 App 且可导出」；2026-10-09 批 85）——
-    /**
-     * 安装审计史（append-only，落盘 `files/.ns/install-history.jsonl`）。
-     *
-     * **为什么它是 `snapshot()` 之外的第二条读口**：两者问的是两件事，合并会让审计的
-     * 时间范围被依赖面板的刷新节奏绑死。`snapshot()` 答「此刻装了什么」（一份**当前**事实，
-     * 每次都现算）；本口答「过去发生过什么」（一份**历史**事实，写一次读一次，与当前状态
-     * 无关）。把后者塞进前者，等于每刷一次依赖面板就把全部历史重读一遍，而依赖面板根本
-     * 不显示它。
-     *
-     * **无参**：与 `snapshot()` 同一取舍 —— 全量 + 呈现层筛，不按项目问。按项目问
-     * 会让「全局变更」（[InstallHistoryOp.REGISTRY]，其 `projectId` 是空串）从任何一次
-     * 筛选里掉出去，而那条恰恰是审计最该看见的。
-     *
-     * 返回按写入序（**最新在最后** —— 那是文件里真实的顺序，读口不替呈现层决定怎么排）。
-     */
-    suspend fun history(): List<InstallHistoryEntry>
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 审计史（§10.5-2；`:ui` 审计页；2026-10-09 批 85）
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * 一条安装审计事实（§10.5-2）。
- *
- * **形状由落盘格式决定，不由「界面上想显示什么」决定**：`install-history.jsonl` 自
- * 2026-09 起就是这五个字段，而本 DTO 是它的只读投影 —— 呈现层要的派生（时间怎么格式化、
- * 操作名怎么翻人话）都在 `:ui` 侧算，不在这里加字段。加字段就要动落盘格式，
- * 而那份文件是**审计**：改它的形状等于让历史行与将来行不可比。
- *
- * @property op 操作名（[InstallHistoryOp] 是已知取值的锚；未知值也如实收下 —— 落盘侧
- *   刻意不因枚举不全而丢事件，读侧更不该把不认识的行悄悄藏掉）。
- * @property projectId 项目号；**空串 = 全局变更**（[InstallHistoryOp.REGISTRY] 改的是
- *   `files/.npmrc`，不属于任何项目），不是「项目号丢了」。
- * @property success 那次操作的结局。**失败也入史**（落盘侧的口径）：审计要能回答
- *   「用户当时看到成功了吗」，只记成功就答不了。
- * @property detail 可读明细（失败原因是原文，成功是摘要）。
- */
-data class InstallHistoryEntry(
-    val op: String,
-    val projectId: String,
-    val success: Boolean,
-    val detail: String? = null,
-    val atMillis: Long,
-)
-
-/**
- * 已知操作名的**唯一一份**（落盘侧 `InstallHistory.Op` 与本对象同值；呈现层引用这里，
- * 不在 Compose 里抄字面量 —— 抄了就会与落盘侧漂）。
- *
- * 与 [InstallHistoryEntry.op] 的 `String` 类型**刻意不一致**：取值域是开放的
- * （未知 op 如实收下），这里只给已知的那些一个稳定的比较锚。
- *
- * 前八个是 `InstallHistory.Op` 的原样搬迁；后六个是**跑出来的**取值 ——
- * `opName(args)` 把任何 argv 首词直接当 op 记，落盘侧从来没有拦住过它们。
- * 这不是要收窄取值域，而是把「实际会出现的名字」写下来：呈现层要分组就得知道有哪些。
- */
-object InstallHistoryOp {
-    const val INSTALL = "install"
-    const val CI = "ci"
-    const val UNINSTALL = "uninstall"
-    const val PRUNE = "prune"
-    const val DEDUPE = "dedupe"
-    const val REGISTRY = "registry"
-    const val IMPORT = "import"
-    const val EXPORT = "export"
-
-    /** 控制台轻操作（`opName` 直取 argv 首词的结果）。 */
-    const val LS = "ls"
-    const val AUDIT = "audit"
-
-    /** `update`（facade 有实现，今天零生产调用方）。 */
-    const val UPDATE = "update"
-    /**
-     * 缓存回收（`reclaimCache()` 的产物；§10.9 第 5 条那颗 cache clean 按钮）。
-     *
-     * **不叫 `cache_clean`**：这个动作不是 npm 的 `cache clean`（那个是整目录全清），
-     * 名字跟着语义走 —— 审计页上两件事长得一样的话，将来真接了全清就分不出来了。
-     */
-    const val CACHE_RECLAIM = "cache_reclaim"
-
-    /** T1 脚本执行动作（审计条目的 action 段）。 */
-    const val RUN_SCRIPT = "run_script"
-    const val EXEC = "exec"
-
-    /**
-     * 安装脚本（`postinstall` 那一类）。
-     *
-     * **今天零生产写入方**（2026-10-10 删审批面、2026-10-11 拆审批时留下的）：
-     * 保留是因为审计页要能**读**旧账
-     * —— 已落盘的 `install-history.jsonl` 里可能有这个 op，删掉常量只会让那些行在界面上
-     * 退回原样显示。不是"以后要用"，是"历史里有"。
-     */
-    const val INSTALL_SCRIPT = "install_script"
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -90,7 +90,7 @@ class T1BridgeE2ETest {
     private fun op(projectId: String, root: Path, what: String, timeoutMillis: Long = 60_000L) = ScriptOp(
         handleId = "h1",
         projectId = projectId,
-        action = com.autoscript.domain.npm.InstallHistoryOp.RUN_SCRIPT,
+        action = OpName.RUN_SCRIPT,
         pkg = projectId,
         what = what,
         args = emptyList(),

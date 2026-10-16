@@ -8,7 +8,7 @@ import kotlinx.coroutines.CancellationException
 /**
  * 依赖维护动作（§10.9 第 5 条那三颗按钮 + 缓存回收）的写操作（挂起；**顶层函数**）。
  *
- * 搬出 `MainActivity` 的理由与 [loadRegistry]/[loadAudit] 逐字相同：Activity 的函数数
+ * 搬出 `MainActivity` 的理由与 [loadRegistry] 逐字相同：Activity 的函数数
  * 贴着 detekt 的 `TooManyFunctions` 线，且这段是"拿读口算下一份状态"的纯逻辑 ——
  * 放这里能用 `FakeHost` 直接测（`:ui` 的单测门跑 JVM，`MainActivity` 构造不出来）。
  *

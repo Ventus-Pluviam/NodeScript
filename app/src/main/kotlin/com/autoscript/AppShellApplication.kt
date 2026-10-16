@@ -15,7 +15,6 @@ import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
-import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.InstallEventBatch
@@ -41,6 +40,7 @@ import com.autoscript.shell.AlarmPort
 import com.autoscript.shell.AlarmReceiver
 import com.autoscript.shell.AlarmSchedulerProvider
 import com.autoscript.shell.HostLog
+import com.autoscript.shell.OpLogHostSink
 import com.autoscript.shell.LockKeyStore
 import com.autoscript.shell.AndroidAlarmPort
 import com.autoscript.shell.AndroidBridgeBinder
@@ -409,6 +409,11 @@ class AppShellApplication : Application(), HostSummary {
                 // npm 会话宿主（同一个 noden）要 dlopen 的那件：`main.cpp` 按
                 // AUTOSCRIPT_LIBNODE 找它，缺了直接 exit 2（2026-10-17 设备实测 bug）。
                 npmLibnode = nativeLibDir.resolve("libnode.so"),
+                // npm 操作事实的去向（2026-10-17 用户令「去掉审计、改打系统日志」）：
+                // 原先 `:app-service:npm` 自己写一本 `files/.ns/install-history.jsonl`，
+                // 现在只把事实交出来，由这里接到 [HostLog]（logcat + 日志管理页
+                // 「系统日志」段 runId=0）。**恒传**：缺了 → 装完什么都没留下。
+                opLog = OpLogHostSink,
                 // 应用密钥（§10.5-1 T2 / §11.3 第 8 条）：lock 带外签名与快照签名的
                 // 密钥面 = Android Keystore（首次运行建一把，之后一直取那把）。
                 // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
@@ -1010,21 +1015,6 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 安装审计史读数（§10.5-2，[HostSummary] 的生产实现）。
-     *
-     * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个
-     * `InstallCoordinator` 会各自持一本审计账，读侧读到的那本与写侧写进去的那本就不是同一本）；
-     * 未接线**抛**，不返回空表 —— 空表是「读成功且真的一条都没有」的样子。
-     */
-    override suspend fun npmHistory(): List<InstallHistoryEntry> {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：审计史暂不可读" }
-        val facade = checkNotNull(built.npmFacade) {
-            "npm 未接线：审计史无处读取（原因见装配日志的 npmCliFailure）"
-        }
-        return facade.history()
-    }
-
-    /**
      * 依赖维护动作（§10.9 第 5 条，[HostSummary] 的生产实现）。
      *
      * 直接转给 facade 的同名方法：`ci` 那条路**必须**经过 facade 的 `ci()`
@@ -1049,7 +1039,7 @@ class AppShellApplication : Application(), HostSummary {
     /**
      * 缓存回收（§10.9 第 5 条，[HostSummary] 的生产实现）。
      *
-     * 与 [npmHistory] 同一条纪律：读的是**装配产物里那个 facade**（第二个
+     * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个
      * `InstallCoordinator` 会拿另一份缓存目录，那就删到别处去了）；未接线**抛**，
      * 不回一份「删了 0 条」的报告 —— 那个数字会被界面原样念给用户。
      */

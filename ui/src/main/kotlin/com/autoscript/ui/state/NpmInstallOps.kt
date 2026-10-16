@@ -169,7 +169,7 @@ internal suspend fun pollInstallWhileRunning(
  * 拉一次安装事件（阶段进度条的数据源，§10.9 第 1 条）。
  *
  * **为什么只拉一次而不是轮询到终态**：`:ui` 的每个读口都是"进页面/手动刷新时现取一次"
- * （见 `ConsoleCmdState`/`AuditState` 的同款纪律），没有常驻轮询循环 ——
+ * （见 `ConsoleCmdState` 的同款纪律），没有常驻轮询循环 ——
  * 而 `runNpmPanelCommand` 是**入队即返回**的，拉一次拿到的多半只是 `QUEUED`。
  * 这不是缺陷也不是假装：**阶段条显示的是"这一刻宿主报到哪一步"**，
  * 用户点刷新（或重新进页面）会再取一次；等宿主把常驻轮询那件事做了，

@@ -11,28 +11,29 @@ import java.nio.file.StandardOpenOption
  * 修的是一个很具体的体验缺口：控制台关掉再进来，敲过的命令就没了 ——
  * 而控制台的用处一半在"把上次那条改一改再跑"。
  *
- * **与 [InstallHistory] 的分工（同样是 jsonl + 追加，纪律不同）**：
- * - [InstallHistory] 是**审计事实**：一次操作的最终结局，只追加、**永不清理**
- *   （清理策略是 backlog A13，动它会碰 §8.5 的幂等锚点）；
+ * **与操作事实那条去向的分工**（2026-10-17 起那条不再是一本自己的账：
+ * 见 [OpLogSink] —— 事实只交出去，落不落、落哪儿由装配层定）：
+ * - 操作事实（[OpLogSink]）是**结论**：一次操作成没成、为什么没成。它今天落在
+ *   系统日志上（`HostLog`），那份日志**只追加**、不修剪；
  * - 本类是**便利缓存**：它记的是"用户敲过什么"，唯一的消费者是输入行的补全。
  *   故它**允许修剪**（[record] 超过 [TRIM_THRESHOLD] 行时整体重写成最近 [maxEntries] 条）
  *   —— 丢掉的只是"很久以前敲过的一条命令"，没有任何事实随之消失。
  *   把这条差别写在这里，是因为两者长得几乎一样：**下一个人很容易把修剪也搬到
- *   `InstallHistory` 上去**，那才是真错。
+ *   那条去向的落点上**，那才是真错。
  *
  * **去重按整行**（读取侧 [recent] 里做）：连敲两次同一条命令只该在历史里出现一次，
  * 且保留**最近**那次的位置 —— 与 shell 的 `HISTCONTROL=erasedups` 同一条直觉。
- * 写入侧不去重：那是审计式的原始账（"这条命令被敲过几次"将来可能有用），
+ * 写入侧不去重：那是原始账式的记法（"这条命令被敲过几次"将来可能有用），
  * 而"显示什么"是读取侧的事。
  *
  * **按项目分开读**（[recent] 收 `projectId`）：控制台是"命令跑在某个项目上"的面
  * （顶部先选项目），历史跟着同一个作用域走 —— 在 A 项目敲的 `npm install axios`
  * 翻到 B 项目去点，落的是 B 的 `node_modules`，而按钮上那行字一模一样。
- * 这与"审计史不分项目"（[InstallHistory] 读口无参）不矛盾：那边问的是"这个宿主
- * 发生过什么"，这边问的是"我在这个项目里敲过什么"。
+ * 这与操作事实**不分项目**不矛盾（[OpLogSink.log] 只带一个 projectId、去向侧
+ * 原样收下）：那边问的是"这个宿主发生过什么"，这边问的是"我在这个项目里敲过什么"。
  *
  * **带凭据形态的行不记**（[looksSecret]）：见那条的 KDoc —— 这是本类唯一一处
- * 「宁可不记」的取舍，与 `InstallCoordinator.runConsoleCommand` 里"入史只记
+ * 「宁可不记」的取舍，与 `InstallCoordinator.runConsoleCommand` 里"记给去向的只记
  * `listOf(cmd.sub)` 而不记完整 argv"是同一条纪律的落点。
  */
 class ConsoleHistory(
@@ -135,7 +136,7 @@ class ConsoleHistory(
      *
      * 手写扫描而不是上 `DomainJson`：`:domain` 的 JSON 依赖本模块**看得见**，但这里
      * 要的是"半行也能读"，而解析器对坏输入是整体失败 —— 一份被写到一半的历史
-     * 不该让前面几十条一起读不出来（与 `InstallHistory` 同一条容忍）。
+     * 不该让前面几十条一起读不出来（与 [InstallJournal] 同一条容忍）。
      */
     private fun stringField(raw: String, name: String): String? {
         val text = raw.trim()
@@ -174,7 +175,7 @@ class ConsoleHistory(
         return null
     }
 
-    /** JSON 字符串转义（与 [InstallHistory] 同一份写法：控制字符一律 `\uXXXX`）。 */
+    /** JSON 字符串转义（与 [InstallJournal] 同一份写法：控制字符一律 `\uXXXX`）。 */
     private fun q(s: String): String = buildString {
         append('"')
         for (c in s) {
@@ -194,7 +195,7 @@ class ConsoleHistory(
     /**
      * 这行看起来夹着凭据 → **不记**（best-effort，不是安全边界）。
      *
-     * 为什么需要：`InstallCoordinator.runConsoleCommand` 里那条「入史只记
+     * 为什么需要：`InstallCoordinator.runConsoleCommand` 里那条「记给去向的只记
      * `listOf(cmd.sub)`，完整 argv 一个字不改地交给 npm」的注释已经点破了这个风险
      * —— `npm install --//registry.example.com/:_authToken=…` 是**能敲进控制台的**。
      * 内存里的控制台环随进程消失，而这份历史落盘、跨重启还在。

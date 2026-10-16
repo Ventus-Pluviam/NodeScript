@@ -12,6 +12,79 @@
 
 ---
 
+## 90. 去掉审计（页面 + 落盘账），操作事实改打系统日志；系统日志跨重启（2026-10-17，用户口径）
+
+**背景（用户口径原文）**：「**去除审计这个东西，把这个日志输出到系统日志中**」+
+「**系统日志不要每次进 app 都清除**」。追问后当场裁定：去的是**依赖管理页顶栏那颗「审计」
+进的子页**，且它背后那份只追加的落盘账 `files/.ns/install-history.jsonl`
+**一并去掉、改打系统日志**（不是"只把入口藏起来"）。
+
+**决策一：这份账整体摘除，不保留"只写不读"的形态。** 它此前贯穿三层（`:domain` 的读口与
+两个 DTO、`:app-service:npm` 的 `InstallHistory` 写侧、`:ui` 的审计页）；页面没了之后，
+"继续写一本没人读的账"是纯粹的磁盘垃圾，而"留个读口给将来"是没被要求的将来。
+于是读口、DTO、写侧、页面、顶栏那颗按钮一起下线（`:domain` 少 1 读口 + 2 DTO）。
+
+**决策二：操作事实变成一条「去向」，不是一本「自己的文件」。** 新增 `OpLogSink`
+（`fun interface`：`op` / `projectId` / `success` / `detail`）：写侧只交**事实**，
+**不决定它去哪儿、什么格式、什么级别**；去向由装配层注入 —— 生产 = `:app` 的
+`OpLogHostSink` → `HostLog`（logcat 照写 + 日志管理页「系统日志」段 runId=0 镜像）。
+**为什么必须是缝而不是直接调 `HostLog`**：`:app-service:npm` 是纯 JVM 模块
+（连 `android.util.Log` 都碰不到），而系统日志那面住 `:app` —— 与本仓三条执行体缝
+（HeavyOp / ScriptOp / ShellOp）同一条分工。**实现方不许抛**（诊断面把一次能跑完的安装
+变成失败是本末倒置，与 `ConsoleHistory` / `ScriptLogStore` 的 `runCatching` 同一条纪律）。
+
+**决策三：`OpName` 搬到 `:app-service:npm`，并删掉 `install_script`。** 它原先住 `:domain`
+的唯一理由是"`:ui` 的审计页要按它分组"；页面没了，唯一消费方就是本模块自己。
+`install_script` 那条的存在理由是"审计页要能读旧账"（旧落盘文件里可能有这个名字）——
+账与页同时没了，它就成了没有来处的常量，故删。**取值域仍是开放的**（`opName(args)`
+直取 argv 首词），常量只是给"实际会出现的名字"一个稳定的比较锚。
+
+**决策四：op 名不再翻译成中文。** 那张 op→中文 的对照表随审计页一起下线（页面是它唯一
+消费者）。系统日志里出现的因此就是 `install` / `registry` / `run_script` 这类**可检索词** ——
+这对 logcat 读者反而更直接（`adb logcat -s npm` 配合 grep 就有用），代价是"给非技术用户看的
+中文面"没了，而那个用户面本来在依赖管理页的排版里，不在日志里。**字面量逐字钉在
+`OpLogSinkTest` 上**：改了它们等于改了用户与运维的检索词，而没有任何东西会因此报错。
+
+**决策五：时间戳不进缝。** `detail` 之外的时刻由**去向侧**盖（`HostLog` 自己取
+`System.currentTimeMillis()`，与 logcat 同源）。写侧再给一个，同一条事实在两个目的地
+就会有两个时刻 —— 而这种差在没有对时之前谁也说不清哪个对。
+
+**决策六：失败照旧要记（这一条是继承，不是新增）。** 执行体失败、门禁/配额预检拒绝、
+交叉校验不一致、降信任四条路都留痕 —— 「用户当时看到成功了吗」是这一面最该答的问题，
+而"被配额/磁盘挡住"正是最该被看见的那类失败。原实现如此，搬迁后逐条保留（回归闸：
+`InstallCoordinatorTest` 那两例改成从记录型去向缝观察，判据未减）。
+
+**决策七：系统日志跨重启 —— 落 `HostLogStore`，回放走 `ConsoleCollector.restored`。**
+系统日志（`runId == 0`）此前只在内存（有界 2000 的环），进程一没就全没；而用户来这一页的
+时机十有八九是"刚才出了点事，我重开看一眼"。落地：`:app` 的 `HostLogStore`
+（`filesDir/.ns/host-log.jsonl`，单文件、一行一条 `{at,level,text}`、**只追加无 retention**）。
+接线是**一个收集器、两条去向**，按 `runId` 分道（`lineSink`：0 → host-log，否则 →
+既有 `ScriptLogStore`；两边守卫**对偶** —— 那边跳过 0，这边只收 0）。
+**回放为什么不走 `append`**：`append` 会回调 `lineSink`，而 sink 正是"写回盘"那条路 ——
+回放 2000 行就是每次启动把盘上那批**再抄一遍**，文件每次开机翻一倍。故回放是
+**构造期预置进环**（`restored`），且 **seq 一律重新分配**（seq 是**本进程**的游标空间，
+拉取方的游标也从 0 起；沿用盘上的旧 seq 会让第一帧就"游标已越过"，那批行永远读不到）。
+回读**只取尾部 1 MiB**（环只装 2000 行，读整份文件是纯浪费）。
+
+**代价与已知边界（如实记）**：
+1. **`host-log.jsonl` 只增不减** —— 随宿主事件一直长，忙设备一年量级几 MB～几十 MB。
+   换掉的是"每次进 app 都清空"（用户明确不要的那个行为）；上限侧的治理（轮转/按大小截断）
+   **本次不做**，因为在同一个 `.ns` 目录里已有一份同纪律的先例（`ScriptLogStore` 按执行分文件、
+   同样无 retention），两处口径一致比单点优化更重要。
+2. **真机上"重开还在"这件事本机验不了**（本机没有 Android SDK，Compose 面编不了）——
+   回归闸钉住的是"落盘/回读/预置"三段的行为，端到端归设备自测。
+3. **旧账不迁移**：已存在的 `install-history.jsonl` 不再被任何代码读，用户"清除数据"以外
+   没有清理入口（与它当初"只追加、永不清理"是同一条口径的延续）。选"不迁移"是因为
+   迁移就得留下读侧 —— 那正是本次要去掉的东西。
+
+**没动的（刻意）**：`npm audit` 与 `AuditReport`（§10.5-3 的 OSV 离线库 / 在线 audit 签名面）
+**照旧** —— 那是**包的安全审计**，与"这个宿主操作发生过什么"是两件事，同名的只是中文那两个字。
+
+**取代的口径**：§10.5-2 那条「审计日志落 App 且可导出」被本项取代，按本文件纪律
+**原文照抄进「已推翻 / 已改口径」表**（不在这里另写一份）。
+
+---
+
 ## 89. 项目缺 `package.json` 时由重操作自动补一份最小骨架（2026-10-17，用户口径）
 
 **背景（用户报 + 用户口径）**：用户在自己建的项目 `demo` 上装依赖，报
@@ -3084,6 +3157,7 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
 | `ADB_INPUT` 三态**恒 `DEGRADED`**（「未就绪时输入走无障碍手势」这条降级路径真实存在） | `AndroidSystemStateReader` 的映射表；`PermissionCenter.guideText(ADB_INPUT)` 的文案 | **改口径**（2026-10-07，本文件**第 38 项**）：批 61（§9.3 三通道三选一）**已经废掉那条降级路径** —— 指定 `adb` 而不可用就是 `ERR_PERMISSION_DENIED`，绝不改用别的通道。故改成真探测：`ShizukuInput.isAvailable()` 就绪 → `GRANTED`，不就绪 → `DENIED`（与无障碍/root/使用情况访问同档）；文案里那句降级承诺同批删掉 | 2026-10-07 |
 | backlog **D7**「大文件余量：`AppShellApplication` 与 `Scheduler` 还有没有值得付的刀口」（2026-10-02 登记） | `docs/backlog.md` D7；`app-service/scheduler/.../core/Scheduler.kt`；`app/src/main/kotlin/com/autoscript/AppShellApplication.kt` | **结项**（2026-10-07，口径全文见本文件**第 39 项**）：`Scheduler` 类体是单一内聚状态机，**无值得付的接缝**（拆大方法要把八九个构造参数摊成 `internal`，是拿封装换行数）；只外迁三个顶层声明（`ScheduledTask`/`RecoveryRecord`/`DefaultDeadlines`）。`AppShellApplication` 的读侧零重复不变式（不搬），写侧取一个刀口 —— 四类 APK 资产的读法抽成 `shell/AssetsRead.kt`（**该文件不可单测**，已如实登记） | 2026-10-07 |
 | 第 54 项第 2 条「命令范围 = 只有 npm，**不加 shell**」（用户 2026-10-09 早先裁定「不用加 sh 啊」） | `docs/design-decisions.md` 第 54 项第 2 条；`docs/design/10-npm.md` §10.9 第 3 条 | **改口径（2026-10-09，批 88）**：用户同日后续裁定「也需要让控制台能执行 shell」+「`su` 进 root、`shizuku` 进 adb、`exit` 退出」—— shell **进控制台**，但不是「裸命令一律当 shell」：**必须显式进模式**（`su`/`shizuku`），默认模式下裸首词仍是 npm bin。原裁定那半句「任意命令走脚本侧的 `auto.shell` 桥面」**仍成立**（那是脚本面，与控制台是两条面）；作废的只有「控制台不加 shell」这一句。口径见本文件**第 58 项** | 2026-10-09 |
+| 审计日志（registry 变更/lock 重签/脚本执行）**落 App 且可导出**；`versionHash` 随执行进审计条目，回答「我当时跑的是哪一份脚本」（脚本一改哈希就变），但**不再作放行判据** | `docs/design/10-npm.md` §10.5-2 第 2 条（原 §18 已拍板项） | **整条下线**（2026-10-17 用户令「**去除审计这个东西，把这个日志输出到系统日志中**」）：审计页（`AuditScreen`/`AuditState`/`AuditOps` + 依赖管理页顶栏那颗按钮）与它背后那份只追加的落盘账 `files/.ns/install-history.jsonl` 一并去掉；操作事实改走 `OpLogSink` 缝 → `:app` 的 `HostLog`（logcat + 日志管理页「系统日志」段）。**「可导出」那半句本就未落**（SAF 通道没接、界面不画按钮），随之作废；快照导出内容里的 `ledger/install-history.jsonl` 同步摘除（反向断言钉在 `NpmSnapshotTest`）。`versionHash` 那半句**仍成立**（它随 `ScriptOp` 走，只是终点从审计条目换成系统日志）。口径见本文件**第 90 项** | 2026-10-17 |
 ### 附：§12.2 被反转口径原文照抄（2026-09-30 步骤 6 摘录前的原文）
 
 > - **语义层**（handler）住 `:platform:capabilities` 的 `SystemNamespaces.kt`，纯 JVM 可测（假 SPI 注入即可跑）：参数校验（spec 守卫、必填字段、`timeout > 0`）、枚举字面量解析（`ShellMode`/`DialogMode`，拼错即报错不静默套默认）、默认值（shell 超时 30s）、错误分类**透传**（`AutojsException.error` 原码回桥）、响应形状编码（与 `extras.ts` 逐字对齐）；

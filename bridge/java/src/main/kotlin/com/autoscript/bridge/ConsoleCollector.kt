@@ -45,6 +45,25 @@ class ConsoleCollector(
      * 缺省 = 不落盘（单测/替身进程各自隔离，行为与此前一致）。
      */
     private val lineSink: (ConsoleLine) -> Unit = {},
+    /**
+     * 跨重启回放（2026-10-17）：构造时预置进环的那些行。
+     *
+     * 用户令原文是「系统日志不要每次进 app 都清除」—— 系统日志（`runId == 0`）此前
+     * 只活在内存里，进程一没就全没。落盘与回读由 `:app` 的 `HostLogStore` 做，
+     * 本参数只问一件事："上一世的行，怎么进来"。
+     *
+     * **为什么不走 [append]**：`append` 会回调 [lineSink]，而 sink 正是"把这行写回盘"
+     * 的那条路 —— 回放 2000 行就是每次启动把盘上那批**再抄一遍**，文件每次开机翻一倍。
+     * 预置进环（构造期，sink 此刻还没有任何活要干）绕开这个回路，语义也更准：
+     * 回放不是"又发生了这些事"，是"上一世发生过的那些事还在"。
+     *
+     * **seq 一律重新分配**（[ConsoleLine.seq] 不带过来）：seq 是**本进程**的游标空间，
+     * 拉取方（`:ui` 控制台）的游标也从 0 起 —— 沿用盘上的旧 seq 会让第一帧就
+     * "游标已越过"，那批行永远读不到。
+     *
+     * 超出 [capacity] 的部分**取最后 capacity 条**（同 [append] 的淘汰方向：丢最老）。
+     */
+    private val restored: List<ConsoleLine> = emptyList(),
 ) : RequestHandler {
 
     init {
@@ -58,6 +77,16 @@ class ConsoleCollector(
     private var seq = 1L
     private val lines = ArrayDeque<ConsoleLine>()
     private var dropped = 0L
+
+    // 回放预置：声明顺序决定了这个块必须**排在 [lines] 之后**（Kotlin 按文本序跑
+    // 属性初始化与 init 块），否则这里碰的是一个还没赋值的环。
+    init {
+        // 先 `takeLast` 再入环 ⇒ 环永不满溢，dropped 不因回放而虚增
+        //（丢的是"上一世就没装下"的那部分，那是上一世的账）。
+        for (line in restored.takeLast(capacity)) {
+            lines.addLast(line.copy(seq = seq++))
+        }
+    }
 
     override suspend fun handle(request: BridgeRequest): BridgeResponse {
         if (request.method != "log") {

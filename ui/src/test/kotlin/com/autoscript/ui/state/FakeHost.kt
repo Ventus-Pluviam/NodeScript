@@ -10,7 +10,6 @@ import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
-import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.NpmCacheReclaimReport
@@ -136,9 +135,6 @@ open class FakeHost(
 
     override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot =
         throw UnsupportedOperationException("本替身未提供 consoleOutput（用例按需覆盖）")
-
-    override suspend fun npmHistory(): List<InstallHistoryEntry> =
-        throw UnsupportedOperationException("本替身未提供 npmHistory（用例按需覆盖）")
 
     override suspend fun runNpmMaintenance(
         projectId: String,

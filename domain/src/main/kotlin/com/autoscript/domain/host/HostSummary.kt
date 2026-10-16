@@ -7,7 +7,6 @@ import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
-import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmRegistrySnapshot
@@ -494,28 +493,9 @@ interface HostSummary {
         )
 
     /**
-     * 安装审计史读数（§10.5-2；管理面板 → 依赖管理 → 审计页）。
-     *
-     * 与依赖面板/镜像源/控制台同一条分工：**宿主自己的界面读口，不经桥**。
-     *
-     * **无参**（与 [npmSnapshot] 里的待审队列同一取舍）：全量 + 呈现层筛 —— 按项目筛会让
-     * 「全局变更」（registry 改动，`projectId` 是空串）从任何一次筛选里掉出去。
-     *
-     * 读失败**抛**（与 [npmSnapshot]/[console] 同）：空表是「读成功且真的一条都没有」的样子，
-     * 会把「宿主读不到审计」画成「你没做过任何操作」—— 而审计页上那句话是安全相关的。
-     *
-     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
-     */
-    suspend fun npmHistory(): List<InstallHistoryEntry> =
-        throw com.autoscript.domain.core.AutojsException(
-            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
-            "审计史读口未接线：本宿主没有接上 npm 审计入口",
-        )
-
-    /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条「包大小管理页」的 cache clean 按钮）。
      *
-     * 与依赖面板/镜像源/审计同一条分工：**宿主自己的界面入口，不经桥** ——
+     * 与依赖面板/镜像源同一条分工：**宿主自己的界面入口，不经桥** ——
      * 桥面是脚本侧的面，而这个按钮改的是**磁盘占用**，只有人在界面上按得下去。
      *
      * 语义不是 `npm cache clean`：删的是「没有任何项目 lock 需要的那些」，见
@@ -576,7 +556,9 @@ interface HostSummary {
      * 还能翻回上次敲的那条"要靠落盘。历史由宿主在命令派发时记下
      * （`InstallCoordinator.runConsoleCommand`），本口只读。
      *
-     * **按项目分开**（与 [npmHistory] 的无参全量刻意相反，理由见门面同口的 KDoc）。
+     * **按项目分开**：控制台是"命令跑在某个项目上"的面，历史跟着同一个作用域走
+     * —— 在 A 项目敲的 `npm install axios` 翻到 B 项目去点，落的是 B 的
+     * `node_modules`，而按钮上那行字一模一样。
      *
      * 缺省实现回空表（未接线 = 没有历史可补，如实）。
      */

@@ -82,7 +82,6 @@ import com.autoscript.ui.components.ToastHost
 import com.autoscript.ui.components.rememberToastAction
 import com.autoscript.ui.screens.ManagementScreen
 import com.autoscript.ui.screens.LogManagementScreen
-import com.autoscript.ui.screens.AuditScreen
 import com.autoscript.ui.screens.NpmScreen
 import com.autoscript.ui.screens.ProjectScreen
 import com.autoscript.ui.screens.RegistryScreen
@@ -95,8 +94,6 @@ import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.scriptOutputLines
-import com.autoscript.ui.state.filterAudit
-import com.autoscript.ui.state.loadAudit
 import com.autoscript.ui.state.reclaimNpmCacheOp
 import com.autoscript.ui.state.pollInstallEvents
 import com.autoscript.ui.state.pollInstallWhileRunning
@@ -110,7 +107,6 @@ import com.autoscript.ui.state.stopConsoleCmd
 import com.autoscript.ui.state.selectConsoleProject
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.LoadState
-import com.autoscript.ui.state.AuditState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.ui.state.TaskLogState
 import com.autoscript.ui.state.ProjectState
@@ -229,15 +225,6 @@ class MainActivity : ComponentActivity() {
      * 读口不依赖壳装配（限额表住 `filesDir/.ns`），首帧就现读一次。
      */
     private var limitsState: ScriptLimitsState by mutableStateOf(ScriptLimitsState.NOT_LOADED)
-
-    /**
-     * 审计页状态（批 85，§10.5-2）。与 [registryState] 同一条口径：读口不依赖壳装配
-     * （`install-history.jsonl` 住 `filesDir`），首帧就现读一次。
-     *
-     * 与 [npmState] 是**两条读口**（那个答「此刻装了什么」，这个答「过去发生过什么」）——
-     * 不合并的理由见 `PackageManagerFacade.history` 的 KDoc。
-     */
-    private var auditState: AuditState by mutableStateOf(AuditState.NOT_LOADED)
 
     /**
      * 执行日志悬浮窗控制器（2026-10-13；组合外持有，供挂起函数用）。
@@ -452,16 +439,11 @@ class MainActivity : ComponentActivity() {
             // 镜像源管理子页（批 83）：同一层级、同一读法。
             var registryOpen by rememberSaveable { mutableStateOf(false) }
             val closeRegistry = { registryOpen = false }
-            // 审计子页（批 85）：**从依赖管理页内进**（不是管理面板的第五项）——
-            // 它记的就是依赖面那些操作，从面板直进会让人以为它是与依赖并列的另一件事。
-            var auditOpen by rememberSaveable { mutableStateOf(false) }
-            val closeAudit = { auditOpen = false }
             val subPage = when {
                 consoleOpen -> ManagementPage.CONSOLE
                 npmOpen -> ManagementPage.NPM
                 envOpen -> ManagementPage.ENV
                 registryOpen -> ManagementPage.REGISTRY
-                auditOpen -> ManagementPage.AUDIT
                 logManagementOpen -> ManagementPage.LOGS
                 else -> null
             }
@@ -643,7 +625,6 @@ class MainActivity : ComponentActivity() {
                                             ManagementPage.ENV -> closeEnv()
                                             ManagementPage.LOGS -> closeLogManagement()
                                             ManagementPage.REGISTRY -> closeRegistry()
-                                            ManagementPage.AUDIT -> closeAudit()
                                             null -> Unit
                                         }
                                     },
@@ -665,8 +646,6 @@ class MainActivity : ComponentActivity() {
                                                 onCloseNpm = closeNpm,
                                                 onCloseEnv = closeEnv,
                                                 onCloseRegistry = closeRegistry,
-                                                onCloseAudit = closeAudit,
-                                                onOpenAudit = { auditOpen = true },
                                                 onCloseLogManagement = closeLogManagement,
                                                 scope = scope,
                                             )
@@ -724,7 +703,6 @@ class MainActivity : ComponentActivity() {
                         ManagementPage.NPM -> reloadNpm()
                         ManagementPage.ENV -> reloadEnv()
                         ManagementPage.REGISTRY -> reloadRegistry()
-                        ManagementPage.AUDIT -> reloadAudit()
                         ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog(); reloadScriptLogs() }
                         null -> Unit
                     }
@@ -808,8 +786,6 @@ class MainActivity : ComponentActivity() {
         onCloseNpm: () -> Unit,
         onCloseEnv: () -> Unit,
         onCloseRegistry: () -> Unit,
-        onCloseAudit: () -> Unit,
-        onOpenAudit: () -> Unit,
         onCloseLogManagement: () -> Unit,
         scope: CoroutineScope,
     ) {
@@ -855,20 +831,12 @@ class MainActivity : ComponentActivity() {
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
                 onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
-                onOpenAudit = onOpenAudit,
                 onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },
                 onToggleDev = { npmState = npmState.copy(installDev = it) },
                 onToggleOffline = { npmState = npmState.copy(installOffline = it) },
                 onSubmitInstall = { scope.launch { npmState = submitInstall(hostSummary(), npmState) } },
                 onRemoveInstalled = { name -> scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) } },
                 onBack = onCloseNpm,
-                modifier = Modifier,
-            )
-            ManagementPage.AUDIT -> AuditScreen(
-                state = auditState,
-                onRefresh = { reloadAudit() },
-                onFilter = { auditState = filterAudit(auditState, it) },
-                onBack = onCloseAudit,
                 modifier = Modifier,
             )
             ManagementPage.ENV -> ScriptEnvScreen(
@@ -1130,17 +1098,6 @@ class MainActivity : ComponentActivity() {
      */
     private suspend fun reloadRegistry() {
         registryState = loadRegistry(hostSummary(), registryState)
-    }
-
-    /**
-     * 现取审计史（挂起；只写 [auditState]）。
-     *
-     * 三落点与 [reloadNpm] 同构：未接线/壳未装配 → 失败态带原因（**不冒充**
-     * 「你没做过任何操作」）；抛错 → 失败态保留已读到的那份；成功 → 全量覆盖
-     * （宿主读数是权威，这份读口本来就是全量历史，不累积）。
-     */
-    private suspend fun reloadAudit() {
-        auditState = loadAudit(hostSummary(), auditState)
     }
 
     /**
@@ -1551,7 +1508,7 @@ class MainActivity : ComponentActivity() {
      * `glyph` 是页签条上那个画出来的图标（见 `Glyphs.kt`）。
      */
     /** 管理页在前台的那个子页（面板本身不是子页，用 null 表示）。 */
-    enum class ManagementPage { CONSOLE, NPM, ENV, LOGS, REGISTRY, AUDIT }
+    enum class ManagementPage { CONSOLE, NPM, ENV, LOGS, REGISTRY }
 
     enum class Tab(val short: String, val glyph: GlyphKind) {
         HOME("项目", GlyphKind.HOME),

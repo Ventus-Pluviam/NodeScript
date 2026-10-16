@@ -45,9 +45,11 @@ import com.autoscript.ui.theme.ThemeColors
  *
  * 分段：**已装依赖**（`npm ls` 直读 lockfile 的权威清单 + 尺寸/配额）。
  *
- * 顶栏那颗「审计」进 [AuditScreen]（§10.5-2）：它记的就是**本页这些操作**发生过什么
- * （安装 / 卸载 / 镜像源变更…），所以从本页进而不是从管理面板当第五项 ——
- * 从面板直进会让人以为它与依赖管理是并列的另一件事。
+ * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
+ * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
+ * `files/.ns/install-history.jsonl` 一并去掉，本页这些操作（安装 / 卸载 / 镜像源变更…）
+ * 的结局改打**系统日志**（管理面板 → 日志管理 → 系统日志段）。
+ * 于是"这些操作发生过什么"不再需要一个从本页进的第二屏 —— 页面本身不再有第五个入口。
  *
  * 这一屏刻意**不做**的几件事（做了就是撒谎）：
  * - **不画百分比进度**：`InstallEvent.Progress.percent` 全仓从无赋值，npm 进程内的
@@ -81,7 +83,6 @@ fun NpmScreen(
     onSelectProject: (String) -> Unit,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
     onReclaimCache: () -> Unit,
-    onOpenAudit: () -> Unit,
     onInstallDraft: (String) -> Unit,
     onToggleDev: (Boolean) -> Unit,
     onToggleOffline: (Boolean) -> Unit,
@@ -99,7 +100,6 @@ fun NpmScreen(
             title = "依赖管理",
             onBack = onBack,
             actions = {
-                ActionBarAction("审计", onOpenAudit)
                 ActionBarAction("刷新", refresh::trigger)
             },
         )

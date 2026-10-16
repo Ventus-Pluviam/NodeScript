@@ -148,9 +148,9 @@ internal fun <T> ManagementTransition(
 ) {
     // `under` 是盖在底下的那一层，`top` 是盖在上面的（null = 没有覆盖层）。
     //
-    // **为什么不能用「当前显示的那层」当底层**：从审计返回依赖管理时 `page` 变回依赖管理，
-    // 而它此刻正是 `top`。若底层也画它，用户会看到同一页淡出又淡入。`under` 存的是
-    // 「`top` 之前那一层」，返回时它已经在那儿了。
+    // **为什么不能用「当前显示的那层」当底层**：从镜像源管理返回依赖管理时 `page` 变回
+    // 依赖管理，而它此刻正是 `top`。若底层也画它，用户会看到同一页淡出又淡入。`under`
+    // 存的是「`top` 之前那一层」，返回时它已经在那儿了。
     var under by remember { mutableStateOf(page) }
     var top by remember { mutableStateOf<T?>(null) }
     // 1 = 上层完全就位（初值：首帧没有覆盖层，直接就位，不做进场动画）。

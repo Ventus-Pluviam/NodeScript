@@ -18,15 +18,33 @@ package com.autoscript.appservice.npm
  * - **Kotlin data class 而不 fun interface**：协作者之间无行为关联，收成接口就是硬造抽象。
  *
  * null 语义（与旧构造逐字一致）：可空成员表示「未接线」——**装配缺口**，不等于
- * 「不需要该能力」。协调器对每个 null 都有显式降级路径（history 缺 → 不入史；
- * lockSigner 缺 → ci 不验签直接走；snapshots 缺 → 导入该格式时 ERR_NOT_IMPLEMENTED；
- * registryVerifier 缺 → 校验步骤静默跳过……）。何时补齐由装配层定，协调器不假装。
+ * 「不需要该能力」。协调器对每个 null 都有显式降级路径（lockSigner 缺 → ci 不验签直接走；
+ * snapshots 缺 → 导入该格式时 ERR_NOT_IMPLEMENTED；registryVerifier 缺 → 校验步骤静默跳过……）。
+ * 何时补齐由装配层定，协调器不假装。
+ *
+ * [opLog] 是这条纪律的一个例外：它是**非空带缺省**的（见那边的 KDoc —— 「未接线」与
+ * 「不需要」在这里是同一件事，不值得区分）。
  */
 data class NpmServices(
     val layout: NpmProjectLayout,
     val journal: InstallJournal,
     val staging: InstallStaging,
-    val history: InstallHistory? = null,
+    /**
+     * 操作事实的去向（[OpLogSink]）。
+     *
+     * 2026-10-17 用户令「去掉审计、改打系统日志」后，原来那个 `history: InstallHistory?`
+     * （一本只追加的落盘账 `files/.ns/install-history.jsonl`）换成了这条缝。
+     *
+     * **不可空、缺省 [OpLogSink.None]**：与其余协作者不同，这里没有「未接线」与
+     * 「不需要」的区分价值 —— 两者都是「这条缝上什么都不发生」。于是调用点不必写
+     * `?.`，而"装配层忘了传"这件事由 `:app` 的装配测试钉（传 None 与不传是同一件事，
+     * 所以钉的判据是**生产装配必须给出 HostLog 那条实现**）。
+     *
+     * **注意它不承担"操作被记下来了吗"**：控制台环（[consoleHistory] 与
+     * `InstallEvent` 进度行）是另一条独立的路，不经过本缝 —— 本缝只决定
+     * **系统日志**里有没有。
+     */
+    val opLog: OpLogSink = OpLogSink.None,
     val lockSigner: LockSigner? = null,
     val snapshots: NpmSnapshot? = null,
     /**
@@ -34,8 +52,8 @@ data class NpmServices(
      *
      * 收在这里而不是 [InstallCoordinator] 的构造参数上：那个构造面已经贴着 detekt
      * `LongParameterList` 的构造阈值（12），而本类正是为「协作者太多」而生的那一层。
-     * 它与 [history] 并列也说得通 —— 两者是同一种东西的两面（见 [ConsoleHistory]
-     * 的类 KDoc：审计事实 vs 便利缓存）。
+     * 它与 [opLog] 曾经并列也说得通 —— 两者是同一种东西的两面（见 [ConsoleHistory]
+     * 的类 KDoc：操作事实 vs 便利缓存）。
      *
      * null = 未接线（老替身/测试零改动）→ 不记也不读，控制台没有历史可补。
      */

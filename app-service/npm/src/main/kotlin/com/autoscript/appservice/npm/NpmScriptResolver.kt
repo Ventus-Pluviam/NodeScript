@@ -18,7 +18,7 @@ import java.nio.file.Path
  * 两个哈希口径（都带 `sha256:` 前缀，便于人眼分辨，且都与 pkg@version 绑在一起）：
  * - [projectScripts]：**整个 scripts 映射**的规范化摘要（键排序后 `name=body` 逐行）。
  *   刻意不做「逐脚本一个哈希」：`npm run <name>` 读的是这份脚本的当前样貌，
- *   [ScriptOp.versionHash] 带上它让审计能回答「我当时跑的是哪一份」——脚本一改哈希就变。
+ *   [ScriptOp.versionHash] 带上它让日志能回答「我当时跑的是哪一份」——脚本一改哈希就变。
  * - [binTarget]：bin 声明（归属包 pkg@version + bin 名 + 目标相对路径）的摘要。
  *
  * 纯 JS bin 白名单（§10.3 T1「纯 JS bin 白名单」）：判据是**目标文件本身**，不是文件名后缀
@@ -37,7 +37,7 @@ internal object NpmScriptResolver {
         /** 包名（manifest 的 `name`；缺失时退到 projectId —— 那是唯一稳定的项目身份）。 */
         val pkg: String,
         val version: String,
-        /** 整份 scripts 的内容哈希（versionHash：审计记「跑的是哪一份脚本」）。 */
+        /** 整份 scripts 的内容哈希（versionHash：操作事实记「跑的是哪一份脚本」）。 */
         val versionHash: String,
         val scripts: Map<String, String>,
     )
@@ -79,7 +79,7 @@ internal object NpmScriptResolver {
      * 一条解析路径；从**声明侧**解析则两种布局同形，且「装出来是什么」以 manifest 为准。
      *
      * 多个包声明同名 bin → `ERR_NOT_SUPPORTED` 并点名候选：npm 自己的消歧依赖安装顺序与
-     * hoist 布局，宿主重算不出一个稳定答案，猜一个就是让审计哈希对不上真正的执行目标。
+     * hoist 布局，宿主重算不出一个稳定答案，猜一个就是让记下的哈希对不上真正的执行目标。
      */
     fun binTarget(projectRoot: Path, bin: String): BinTarget? {
         val nodeModules = projectRoot.resolve("node_modules")

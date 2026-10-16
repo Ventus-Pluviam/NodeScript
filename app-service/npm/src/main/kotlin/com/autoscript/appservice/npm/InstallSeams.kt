@@ -30,7 +30,7 @@ data class InstallConfig(
 /**
  * 一次重操作的结果。
  *
- * [summary] 进审计与 `Finished.detail`（一句话的人类可读结论）。
+ * [summary] 进操作事实（[OpLogSink] 的 `detail`）与 `Finished.detail`（一句话的人类可读结论）。
  *
  * [outputTail] 是**命令自己的输出尾部**（2026-10-09 批 84 新增）：控制台要把
  * 「npm 到底说了什么」显示出来，而 `Finished.detail` 只放得下一句摘要。
@@ -106,7 +106,7 @@ fun interface ProgressSink {
  * 把后者塞进事件契约等于为一个宿主界面去改脚本侧的面。
  *
  * 与 [HeavyOpOutcome.outputTail] 的分工：`outputTail` 是**跑完之后**的尾部（有界、
- * 谁都拿得到，进审计与终态行）；本缝是**跑的当中**逐行报，只喂控制台。
+ * 谁都拿得到，进操作事实与终态行）；本缝是**跑的当中**逐行报，只喂控制台。
  * 两条并存的理由很实际 —— 流是**尽力而为**的（实现方可以在没有订阅者时不报），
  * 而 `outputTail` 是结果的一部分，缺了控制台就没东西可显示。
  *
@@ -124,6 +124,82 @@ fun interface OutputSink {
     object None : OutputSink {
         override fun line(text: String) {}
     }
+}
+
+/**
+ * **操作事实的去向缝**（一次重操作/轻操作的最终结局 + 可读明细）。
+ *
+ * 2026-10-17 用户令：**去掉审计**（依赖管理页那颗「审计」进的那个子页，以及它背后那份
+ * 只追加的落盘账 `files/.ns/install-history.jsonl`），这些记录改打**系统日志**。
+ * 于是这一族的形状从「一本自己的文件」变成「一条去向」：
+ *
+ * - 写侧（[InstallCoordinator]）只交出**事实**（op / projectId / 成败 / 明细），
+ *   不决定它去哪儿、什么格式、什么级别；
+ * - 去向由装配层给（生产 = `:app` 的 `HostLog`：logcat + 日志管理页「系统日志」段
+ *   runId=0 镜像；见 `AppShellKit.assemble` 的 `opLog` 参数）。
+ *
+ * **为什么必须是一条缝而不是直接调用**：`:app-service:npm` 是纯 JVM 模块
+ * （连 `android.util.Log` 都碰不到），而系统日志那面住 `:app`。这与
+ * [HeavyOpExecutor]/[ScriptOpExecutor]/[ShellOpExecutor] 是同一条分工。
+ *
+ * **实现方不许抛**：这是诊断面 —— 为它把一条本来能跑完的安装变成失败是本末倒置
+ * （与 `ConsoleHistory`/`ScriptLogStore` 的 `runCatching` 同一条纪律；`HostLog`
+ * 自己也是吞异常写法）。缺省 [None] = 未接线（老替身零改动，且不假装记过）。
+ *
+ * **为什么不带时间戳**：时间由去向侧盖（`HostLog` 自己取 `System.currentTimeMillis()`
+ * 并与 logcat 同源）—— 交给写侧，同一条事实在两个目的地就会有两个时刻。
+ */
+fun interface OpLogSink {
+    fun log(op: String, projectId: String, success: Boolean, detail: String?)
+
+    /** 缺省：未接线 → 不记（也不抛）。 */
+    object None : OpLogSink {
+        override fun log(op: String, projectId: String, success: Boolean, detail: String?) {}
+    }
+}
+
+/**
+ * 操作名的已知取值（[OpLogSink.log] 的 `op` 段）。
+ *
+ * **取值域是开放的**：`opName(args)` 把任何 argv 首词直接当 op 记，本对象只是给
+ * 「实际会出现的名字」一个稳定的比较锚（测试与去向侧读起来不必猜字面量）。
+ *
+ * 2026-10-17 随「去掉审计」自 `:domain` 的 `InstallHistoryOp` 整体搬来本模块：
+ * 那时它是为了让 `:ui` 审计页分组而住契约层，页面没了，唯一的消费方就是本模块自己
+ * （`OpLogSink` 的实参）。
+ *
+ * 搬来时**删掉了 `install_script`**：那条的唯一存在理由是「审计页要能读旧账」
+ * （落盘文件里可能有这个名字）—— 账本与页面同时没了，留着它就成了没有来处的常量。
+ */
+object OpName {
+    const val INSTALL = "install"
+    const val CI = "ci"
+    const val UNINSTALL = "uninstall"
+    const val PRUNE = "prune"
+    const val DEDUPE = "dedupe"
+    /** §10.5-2 的 registry 变更（项目级与全局级都归它）。 */
+    const val REGISTRY = "registry"
+    const val IMPORT = "import"
+    const val EXPORT = "export"
+
+    /** 控制台轻操作（`opName` 直取 argv 首词的结果）。 */
+    const val LS = "ls"
+    const val AUDIT = "audit"
+
+    /** `update`（facade 有实现，今天零生产调用方）。 */
+    const val UPDATE = "update"
+
+    /**
+     * 缓存回收（`reclaimCache()` 的产物；§10.9 第 5 条那颗 cache clean 按钮）。
+     *
+     * **不叫 `cache_clean`**：这个动作不是 npm 的 `cache clean`（那个是整目录全清），
+     * 名字跟着语义走 —— 两个名字长得一样的话，将来真接了全清就分不出来了。
+     */
+    const val CACHE_RECLAIM = "cache_reclaim"
+
+    /** T1 脚本执行动作（[ScriptOp.action] 的取值）。 */
+    const val RUN_SCRIPT = "run_script"
+    const val EXEC = "exec"
 }
 
 /**
@@ -169,14 +245,14 @@ fun interface ScriptOpExecutor {
 /**
  * 一次 lifecycle 执行的上下文。
  *
- * [what] 是脚本名或 bin 名（审计与错误信息的抓手）；[npmArgs] 是 npm CLI 口径参数；
- * [versionHash] 带上是为了让执行体可复述「我跑的是哪一份」——审计条目只记摘要不够，
+ * [what] 是脚本名或 bin 名（操作事实与错误信息的抓手）；[npmArgs] 是 npm CLI 口径参数；
+ * [versionHash] 带上是为了让执行体可复述「我跑的是哪一份」——操作事实只记摘要不够，
  * 用户问「我跑的那份脚本现在还在不在」时要有据可查（脚本一改哈希就变）。
  */
 data class ScriptOp(
     val handleId: String,
     val projectId: String,
-    /** 审计条目的 action 段（[com.autoscript.domain.npm.InstallHistory.Op] 的常量）。 */
+    /** 操作事实里的 action 段（[OpName] 的常量）。 */
     val action: String,
     /** 归属包名（run 侧是项目自身包名，exec 侧是提供该 bin 的包名）。 */
     val pkg: String,
@@ -195,7 +271,7 @@ data class ScriptOp(
      */
     val cancelSignal: OpCancelSignal = OpCancelSignal.NONE,
 ) {
-    /** 主体段（`"<pkg>|<what>"`）—— 审计条目与错误话术同款，不再各拼各的。 */
+    /** 主体段（`"<pkg>|<what>"`）—— 操作事实与错误话术同款，不再各拼各的。 */
     val subject: String get() = "$pkg|$what"
 }
 

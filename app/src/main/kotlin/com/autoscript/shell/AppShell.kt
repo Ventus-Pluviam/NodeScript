@@ -173,6 +173,19 @@ class AppShell(
              */
             scriptLogs: ScriptLogStore? = null,
             /**
+             * **系统日志**（`runId == 0` 那批宿主行）的落盘缝（2026-10-17 用户令
+             * 「系统日志不要每次进 app 都清除」）。null = 不落盘（骨架/单测的缺省）。
+             *
+             * 与 [scriptLogs] **成对但去两个方向**：两者都挂在同一个
+             * `ConsoleCollector.lineSink` 上，按 `runId` 分道（脚本行 vs 宿主行）。
+             * 给的时机也一样 —— 生产由 `AppShellKit` 传
+             * `HostLogStore(nsDir/"host-log.jsonl")`。
+             *
+             * 非 null 时它同时承担**回放**：构造收集器时把上一世的行预置进环
+             * （见 `ConsoleCollector` 的 `restored`），否则"重开还在"就只是句空话。
+             */
+            hostLogs: HostLogStore? = null,
+            /**
              * `a11y` 命名空间实现（§9.1）。注入缝：实现在 `:platform:capabilities`，
              * 而 `:app` 禁止直连 `:platform`（§6，archUnit 强制），故由持有实现的
              * Android 侧（Application/Activity）在调用 [assemble] 时传入；
@@ -334,7 +347,16 @@ class AppShell(
                 // 2026-10-13 落盘缝：行级 sink（ConsoleCollector.append 锁外回调）与
                 // run 级 begin（RuntimeController.start Granted 分支回调）同时接到
                 // 同一份 store —— index 与日志文件永不分家（见 assemble 的 scriptLogs KDoc）。
-                val console = ConsoleCollector(lineSink = { scriptLogs?.appendLine(it) })
+                // 一个收集器、两条去向，按 `runId` 分道（两边的守卫是对偶的：
+                // ScriptLogStore 跳过 0，HostLogStore 只收 0）。
+                // `restored` 是回放：上一世的宿主行在这里预置进环（**不走 sink** ——
+                // 走了就是每次启动把盘上那批再抄一遍）。
+                val console = ConsoleCollector(
+                    lineSink = { line ->
+                        if (line.runId == 0L) hostLogs?.append(line) else scriptLogs?.appendLine(line)
+                    },
+                    restored = hostLogs?.load().orEmpty(),
+                )
                 router.register("console", console)
 
                 val controller = RuntimeController(

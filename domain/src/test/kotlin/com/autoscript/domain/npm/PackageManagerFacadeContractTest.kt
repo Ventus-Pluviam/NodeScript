@@ -99,41 +99,6 @@ class PackageManagerFacadeContractTest {
     }
 
     @Test
-    fun `审计史条目五字段（形状由落盘格式决定，不由界面想显示什么决定）`() {
-        assertEquals(
-            listOf("op", "projectId", "success", "detail", "atMillis"),
-            InstallHistoryEntry::class.java.declaredFields.map { it.name },
-            "这五个字段就是 install-history.jsonl 的落盘字段：加字段要动落盘格式，" +
-                "而那是审计 —— 改形状等于让历史行与将来行不可比",
-        )
-    }
-
-    @Test
-    fun `审计操作名的取值域是开放的，已知名有一个锚`() {
-        // 未知 op 必须能构造出来（落盘侧刻意不因枚举不全丢事件，读侧不该把不认识的行藏掉）。
-        val unknown = InstallHistoryEntry(op = "future-op", projectId = "p", success = true, atMillis = 0)
-        assertEquals("future-op", unknown.op)
-
-        // 已知名以 :domain 那份为准（`:ui` 审计页按它分组，看不见 :app-service:npm）。
-        assertEquals(
-            listOf("install", "ci", "uninstall", "prune", "dedupe", "registry", "import", "export"),
-            listOf(
-                InstallHistoryOp.INSTALL, InstallHistoryOp.CI, InstallHistoryOp.UNINSTALL,
-                InstallHistoryOp.PRUNE, InstallHistoryOp.DEDUPE, InstallHistoryOp.REGISTRY,
-                InstallHistoryOp.IMPORT, InstallHistoryOp.EXPORT,
-            ),
-            "前八个与 InstallHistory.Op 逐字同值（那边现在是别名）；改了要同步 :ui 的分组",
-        )
-        // 跑出来的取值：opName(args) 直取 argv 首词，T1 两条由 runScript/exec 直接给常量。
-        assertEquals("ls", InstallHistoryOp.LS)
-        assertEquals("audit", InstallHistoryOp.AUDIT)
-        assertEquals("update", InstallHistoryOp.UPDATE)
-        assertEquals("run_script", InstallHistoryOp.RUN_SCRIPT)
-        assertEquals("exec", InstallHistoryOp.EXEC)
-        assertEquals("install_script", InstallHistoryOp.INSTALL_SCRIPT)
-    }
-
-    @Test
     fun `缓存回收报告六字段（回收后的账，不是"本来有多少"）`() {
         assertEquals(
             listOf("removedEntries", "removedBytes", "keptEntries", "keptBytes", "keepCount", "indexRebuilt"),

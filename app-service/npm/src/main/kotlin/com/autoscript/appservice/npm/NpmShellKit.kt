@@ -2,7 +2,6 @@ package com.autoscript.appservice.npm
 
 import com.autoscript.appservice.npm.CacacheIndex
 import com.autoscript.appservice.npm.InstallCoordinator
-import com.autoscript.appservice.npm.InstallHistory
 import com.autoscript.appservice.npm.InstallJournal
 import com.autoscript.appservice.npm.InstallStaging
 import com.autoscript.appservice.npm.LockSigner
@@ -28,7 +27,7 @@ import java.nio.file.Path
  *
  * 目录映射（§10 存储布局）：
  * - `filesDir/scripts` → [NpmProjectLayout.projectsRoot]（项目根）；
- * - `filesDir/.ns` → journal（`install.journal`）/ history（`install-history.jsonl`）/
+ * - `filesDir/.ns` → journal（`install.journal`）/ 控制台命令历史（`console-history.jsonl`）/
  *   lock 签名（`lock.sig`）/ 快照账本来源；
  * - `cacheDir/npm-cache` → [CacacheIndex]（cacache `content-v2` 真查；被系统清掉如实报缺口）。
  *
@@ -67,6 +66,15 @@ object NpmShellKit {
         lockKey: LockSigner.KeyProvider? = null,
         snapshots: Boolean = true,
         freeSpaceProbe: (Path) -> Long = defaultFreeSpaceProbe(filesDir),
+        /**
+         * 操作事实的去向（[OpLogSink]）。
+         *
+         * **必须由调用方给**：本模块是纯 JVM，够不着 `android.util.Log`，而
+         * 「操作事实进系统日志」的生产实现（`HostLog`）住 `:app`。缺省
+         * [OpLogSink.None] 是给测试替身留的（与其余缝同形），生产装配**不许**用缺省
+         * —— 用了的表现是「装完了什么都没留下」，而那正是 2026-10-17 用户令要的东西。
+         */
+        opLog: OpLogSink = OpLogSink.None,
     ): NpmBridgeHandler {
         // 项目根来自契约层（§9.6 单一事实来源）：与 script-repo/调度恢复/装配层同一个函数，
         // 拼错目录名不再可能（曾经这里与 AppShellKit 各写一份字面量）。
@@ -80,9 +88,10 @@ object NpmShellKit {
             layout = layout,
             journal = InstallJournal(nsDir),
             staging = InstallStaging(layout),
-            history = InstallHistory(nsDir),
-            // 控制台命令历史（2026-10-10 批 90）：与审计史同住 `.ns/`，
-            // 但**纪律不同**（可修剪的便利缓存，见 ConsoleHistory 的类 KDoc）。
+            opLog = opLog,
+            // 控制台命令历史（2026-10-10 批 90）：**可修剪**的便利缓存
+            // （见 ConsoleHistory 的类 KDoc）—— 与操作事实那条去向是两回事：
+            // 前者落盘、有保留策略；后者只交出去，落不落、落哪儿由去向定。
             consoleHistory = ConsoleHistory(nsDir),
             lockSigner = lockKey?.let { LockSigner(nsDir, it) },
             snapshots = if (snapshots && lockKey != null) NpmSnapshot(layout, nsDir, lockKey) else null,
