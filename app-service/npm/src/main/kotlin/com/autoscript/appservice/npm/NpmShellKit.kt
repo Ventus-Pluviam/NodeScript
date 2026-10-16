@@ -110,15 +110,13 @@ object NpmShellKit {
         )
     }
 
-    /** 缺省磁盘探针：项目目录在 install 前本来就不存在（stat 会炸），退到 filesDir ——
-     * 同分区同答案（§10.2 磁盘预检问的是分区余量，不是"项目目录在不在"）。可注入覆盖：
-     * 单测 @TempDir 落在 tmpfs 上（CI/沙箱 /tmp 常被占满），真探会让"重操作诚实
+    /** 缺省磁盘探针：项目目录在 install 前本来就不存在（不判存在会读出 0），退到 filesDir ——
+     * 同分区同答案（§10.2 磁盘预检问的是分区余量，不是"项目目录在不在"）。
+     * **读法本身在 [FreeSpace]**（那里记着 2026-10-17 设备实测：`Files.getFileStore` 在
+     * Android 上抛 `UnsupportedOperationException("getFileStore")`，整条装依赖路走不通）。
+     * 可注入覆盖：单测 @TempDir 落在 tmpfs 上（CI/沙箱 /tmp 常被占满），真探会让"重操作诚实
      * ERR_NOT_IMPLEMENTED"的用例先撞 ERR_DISK_FULL —— 探针是环境敏感缝，测试固定值。 */
     private fun defaultFreeSpaceProbe(filesDir: Path): (Path) -> Long = { p ->
-        try {
-            java.nio.file.Files.getFileStore(p).usableSpace
-        } catch (e: java.io.IOException) {
-            java.nio.file.Files.getFileStore(filesDir).usableSpace
-        }
+        FreeSpace.usableBytesFor(p, filesDir)
     }
 }

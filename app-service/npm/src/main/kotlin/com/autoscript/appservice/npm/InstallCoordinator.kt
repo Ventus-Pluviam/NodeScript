@@ -95,9 +95,13 @@ class InstallCoordinator(
      * 那会把它推到 detekt `LongParameterList` 的构造阈值线上。
      */
     private val globalConfig: NpmGlobalConfig? = null,
-    freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
-        Files.getFileStore(it).usableSpace
-    },
+    /**
+     * 磁盘可用字节探针。缺省走 [FreeSpace]（**不用 `Files.getFileStore`** —— Android 上那格
+     * 没实现，见 [FreeSpace] 的类 KDoc）；**生产永不用这个缺省**：[NpmShellKit.assembleHandler]
+     * 恒传一个带 filesDir 兜底的探针（项目目录可能还不存在），本缺省只服务"裸造一个
+     * InstallCoordinator"的场合（本仓只有测试这么干，而测试全都显式注入固定值）。
+     */
+    freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = { FreeSpace.usableBytes(it) },
     now: () -> Long = { System.currentTimeMillis() },
     config: InstallConfig = InstallConfig(),
     /** 真 cacheDir（`<data>/cache/npm-cache`，§10.2；Android 装配层注入）。 */
