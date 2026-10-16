@@ -75,6 +75,18 @@ class HostNodeExecutor(
      * 自行决定装不装）。
      */
     private val spawnGateFile: Path? = null,
+    /**
+     * noden 要 `dlopen` 的 `libnode.so` 绝对路径（设备 = `nativeLibraryDir/libnode.so`）。
+     *
+     * `main.cpp` **必填**，缺则 exit 2（§7.8）—— 2026-10-17 设备实测 bug：这条路
+     * 从来没注过它，于是设备上点安装得到的是一句 `:nodeN 缺 AUTOSCRIPT_LIBNODE`，
+     * 而宿主 JVM 测试用的是系统 `node`（不读这个变量），复现不出。
+     *
+     * null = 这次用的不是需要 libnode 的宿主（桌面系统 `node`）→ 不注入。
+     * **生产装配不许传 null**（`:app` 的 `wireNpmExecutor` 在 `host != null` 时
+     * 强制要求这一件，见那边的 fail-closed 判据）。
+     */
+    private val libnodePath: Path? = null,
 ) : HeavyOpExecutor {
 
     init {
@@ -87,6 +99,9 @@ class HostNodeExecutor(
         output: OutputSink,
     ): HeavyOpOutcome =
         withContext(Dispatchers.IO) {
+            // 必填件预检摆在最前：报进度之前先确认这次真跑得起来 ——
+            // 缺件是**装配/打包**问题，不该画成一次跑到一半的安装。
+            NpmHostEnv.checkInstalled(libnodePath)
             sink.emit(
                 com.autoscript.domain.npm.InstallEvent.Progress(
                     op.projectId, op.nonce,
@@ -223,6 +238,9 @@ class HostNodeExecutor(
         val pb = ProcessBuilder(npmArgv(op, workDir))
         pb.directory(workDir.toFile())
         pb.environment().putAll(env)
+        // 宿主键在用户/基础键**之后**写（§8.1 顺序即契约）：`libnode.so` 的路径由宿主指，
+        // 不由调用方给的那张表覆盖。缺了它 main.cpp 直接 exit 2，见 [NpmHostEnv]。
+        NpmHostEnv.apply(pb.environment(), libnodePath)
         // 门禁注入走 NODE_OPTIONS（**追加不覆盖**父环境里那份别人的设置，见 mergeNodeOptions）：
         // `--require` 对 `-e`、脚本、以及 npm 自己 fork 的 node 子进程都生效，覆盖面比
         // 单点 argv 注入宽 —— 而 argv 那条路在这里本来也走不通（npm 的 argv 是它自己的）。

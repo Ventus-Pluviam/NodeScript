@@ -7,11 +7,12 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 引擎三件 `.so` 的**落位门**（2026-10-14 真机 bug 的回归门）。
+ * 引擎四件 `.so` 的**落位门**（2026-10-14 真机 bug 的回归门）。
  *
- * **它挡的是什么**：`AppShellApplication` 装配引擎时把三处路径喂给
- * `NodeEngineConfig.hostBinary` / `.libnodePath` 与 `npmNodeBin`，三处**都**必须指向
- * `nativeLibraryDir`（jniLibs 交付位，§19；`useLegacyPackaging = true` 安装期解压）。
+ * **它挡的是什么**：`AppShellApplication` 装配引擎时把四处路径喂给
+ * `NodeEngineConfig.hostBinary` / `.libnodePath`、`npmNodeBin` 与 `npmLibnode`（后者
+ * 2026-10-17 补：npm 那条路一直没把 `AUTOSCRIPT_LIBNODE` 注下去，设备上点安装 = exit 2），
+ * 四处**都**必须指向 `nativeLibraryDir`（jniLibs 交付位，§19；`useLegacyPackaging = true` 安装期解压）。
  * 批 109（`e338000`，`typed ids`）批量改名时把这三处的接收者从 `nativeDir` 串成了
  * `nsDir`（`filesDir/.ns`）—— **Kotlin 不报错**，因为两个都是 `Path`、`resolve` 都合法；
  * 设备上表现为点执行零输出：`NodeProcessEngine.execute` 的必填件预检如实点名
@@ -31,15 +32,16 @@ import org.junit.jupiter.api.Test
  */
 class AppShellEnginePathsTest {
 
-    /** 三处喂给引擎/npm 的 `.so` 路径（属性名 → 交付位文件）。 */
+    /** 四处喂给引擎/npm 的 `.so` 路径（属性名 → 交付位文件）。 */
     private val expectedSites = mapOf(
         "hostBinary" to "libnoden.so",
         "libnodePath" to "libnode.so",
         "npmNodeBin" to "libnoden.so",
+        "npmLibnode" to "libnode.so",
     )
 
     @Test
-    fun `引擎三件 so 的路径都读 nativeLibraryDir 而不是 files 目录下的 ns`() {
+    fun `引擎四件 so 的路径都读 nativeLibraryDir 而不是 files 目录下的 ns`() {
         val source = String(
             Files.readAllBytes(repoRoot().resolve(SOURCE)),
             Charsets.UTF_8,

@@ -293,6 +293,22 @@ object AppShellKit {
          * 规则只有一条，写在装配根那一处。
          */
         capabilityMask: CapabilityMask? = null,
+        /**
+         * noden 要 `dlopen` 的 `libnode.so` 绝对路径（Android 侧 =
+         * `nativeLibraryDir/libnode.so`）。**与 [npmNodeBin] 成对**（一个是宿主、一个是它要
+         * dlopen 的库，同一个 jniLibs 目录里的两件）—— 排在参数表末尾是仓规，不是把它和
+         * [npmNodeBin] 拆开：读的时候请把两处一起看。
+         *
+         * **为什么必须有这条**（2026-10-17 设备实测）：`main.cpp` 头一件事就是读
+         * `AUTOSCRIPT_LIBNODE`，缺了直接 `exit 2`（stderr 只有一行
+         * `:nodeN 缺 AUTOSCRIPT_LIBNODE`）。脚本引擎那条路一直注着
+         * （`NodeEngineConfig.libnodePath`），**npm 这条路从来没注过** —— 而宿主 JVM 测试
+         * 跑的是系统 `node`（不读它），所以 CI 与本机都复现不出，只有真机上点一次安装才看得见。
+         *
+         * null = 宿主是系统 `node` 的形态（纯 JVM 配方/测试）→ 不注入。
+         * **生产（`AppShellApplication`）恒传**：装了 CLI 却没有 libnode = 装不起来。
+         */
+        npmLibnode: Path? = null,
     ): AssembledShell {
         val nsDir = filesDir.resolve(".ns")
         Files.createDirectories(nsDir)
@@ -384,6 +400,8 @@ object AppShellKit {
                 filesDir, cacheDir, npmCliSource, npmNodeBin, npmGateDeploy,
                 // 具名传：第 6 个位置参数是 `t1ShimDeploy`（落位缝），别串到 binder 上。
                 t1Binder = npmT1Binder,
+                // libnode.so 那条路径跟着宿主一起下去（两者是同一件必填件的两半）。
+                libnode = npmLibnode,
             )
         } else {
             null   // 调用方自带 handler：本配方不碰素材（见上方 KDoc），四个报告字段保持 null
@@ -499,6 +517,15 @@ object AppShellKit {
         t1ShimDeploy: (Path) -> NpmSpawnGate.Deploy = { NpmT1Bridge.deployShim(it) },
         /** T1 桥的 socket 绑定缝（平台相关，见 [assemble] 的 `npmT1Binder`：**故意无缺省**）。 */
         t1Binder: NpmT1Bridge.SocketBinder,
+        /**
+         * 宿主要 dlopen 的 `libnode.so`（见 [assemble] 的 `npmLibnode`）。
+         *
+         * **`host != null` 时必填**（缺了就是 fail closed，见下面的判据）：两个执行体
+         * （[HostNodeExecutor] / [NpmScriptExecutor]）都由 `noden` 起，缺
+         * `AUTOSCRIPT_LIBNODE` 一律 exit 2 —— 那是"装了 CLI 却没有能跑它的 node"的
+         * 第二种形态，跟宿主缺位一样该在装配期拒掉，而不是留给用户去读一句退出码 2。
+         */
+        libnode: Path? = null,
     ): NpmWiring {
         if (source == null) {
             return NpmWiring(HeavyOpExecutor.Unavailable, null, "无素材来源（assets/npm 未随包）", null)
@@ -519,10 +546,21 @@ object AppShellKit {
                 null,
             )
         }
+        // 宿主与它要 dlopen 的 libnode.so 是**一件必填件的两半**：只给前一半，
+        // 会话一起来就 exit 2（2026-10-17 设备实测的 bug）。故与
+        // "没有 Node 宿主"同一档处理 —— 装配期拒，不留到用户按安装那一刻。
+        if (libnode == null) {
+            return NpmWiring(
+                HeavyOpExecutor.Unavailable, deployed,
+                "CLI 已落位（${deployed.cliJs}）且宿主就位，但没有 libnode.so 的路径" +
+                    "（noden 缺 AUTOSCRIPT_LIBNODE 直接 exit 2）→ 不注入执行体",
+                null,
+            )
+        }
         // T1 脚本执行体（2026-10-10 批 91）：**与安装链并列、条件不同**。
         // 安装链要门禁 shim（零 spawn），T1 链要桥 shim（spawn 走桥）—— 两者互斥，
         // 故不共用"三条齐"那条判据，也不因门禁 shim 落位失败而一起缺席。
-        val t1 = wireT1Executor(filesDir, deployed.cliJs, host, t1ShimDeploy, t1Binder)
+        val t1 = wireT1Executor(filesDir, deployed.cliJs, host, t1ShimDeploy, t1Binder, libnode)
         // child_process 拦截 shim（§10.11 P0 承诺面 / §10.12 末行「零 spawn 不变量漂移」）：
         // **只有真要去起 CLI 时才落**（没宿主 = 本来就没有安装会话可守，落一个没人 require
         // 的 .cjs 是噪声）。落位失败 → **不注入执行体**：静默降级成「装是能装、守卫没了」
@@ -545,6 +583,7 @@ object AppShellKit {
                     // `--prefix`（workDir，里面已拷了项目 .npmrc）→ userconfig → 出厂解析，
                     // 与 InstallCoordinator.resolveRegistry 的两层链同源。
                     userConfig = filesDir.resolve(NpmGlobalConfig.FILE_NAME),
+                    libnodePath = libnode,
                 ),
                 deployed, null, gate, t1,
             )
@@ -575,6 +614,8 @@ object AppShellKit {
         host: String,
         t1ShimDeploy: (Path) -> NpmSpawnGate.Deploy,
         t1Binder: NpmT1Bridge.SocketBinder,
+        /** 宿主要 dlopen 的 `libnode.so`（见 [wireNpmExecutor] 的同名参数）。 */
+        libnode: Path? = null,
     ): ScriptOpExecutor {
         val shim = when (val d = t1ShimDeploy(filesDir)) {
             is NpmSpawnGate.Deploy.Ready -> d.file
@@ -590,6 +631,7 @@ object AppShellKit {
             sessionFactory = SocketT1Sessions(t1Binder),
             baseEnv = emptyMap(),
             userConfig = filesDir.resolve(NpmGlobalConfig.FILE_NAME),
+            libnodePath = libnode,
         )
     }
 }

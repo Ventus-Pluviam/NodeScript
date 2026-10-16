@@ -60,10 +60,21 @@ class NpmScriptExecutor(
     /** 基础环境（生产 = 父进程环境；测试可固定）。 */
     private val baseEnv: Map<String, String> = emptyMap(),
     private val userConfig: Path? = null,
+    /**
+     * noden 要 `dlopen` 的 `libnode.so` 绝对路径（设备 = `nativeLibraryDir/libnode.so`）。
+     *
+     * 与 [HostNodeExecutor.libnodePath] **同一个理由、同一件必填件**：这条 T1 会话也是
+     * `noden` 起的，缺 `AUTOSCRIPT_LIBNODE` 一样 exit 2（§7.8）。
+     * null = 宿主是系统 `node`（桌面测试）→ 不注入。
+     */
+    private val libnodePath: Path? = null,
 ) : ScriptOpExecutor {
 
     override suspend fun execute(op: ScriptOp, sink: ProgressSink, output: OutputSink): String =
         withContext(Dispatchers.IO) {
+            // 必填件预检（与 [HostNodeExecutor] 同一条判据、同一条理由）：
+            // 配了却没落位 = 打包缺件，在这里点名。
+            NpmHostEnv.checkInstalled(libnodePath)
             if (!Files.isRegularFile(npmCliJs)) {
                 throw AutojsException(
                     ErrorCode.ERR_NOT_IMPLEMENTED,
@@ -135,6 +146,8 @@ class NpmScriptExecutor(
         pb.directory(op.projectRoot.toFile())
         val env = pb.environment()
         env.putAll(baseEnv)
+        // 宿主键后写（§8.1 顺序即契约）：同 [HostNodeExecutor.runNpm]。
+        NpmHostEnv.apply(env, libnodePath)
         // **只注 T1 桥那一份**（见类 KDoc：与安装会话的门禁 shim 互斥）。
         env[NpmSpawnGate.ENV_NODE_OPTIONS] =
             NpmSpawnGate.mergeNodeOptions(env[NpmSpawnGate.ENV_NODE_OPTIONS], shimFile)

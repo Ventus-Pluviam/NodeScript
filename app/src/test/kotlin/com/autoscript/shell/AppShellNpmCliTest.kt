@@ -54,12 +54,21 @@ class AppShellNpmCliTest {
         override fun read(relPath: String): ByteArray? = tree[relPath]
     }
 
+    /**
+     * 真落一件 `libnode.so`：`host != null` 时装配层**强制要求**它
+     * （`wireNpmExecutor` 的 fail-closed 判据，见那里的 KDoc）—— 本文件每条"有宿主"的
+     * 用例都得给，否则测的就成了另一个分支。
+     */
+    private fun libnodeFile(): Path =
+        dir.resolve("libnode.so").also { if (!Files.exists(it)) Files.write(it, ByteArray(0)) }
+
     private fun assembleWith(
         source: NpmCliDeployer.CliSource?,
         nodeBin: String?,
         lockKeys: LockKeyStore.HmacKeys? = null,
         gateDeploy: (Path) -> com.autoscript.appservice.npm.NpmSpawnGate.Deploy =
             { com.autoscript.appservice.npm.NpmSpawnGate.deploy(it) },
+        libnode: Path? = null,
     ): AssembledShell = AppShellKit.assemble(
         filesDir = files,
         cacheDir = cache,
@@ -68,6 +77,8 @@ class AppShellNpmCliTest {
         screenGate = ScreenGate.AllowAll,
         npmCliSource = source,
         npmNodeBin = nodeBin,
+        // 宿主与 libnode.so 成对（host == null 时它也用不上，装配层先判宿主）。
+        npmLibnode = if (nodeBin == null) null else (libnode ?: libnodeFile()),
         npmLockKeys = lockKeys,
         npmGateDeploy = gateDeploy,
         // T1 桥的 socket 缝：`assemble` 里是必填（见那条 KDoc）。桌面单测用 JDK unix
@@ -211,6 +222,7 @@ class AppShellNpmCliTest {
             cacheDir = cache,
             source = src,
             host = dir.resolve("libnoden.so").toString(),   // 只要非 null：本用例不起 node
+            libnode = libnodeFile(),                        // 与宿主成对（装配层 fail closed）
             gateDeploy = { com.autoscript.appservice.npm.NpmSpawnGate.Deploy.Ready(dir.resolve("gate.cjs")) },
         )
         val executor = assertInstanceOf(
@@ -260,6 +272,7 @@ class AppShellNpmCliTest {
             cacheDir = cache,
             source = src,
             host = dir.resolve("libnoden.so").toString(),
+            libnode = libnodeFile(),
             gateDeploy = { com.autoscript.appservice.npm.NpmSpawnGate.Deploy.Ready(dir.resolve("gate.cjs")) },
         )
         val workDir = dir.resolve("work")

@@ -313,12 +313,14 @@ class AppShellApplication : Application(), HostSummary {
             // `Paths.get` 而不是 `Path.of`：后者在 Android 上 since=34（`api-versions.xml` 实查），
             // minSdk 26 下 lint 的 NewApi 会红 —— 全仓 main 源已统一回 `Paths.get`（since=26）。
             val nativeLibDir = Paths.get(applicationInfo.nativeLibraryDir)
-            // 引擎三件 .so（hostBinary / libnodePath / npmNodeBin）**唯一合法落位** =
-            // nativeLibDir（jniLibs 交付，§19；useLegacyPackaging 安装期解压位）。不许改成
-            // files/.ns —— 2026-10-14 真机 bug：批 109 改名连带把这三处串成 nsDir.resolve，
-            // Kotlin 不报错、设备上全量 ERR_FILE_NOT_FOUND（design-decisions §77.3 记的就是这
-            // 种「改名的碰撞」）。落位门 = AppShellEnginePathsTest（读本文件钉接收者）；
-            // 改这三处要连门一起改。
+            // 引擎四件 .so（hostBinary / libnodePath / npmNodeBin / npmLibnode）**唯一合法
+            // 落位** = nativeLibDir（jniLibs 交付，§19；useLegacyPackaging 安装期解压位）。
+            // 不许改成 files/.ns —— 2026-10-14 真机 bug：批 109 改名连带把这几处串成
+            // nsDir.resolve，Kotlin 不报错、设备上全量 ERR_FILE_NOT_FOUND
+            // （design-decisions §77.3 记的就是这种「改名的碰撞」）。落位门 =
+            // AppShellEnginePathsTest（读本文件钉接收者）；改这几处要连门一起改。
+            // 第四件（npmLibnode，2026-10-17）：与 npmNodeBin 是**同一件必填件的两半** ——
+            // noden 起来头一件事就是按 AUTOSCRIPT_LIBNODE 去 dlopen 它，缺了 exit 2。
             // §8.5 意图日志的存储引擎：SQLite（打开前做一次性迁移 jsonl → SQLite，
             // 带原 runId）。**打不开不回落**（2026-10-08 裁定）—— 异常直接冒到本函数的
             // catch，判本次装配失败：壳保持未就绪、闹钟走漏投记账，不拿一条锚点靠
@@ -404,6 +406,9 @@ class AppShellApplication : Application(), HostSummary {
                 // npm 执行体的 Node 宿主 = 与脚本引擎同一个 noden（§19 交付位）：
                 // 设备上它就是 nativeLibraryDir/libnoden.so，ProcessBuilder 直接 exec。
                 npmNodeBin = nativeLibDir.resolve("libnoden.so").toString(),
+                // npm 会话宿主（同一个 noden）要 dlopen 的那件：`main.cpp` 按
+                // AUTOSCRIPT_LIBNODE 找它，缺了直接 exit 2（2026-10-17 设备实测 bug）。
+                npmLibnode = nativeLibDir.resolve("libnode.so"),
                 // 应用密钥（§10.5-1 T2 / §11.3 第 8 条）：lock 带外签名与快照签名的
                 // 密钥面 = Android Keystore（首次运行建一把，之后一直取那把）。
                 // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
