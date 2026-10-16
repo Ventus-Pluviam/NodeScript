@@ -45,6 +45,12 @@ import com.autoscript.domain.scripts.EngineRunLink
  */
 class ControllerRunDispatcher(
     private val controller: RuntimeController,
+    private val screenGate: ScreenGate = ScreenGate.AllowAll,
+    private val defaultAwaitTimeoutMillis: Long = DEFAULT_AWAIT_TIMEOUT_MILLIS,
+    /** 满池排队上限的显式覆盖；null = 按触发源分级取 [queueTimeoutFor]（§8.6 默认有界）。 */
+    private val queueTimeoutMillis: Long? = null,
+    /** 分级表（§8.6 铁律 3）；测试注入小值，避免为了验边界真等十几秒。 */
+    private val queueTimeoutFor: (TriggerSource) -> Long = DEFAULT_QUEUE_TIMEOUTS,
     /**
      * 崩溃行出口（2026-10-16 用户报「有不支持的函数应该在悬浮窗里输出报错」）。
      *
@@ -60,12 +66,6 @@ class ControllerRunDispatcher(
      * （单测/骨架零改动），生产在 `AppShell.assemble` 接 `ConsoleCollector::append`。
      */
     private val crashLine: (runId: Long, level: String, text: String) -> Unit = { _, _, _ -> },
-    private val screenGate: ScreenGate = ScreenGate.AllowAll,
-    private val defaultAwaitTimeoutMillis: Long = DEFAULT_AWAIT_TIMEOUT_MILLIS,
-    /** 满池排队上限的显式覆盖；null = 按触发源分级取 [queueTimeoutFor]（§8.6 默认有界）。 */
-    private val queueTimeoutMillis: Long? = null,
-    /** 分级表（§8.6 铁律 3）；测试注入小值，避免为了验边界真等十几秒。 */
-    private val queueTimeoutFor: (TriggerSource) -> Long = DEFAULT_QUEUE_TIMEOUTS,
 ) : RunDispatcher {
     init {
         require(queueTimeoutMillis == null || queueTimeoutMillis > 0) {
