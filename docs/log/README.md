@@ -1,5 +1,24 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-17：项目缺 `package.json` 时自动补一份最小骨架；设备实测——装依赖报「getFileStore」；装依赖抛 `NetworkOnMainThreadException`）
+
+- [2026-10-17 · 项目缺 `package.json` 时自动补一份最小骨架](2026-10-17.md) 一条目（最新）：
+  用户报「项目 demo 缺 package.json（…），无法执行 npm install」+ 口径原文「**应该让它缺的时候自动创建呀**」
+  （决策第 89 项）。**为什么会走到这一步**：`package.json` 此前只有**模板部署**才长得出，而 2026-10-16
+  用户裁定「根层可写」后**首页根层建文件夹 = 建项目**造出来的是**空目录** —— 两条各自都对的口径合起来
+  = "自己建的项目装不了依赖"，拦路点就是 `HostNodeExecutor.prepareWorkDir` 那句 `require`。
+  **药**：缺清单照 `ProjectManifest.minimal` 造一份、**只落 workDir**、跑完由既有 `harvest` 写回项目根
+  （与 npm 自己重写 manifest 同一条落盘路径），**失败的操作不在项目里留文件**；返回值 `Unit → Boolean`
+  让调用方在**终态摘要**（→ `InstallEvent.Finished.detail` → 控制台 RESULT 行）如实说一句 ——
+  **刻意不走 `OutputSink`**（那条缝一碰 `runHeavy` 的 `streamed` 就为真，npm 的输出尾部会被当成
+  "已报过流"而不再补）。**三条判据**：① **不写 `main`**（`ProjectIndex` 缺 `main` 会退到
+  `main.js`/`index.js` ⇒ 这份清单对入口判断零影响）；② **`name` 洗成 npm 认的形态**（项目号判据放宽后
+  中文/大写/空格/`@` 都合法，而 npm 只认小写 URL-safe，不洗即 `EINVALIDPACKAGENAME`；
+  **代价如实记**：中文项目号拿到不含信息量的名字，但它在此处只有展示意义、数据仍在项目号上）；
+  ③ **`private: true`** 挡住误发布。**未动**：`npm run` 那条「无 lifecycle 脚本可跑」照旧。
+  **回归闸** `ProjectManifestTest` 5 例 + `HostNodeExecutorSeedTest` 4 例，**已对拍**（退回旧 `require`
+  即红 3 例，报的正是用户那句）。
+
 ## 最新追记（2026-10-17：设备实测——装依赖报「getFileStore」（磁盘探针在 Android 上那格没实现）；装依赖抛 `NetworkOnMainThreadException`（交叉校验取 packument 落在主线程上））
 
 - [2026-10-17 · 设备实测：装依赖报「getFileStore」](2026-10-17.md) 一条目（最新）：

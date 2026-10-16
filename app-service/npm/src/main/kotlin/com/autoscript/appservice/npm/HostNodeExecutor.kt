@@ -20,7 +20,8 @@ import java.util.concurrent.TimeUnit
  * 执行宿主不同：工作目录约定一致——
  *
  * **work-prefix 模型**（npm 语义要求 prefix = 项目根，不能是 node_modules 本身）：
- * 1. 在 stageDir 旁开 `npmwork-<nonce>` 工作目录，写入项目 package.json + 现有 lockfile；
+ * 1. 在 stageDir 旁开 `npmwork-<nonce>` 工作目录，写入项目 package.json（**缺则照
+ *    [ProjectManifest.minimal] 造一份**）+ 现有 lockfile；
  * 2. `npm <args> --prefix <workDir>`（cwd=workDir），reify 目标 = `<workDir>/node_modules`；
  * 3. 成功后把 `<workDir>/node_modules/＊` 提升进 stageDir（stageDir 即未来 node_modules），
  *    把 `<workDir>/package-lock.json` 原子写回项目根（lockfile 随成功事务更新，失败不污染）；
@@ -94,7 +95,7 @@ class HostNodeExecutor(
             )
             val workDir = op.stageDir.resolveSibling("npmwork-" + op.nonce)
             try {
-                prepareWorkDir(op, workDir)
+                val seededManifest = prepareWorkDir(op, workDir)
                 // REIFY/DONE：npm 进程内 reify 是黑盒，主机形态只能粗粒度标注阶段
                 sink.emit(
                     com.autoscript.domain.npm.InstallEvent.Progress(
@@ -111,7 +112,15 @@ class HostNodeExecutor(
                     ),
                 )
                 HeavyOpOutcome(
-                    summary = "npm ${op.args.first()} 完成",
+                    // 自动补出来的清单要在**终态摘要**里说一句（走 `InstallEvent.Finished.detail`
+                    // 与控制台 RESULT 行，与"完成/失败"同一处）：不静默 —— 用户的项目里
+                    // 凭空多了个 package.json，他得知道是谁放的。**不走 [OutputSink]** 是刻意的：
+                    // 那条缝一被碰，`runHeavy` 的 `streamed` 就为真，npm 的输出尾部会被当成
+                    // "已经报过流"而不再补 —— 一句话换掉一段真输出，不值。
+                    summary = buildString {
+                        append("npm ").append(op.args.first()).append(" 完成")
+                        if (seededManifest) append("（项目原本没有 package.json，已自动建一份最小骨架）")
+                    },
                     // 尾部截断（见 [HeavyOpOutcome.outputTail] 的 KDoc）：控制台要的是
                     // 「npm 最后说了什么」，不是几万行安装日志。
                     outputTail = captured.trim().takeLast(OUTPUT_TAIL_CHARS).ifBlank { null },
@@ -122,21 +131,37 @@ class HostNodeExecutor(
         }
 
     /**
-     * 播种工作目录：项目 `package.json`（必须存在）+ 现有 lockfile（有则带上，保住已装依赖闭包）
-     * + 项目 `.npmrc`（有则带上，见下方注释）。
+     * 播种工作目录：项目 `package.json`（**缺了就照 [ProjectManifest.minimal] 造一份**）
+     * + 现有 lockfile（有则带上，保住已装依赖闭包）+ 项目 `.npmrc`（有则带上，见下方注释）。
+     *
+     * **缺清单不再拒绝**（2026-10-17 用户口径「应该让它缺的时候自动创建呀」）：此前这里
+     * 一句 `require` 把"自己建的项目"整个挡在门外 —— 而"首页根层建文件夹 = 建项目"
+     * （2026-10-16 用户裁定）造出来的正是一**空目录**，于是用户看到的是
+     * `项目 demo 缺 package.json（…）`，既不是他的错，他也无从下手。
+     * 造出来的那份只落在 workDir，**跑完由 [harvest] 写回项目根**（与 npm 自己重写
+     * manifest 走同一条路，不新开一条落盘路径）；本次操作失败则项目根**一个字都不变**
+     * —— 一个失败的操作不该在用户的项目里留下新文件。
      *
      * `public` 与 [npmArgv] 同一条理由：Kotlin 的 `internal` 跨模块不可见，而
      * 「项目 `.npmrc` 到底有没有进 workDir」这条不变量最该被 `:app` 的装配测试钉住
      * （它一旦失守，`setRegistry` 就重新变成空转，而症状只在真机上表现为「装的还是官方源」）。
+     *
+     * @return 本次是不是**新建**了那份清单（项目根此前没有）—— 调用方据此在终态摘要里
+     *   如实说一句：用户的项目里会凭空多出一个文件，不能让他自己猜是哪儿来的。
      */
-    fun prepareWorkDir(op: HeavyOp, workDir: Path) {
-        val pkgJson = op.projectRoot.resolve("package.json")
-        require(Files.isRegularFile(pkgJson)) {
-            "项目 ${op.projectId} 缺 package.json（$pkgJson），无法执行 npm ${op.args.first()}"
-        }
+    fun prepareWorkDir(op: HeavyOp, workDir: Path): Boolean {
+        val pkgJson = op.projectRoot.resolve(ProjectManifest.FILE_NAME)
         workDir.toFile().deleteRecursively()
         Files.createDirectories(workDir)
-        Files.copy(pkgJson, workDir.resolve("package.json"))
+        val seeded = !Files.isRegularFile(pkgJson)
+        if (seeded) {
+            Files.write(
+                workDir.resolve(ProjectManifest.FILE_NAME),
+                ProjectManifest.minimal(op.projectId).toByteArray(StandardCharsets.UTF_8),
+            )
+        } else {
+            Files.copy(pkgJson, workDir.resolve(ProjectManifest.FILE_NAME))
+        }
         val lock = op.projectRoot.resolve("package-lock.json")
         if (Files.isRegularFile(lock)) {
             Files.copy(lock, workDir.resolve("package-lock.json"))
@@ -149,6 +174,7 @@ class HostNodeExecutor(
         if (Files.isRegularFile(npmrc)) {
             Files.copy(npmrc, workDir.resolve(NpmGlobalConfig.FILE_NAME))
         }
+        return seeded
     }
 
     /**
