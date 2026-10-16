@@ -39,8 +39,6 @@ class PackageManagerFacadeContractTest {
             "progress", "drainEvents",
             // 快照
             "exportSnapshot",
-            // 审计史（§10.5-2；append-only 历史，与 snapshot() 的"当前事实"是两件事）
-            "history",
             // 缓存回收（§10.9 第 5 条的动作半边；**不是** npm cache clean，见该方法的 KDoc）
             "reclaimCache",
             // npm-cache 体积读数（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）
