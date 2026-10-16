@@ -1,5 +1,25 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-17：设备实测——装依赖报「getFileStore」（磁盘探针在 Android 上那格没实现）；装依赖抛 `NetworkOnMainThreadException`（交叉校验取 packument 落在主线程上））
+
+- [2026-10-17 · 设备实测：装依赖报「getFileStore」](2026-10-17.md) 一条目（最新）：
+  用户报（原文）「报错，getfilestore」，紧接上一条 `NetworkOnMainThreadException` 而来 ——
+  那条修的是交叉校验，**磁盘探针正是它后面那一步**，所以修完前一步这条立刻暴露。
+  **病**：`NpmShellKit.defaultFreeSpaceProbe` 用的 `Files.getFileStore(p).usableSpace` ——
+  Android 的 `java.nio.file` 只实现了 NIO2 的一半，`FileSystemProvider.getFileStore`
+  **正是没实现的那一格**，调它抛 `UnsupportedOperationException("getFileStore")`；那句 message
+  会被 `:ui` 的 `opError = t.message ?: t.javaClass.simpleName` **原样显示**（屏幕上就那四个字，
+  没有半个字指向"磁盘"）。原有 `catch (java.io.IOException)` 拦不住（UOE 是 RuntimeException）。
+  后果不是"读不到磁盘"而是**装依赖整条路走不通**（探针在 `enqueueHeavy` 每次重操作入口都跑）。
+  **本机与 CI 都复现不了**（宿主 getFileStore 好得很）⇒ 又一类只能设备实测发现的错。
+  **药**：读法收到 `FreeSpace` 一处，改用 `java.io.File.usableSpace`（Android 侧 statvfs(2)
+  实现，`java.io` 不属于「NIO2 那一半」），**先判存在** —— 不存在的路径 `usableSpace` 回 0，
+  拿 0 比预检下限就是一句假的 ERR_DISK_FULL（本机实测 `new File(不存在).getUsableSpace() == 0`）。
+  **回归闸** `FreeSpaceTest` 4 例，**已对拍**（去掉存在性判断即红）；**如实记一条测不到的**：
+  「Android 那格没实现」在 JVM 上钉不住，单测只守得住新读法。验：模块 26 个测试类真跑
+  （FreeSpaceTest 4 / InstallCoordinatorTest 99 全过）、detekt 零 findings、全仓 `getFileStore`
+  代码里零命中。
+
 ## 最新追记（2026-10-17：设备实测——装依赖抛 `NetworkOnMainThreadException`（交叉校验取 packument 落在主线程上））
 
 - [2026-10-17 · 设备实测：装依赖抛 `NetworkOnMainThreadException`](2026-10-17.md) 一条目（最新）：
