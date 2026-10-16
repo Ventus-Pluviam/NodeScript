@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import com.autoscript.ui.components.claimPointerHits
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlin.math.min
@@ -415,7 +416,15 @@ internal fun <T> ManagementTransition(
                             )
                         }
                     }
-                    .matchParentSize(),
+                    .matchParentSize()
+                    // **子页在前台时，面板那层不该再收得到触摸**（2026-10-16 用户报
+                    // 「日志管理页点空白进入依赖管理，退出来日志管理退不出来」）：
+                    // 子页的空白处没有手势管，同一坐标在面板层恰是「依赖管理」入口行，
+                    // 触摸穿透下去就把它点了 —— 状态机于是被推出两层设计（日志管理
+                    // 被顶进 under、依赖管理当了 top），退出路径随之中断。
+                    // 挂在这里 = "这一层被命中就挡住下面的兄弟"，事件一个都不消费
+                    // （子页自己的按压/滚动一字未动；机制与取舍见它的 KDoc）。
+                    .claimPointerHits(),
             ) {
                 // 子页内容 + **窗口圆角**裁剪（TG `:1136-1155` 的 round-rect）。
                 // 内容不是 `matchParentSize`（它不参与父级尺寸计算），直接用 `fillMaxSize`。
