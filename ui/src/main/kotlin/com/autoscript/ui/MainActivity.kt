@@ -114,6 +114,7 @@ import com.autoscript.ui.state.AuditState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.ui.state.TaskLogState
 import com.autoscript.ui.state.ProjectState
+import com.autoscript.ui.state.ScriptFileRowUi
 import com.autoscript.ui.state.RegistryState
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.ScriptEnvState
@@ -777,6 +778,12 @@ class MainActivity : ComponentActivity() {
                 onSortChange = { sort, reversed ->
                     projectState = projectState.copy(sort = sort, reversed = reversed, opError = null, opNotice = null)
                 },
+                // 绝对路径只有宿主知道（`files/scripts` 的落点 + relPath）—— 现取一次，
+                // 失败原文由 ProjectScreen 说出来（不静默复制一条空的）。
+                onAbsolutePath = { projectId, relPath -> absolutePathOp(projectId, relPath) },
+                // 删除：菜单传一条、多选传剪好的那一份（`com.autoscript.ui.state.deleteTargets`）。
+                // 成败由 [deleteEntriesOp] 聚合成 opError/opNotice，本屏不写状态。
+                onDelete = { rows -> deleteEntriesOp(rows) },
                 modifier = Modifier,
             )
         }
@@ -965,6 +972,60 @@ class MainActivity : ComponentActivity() {
         } catch (t: Exception) {
             ProjectState.failed(t)
         }
+    }
+
+    /**
+     * 取一个条目的绝对路径（项目页菜单「复制绝对路径」）。
+     *
+     * **不写 [projectState]**：读一条路径不改清单，也没有回执可言 —— 与 [readScriptFileOp]
+     * 同一条分工（成败归调用它的那一处显示）。
+     */
+    private suspend fun absolutePathOp(projectId: String, relPath: String): String {
+        val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
+        return host.absolutePathOf(projectId, relPath)
+    }
+
+    /**
+     * 删除条目（项目页菜单「删除」与选择模式顶栏那一格）。
+     *
+     * **逐条删、聚合成败**：一条失败不该把其余的挡住（多选时用户要的是"能删的都删掉"），
+     * 但也不能把部分失败说成成功 —— 所以「已删除 N 项」只数真删掉的，
+     * 失败那条的**原文**照旧给出来（`opToastMessage` 三态里失败排头）。
+     *
+     * 三落点与 [createEntryOp] 同构：未接线 → opError；抛 → opError 原文；成功/部分成功 →
+     * opNotice + 现取一次清单（行没了，不重读就会停在旧快照上）。
+     *
+     * **不弹确认框**（用户口径「不用加弹窗」）：本口被调到就已经是"用户点了删除"。
+     */
+    private suspend fun deleteEntriesOp(rows: List<ScriptFileRowUi>) {
+        if (rows.isEmpty()) return
+        val host = hostSummary()
+        if (host == null) {
+            projectState = projectState.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）")
+            return
+        }
+        var failed = 0
+        var firstError: String? = null
+        for (row in rows) {
+            try {
+                host.deleteEntry(row.projectId, row.relPath)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Exception) {
+                failed++
+                if (firstError == null) firstError = t.message ?: t.javaClass.simpleName
+            }
+        }
+        reloadProjectFiles()
+        val done = rows.size - failed
+        projectState = projectState.copy(
+            opError = firstError?.let { if (failed == 1) it else "$failed 项删除失败：$it" },
+            opNotice = when {
+                done == 0 -> null
+                rows.size == 1 -> "已删除「${rows.first().name}」"
+                else -> "已删除 $done 项"
+            },
+        )
     }
 
     /**

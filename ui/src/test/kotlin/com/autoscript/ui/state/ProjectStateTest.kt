@@ -311,6 +311,50 @@ class ProjectStateTest {
         assertEquals("sub", ProjectState.folderTitle(folder = "demo/lib/sub/"))
     }
 
+    /**
+     * 批量删除的目标清单（选择模式顶栏那格「删除」；2026-10-17 用户口径「顺带做上」）。
+     *
+     * 两条规矩都在这里钉住：**父子同选只留父**（搜索态的池子是整棵树，先删父再删子会让
+     * 子项那一下撞"条目不存在"假报失败）、**深度降序**。
+     */
+    @Test
+    fun `批量删除的目标 父子同选只留父且深度降序`() {
+        val files = listOf(
+            ScriptFileRowUi.of(rowAt("lib", isDirectory = true, childCount = 2), zone),
+            ScriptFileRowUi.of(rowAt("lib/a.js"), zone),
+            ScriptFileRowUi.of(rowAt("lib/deep/b.js"), zone),
+            ScriptFileRowUi.of(rowAt("main.js"), zone),
+        )
+        val keys = files.map { ProjectState.keyOf(it) }.toSet()
+
+        val targets = deleteTargets(keys, files)
+        // `lib/` 吃掉了它下面的两个（`lib/a.js`、`lib/deep/b.js`），只剩 `lib/` 与 `main.js`。
+        assertEquals(setOf("demo/lib/", "demo/main.js"), targets.map { it.relPath }.toSet())
+        // 深度降序：`demo/lib/`（2 个斜杠）排在 `demo/main.js`（1 个）前面。
+        assertEquals(listOf("demo/lib/", "demo/main.js"), targets.map { it.relPath })
+
+        // 只选了子项：它就是目标（剪枝不该把"选了什么"也一起剪掉）。
+        val onlyChild = setOf(ProjectState.keyOf(files[2]))
+        assertEquals(listOf("demo/lib/deep/b.js"), deleteTargets(onlyChild, files).map { it.relPath })
+        // 没选任何行 → 空（顶栏那格在空选时本来就是禁用的，这里保证不会误删第一行）。
+        assertTrue(deleteTargets(emptySet(), files).isEmpty())
+    }
+
+    /** 前缀判据靠**目录行 relPath 的尾随 `/`**：少了它，`lib` 会误吃掉 `liba.js`。 */
+    @Test
+    fun `批量删除的前缀不吃同名兄弟`() {
+        val files = listOf(
+            ScriptFileRowUi.of(rowAt("lib", isDirectory = true, childCount = 1), zone),
+            ScriptFileRowUi.of(rowAt("liba.js"), zone),
+        )
+        val keys = files.map { ProjectState.keyOf(it) }.toSet()
+        assertEquals(
+            setOf("demo/lib/", "demo/liba.js"),
+            deleteTargets(keys, files).map { it.relPath }.toSet(),
+            "`liba.js` 不是 `lib/` 的后代，两个都得留着",
+        )
+    }
+
     @Test
     fun `多选 逐行开关与选择全部取消全选`() {
         val files = listOf(

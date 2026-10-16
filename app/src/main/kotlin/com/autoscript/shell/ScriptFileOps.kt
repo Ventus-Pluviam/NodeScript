@@ -12,6 +12,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.Comparator
 
 /**
  * 项目页操作面的落盘（新建文件/新建文件夹；TG FAB 展开两项的对应位）。
@@ -22,8 +23,10 @@ import java.nio.file.StandardCopyOption
  * **根层可写（2026-10-16 用户裁定「根层可写」，三条判据打通）**：`projectId` 空串 =
  * `files/scripts/` 本层（[com.autoscript.domain.scripts.ProjectId.ROOT]）。首页 FAB 建的**文件**
  * 落 `files/scripts/<名字>`、建的**文件夹**就是一个新项目（`files/scripts/<名字>/`）——
- * 后者多两条判据，见 [requireProjectName]。四个口（[createFile]/[createFolder]/[read]/[save]）
- * 共用 [resolveInProject]，根层分支只改"归属怎么判"，不改"防不防越界"。
+ * 后者多两条判据，见 [requireName] 的 `isProject` 档。六个口（[createFile]/[createFolder]/[read]/[save]/
+ * [delete]/[absolutePath]）共用 [resolveInProject]，根层分支只改"归属怎么判"，不改"防不防越界"。
+ * **删除与绝对路径（2026-10-17 用户口径）**：删文件夹是**递归整棵**（非空文件夹删不掉等于没做）；
+ * 绝对路径就是 [resolveInProject] 的字符串形态（判据复用，不另写一套容错拼法）。
  *
  * 两条口径（原文口径不变，根层只是给它们各加一档）：
  * - **名字 = 单段相对路径**：用户输入的是名字，不是路径 —— 斜杠/`..`/空段直接拒绝
@@ -135,6 +138,51 @@ object ScriptFileOps {
     }
 
     /**
+     * 条目的绝对路径（文件列表菜单「复制绝对路径」）。
+     *
+     * 就是 [resolveInProject] 的字符串形态 —— **判据一字不差地复用**（防越界 + 首段与
+     * [projectId] 一致 + 根层单段），不在这里重写一套"看着像就去掉前缀"的容错拼法：
+     * 拼错的方向是"复制出去的路径指向另一个文件"，而用户拿这条路径去别处用（终端、
+     * 编辑器、报错贴图）时**不会有人再校验一遍**。
+     *
+     * **不查存在性**（与 `ScriptPaths.scriptFile` 同一条分工）：约定只回答"应该在哪"。
+     * 刚被删掉的行照样复制得出它曾有的路径。
+     */
+    fun absolutePath(filesDir: Path, projectId: String, relPath: String): String =
+        resolveInProject(filesDir, projectId, relPath).toString()
+
+    /**
+     * 删一个条目（文件 / 文件夹；**文件夹递归整棵**）—— 文件列表菜单「删除」与批量删除。
+     *
+     * 三道闸，都在落盘前：
+     * 1. [resolveInProject]：防 `..`/绝对路径/越界 + 首段与 [projectId] 一致（根层要求单段）；
+     * 2. **目标必须存在**（原文「条目不存在」）—— 静默成功会把"删错了对象"与"删掉了"画成
+     *    同一件事，而这两件事对用户完全不同；
+     * 3. **不许是 `files/scripts/` 本身**：根层单段判据理论上已经挡掉（relPath 非空且单段
+     *    ⇒ 至少深一层），但这条闸挡的是**删掉整个项目库**，值得自己有句话。
+     *
+     * **根层的文件夹就是项目本身**（`files/scripts/<名字>/`）：删它就是删掉一整个项目 ——
+     * 用户 2026-10-17 裁定「允许」（见 `HostSummary.deleteEntry` 的 KDoc），故本函数不为它
+     * 设闸，只保证"删干净、不留半个目录"。
+     *
+     * 删除用 `walk` 逆序（先文件后目录）+ `deleteIfExists`：`Files.delete` 对非空目录抛
+     * `DirectoryNotEmptyException`，而"删文件夹"在用户眼里就是一个动作。
+     */
+    fun delete(filesDir: Path, projectId: String, relPath: String) {
+        val target = resolveInProject(filesDir, projectId, relPath)
+        val root = ScriptPaths.projectsRoot(filesDir).toAbsolutePath().normalize()
+        require(target != root) { "根层不是条目：不能删 files/scripts 本身（那是整个项目库）" }
+        require(Files.exists(target)) { "条目不存在：$relPath" }
+        if (!Files.isDirectory(target)) {
+            Files.delete(target)
+            return
+        }
+        Files.walk(target).use { stream ->
+            stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        }
+    }
+
+    /**
      * `relPath` → 绝对路径：**`files/scripts/` 之下的相对路径**（首段 = 项目名）。
      *
      * 为什么不是"项目根之下的相对路径"：呈现层手里那条是 [com.autoscript.domain.host.ScriptFileRow.relPath]，
@@ -189,7 +237,7 @@ object ScriptFileOps {
      * 用户以为建了个文件、其实建了一串目录）。
      *
      * [isFolder] 只影响**根层**那一档：根层建的文件夹落盘后就是 `files/scripts/<名字>/`，
-     * 也就是一个项目，故多两条判据（[requireProjectName]）。文件名/项目内的文件夹名不受它影响
+     * 也就是一个项目，故多两条判据（[requireName] 的 `isProject` 档）。文件名/项目内的文件夹名不受它影响
      * —— 这里的"文件夹"与那里的"项目"是同一个目录的两个身份，判据只在根层这一档分开。
      */
     private fun resolveName(
@@ -199,10 +247,10 @@ object ScriptFileOps {
         dirRelPath: String?,
         isFolder: Boolean,
     ): Path {
-        requireName(name)
+        // 根层 + 建文件夹 = 建项目（`files/scripts/<名字>/` 落盘后就是一个项目目录）——
+        // 名字因此要多过两条判据（见 [requireName] 的 [isProject]）。
+        requireName(name, isProject = isFolder && projectId.isEmpty() && dirRelPath.isNullOrBlank())
         val dir = targetDir(filesDir, projectId, dirRelPath)
-        // 根层 + 建文件夹 = 建项目（`files/scripts/<名字>/` 落盘后就是一个项目目录）。
-        if (isFolder && projectId.isEmpty() && dirRelPath.isNullOrBlank()) requireProjectName(name)
         return dir.resolve(name)
     }
 
@@ -230,7 +278,7 @@ object ScriptFileOps {
     }
 
     /**
-     * 名字本身（**不分层**，落哪一层由 `dirRelPath` 说）。
+     * 名字判据（**不分层**，落哪一层由 `dirRelPath` 说）。
      *
      * 后两条是 2026-10-16 顺手堵的"建了但看不见"：
      * - **点开头**：`ScriptFilesRead` 把点开头条目当系统噪声排除，建出来的东西**不进列表**
@@ -239,8 +287,20 @@ object ScriptFileOps {
      *   超了 `Files.createFile` 抛的是一句 `FileSystemException: File name too long`。
      *
      * **不 trim**：名字里前后空格照旧原样落盘（改动前后行为一致，不在这里悄悄替用户改名）。
+     *
+     * [isProject] 为真时 = 这个名字落盘后就是 `files/scripts/<名字>/`，**也就是一个项目**，
+     * 故多两条判据。为什么非有不可（而不是"建了就建了，打不开再说"）：项目号判据比文件名判据
+     * **严**一档 —— 文件名可以含 `.`（`a.b.js`），项目名不可以（批 84：`.` 让
+     * `projectsRoot.resolve("..")` 跳出项目根）。放行的话，用户建出一个 `v1.0/`，进得去却
+     * **里面每个文件都打不开**（`ProjectId("v1.0")` 当场抛），而错要等到那一刻才现形。
+     * 第二条同理但更俗：叫 `node_modules` 的目录在文件列表里**整棵不显示**
+     * （[ScriptPaths.NODE_MODULES_DIR]），建了就"消失"。
+     *
+     * **两条判据合成一个函数**是刻意的：它们判的是**同一个东西**（这个名字），只是"落盘后是不是
+     * 项目目录"多一档 —— 拆两个函数会让调用方以为那是两件事，而 `ScriptFileOps` 这个对象
+     * 已经贴到 detekt `TooManyFunctions` 的上限（11），多一个函数就多一条违规。
      */
-    private fun requireName(name: String) {
+    private fun requireName(name: String, isProject: Boolean) {
         require(name.isNotBlank()) { "名字不能为空" }
         // 单段校验在前：isSafeRelPath 是部署路径的判据（多段相对路径对部署合法），
         // `lib/main.js` 会穿过去、到 Files.createFile 才炸出 NoSuchFileException。
@@ -250,21 +310,7 @@ object ScriptFileOps {
         require(name.toByteArray(StandardCharsets.UTF_8).size <= MAX_NAME_BYTES) {
             "名字太长（最多 $MAX_NAME_BYTES 字节，一个汉字算 3 字节）：$name"
         }
-    }
-
-    /**
-     * 根层文件夹名 = **项目名**，多两条判据（它落盘后就是 `files/scripts/<名字>/`）。
-     *
-     * 为什么这条非有不可（而不是"建了就建了，打不开再说"）：项目号判据比文件名判据**严**一档
-     * —— 文件名可以含 `.`（`a.b.js`），项目名不可以（批 84：`.` 让
-     * `projectsRoot.resolve("..")` 跳出项目根）。放行的话，用户建出一个 `v1.0/`，
-     * 进得去却**里面每个文件都打不开**（`ProjectId("v1.0")` 当场抛），
-     * 而错要等到那一刻才现形。这里当场拒，原文点破原因。
-     *
-     * 第二条同理但更俗：叫 `node_modules` 的目录在文件列表里**整棵不显示**
-     * （[ScriptPaths.NODE_MODULES_DIR]），建了就"消失"。
-     */
-    private fun requireProjectName(name: String) {
+        if (!isProject) return
         require(ScriptPaths.isValidProjectId(name)) {
             "这个名字不能当项目名：$name —— 根层的文件夹就是一个项目，名字不能含 `.`（也不能含 / 与 \\）"
         }

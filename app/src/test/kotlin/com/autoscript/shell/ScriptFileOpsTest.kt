@@ -26,6 +26,13 @@ import org.junit.jupiter.api.io.TempDir
  * - 越界 relPath（`..`/绝对路径）在**读取侧也拒绝**；
  * - 目录不是文件、保存**不新建**（新建归 createFile）；
  * - 二进制（含 NUL）与超限文件读时拒绝 —— 当文本打开再存回去就是损坏用户文件。
+ *
+ * 删除与绝对路径（[ScriptFileOps.delete]/[ScriptFileOps.absolutePath]，2026-10-17 用户口径
+ * 「文件列表菜单加个删除 + 复制绝对路径」）：
+ * - 删**文件夹递归整棵**（非空文件夹删不掉等于菜单里那格没做），删完项目本身留着；
+ * - 删不存在的条目**拒**（静默成功会把"删错了对象"与"删掉了"画成同一件事）；
+ * - 删除/绝对路径的**越界与归属判据与读写口同源**（同一个 `resolveInProject`）；
+ * - 绝对路径**不查存在性**（刚删掉的行照样复制得出它原来在哪）。
  */
 class ScriptFileOpsTest {
 
@@ -300,6 +307,81 @@ class ScriptFileOpsTest {
         Files.createFile(project.resolve("empty.js"))
         assertEquals(text, ScriptFileOps.read(dir, "demo", "demo/valid.js"))
         assertEquals("", ScriptFileOps.read(dir, "demo", "demo/empty.js"))
+    }
+
+    // ── 删除与绝对路径（2026-10-17 用户口径：菜单「复制绝对路径」/「删除」）──
+
+    @Test
+    fun `绝对路径按 files_scripts 之下那条算`() {
+        Files.createDirectories(dir.resolve("scripts/demo/lib"))
+        // 三档：根层单段 / 项目根 / 子层 —— 都是 `files/scripts/<relPath>`。
+        assertEquals(dir.resolve("scripts/hello.js").toString(), ScriptFileOps.absolutePath(dir, "", "hello.js"))
+        assertEquals(dir.resolve("scripts/demo/main.js").toString(), ScriptFileOps.absolutePath(dir, "demo", "demo/main.js"))
+        // 目录行的 relPath 带尾随 `/`（契约形态）—— 复制出来的是目录本身，不带那个斜杠。
+        assertEquals(dir.resolve("scripts/demo/lib").toString(), ScriptFileOps.absolutePath(dir, "demo", "demo/lib/"))
+        // 判据与读写口**同源**：越界、首段不是本项目、根层多段一律拒。
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.absolutePath(dir, "demo", "../escape.js") }
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.absolutePath(dir, "demo", "other/main.js") }
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.absolutePath(dir, "", "demo/main.js") }
+        // **不查存在性**：刚被删掉的行照样复制得出它原来在哪。
+        assertEquals(dir.resolve("scripts/demo/gone.js").toString(), ScriptFileOps.absolutePath(dir, "demo", "demo/gone.js"))
+    }
+
+    @Test
+    fun `删文件与空文件夹`() {
+        val project = Files.createDirectories(dir.resolve("scripts/demo"))
+        Files.write(project.resolve("a.js"), "x".toByteArray())
+        Files.createDirectory(project.resolve("empty"))
+        ScriptFileOps.delete(dir, "demo", "demo/a.js")
+        // 目录行那条 relPath 带尾随 `/` —— 删除要照收（读写口也是先 trimEnd('/')）。
+        ScriptFileOps.delete(dir, "demo", "demo/empty/")
+        assertEquals(0, Files.list(project).use { it.count() })
+        assertTrue(Files.isDirectory(project), "删的是条目，不是项目本身")
+    }
+
+    @Test
+    fun `删文件夹递归整棵`() {
+        val deep = Files.createDirectories(dir.resolve("scripts/demo/lib/deep"))
+        Files.write(deep.resolve("x.js"), "x".toByteArray())
+        Files.write(dir.resolve("scripts/demo/lib/y.js"), "y".toByteArray())
+        ScriptFileOps.delete(dir, "demo", "demo/lib/")
+        assertTrue(!Files.exists(dir.resolve("scripts/demo/lib")), "整棵都得没")
+        assertTrue(Files.isDirectory(dir.resolve("scripts/demo")), "只删那一棵")
+    }
+
+    /** 根层的文件夹**就是项目本身**：删它 = 连同其中全部文件删掉一整个项目（用户 2026-10-17 裁定允许）。 */
+    @Test
+    fun `根层的文件夹就是项目_删它整棵没`() {
+        val scripts = Files.createDirectories(dir.resolve("scripts"))
+        val project = Files.createDirectories(scripts.resolve("我的脚本/sub"))
+        Files.write(project.resolve("x.js"), "x".toByteArray())
+        ScriptFileOps.delete(dir, "", "我的脚本/")
+        assertTrue(!Files.exists(scripts.resolve("我的脚本")))
+        assertEquals(0, Files.list(scripts).use { it.count() }, "同层别的条目一个都不许动")
+    }
+
+    @Test
+    fun `删不存在的条目拒绝`() {
+        Files.createDirectories(dir.resolve("scripts/demo"))
+        val e = assertThrows(IllegalArgumentException::class.java) {
+            ScriptFileOps.delete(dir, "demo", "demo/nope.js")
+        }
+        // 静默成功会把"删错了对象"与"删掉了"画成同一件事。
+        assertTrue(e.message?.contains("不存在") == true, "实际：${e.message}")
+    }
+
+    @Test
+    fun `删除的越界与归属判据与读写同源`() {
+        Files.createDirectories(dir.resolve("scripts/demo"))
+        Files.createDirectories(dir.resolve("scripts/other"))
+        Files.write(dir.resolve("scripts/other/x.js"), "x".toByteArray())
+        for (bad in listOf("../escape.js", "/etc/passwd", "other/x.js", "demo/../other", "")) {
+            assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.delete(dir, "demo", bad) }
+        }
+        // 根层只认本层单段：`demo/x.js` 是"项目 demo 下的文件"，不该从这个入口删掉。
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.delete(dir, "", "demo/x.js") }
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.delete(dir, "", "") }
+        assertTrue(Files.exists(dir.resolve("scripts/other/x.js")), "越界的一个都没被删")
     }
 
 }

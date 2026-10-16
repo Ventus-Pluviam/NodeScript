@@ -107,6 +107,7 @@ import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.pressableLongPress
 import com.autoscript.ui.components.rememberCopyAction
 import com.autoscript.ui.components.rememberLongPressFeedback
+import com.autoscript.ui.state.deleteTargets
 import com.autoscript.ui.state.FileSort
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.opToastMessage
@@ -176,6 +177,26 @@ fun ProjectScreen(
     onRunFile: suspend (projectId: String, relPath: String) -> Unit,
     /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */
     onSortChange: (FileSort, Boolean) -> Unit,
+    /**
+     * 条目（文件或文件夹）的绝对路径（菜单「复制绝对路径」；2026-10-17 用户口径）。
+     *
+     * **挂起**：绝对路径 = `files/scripts/` 的落点 + relPath，而落点只有宿主知道
+     * （本屏拿不到 `filesDir`，也不该拿到 —— 它连 `files/scripts` 这个约定都不该知道）。
+     * 失败原文抛，本屏把原因说出来（不静默复制一条空串）。
+     */
+    onAbsolutePath: suspend (projectId: String, relPath: String) -> Unit,
+    /**
+     * 删除条目（菜单「删除」与选择模式顶栏那一格；2026-10-17 用户口径）。
+     *
+     * **一条回调两条路**：菜单传只有一个元素的清单，多选传 [com.autoscript.ui.state.deleteTargets]
+     * 剪好的那一份（父子同选只留父、深度降序）。
+     *
+     * **正常返回 ≠ 已全删**：宿主逐条删、聚合成败，回执（`opNotice`/`opError`）由外壳写；
+     * 本屏只管把行送出去 —— 删完必须重读列表，那是外壳的事。
+     *
+     * **不弹确认框**（用户口径原文「不用加弹窗」）：点了即删，不可撤销。
+     */
+    onDelete: suspend (rows: List<ScriptFileRowUi>) -> Unit,
     /**
      * 本页是否是 pager 当前停稳的那一页。pager 预组合邻页（`beyondViewportPageCount = 1`），
      * 本屏的返回键拦截若不看它，用户在任务页按返回会被邻页的项目屏吞掉（去退一层目录）。
@@ -394,10 +415,25 @@ fun ProjectScreen(
                         onBack = { selected = emptySet() },
                         backGlyph = "✕",
                         actions = {
-                            ActionBarAction(
-                                text = if (allSelected) "取消全选" else "选择全部",
-                                onClick = { selected = ProjectState.toggleSelectAll(selected, visible) },
-                            )
+                            // 两格：全选开关 + **删除**（2026-10-17 用户口径「顺带做上」）。
+                            // 删除**排在后面**（右端）：破坏性动作不放在拇指先够到的位置上。
+                            // 删完**退出选择模式** —— 行没了，选中集里不能留幽灵键
+                            // （留着的话顶栏还写"已选 N 项"，而列表里一行都没选上）。
+                            Row {
+                                ActionBarAction(
+                                    text = if (allSelected) "取消全选" else "选择全部",
+                                    onClick = { selected = ProjectState.toggleSelectAll(selected, visible) },
+                                )
+                                ActionBarAction(
+                                    text = "删除",
+                                    tone = StatusTone.PROBLEM,
+                                    onClick = {
+                                        val targets = deleteTargets(selected, state.files)
+                                        selected = emptySet()
+                                        scope.launch { onDelete(targets) }
+                                    },
+                                )
+                            }
                         },
                     )
                 } else {
@@ -512,31 +548,54 @@ fun ProjectScreen(
                 }
             }
         // 一行的操作面板（TG 底部操作面板：长按/点文件行弹出，动作是大触控目标的整行）。
-        // **只放今天真能做的**：复制路径（本屏自己就能做）+ 进文件夹（目录行才有）。
-        // 运行/重命名/删除要宿主侧读口（`HostSummary` 目前只有 `createEntry`），
-        // 没有的口不摆成按钮 —— 摆了就是点了没反应。
+        // **2026-10-17 用户口径**：三项 —— 复制相对路径 / 复制绝对路径 / 删除。
+        // 「进入文件夹」那一项**删掉了**：点目录行本身就是进一层（见 `onClick` 的
+        // `file.isDirectory -> enterFolder(...)`），菜单项与主手势重复了一件事。
+        // 删除是**红色**（`StatusTone.PROBLEM`，TG 的删除项就是 `text_RedRegular`），
+        // 且**没有确认框**（用户口径「不用加弹窗」）—— 点了即删，不可撤销。
         if (showOverlays) sheetTarget?.let { target ->
             ActionBottomSheet(
                 title = target.name,
                 onDismiss = { sheetTarget = null },
             ) {
                 ActionBottomSheetItem(
-                    label = "复制路径",
+                    label = "复制相对路径",
                     onClick = {
-                        copy.copy("已复制路径", target.relPath)
+                        copy.copy("已复制相对路径", target.relPath)
                         sheetTarget = null
                     },
                 )
-                if (target.isDirectory) {
-                    ActionBottomSheetItem(
-                        label = "进入文件夹",
-                        onClick = {
-                            query = ""
-                            sheetTarget = null
-                            enterFolder(target.relPath)
-                        },
-                    )
-                }
+                ActionBottomSheetItem(
+                    label = "复制绝对路径",
+                    onClick = {
+                        sheetTarget = null
+                        // 绝对路径只有宿主知道（本屏拿不到 `filesDir`，也不该拿到）——
+                        // 现取一次；取不到就把原文说出来，不静默复制一条空的。
+                        scope.launch {
+                            try {
+                                copy.copy("已复制绝对路径", onAbsolutePath(target.projectId, target.relPath))
+                            } catch (t: kotlinx.coroutines.CancellationException) {
+                                throw t
+                            } catch (t: IllegalArgumentException) {
+                                // 宿主那只口的失败面就是这两类（与 `runFile` 那份 catch 同型）：
+                                // 路径判据拒收是 IAE、宿主未装配是 ISE（`error(...)`）。
+                                // **不收一个泛 Exception**：那是一条 detekt 违规，而这里真要的
+                                // 是"把这两类原文说出来"，不是"什么都吞"。
+                                toast?.show("复制失败：${t.message ?: t.javaClass.simpleName}")
+                            } catch (t: IllegalStateException) {
+                                toast?.show("复制失败：${t.message ?: t.javaClass.simpleName}")
+                            }
+                        }
+                    },
+                )
+                ActionBottomSheetItem(
+                    label = "删除",
+                    tone = StatusTone.PROBLEM,
+                    onClick = {
+                        sheetTarget = null
+                        scope.launch { onDelete(listOf(target)) }
+                    },
+                )
             }
     }
         // 创建对话框在屏幕级（不在 Box 里 —— 它盖全屏，不该被列表的裁剪裁到）。

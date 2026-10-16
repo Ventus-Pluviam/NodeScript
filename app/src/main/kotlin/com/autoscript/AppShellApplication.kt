@@ -883,6 +883,26 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 删一个条目（[HostSummary] 的生产实现，文件列表菜单「删除」/ 多选批量删除）。
+     *
+     * 同 [createEntry]：只看 `files/scripts/` 落盘，**不依赖壳寄存器** —— 装配中/失败时
+     * 删除照常可用（此时"能删不能跑"正是用户该看到的全貌）。递归与三道闸在
+     * [ScriptFileOps.delete]（原文抛给 UI）。
+     */
+    override suspend fun deleteEntry(projectId: String, relPath: String) {
+        ScriptFileOps.delete(filesDir.toPath(), projectId, relPath)
+    }
+
+    /**
+     * 条目（文件或文件夹）的绝对路径（[HostSummary] 的生产实现，「复制绝对路径」）。
+     *
+     * 判据（防越界 + 首段与项目名一致）与读写口同源，见 [ScriptFileOps.absolutePath]。
+     * **不查存在性**：复制一条路径不该因为文件刚被删就失败（用户要的往往正是"它原来在哪"）。
+     */
+    override suspend fun absolutePathOf(projectId: String, relPath: String): String =
+        ScriptFileOps.absolutePath(filesDir.toPath(), projectId, relPath)
+
+    /**
      * 语法高亮会话工厂（[HostSummary] 的生产实现，编辑器前端调用）。
      * 经 [PlatformWiring.syntaxHighlighter] 薄转接 `:platform:editor` 的 EditorHighlighters
      * —— 根包不 import 任何 `com.autoscript.platform..`（ArchitectureTest 看住）。

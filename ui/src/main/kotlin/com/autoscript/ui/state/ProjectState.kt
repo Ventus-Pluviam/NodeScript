@@ -18,6 +18,33 @@ enum class FileSort(val label: String) {
 }
 
 /**
+ * 批量删除要动的行（选择模式顶栏那格「删除」；2026-10-17 用户口径「顺带做上」）。
+ *
+ * 两条规则，都是**删除这个动作自己的语义**，不推给宿主口去猜：
+ * 1. **剪掉被另一个选中项包含的后代**：搜索态的池子是**整棵树**（见 [ProjectState.poolFor]），
+ *    父目录与它里面的文件可以同时被选中；先删父、再删子，子项那一下会撞
+ *    "条目不存在"**假报失败**（用户看到"1 项删除失败"，其实东西已经删干净了）。
+ * 2. **按 relPath 深度降序**：剩下的都是互不包含的条目，次序本身不影响结果，
+ *    但"先深后浅"是唯一不会在下一次改动里退化成假失败的那个次序。
+ *
+ * 前缀判据用的是**目录行的 relPath 带尾随 `/`**（[com.autoscript.domain.host.ScriptFileRow.relPath]
+ * 的契约）：`"demo/lib/"` 是 `"demo/lib/a.js"` 的前缀，而 `"demo/lib"` 不是 —— 少了这个斜杠，
+ * `lib` 会误吃掉 `liba.js`。
+ *
+ * **为什么住文件顶层而不是 [ProjectState.Companion]**：它是**操作语义**（选中 → 要删哪些），
+ * 不是同伴对象里那套"选中集 ↔ 可见集"的读取语义；而那个 companion 已经贴到 detekt
+ * `TooManyFunctions` 的上限（11），再加一个函数就多一条违规。
+ */
+internal fun deleteTargets(selected: Set<String>, files: List<ScriptFileRowUi>): List<ScriptFileRowUi> {
+    val picked = files.filter { ProjectState.keyOf(it) in selected }
+    return picked
+        .filter { row ->
+            picked.none { other -> other.relPath != row.relPath && row.relPath.startsWith(other.relPath) }
+        }
+        .sortedByDescending { row -> row.relPath.count { it == '/' } }
+}
+
+/**
  * 项目页（文件列表）呈现态（纯数据，Compose 之外可 JVM 测）。
  *
  * 与 [TaskCenterState]/[ConsoleState] 同一条纪律：

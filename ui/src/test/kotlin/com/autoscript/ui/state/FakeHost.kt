@@ -97,6 +97,12 @@ open class FakeHost(
     override suspend fun saveScriptFile(projectId: String, relPath: String, content: String): Unit =
         throw UnsupportedOperationException("本替身未提供 saveScriptFile（用例按需覆盖）")
 
+    override suspend fun deleteEntry(projectId: String, relPath: String): Unit =
+        throw UnsupportedOperationException("本替身未提供 deleteEntry（用例按需覆盖）")
+
+    override suspend fun absolutePathOf(projectId: String, relPath: String): String =
+        throw UnsupportedOperationException("本替身未提供 absolutePathOf（用例按需覆盖）")
+
     override suspend fun runScriptFile(projectId: String, relPath: String): Unit =
         throw UnsupportedOperationException("本替身未提供 runScriptFile（用例按需覆盖）")
 

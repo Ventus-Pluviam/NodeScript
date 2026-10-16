@@ -233,6 +233,46 @@ interface HostSummary {
     )
 
     /**
+     * 删一个条目（文件列表的菜单「删除」／多选批量删除；2026-10-17 用户口径）。
+     *
+     * **文件夹递归整棵**：非空文件夹删不掉的话，菜单里那格在"能看见却删不动"的形态上
+     * 等于没做（TG 文件页删文件夹也是连内容一起）。
+     *
+     * 挂起：写盘（IO）。失败**抛**（原文给 UI）：
+     * - 条目不存在（**抛而不是静默成功**：静默成功会把"删错了对象"和"删掉了"画成同一件事）；
+     * - [relPath] 越界 / 首段与 [projectId] 对不上（判据与 [readScriptFile] 同源）；
+     * - 落盘失败（权限、占用）。
+     *
+     * **根层的文件夹就是项目本身**（`files/scripts/<名字>/`，见 [ProjectId.ROOT]）——
+     * 删它就是连同其中全部文件删掉一整个项目。用户 2026-10-17 裁定**允许**（不是禁止），
+     * 故本口不为此设闸；实现方仍必须挡住"删 `files/scripts/` 本身"（那是整个项目库）。
+     *
+     * **不检查在途执行**：引擎已把脚本读进内存，删文件不会打断本次执行，下一次投递才会
+     * 得到 `ERR_FILE_NOT_FOUND`（如实记账，不在这里补一层"正在运行就不许删"）。
+     *
+     * @param projectId 所属项目（[ProjectId.ROOT] 的空串 = 根层那一条）。
+     * @param relPath 同 [readScriptFile]（`files/scripts/` 之下的相对路径，首段 = 项目名）；
+     *   目录行以 `/` 结尾（[ScriptFileRow.relPath] 的形态），实现方按"尾随斜杠可有可无"收。
+     */
+    suspend fun deleteEntry(projectId: String, relPath: String)
+
+    /**
+     * 条目（**文件或文件夹**）的绝对路径 —— 文件列表菜单的「复制绝对路径」（2026-10-17 用户口径）。
+     *
+     * 为什么这条要经宿主：绝对路径 = `files/scripts/` 的落点 + relPath，而**只有宿主知道
+     * `filesDir`**（`:ui` 拿不到，也不该拿到 —— 它连 `files/scripts` 这个约定都不该知道）。
+     *
+     * **不查存在性**：与 [com.autoscript.domain.scripts.ScriptPaths.scriptFile] 同一条分工
+     * —— 约定只回答"应该在哪"，查存在性是调用方的事。于是刚被删掉的行照样复制得出它曾有的
+     * 路径（用户要的往往正是"我删之前那个文件在哪"）。
+     *
+     * 失败**抛**：越界 / 首段与 [projectId] 对不上（判据与 [readScriptFile] 同源）。
+     *
+     * @param relPath 同 [readScriptFile]。
+     */
+    suspend fun absolutePathOf(projectId: String, relPath: String): String
+
+    /**
      * 读一个脚本文件的文本内容（项目页**点文件进编辑**；TG 文件页点开文档的对应位）。
      *
      * 挂起：读盘（IO）。失败**抛**（与 [scriptFiles] 同一条纪律）—— 读不到就是读不到，
