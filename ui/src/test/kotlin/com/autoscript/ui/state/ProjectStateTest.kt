@@ -2,6 +2,7 @@ package com.autoscript.ui.state
 
 import com.autoscript.domain.host.ScriptFileRow
 import com.autoscript.domain.host.ScriptFilesSnapshot
+import com.autoscript.domain.scripts.ProjectId
 import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -220,6 +221,44 @@ class ProjectStateTest {
 
         val sub = ProjectState.childrenOf(files, folder = "demo/lib/sub/")
         assertTrue(sub.isEmpty())
+    }
+
+    /**
+     * 根层条目（`files/scripts/` 本层，`projectId` = [ProjectId.ROOT]）—— 2026-10-16 用户裁定
+     * 「根层可写」之后才有。`relPath` 就是它自己的名字（没有项目段），故在它们身上
+     * `childrenOf` 的判据（去掉尾随 `/` 之后还有没有斜杠）与项目内的行逐字同形。
+     */
+    private fun rootRow(name: String, isDirectory: Boolean = false, childCount: Int = 0) = ScriptFileRow(
+        projectId = ProjectId.ROOT.value,
+        relPath = if (isDirectory) "$name/" else name,
+        name = name,
+        ext = if (isDirectory) "" else name.substringAfterLast('.', ""),
+        isDirectory = isDirectory,
+        childCount = childCount,
+        sizeBytes = 0L,
+        modifiedMillis = now,
+    )
+
+    /**
+     * 全库根那一层收的是"根层自己那些条目"：项目目录 + **根层建的文件** + 根层建的文件夹
+     * （后者落盘后就是一个项目）。判据只看 `relPath` 的斜杠数，与 `projectId` 无关。
+     */
+    @Test
+    fun `全库根一层收根层文件与根层文件夹`() {
+        val files = listOf(
+            ScriptFileRowUi.of(rootRow("hello.js"), zone),
+            ScriptFileRowUi.of(rootRow("我的脚本", isDirectory = true, childCount = 1), zone),
+            ScriptFileRowUi.of(rowAt("main.js", project = "我的脚本"), zone),
+            ScriptFileRowUi.of(projectRow("demo"), zone),
+        )
+        assertEquals(
+            listOf("hello.js", "我的脚本", "demo"),
+            ProjectState.childrenOf(files, folder = null).map { it.name },
+        )
+        // 根层的文件夹 = 一个项目：进去之后里面的行报的是它的名字，不是空串。
+        assertEquals(listOf("main.js"), ProjectState.childrenOf(files, folder = "我的脚本/").map { it.name })
+        // 退回上一层到根层收口（`"我的脚本/"` 去掉尾随斜杠后没有斜杠 → null）。
+        assertEquals(null, ProjectState.parentFolder("我的脚本/"))
     }
 
     @Test

@@ -29,11 +29,19 @@ object ScriptPaths {
      * [ProjectId] 的 `init` 里判过一道，本方法因此**不再重复 `require`** ——
      * 拿到类型就意味着过了判据，这正是值类存在的意义。仍**不校验存在性**
      * （那是 [Path.exists] 的事，不是约定的）。
+     *
+     * **[ProjectId.ROOT]（根层）在这里天然落到 `files/scripts/` 本身**：`Path.resolve("")`
+     * 恒等自身。这不是碰巧 —— 根层条目（`files/scripts/x.js`）的绝对路径、以及它在引擎里
+     * 的 `cwd`，都靠这条恒等式走**同一套寻址**，不需要在 `:engine:node-process` 里加分支。
      */
     fun projectRoot(filesDir: Path, projectId: ProjectId): Path = projectsRoot(filesDir).resolve(projectId.value)
 
     /**
-     * 项目号的合法形态（**唯一一份**判据）。
+     * 项目号的合法形态（**唯一一份**判据）：**非空，且不含 `/`、`\`、`.`、控制字符**。
+     *
+     * ```
+     * [^/\\\p{Cntrl}.]+
+     * ```
      *
      * 为什么住这里：这条正则被三个地方读 —— `:app-service:npm` 的 `NpmProjectLayout.projectRoot`
      * （防路径逃逸的 `require`）、界面侧的命令行校验（`NpmConsoleKeys.rejectProjectId`，
@@ -44,17 +52,36 @@ object ScriptPaths {
      *
      * 与 [com.autoscript.domain.npm.NpmConsoleKeys.rejectProjectId] 的分工：那是**话术**
      * （拒收原文，给用户看），这是**判据**（是/否）。
+     *
+     * ## 2026-10-16 放宽：从 `[A-Za-z0-9_-]+` 到"排除分隔符与点"
+     *
+     * **用户裁定**：首页可写之后，在根层建的**文件夹就是一个新项目**（`files/scripts/<名字>/`），
+     * 于是"根层文件夹名"与"项目号"必须是同一条判据 —— 两套判据会造出「列得出、点不开」的
+     * 目录（建的时候放行，进里面打开文件时 `ProjectId` 抛）。用户选的是**允许中文**（除分隔符与点）。
+     *
+     * **放宽的只是字符集，不是防逃逸判据**：批 84 收掉 `.` 的理由是
+     * `projectsRoot.resolve("..")` 跳出项目根，那条仍然一个字不动 —— `.` 依旧禁，
+     * `/` 与 `\` 依旧禁（它们是路径分隔符），控制字符一并禁（NUL 会让 `Path.resolve` 抛
+     * `InvalidPathException`，`\n` 会把日志行/文件名搞成两行）。**空串仍不是项目号**
+     * （`+` 至少一个字符）—— 根层用的是另一个概念，见 [ProjectId.ROOT]。
+     *
+     * **已知边界（不为它加第二份判据）**：npm 控制台（`NpmConsoleKeys.parse`）按**空白分词**，
+     * 所以带空格的项目名在那条命令行里敲不出来 —— 那是那一条命令行的输入形态所限，
+     * 不是判据该收窄的理由（收窄成两份判据正是本对象开头反对的）。
      */
-    val PROJECT_ID: Regex = Regex("[A-Za-z0-9_-]+")
+    val PROJECT_ID: Regex = Regex("""[^/\\\p{Cntrl}.]+""")
 
     /**
      * [PROJECT_ID] 的布尔投影（`NpmProjectLayout.projectRoot` 与界面校验共用一处）。
      *
-     * 注意判据里**没有 `.`**：原正则 `[A-Za-z0-9._-]+` 收 `.` 与 `..`，而
+     * 判据里**没有 `.`**：原正则 `[A-Za-z0-9._-]+` 收 `.` 与 `..`，而
      * `projectsRoot.resolve("..")` 正好跳出项目根 —— 那条 `require` 自称「防路径逃逸」，
      * 实际把最经典的一种逃逸放行了（`.` 本身则让 `files/scripts/.` 变成项目根，
-     * 于是「项目 `.npmrc`」落在共享目录上）。`.` 在项目号里也没有真实用途：
-     * 项目号来自目录名，而仓库自己的项目就叫 `main`。批 84 收口时一并钉住。
+     * 于是「项目 `.npmrc`」落在共享目录上）。`.` 在项目号里也没有真实用途。批 84 收口时
+     * 一并钉住，2026-10-16 放宽字符集时**仍然保留**（见 [PROJECT_ID] 的 KDoc）。
+     *
+     * 空串回 **false**（项目号非空）：根层哨兵 [ProjectId.ROOT] 是"没有项目"的编码，
+     * 不是项目号 —— 故它构造得出来，但 [ProjectId.createOrNull] 与界面校验都不放行它。
      */
     fun isValidProjectId(projectId: String): Boolean = PROJECT_ID.matches(projectId)
 
@@ -114,13 +141,40 @@ object ScriptPaths {
      * 削不出（首段不是项目名）**回 null**，由调用方响亮拒绝 —— 不静默当成项目内路径。
      *
      * 不做词法校验（`..`/绝对路径）：那是 [scriptFile] 与 [RelPath] 的事，本方法只削前缀。
+     *
+     * **根层分支（2026-10-16）**：[ProjectId.ROOT]（空串）时不削前缀 —— 根层条目本身就是
+     * 项目内路径（`files/scripts/x.js` 的 `scriptPath` 就是 `x.js`）。但**必须是单段**：
+     * 根层只有一层（`files/scripts/`），`a/b.js` 对根层是"更深的层"，回 null 由调用方响亮拒绝
+     * —— 与前面"削不出就回 null，不静默当成项目内路径"同一条纪律。
      */
     fun projectInternalOrNull(projectId: String, relPath: String): String? {
         val trimmed = relPath.trimEnd('/')
+        if (projectId.isEmpty()) {
+            return trimmed.takeIf { it.isNotEmpty() && '/' !in it }
+        }
         val prefix = "$projectId/"
         if (!trimmed.startsWith(prefix)) return null
         return trimmed.removePrefix(prefix).takeIf { it.isNotEmpty() }
     }
+
+    /**
+     * `(projectId, 项目内路径)` → **`files/scripts/` 之下的完整相对路径**（日志/控制台标题用）。
+     *
+     * 为什么要一个函数而不是各处 `"$projectId/$relPath"`：根层条目的项目段是空串，
+     * 直接拼会渲染成 `//x.js`（悬浮窗/日志管理/任务日志详情三处各拼一次就三处都错）。
+     * 判据只有一份的老规矩，展示也一样。
+     */
+    fun fullRelPath(projectId: String, scriptPath: String): String =
+        if (projectId.isEmpty()) scriptPath else "$projectId/$scriptPath"
+
+    /**
+     * 展示用的项目名：根层条目没有项目（空串哨兵），显示成「根目录」。
+     *
+     * 只服务"项目名 与 路径 分开写"的那两处（`LogManagementScreen` 的行标题、
+     * `TaskLogState` 的详情文案）；写成 `"$projectId / $scriptPath"` 的形态时用
+     * [fullRelPath] 而不是本函数。
+     */
+    fun projectLabel(projectId: String): String = if (projectId.isEmpty()) "根目录" else projectId
 
     /**
      * 录屏产物的落点目录：`files/scripts/<projectId>/.recordings`（§9.2 录屏腿）。
@@ -150,6 +204,16 @@ object ScriptPaths {
 
     /** 录屏产物目录名（点开头 = 项目内务，见 [recordingsDir]）。 */
     const val RECORDINGS_DIR: String = ".recordings"
+
+    /**
+     * npm 依赖目录名（**唯一一份字面量**）。
+     *
+     * 两个读者回答的其实是同一件事：`ScriptFilesRead` 靠它把整棵子树排除在文件清单外
+     * （依赖缓存不是用户资产），`ScriptFileOps` 靠它拒绝"根层建一个叫它的项目"
+     * （那种目录在列表里**看不见**，用户会读到"建了但没了"）。两处各写一份字面量的话，
+     * 改一处就变成"列表里排除的"与"禁止新建的"是两个名字。
+     */
+    const val NODE_MODULES_DIR: String = "node_modules"
 
     /**
      * facade 包 `auto` 的落位根：`filesDir/node_modules/auto`（docs §12.4 资产交付轨）。

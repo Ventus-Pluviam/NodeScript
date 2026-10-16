@@ -19,7 +19,13 @@ import java.nio.file.StandardCopyOption
  * **为什么单独一个对象**（与 [ScriptFilesRead] 同一条理由）：`Application` 在 JVM
  * 单测里构造不出来，而"名字合不合法、路径怎么落、撞了已存在的怎么办"这段判断必须可测。
  *
- * 两条口径：
+ * **根层可写（2026-10-16 用户裁定「根层可写」，三条判据打通）**：`projectId` 空串 =
+ * `files/scripts/` 本层（[com.autoscript.domain.scripts.ProjectId.ROOT]）。首页 FAB 建的**文件**
+ * 落 `files/scripts/<名字>`、建的**文件夹**就是一个新项目（`files/scripts/<名字>/`）——
+ * 后者多两条判据，见 [requireProjectName]。四个口（[createFile]/[createFolder]/[read]/[save]）
+ * 共用 [resolveInProject]，根层分支只改"归属怎么判"，不改"防不防越界"。
+ *
+ * 两条口径（原文口径不变，根层只是给它们各加一档）：
  * - **名字 = 单段相对路径**：用户输入的是名字，不是路径 —— 斜杠/`..`/空段直接拒绝
  *   （单段校验在前，[DeployPath.isSafeRelPath] 兜底 —— 后者是部署路径的判据，
  *   多段相对路径对它合法，拦不住 `lib/main.js` 穿到落盘才炸），要进文件夹先建文件夹。
@@ -41,7 +47,7 @@ object ScriptFileOps {
      * @throws java.nio.file.FileAlreadyExistsException 同名文件/文件夹已存在。
      */
     fun createFile(filesDir: Path, projectId: String, name: String, dirRelPath: String? = null) {
-        val target = resolveName(filesDir, projectId, name, dirRelPath)
+        val target = resolveName(filesDir, projectId, name, dirRelPath, isFolder = false)
         Files.createFile(target)
     }
 
@@ -52,7 +58,7 @@ object ScriptFileOps {
      * @throws java.nio.file.FileAlreadyExistsException 同名文件/文件夹已存在。
      */
     fun createFolder(filesDir: Path, projectId: String, name: String, dirRelPath: String? = null) {
-        val target = resolveName(filesDir, projectId, name, dirRelPath)
+        val target = resolveName(filesDir, projectId, name, dirRelPath, isFolder = true)
         Files.createDirectory(target)
     }
 
@@ -140,6 +146,10 @@ object ScriptFileOps {
      *
      * 三道校验：[DeployPath.resolveIn] 防 `..`/绝对路径/越界、首段与项目名一致、项目目录存在。
      *
+     * **根层分支（2026-10-16）**：`projectId` 空串时"首段与项目名一致"这条没有意义
+     * （根层条目没有项目段），换成**"必须正好一层"** —— `base.relativize(target).nameCount == 1`。
+     * 防越界那一道（[DeployPath.resolveIn]）一字不动：根层照样不许 `..`/绝对路径/穿层。
+     *
      * （原文这里写着「[ScriptPaths.scriptFile] 刻意不做逃逸校验」，**2026-10-12 删掉**——
      * 那是批 7c0fec9 订正前的状态：外审 M1 收口时 `scriptFile` 已补上词法闸，理由与
      * 词法判据的边界见该方法 KDoc。这里仍用自己的 `resolveIn` 而不是复用 `scriptFile`：
@@ -152,6 +162,14 @@ object ScriptFileOps {
         val rel = relPath.trimEnd('/')
         val base = ScriptPaths.projectsRoot(filesDir).toAbsolutePath().normalize()
         val target = DeployPath.resolveIn(base, rel)
+        if (projectId.isEmpty()) {
+            require(base.relativize(target).nameCount == 1) {
+                "relPath 与根层不一致：$relPath 不是 files/scripts/ 本层的条目" +
+                    "（根层只有一层、没有项目名；子层请带项目名）"
+            }
+            require(Files.isDirectory(base)) { "根目录不存在：files/scripts（还没部署过任何项目）" }
+            return target
+        }
         val owner = base.relativize(target).firstOrNull()?.toString()
         require(owner == projectId) {
             "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
@@ -169,25 +187,97 @@ object ScriptFileOps {
      * `NoSuchFileException`（一句机器话），这里换成点破"文件夹不存在"的原文 —— 呈现层原样显示。
      * **不顺路建中间层**（`createDirectories` 会把"名字打错一层"静默变成一个层级结构，
      * 用户以为建了个文件、其实建了一串目录）。
+     *
+     * [isFolder] 只影响**根层**那一档：根层建的文件夹落盘后就是 `files/scripts/<名字>/`，
+     * 也就是一个项目，故多两条判据（[requireProjectName]）。文件名/项目内的文件夹名不受它影响
+     * —— 这里的"文件夹"与那里的"项目"是同一个目录的两个身份，判据只在根层这一档分开。
      */
     private fun resolveName(
         filesDir: Path,
         projectId: String,
         name: String,
         dirRelPath: String?,
+        isFolder: Boolean,
     ): Path {
+        requireName(name)
+        val dir = targetDir(filesDir, projectId, dirRelPath)
+        // 根层 + 建文件夹 = 建项目（`files/scripts/<名字>/` 落盘后就是一个项目目录）。
+        if (isFolder && projectId.isEmpty() && dirRelPath.isNullOrBlank()) requireProjectName(name)
+        return dir.resolve(name)
+    }
+
+    /**
+     * 目标文件夹（**必须已存在**）：根层 = `files/scripts/` 本层，项目内 = 项目根或子层。
+     *
+     * 两条"不存在"的原文分开写：根层缺的是 `files/scripts`（还没部署过任何项目），
+     * 项目内缺的是那个项目/子目录 —— 合成一句会让用户按错误的方向去查。
+     */
+    private fun targetDir(filesDir: Path, projectId: String, dirRelPath: String?): Path {
+        if (dirRelPath.isNullOrBlank()) {
+            val root = if (projectId.isEmpty()) {
+                ScriptPaths.projectsRoot(filesDir)
+            } else {
+                ScriptPaths.projectRoot(filesDir, ProjectId(projectId))
+            }
+            require(Files.isDirectory(root)) {
+                if (projectId.isEmpty()) "根目录不存在：files/scripts（还没部署过任何项目）" else "项目不存在: $projectId"
+            }
+            return root
+        }
+        val dir = resolveInProject(filesDir, projectId, dirRelPath)
+        require(Files.isDirectory(dir)) { "文件夹不存在：$dirRelPath" }
+        return dir
+    }
+
+    /**
+     * 名字本身（**不分层**，落哪一层由 `dirRelPath` 说）。
+     *
+     * 后两条是 2026-10-16 顺手堵的"建了但看不见"：
+     * - **点开头**：`ScriptFilesRead` 把点开头条目当系统噪声排除，建出来的东西**不进列表**
+     *   （项目根下的 `.npmrc` 那种内务文件正是靠这条隐身），用户只会读到"建了但没了"；
+     * - **超长**：Linux/Android 文件名上限 255 **字节**（汉字 UTF-8 占 3 字节，约 85 个字），
+     *   超了 `Files.createFile` 抛的是一句 `FileSystemException: File name too long`。
+     *
+     * **不 trim**：名字里前后空格照旧原样落盘（改动前后行为一致，不在这里悄悄替用户改名）。
+     */
+    private fun requireName(name: String) {
         require(name.isNotBlank()) { "名字不能为空" }
         // 单段校验在前：isSafeRelPath 是部署路径的判据（多段相对路径对部署合法），
         // `lib/main.js` 会穿过去、到 Files.createFile 才炸出 NoSuchFileException。
         require('/' !in name) { "名字不能含 /（要进子文件夹先在那一层新建）" }
         require(DeployPath.isSafeRelPath(name)) { "名字含非法字符（.. 不允许）" }
-        if (dirRelPath.isNullOrBlank()) {
-            val root = ScriptPaths.projectRoot(filesDir, ProjectId(projectId))
-            require(Files.isDirectory(root)) { "项目不存在: $projectId" }
-            return root.resolve(name)
+        require(!name.startsWith(".")) { "名字不能以点开头：$name（点开头是内务文件，文件列表里不显示）" }
+        require(name.toByteArray(StandardCharsets.UTF_8).size <= MAX_NAME_BYTES) {
+            "名字太长（最多 $MAX_NAME_BYTES 字节，一个汉字算 3 字节）：$name"
         }
-        val dir = resolveInProject(filesDir, projectId, dirRelPath)
-        require(Files.isDirectory(dir)) { "文件夹不存在：$dirRelPath" }
-        return dir.resolve(name)
     }
+
+    /**
+     * 根层文件夹名 = **项目名**，多两条判据（它落盘后就是 `files/scripts/<名字>/`）。
+     *
+     * 为什么这条非有不可（而不是"建了就建了，打不开再说"）：项目号判据比文件名判据**严**一档
+     * —— 文件名可以含 `.`（`a.b.js`），项目名不可以（批 84：`.` 让
+     * `projectsRoot.resolve("..")` 跳出项目根）。放行的话，用户建出一个 `v1.0/`，
+     * 进得去却**里面每个文件都打不开**（`ProjectId("v1.0")` 当场抛），
+     * 而错要等到那一刻才现形。这里当场拒，原文点破原因。
+     *
+     * 第二条同理但更俗：叫 `node_modules` 的目录在文件列表里**整棵不显示**
+     * （[ScriptPaths.NODE_MODULES_DIR]），建了就"消失"。
+     */
+    private fun requireProjectName(name: String) {
+        require(ScriptPaths.isValidProjectId(name)) {
+            "这个名字不能当项目名：$name —— 根层的文件夹就是一个项目，名字不能含 `.`（也不能含 / 与 \\）"
+        }
+        require(name != ScriptPaths.NODE_MODULES_DIR) {
+            "这个名字不能用：$name 是依赖缓存目录名，文件列表里不显示（换一个名字）"
+        }
+    }
+
+    /**
+     * 名字的字节上限（255 = Linux/Android 单段文件名上限，单位**字节**不是字符）。
+     *
+     * 存在这里而不是让 `Files` 抛：`FileSystemException: File name too long` 是一句机器话，
+     * 而这句中文原文能直接告诉用户"为什么中文名字能写得更短"。
+     */
+    private const val MAX_NAME_BYTES: Int = 255
 }

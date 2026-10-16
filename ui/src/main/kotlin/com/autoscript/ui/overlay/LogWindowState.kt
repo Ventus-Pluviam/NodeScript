@@ -1,5 +1,6 @@
 package com.autoscript.ui.overlay
 
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleLineState
 
@@ -90,8 +91,12 @@ data class LogWindowState(
      * 在途 = 暂停图标，那颗钮本来就是三态的事实源），标题再缀一遍是重复且占宽。
      * 「已结算」这个事实仍留在状态里（[running]，暂停钮的可用态与
      * 「本次执行没有输出」那句仍读它），只是不再上标题。
+     *
+     * **根层条目的 `projectId` 是空串**（[com.autoscript.domain.scripts.ProjectId.ROOT]）：
+     * 直接拼会渲染成 `//x.js`，故项目段走 [ScriptPaths.fullRelPath]（判据只有一份，
+     * 2026-10-16）。
      */
-    val titleText: String get() = "/$projectId/$relPath"
+    val titleText: String get() = "/" + ScriptPaths.fullRelPath(projectId, relPath)
 
     /**
      * 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。

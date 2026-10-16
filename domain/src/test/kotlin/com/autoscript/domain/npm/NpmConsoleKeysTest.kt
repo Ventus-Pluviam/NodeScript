@@ -224,7 +224,8 @@ class NpmConsoleKeysTest {
         assertNull(NpmConsoleKeys.rejectProjectId("my-proj_1-2"))
         // `.` 与 `..` 在名单里是刻意的：`resolve("..")` 正好跳出项目根，
         // 而原正则 `[A-Za-z0-9._-]+` 把它们放行了（批 84 收口）。
-        for (bad in listOf("", ".", "..", "a/b", "a b", "a\\b")) {
+        // 样本自 2026-10-16 起去掉 `a b`（含空格，判据放宽后合法）——「禁的那几样」才是本用例要钉的。
+        for (bad in listOf("", ".", "..", "a/b", "a.b", "a\\b", "a\nb")) {
             val why = NpmConsoleKeys.rejectProjectId(bad)
             assertNotNull(why, "「$bad」应当被拒")
             assertTrue(bad in why!!, "理由要点名原文：$why")

@@ -35,6 +35,22 @@ class LogWindowStateTest {
         assertEquals("/demo/data/test.js", s.titleText)
     }
 
+    /**
+     * 根层条目（`projectId` = 空串哨兵，2026-10-16 用户裁定「根层可写」）：标题不能渲染成
+     * `//x.js`。归属过滤仍按 `(projectId, relPath)` 全等 —— 空串照样是**一个**项目号值，
+     * 于是根层的执行只跟根层的行对上（不会和某个项目里的同名文件串味）。
+     */
+    @Test
+    fun `根层条目的标题是单斜杠且归属只认根层`() {
+        val s = LogWindowState(projectId = "", relPath = "hello.js")
+        assertEquals("/hello.js", s.titleText)
+        assertEquals("js", s.ext, "没有斜杠的路径照样取得到扩展名")
+        // 别的项目里同名文件的行**不算**根层这条执行（归属是 (projectId, relPath) 全等）。
+        val bound = s.bind(listOf(run(7L, projectId = "demo", scriptPath = "hello.js")))
+        assertEquals(null, bound.boundRunId)
+        assertEquals(7L, s.bind(listOf(run(7L, projectId = "", scriptPath = "hello.js"))).boundRunId)
+    }
+
     @Test
     fun `bind 按归属取最大 runId 并同步 paused 与 running`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")

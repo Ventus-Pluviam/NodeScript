@@ -1,6 +1,7 @@
 package com.autoscript.shell
 
 import com.autoscript.domain.host.ScriptFileRow
+import com.autoscript.domain.scripts.ProjectId
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
@@ -69,6 +70,34 @@ class ScriptFilesReadTest {
         val rows = ScriptFilesRead.snapshot(dir).rows
         // node_modules 目录本身也藏着（不是"只藏内容"）；项目目录 demo 照样是一行。
         assertEquals(listOf("demo", "main.js"), rows.map { it.name }.sorted())
+    }
+
+    /**
+     * 根层条目（`files/scripts/` 本层）的 `projectId` 是 [ProjectId.ROOT]（空串），
+     * 二层及以下仍是首段目录名（2026-10-16 用户裁定「根层可写」）。
+     *
+     * **此前一律取首段**，于是根层的文件被报成"项目 `x.js`"：列得出来，点开必得一句
+     * 「项目不存在: x.js」（`ScriptFileOps.resolveInProject` 的 `require`）——
+     * 这正是用户看到的"建得出、打不开"那一半。
+     */
+    @Test
+    fun `根层条目没有项目段二层以下仍报首段`() = runBlocking {
+        val root = dir.resolve("scripts")
+        Files.createDirectories(root.resolve("demo"))
+        Files.createDirectories(root.resolve("我的脚本"))
+        Files.write(root.resolve("hello.js"), "x".toByteArray())
+        Files.write(root.resolve("demo/main.js"), "y".toByteArray())
+        Files.write(root.resolve("我的脚本/run.js"), "z".toByteArray())
+
+        val rows = ScriptFilesRead.snapshot(dir).rows
+        // 根层的文件与根层的文件夹（= 一个项目）都报空串；它们下面的条目报首段。
+        assertEquals(ProjectId.ROOT.value, rows.single { it.name == "hello.js" }.projectId)
+        assertEquals(ProjectId.ROOT.value, rows.single { it.name == "我的脚本" }.projectId)
+        assertEquals("hello.js", rows.single { it.name == "hello.js" }.relPath)
+        assertEquals("我的脚本/", rows.single { it.name == "我的脚本" }.relPath)
+        assertEquals("我的脚本", rows.single { it.name == "run.js" }.projectId)
+        assertEquals("我的脚本/run.js", rows.single { it.name == "run.js" }.relPath)
+        assertEquals("demo", rows.single { it.name == "main.js" }.projectId)
     }
 
     @Test

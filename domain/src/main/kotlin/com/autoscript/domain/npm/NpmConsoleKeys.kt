@@ -95,13 +95,21 @@ object NpmConsoleKeys {
      * 单一事实来源），本函数只是把它翻成一句给用户看的话 —— 界面当场拒与落盘侧
      * `require` 因此同源。
      *
-     * 话术里**没有「点」**：`ScriptPaths.PROJECT_ID` 于 2026-10-09 批 84 收掉了 `.`
+     * 话术里**点了「点」**：`ScriptPaths.PROJECT_ID` 于 2026-10-09 批 84 收掉了 `.`
      * （它放行 `..`，而 `projectsRoot.resolve("..")` 正好跳出项目根）。话术跟着判据走，
      * 否则用户按话术写一个 `a.b` 却被拒 —— 那比不写还坏。
+     *
+     * **2026-10-16 判据放宽成"排除分隔符与点"**（允许中文/空格/`:` 等，见
+     * `ScriptPaths.PROJECT_ID` 的 KDoc），话术跟着改成"禁止清单"而不是"允许清单"——
+     * 判据不再是可枚举的字符集，话术再写成"只允许字母数字"就是**又一次**话术与判据漂开
+     * （而且这次漂的方向是"用户照话术写中文名以为不合法"）。
+     *
+     * 注：本命令行按**空白分词**，所以带空格的项目名在这里敲不出来 —— 那是这条命令行的
+     * 输入形态所限，不是本判据的事（判据只有一份，不为它收窄）。
      */
     fun rejectProjectId(projectId: String): String? =
         if (com.autoscript.domain.scripts.ScriptPaths.isValidProjectId(projectId)) null
-        else "项目号不合法（只允许字母、数字、下划线、连字符）：$projectId"
+        else "项目号不合法（不能为空，也不能含 / 、\\ 、. 或控制字符）：$projectId"
 
     /** 进入特权模式的入口词（用户口径 2026-10-09：`su` = root，`shizuku` = adb）。 */
     const val ENTER_ROOT = "su"

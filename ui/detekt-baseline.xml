@@ -53,8 +53,8 @@
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun SectionTitle(text: String)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable fun FileListLayer(showOverlays: Boolean)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CapsuleInputField( value: String, onValueChange: (String) -&gt; Unit, placeholder: String, modifier: Modifier = Modifier, leadingGlyph: GlyphKind? = null, focusDismiss: com.autoscript.ui.components.FocusDismissState? = null, )</ID>
-    <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateEntryDialogs( creating: ProjectState.CreationKind?, onDismiss: () -&gt; Unit, onConfirm: (name: String, isFolder: Boolean) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateFab( onCreateFile: () -&gt; Unit, onCreateFolder: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateEntryDialogs( creating: ProjectState.CreationKind?, onDismiss: () -&gt; Unit, onConfirm: (name: String, isFolder: Boolean) -&gt; Unit, atRoot: Boolean, )</ID>
+    <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateFab( onCreateFile: () -&gt; Unit, onCreateFolder: () -&gt; Unit, modifier: Modifier = Modifier, atRoot: Boolean, )</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun EmptyFilesHint(filtered: Boolean, inFolder: Boolean)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun FabSubItem(label: String, glyph: GlyphKind, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun FabSubStrokeTop(): Color</ID>

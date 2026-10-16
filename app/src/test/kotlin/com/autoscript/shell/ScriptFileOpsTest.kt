@@ -206,6 +206,92 @@ class ScriptFileOpsTest {
         }
     }
 
+    // ── 根层（[com.autoscript.domain.scripts.ProjectId.ROOT] = 空串）：`files/scripts/` 本层 ──
+    //
+    // 2026-10-16 用户裁定「根层可写」：首页 FAB 建的文件落本层、建的文件夹就是一个新项目。
+    // 下面这几条钉的是三条判据（列得出/打得开/跑得起来）里的**读与写两半**，
+    // 跑那一半在 `ScriptPathsProjectInternalTest`（形状转换）与 `ScriptPathsScriptFileTest`
+    // （绝对路径拼装）里钉。
+
+    @Test
+    fun `根层建文件与文件夹落在 files_scripts 本层`() {
+        Files.createDirectories(dir.resolve("scripts"))
+        ScriptFileOps.createFile(dir, "", "hello.js")
+        ScriptFileOps.createFolder(dir, "", "我的脚本")
+        assertTrue(Files.isRegularFile(dir.resolve("scripts/hello.js")))
+        assertTrue(Files.isDirectory(dir.resolve("scripts/我的脚本")), "根层的文件夹就是一个项目目录")
+        // 没有多出一层（"落到别处"的典型形态就是凭空多一个目录）。
+        assertEquals(0, Files.list(dir.resolve("scripts/我的脚本")).use { it.count() })
+    }
+
+    @Test
+    fun `根层文件读回_保存覆盖且不留临时文件`() {
+        val scripts = Files.createDirectories(dir.resolve("scripts"))
+        Files.write(scripts.resolve("hello.js"), "const a = 1;\n".toByteArray(Charsets.UTF_8))
+        assertEquals("const a = 1;\n", ScriptFileOps.read(dir, "", "hello.js"))
+        ScriptFileOps.save(dir, "", "hello.js", "const a = 2;\n")
+        assertEquals("const a = 2;\n", ScriptFileOps.read(dir, "", "hello.js"))
+        assertEquals(
+            listOf("hello.js"),
+            Files.list(scripts).use { s -> s.map { it.name }.sorted().toList() },
+        )
+    }
+
+    @Test
+    fun `根层 relPath 必须是单段`() {
+        val scripts = Files.createDirectories(dir.resolve("scripts"))
+        Files.createDirectories(scripts.resolve("proj"))
+        Files.write(scripts.resolve("proj/x.js"), "y".toByteArray())
+        // 根层只有一层：`proj/x.js` 是"项目 proj 下的文件"，不该从这个入口读到。
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.read(dir, "", "proj/x.js") }
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.save(dir, "", "proj/x.js", "pwn") }
+        // 越界/空串照旧拒（防越界那一道与项目分支同源）。
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.read(dir, "", "") }
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.read(dir, "", "../escape.js") }
+        assertEquals("y", String(Files.readAllBytes(scripts.resolve("proj/x.js"))), "越界的写一次都没落下来")
+    }
+
+    /**
+     * 根层建**文件夹** = 建一个新项目，故多两条判据（名字得能当项目号）。
+     *
+     * 放行的代价是"进得去、里面每个文件都打不开"：项目号判据比文件名判据严一档
+     * （文件名可以含 `.`，项目名不可以 —— 批 84：`.` 让 `projectsRoot.resolve("..")` 跳出项目根）。
+     */
+    @Test
+    fun `根层建文件夹的名字要能当项目名`() {
+        Files.createDirectories(dir.resolve("scripts"))
+        val e = assertThrows(IllegalArgumentException::class.java) {
+            ScriptFileOps.createFolder(dir, "", "v1.0")
+        }
+        assertTrue(e.message?.contains("项目名") == true, "原文要点破原因：${e.message}")
+        // `node_modules`：文件列表里整棵不显示 → 建了等于消失。
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.createFolder(dir, "", "node_modules") }
+        assertTrue(!Files.exists(dir.resolve("scripts/v1.0")))
+        assertTrue(!Files.exists(dir.resolve("scripts/node_modules")))
+        // **文件名不受这条限制**：`a.b.js` 里有 `.` 是常事 —— 两条判据分得开。
+        ScriptFileOps.createFile(dir, "", "a.b.js")
+        assertTrue(Files.isRegularFile(dir.resolve("scripts/a.b.js")))
+    }
+
+    /** 点开头与超长（255 字节）在落盘前拒 —— 否则是"建了但列表里看不见"/一句机器话。 */
+    @Test
+    fun `点开头与超长名字拒绝`() {
+        Files.createDirectories(dir.resolve("scripts"))
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.createFile(dir, "", ".hidden.js") }
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.createFolder(dir, "", ".git") }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScriptFileOps.createFile(dir, "", "长".repeat(100) + ".js")
+        }
+        assertEquals(0, Files.list(dir.resolve("scripts")).use { it.count() })
+    }
+
+    /** 根目录都还没建（首装）时，根层新建拒绝而**不是**顺手把 `files/scripts/` 建出来。 */
+    @Test
+    fun `根目录不存在时根层新建拒绝`() {
+        assertThrows(IllegalArgumentException::class.java) { ScriptFileOps.createFile(dir, "", "x.js") }
+        assertTrue(!Files.exists(dir.resolve("scripts")))
+    }
+
     @Test
     fun `合法中文补充字符与空文件都可读取`() {
         val project = Files.createDirectories(dir.resolve("scripts/demo"))

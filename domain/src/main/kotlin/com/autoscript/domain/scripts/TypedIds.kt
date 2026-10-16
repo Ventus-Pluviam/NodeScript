@@ -44,25 +44,55 @@ package com.autoscript.domain.scripts
  * `init` 的后门来收编它们：那类后门一旦存在，`require` 就退化成「可选项」，而本项的全部价值
  * 就是那个 `require` 在。读回侧要构造 [ProjectId] 就得先过判据 —— 判不过就响亮地抛，
  * 这是本仓一贯的纪律（见 `PackSpec` 的「响亮失败」），不是本批新立的规矩。
+ *
+ * ## 空串 = 根层哨兵（2026-10-16）
+ *
+ * [ROOT] 是本类**唯一的例外**：空串不是项目号（[ScriptPaths.isValidProjectId] 对它回
+ * false），它是"**没有项目**"的编码 —— `files/scripts/` 本层那些条目（`files/scripts/x.js`）。
+ *
+ * 为什么要这个哨兵而不是另造一套寻址：`(projectId, relPath)` 是本仓唯一的寻址形状
+ * （文件清单行、执行口、意图日志、归档、在途表全用它）。而 `Path.resolve("")` 恒等自身，
+ * 于是 `ScriptPaths.projectRoot(filesDir, ROOT)` 天然等于 `files/scripts/`、
+ * `scriptFile(filesDir, ROOT, RelPath("x.js"))` 天然等于 `files/scripts/x.js` ——
+ * **引擎侧一行都不用改**（`NodeProcessEngine` 里 `ProjectId(run.projectId)` 与 `cwd` 那两处
+ * 照旧）。空串也不可能逃逸：resolve 一个空串不改变路径。
+ *
+ * **随之而来的危险面由调用方把闸**（哨兵一旦可构造，凡"以 id 拼路径"的地方都要问一句
+ * "空串在这里是什么意思"）：已知且已堵的是 `FsProjectStore.create/delete` ——
+ * `rootFor(ROOT)` 就是 `files/scripts` 本身，不堵的话 `delete` 会把整个库删掉。
+ * 外部输入**进不来**这个哨兵：[createOrNull] 对空串回 null（界面/桥侧照旧拒空）。
  */
 @JvmInline
 value class ProjectId(val value: String) {
 
     /**
-     * 判据收 [ScriptPaths.PROJECT_ID]（唯一一份，见本文件 KDoc）。
+     * 判据收 [ScriptPaths.PROJECT_ID]（唯一一份，见本文件 KDoc），**外加空串这一个哨兵**。
      *
      * 注意判据里**没有 `.`**：原正则 `[A-Za-z0-9._-]+` 收 `.` 与 `..`，而
-     * `projectsRoot.resolve("..")` 正好跳出项目根。批 84 已把它收成 `[A-Za-z0-9_-]+`，
-     * 本批只是把这个既有口径**落到类型上** —— 不是本批新增的收窄。
+     * `projectsRoot.resolve("..")` 正好跳出项目根。批 84 已把它收掉，2026-10-16 放宽
+     * 字符集（允许中文等）时**仍然保留** —— 放宽的从来不是防逃逸那一条。
+     *
+     * 空串放行**只为本类自己的 [ROOT]**：写法上仍推荐用具名常量而不是 `ProjectId("")`
+     * 字面量（读代码的人不该靠"猜空串什么意思"）。
      */
     init {
-        require(ScriptPaths.isValidProjectId(value)) { "非法项目号: $value" }
+        require(value.isEmpty() || ScriptPaths.isValidProjectId(value)) { "非法项目号: $value" }
     }
 
     /** 展示与日志用的原文（拼接路径、拼消息时才解包；判据不放行的是 [value] 本身）。 */
     override fun toString(): String = value
 
     companion object {
+
+        /**
+         * 根层哨兵：`files/scripts/` 本层（不是项目，是"没有项目"）。
+         *
+         * 见类 KDoc「空串 = 根层哨兵」。**这不是一个项目号** —— [ScriptPaths.isValidProjectId]
+         * 与 [createOrNull] 都对它回否；它是 [value] 为空串的那个 [ProjectId]，给
+         * `ScriptFileRow.projectId` 这类"必须有值"的位置一个诚实的编码。
+         */
+        val ROOT: ProjectId = ProjectId("")
+
         /**
          * 收外部输入的入口：非法回 null（**不抛**），由调用方决定折成哪个错误码。
          *

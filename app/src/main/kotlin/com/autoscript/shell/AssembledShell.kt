@@ -289,9 +289,16 @@ class AssembledShell internal constructor(
         // `files/scripts/demo/demo/data/test.js` —— 一句 ERR_FILE_NOT_FOUND，
         // 且**编译期毫无迹象**。削不出（首段不是本项目）当场拒，不静默当项目内路径跑。
         val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath)
+        // 根层（projectId 空串）不是"某个项目"，那句"不在项目 x 下"对它读起来是错的
+        // —— 两种形状各说各的错（2026-10-16 根层可写时分开写）。
         require(internalPath != null) {
-            "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
-                "（relPath 是 files/scripts/ 之下的相对路径，首段应为项目名）"
+            if (projectId.isEmpty()) {
+                "relPath 与根层不一致：$relPath 不是 files/scripts/ 本层的文件" +
+                    "（根层只有一层，没有项目名）"
+            } else {
+                "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
+                    "（relPath 是 files/scripts/ 之下的相对路径，首段应为项目名）"
+            }
         }
         shell.scheduler.onTriggerFile(projectId = projectId, relPath = internalPath)
     }

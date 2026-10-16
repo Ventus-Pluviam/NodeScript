@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
 import com.autoscript.ui.components.Cell
@@ -442,7 +443,8 @@ private fun TaskLogRow(run: TaskLogRowState, onCopy: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Text(
-            "${run.projectId} / ${run.scriptPath}",
+            // 根层条目没有项目段：`projectLabel` 把它显示成「根目录」（2026-10-16）。
+            "${ScriptPaths.projectLabel(run.projectId)} / ${run.scriptPath}",
             style = MaterialTheme.typography.titleMedium,
             color = ThemeColors.text,
         )

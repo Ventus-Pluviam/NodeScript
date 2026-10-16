@@ -69,6 +69,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.scripts.ScriptRunnability
 import com.autoscript.ui.ManagementTransition
 import com.autoscript.ui.components.ActionBar
@@ -346,12 +347,17 @@ fun ProjectScreen(
         }
     }
 
-    // 新建落在**当前所在项目 + 当前所在那一层**（文件树按项目分目录，全库根不可写）：
-    // 进了目录就是那一层（`currentFolder` 本身就是合格的 relPath 前缀），还在全库根时
-    // 有文件取第一行的项目、没文件回缺省目录名（首装用户先建项目文件夹）。
-    val targetProject = currentFolder?.substringBefore('/')
-        ?: state.files.firstOrNull()?.projectId
-        ?: "demo"
+    // 新建落在**当前所在那一层**：进了目录就是那一层（`currentFolder` 本身就是合格的
+    // relPath 前缀），还在全库根时落 `files/scripts/` 本层本身（[ProjectId.ROOT]）。
+    //
+    // **2026-10-16 用户裁定「根层可写」**：此前这里有一串兜底
+    // （`state.files.firstOrNull()?.projectId ?: "demo"`）—— 全库根被当成"没有项目可写"，
+    // 于是拿第一个项目顶替，首装没有项目时还回落到缺省名 `demo`。用户实测读到的正是
+    // 「我在首页创建的，怎么进了 demo 里面」。根层现在**真能放东西**：文件落
+    // `files/scripts/<名字>`、文件夹就是一个新项目，所以不需要任何顶替。
+    val targetProject = currentFolder?.substringBefore('/') ?: ProjectId.ROOT.value
+    // 根层（没有项目段）时 FAB 那颗"新建文件夹"的语义就是"建项目"，文案跟着改（见 CreateFab）。
+    val atRootLayer = targetProject.isEmpty()
 
     // 创建对话框是本屏私有的现值（state.creating 记的是"操作面开着"这一事实，
     // 对话框里的输入框内容不值得进状态类 —— 关掉即丢）。
@@ -500,6 +506,7 @@ fun ProjectScreen(
                             onCreateFolder = { creatingKind = ProjectState.CreationKind.FOLDER },
                             modifier = Modifier.align(Alignment.BottomEnd)
                                 .padding(end = 20.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
+                            atRoot = atRootLayer,
                         )
                     }
                 }
@@ -542,6 +549,7 @@ fun ProjectScreen(
                 // 还在全库根（null）时落项目根，与旧口径一致。
                 onCreate(targetProject, name, isFolder, currentFolder)
             },
+            atRoot = atRootLayer,
         )
     }
 
@@ -1033,6 +1041,7 @@ private fun CreateFab(
     onCreateFile: () -> Unit,
     onCreateFolder: () -> Unit,
     modifier: Modifier = Modifier,
+    atRoot: Boolean,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val rotation by animateFloatAsState(
@@ -1071,7 +1080,9 @@ private fun CreateFab(
     Column(modifier, horizontalAlignment = Alignment.End) {
         // 子项自下而上展开（TG：子按钮浮在主按钮上方，逐颗滑出）。
         AnimatedVisibility(visible = expanded, enter = subEnter, exit = subExit) {
-            FabSubItem(label = "新建文件夹", glyph = GlyphKind.FOLDER, onClick = {
+            // 根层建的文件夹就是一个新项目（`files/scripts/<名字>/`），说"新建文件夹"
+            // 名不符实 —— 用户要的是"在这儿放一个能进去、能放脚本的东西"，那东西叫项目。
+            FabSubItem(label = if (atRoot) "新建项目" else "新建文件夹", glyph = GlyphKind.FOLDER, onClick = {
                 expanded = false
                 onCreateFolder()
             })
@@ -1203,12 +1214,15 @@ private fun FabSubStrokeTop(): Color =
  *   不是照着抄一份）。
  *
  * 名字合法性在宿主侧裁决（`ScriptFileOps`），这里不预校验 —— 错误原文走 opError 行。
+ * 根层的文件夹名多两条判据（它就是一个项目：不能含 `.`、不能叫 `node_modules`），
+ * 同样由宿主侧当场拒并给原文 —— 界面不写第二套判据（2026-10-16）。
  */
 @Composable
 private fun CreateEntryDialogs(
     creating: ProjectState.CreationKind?,
     onDismiss: () -> Unit,
     onConfirm: (name: String, isFolder: Boolean) -> Unit,
+    atRoot: Boolean,
 ) {
     var name by remember { mutableStateOf("") }
     // creating 为 null 时对话框不在组合里，name 随 remember 的 key 重置。
@@ -1216,7 +1230,8 @@ private fun CreateEntryDialogs(
     if (creating == null) return
     val title = when (creating) {
         ProjectState.CreationKind.FILE -> "新建文件"
-        ProjectState.CreationKind.FOLDER -> "新建文件夹"
+        // 根层的文件夹落盘后就是一个项目目录（与 FAB 那颗子钮同一句话术）。
+        ProjectState.CreationKind.FOLDER -> if (atRoot) "新建项目" else "新建文件夹"
     }
     AlertDialog(
         onDismissRequest = onDismiss,
