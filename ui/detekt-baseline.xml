@@ -44,8 +44,7 @@
     <ID>FunctionNaming:Menus.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ActionBottomSheet( title: String, onDismiss: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
     <ID>FunctionNaming:Motion.kt$fun OvershootEasing(tension: Float): Easing</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, onDedupePromote: () -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, onReclaimCache: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun DependencyListCard( state: NpmState, onRemove: (String) -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallCard( state: NpmState, onDraft: (String) -&gt; Unit, onSubmit: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallRow( state: NpmState, onDraft: (String) -&gt; Unit, onSubmit: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallProgressRow(p: InstallProgressState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow( row: NpmRowState, enabled: Boolean, onRemove: (String) -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun LogCard(state: NpmState)</ID>
@@ -189,7 +188,7 @@
     <ID>LongParameterList:LogManagementScreen.kt$( consoleState: ConsoleState, taskLogState: TaskLogState, scriptLogState: com.autoscript.ui.state.ScriptLogState, onRefreshConsole: suspend () -&gt; Unit, onRefreshTaskLog: suspend () -&gt; Unit, onRefreshScriptLog: suspend () -&gt; Unit, onReadScriptLog: suspend (Long) -&gt; List&lt;com.autoscript.domain.host.ConsoleLineRow&gt;, onStopRun: (ActiveRunState) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:Inputs.kt$@Composable fun CapsuleInputField( value: String, onValueChange: (String) -&gt; Unit, placeholder: String, modifier: Modifier = Modifier, leadingGlyph: GlyphKind? = null, focusDismiss: FocusDismissState? = null, enabled: Boolean = true, onSubmit: (() -&gt; Unit)? = null, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionTile( label: String, glyph: GlyphKind, enabled: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionsCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onDedupePromote: () -&gt; Unit, onReclaimCache: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionsBar( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onDedupePromote: () -&gt; Unit, onReclaimCache: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ScopeCard(state: NpmState, onSelect: (String) -&gt; Unit)</ID>
   </CurrentIssues>
 </SmellBaseline>

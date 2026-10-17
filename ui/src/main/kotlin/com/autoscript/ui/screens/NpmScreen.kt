@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +44,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
@@ -77,8 +81,9 @@ import com.autoscript.ui.theme.ThemeColors
 /**
  * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
- * 分段（自上而下）：**作用域与尺寸**（一张卡）· 安装 · **依赖列表**（白卡，卡头可折叠、
- * 默认收起）· **三个维护按钮**（[OptionsCard]）· **日志大框**（整页最下面）。
+ * 分段（自上而下）：**作用域与尺寸**（一张卡）· **安装依赖 + 依赖列表**（同一张白卡，卡头
+ * 可折叠、默认收起）· **日志大框**（滚动内容的最下面）；页底另有一条**固定的动作栏**
+ * （[OptionsBar] 那三颗维护按钮，不随内容滚）。
  *
  * 页底是**任务中心那块灰**（[ThemeColors.surfaceMuted]），页上每一段都是一张白卡
  * （[PanelCard]）—— 与管理面板（本页的入口）同族，见 [PanelCard] 的说明。
@@ -87,7 +92,8 @@ import com.autoscript.ui.theme.ThemeColors
  * 1. 「删除顶上的报错。不需要它」—— 顶栏下面那两组字（读失败 / 操作报错 / 回执）
  *    整段下线，页面上半部分**不再出现红字**；
  * 2. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成
- *    [DependencyListCard]（白卡 + 高度自限 + 卡内自滚）；
+ *    一张白卡（~~[DependencyListCard]：白卡 + 高度自限 + 卡内自滚~~，第十一批第 29/31
+ *    条把它并进「安装 + 依赖列表」那一组、卡内那层滚动撤掉了）；
  * 3. 「最下面弄个显示日志的大框。灰色背景，胶囊框」—— [LogCard]，内容按当场裁定
  *    「两者都显示」= 先本页这次操作的账、后 npm 输出（组装在 [NpmState.logLines]）；
  * 4. 「背景颜色改成任务中心背景一样的颜色」—— 页底 + 顶栏改 [ThemeColors.surfaceMuted]，
@@ -113,11 +119,11 @@ import com.autoscript.ui.theme.ThemeColors
  *     （名字 + 数字）。**代价**：「回收缓存」在本页从此没有入口（宿主与 `reclaimNpmCacheOp`
  *     都还在、也还测着，只是没人调）；
  * 12. 「安装这个小字标题去掉，改成输入框左侧，叫安装依赖，右边的安装按钮改成蓝色执行按钮」
- *     —— [InstallCard] 那一行小标题整行下线，省下的一行给了「安装依赖 [输入框]（执行）」；
+ *     —— [InstallRow] 那一行小标题整行下线，省下的一行给了「安装依赖 [输入框]（执行）」；
  * 13. 「还有依赖列表取消横线分隔」（第二批的尾巴）。
  *
  * **第四批（同一天的第四次现场改动，用户口径原文）**：
- * 14. 「去掉开发依赖，和离线优先。默认开启离线优先」—— [InstallCard] 那两颗旗标**整行下线**，
+ * 14. 「去掉开发依赖，和离线优先。默认开启离线优先」—— [InstallRow] 那两颗旗标**整行下线**，
  *     `--prefer-offline` 变成**写死**的行为（见 `NpmInstallOps.INSTALL_FLAGS`）。刻意**不留**
  *     一颗"默认点亮、可以关掉"的旗标：能关掉的默认值就是两次行为，而 §10 的离线能力全建在
  *     npm 缓存上，"先查缓存"没有任何理由关。`-D` 同理下线（它装的是**开发依赖**，
@@ -144,10 +150,11 @@ import com.autoscript.ui.theme.ThemeColors
  * 21. 「依赖作用域，默认为全局，放进和 node_modules 和 npm 缓存同一个列表分组」——
  *     [ScopeCard]（作用域 + 两行尺寸一张卡）与 [NpmState.of] 的缺省回落一起改；
  * 22. 「去除维护列表，清理依赖，依赖去重，清理缓存弄成3个选项。这3个样式参考tg的…
- *     点击动效也参考tg的。选项放在最下面」—— 维护卡整张下线，换成页底的 [OptionsCard]
+ *     点击动效也参考tg的。选项放在最下面」—— 维护卡整张下线，换成页底的 [OptionsBar]
  *     （三个 TG 子菜单式的选项行，按下走 TG 的水波）。**「清理缓存」因此重新有了入口**
  *     （第 11 条记的那个"没有入口"的代价在本条撤销）。~~本条那版样式被下一批整条推翻~~，
- *     见第 24 条；~~「选项放在最下面」这条位置口径也被第十批第 28 条改写~~（日志改到它下面）。
+ *     见第 24 条；~~「选项放在最下面」这条位置口径也被第十批第 28 条改写~~（日志改到它下面）；
+ *     ~~它"在列表最末一条"这件事也被第十一批第 30 条改写~~（三颗搬出列表、钉在页底）。
  *
  * **第六批（同一天的第六次现场改动，用户口径原文）**：
  * 23. 「清理未声明依赖改名啊，改成清理依赖」—— 改回短名（第 15 条那次改口撤销）；
@@ -177,6 +184,15 @@ import com.autoscript.ui.theme.ThemeColors
  * 28. 「把日志放到最下面吧」—— [LogCard] 从"依赖列表与三颗动作之间"移到**整页最后一段**，
  *     新顺序：作用域与尺寸 → 安装 → 依赖列表 → 三个维护动作 → 日志。第 22 条那句
  *     「选项放在最下面」在本条被改写：动作后面还有日志，两者都按用户口径各让过一版。
+ *
+ * **第十一批（2026-10-18，用户口径原文）**：
+ * 29. 「安装依赖和依赖列表合并成一个列表分组」—— [InstallRow] 与依赖列表并成**一张卡**：
+ *     安装行一段、卡头一段、之后每颗依赖各一段（[dependenciesGroup] + [cardSlice]）。
+ * 30. 「三个按键放在低栏最下面的位置」—— 三颗维护动作从列表里搬出来，变成**钉在页底**的
+ *     [OptionsBar]，不再随内容滚；让位（[TabBarBottomClearance]）随之下移到这一栏。
+ * 31. 「依赖列表滑动还是很卡」—— 卡里那层 `LazyColumn` **撤掉**：依赖行改成页面列表自己的
+ *     item，这一屏从此只有一个可滚动容器（与第 29 条是同一处结构）。~~展开后卡内自滚~~
+ *     （2026-10-17）这条口径同时作废。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -245,39 +261,54 @@ fun NpmScreen(
         // 顶栏下面**不再有任何报错/回执**（2026-10-17 用户令：「删除顶上的报错。不需要它」
         // + 裁定「报错全部收进底部日志大框」）：读失败、[NpmState.opError]、[NpmState.opNotice]
         // 三样统统画在最下面那个日志大框里（[LogCard]）—— 页面上半部分只放读数与动作。
+        // 「依赖列表」的展开态**提到这一层**：这一组现在是**好几条列表项拼出来的**
+        // （安装行一段 / 卡头一段 / 每颗依赖各一段），那条布尔得由拼它们的人读
+        // （见 [dependenciesGroup]）。此前它长在 `DependencyListCard` 里 —— 那时整组只
+        // 是一条 item，展开态跟着那一件走。
+        var depsExpanded by rememberSaveable { mutableStateOf(false) }
         LazyColumn(
             Modifier.fillMaxWidth().weight(1f),
-            contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
+            // 底部留白**不再让 [TabBarBottomClearance]**：让位这件事现在归页底那条固定的
+            // 动作栏做（它自己带导航栏 inset），列表只留一道卡间缝。
+            contentPadding = PaddingValues(bottom = CARD_SPACING),
         ) {
             // 依赖作用域与两行尺寸**同一张卡**（2026-10-17 第二批用户口径：「依赖作用域，
             // 默认为全局，放进和 node_modules 和 npm 缓存同一个列表分组」）。三行回答的是
             // 同一个问题——"这一屏在管哪一棵 node_modules、它有多大"——分成两张卡时那几个
             // 数字之间隔着一条灰缝，读起来像两件事。
             item { ScopeCard(state, onSelectProject) }
-            item {
-                InstallCard(
-                    state = state,
-                    onDraft = onInstallDraft,
-                    onSubmit = onSubmitInstall,
-                )
-            }
-            item { DependencyListCard(state, onRemoveInstalled, onReinstall) }
-            // 三个维护动作在依赖列表下面（2026-10-17 用户口径「选项放在最下面」）。
-            item { OptionsCard(state, onMaintenance, onDedupePromote, onReclaimCache) }
-            // 日志大框在**整页最下面**（2026-10-18 用户口径「把日志放到最下面吧」）。
-            // 它排在三颗动作**之后**：动作落在"当前作用域那棵树"上，日志是那棵树刚才发生了
-            // 什么的账 —— 按下去、**往下**看结果。
-            //
-            // ~~原先它夹在依赖列表与三颗动作之间~~（2026-10-17 那版顺序）：那一版把「选项放在
-            // 最下面」当成整页的最后一段，本条按新口径改成"动作之后还有日志"。两版都不删，
-            // 记在下面的批次表里（第十批第 28 条）。
+            // 安装依赖 + 依赖列表**合成一组**（第十一批第 29 条）：整组一张卡，一段一行。
+            dependenciesGroup(
+                state = state,
+                expanded = depsExpanded,
+                onToggle = { depsExpanded = !depsExpanded },
+                onDraft = onInstallDraft,
+                onSubmit = onSubmitInstall,
+                onRemove = onRemoveInstalled,
+                onReinstall = onReinstall,
+            )
+            // 日志大框在**滚动内容的最下面**（第十批第 28 条）。它现在跟在"安装 + 依赖列表"
+            // 那一组后面 —— 页底那条固定的动作栏不占列表位置，所以"日志在最后"这条口径
+            // 一个字没改，改的只是它上面少了三颗动作。
             item { LogCard(state) }
         }
+        // 三个维护动作**钉在页底**（第十一批第 30 条）：从列表里搬出来，不再随内容滚 ——
+        // 这一页的动作任何时候都够得着，而上面那个日志框可以很长。
+        OptionsBar(
+            state = state,
+            onMaintenance = onMaintenance,
+            onDedupePromote = onDedupePromote,
+            onReclaimCache = onReclaimCache,
+        )
     }
 }
 
 /**
  * 安装输入行 + 阶段进度条（§10.9 第 1 条的变更半边，2026-10-09 批 87）。
+ *
+ * **它现在是「安装依赖 + 依赖列表」那一组的第一段**（2026-10-18 第十一批第 29 条），不再
+ * 自带一张卡：底色与四角由 [cardSlice] 拼出来，本件只画内容 —— 所以这里没有 [PanelCard]，
+ * 而下面那段阶段条、那行输入框的几何一个字没动。
  *
  * **一颗旗标都没有了**（2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」）。
  * 原先两颗（`-D` 与「离线优先」）各自下线的理由不同：
@@ -299,66 +330,64 @@ fun NpmScreen(
  * 界面不假装自己知道装之前该警告什么。
  */
 @Composable
-private fun InstallCard(
+private fun InstallRow(
     state: NpmState,
     onDraft: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
-    PanelCard {
-        Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
-            // **这一段没有小标题了**（2026-10-17 用户口径：「安装这个小字标题去掉，改成输入框
-            // 左侧，叫安装依赖」）：原来那一行小字「安装」占掉一整行高度却什么也没说，
-            // 换成输入框左边那三个字，读起来就是「安装依赖 [______]（执行）」。
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // 标签不用 MUTED 小字：它现在与输入框同一行，是这一行的**主语**，
-                // 用小灰字会被读成输入框的副说明。
-                //
-                // **它现在是那根"弹簧"**（2026-10-17 第二批用户口径：「安装依赖的输入框
-                // 长度短一点（右对齐）」）：输入框改成定宽之后，左边多出来的空间全归标签，
-                // 于是「标签贴左、框与执行钮贴右」这条版式是 Row 自己算出来的，不是靠
-                // 一个写死的 `Spacer(width)` 撑 —— 后者在窄屏上会把这一行顶出屏幕
-                // （标签不会让位），而 `weight(1f)` 只会把标签压窄。
-                Text(
-                    "安装依赖",
-                    color = ThemeColors.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f),
-                )
-                // 版式抄首页搜索框（[CapsuleInputField]，两个屏共用同一份），只把宽度收窄。
-                // **定宽而不是 `weight`**：`weight` 会把它拉回"占满剩余"的老样子，
-                // 而这条口径要的正是"短一点"。
-                CapsuleInputField(
-                    value = state.installDraft,
-                    onValueChange = onDraft,
-                    placeholder = "如 axios@1.7.0",
-                    modifier = Modifier.width(INSTALL_FIELD_WIDTH),
-                    enabled = state.canInstall,
-                    onSubmit = onSubmit,
-                )
-                Spacer(Modifier.width(8.dp))
-                // **蓝色执行按钮**（用户口径「右边的安装按钮改成蓝色执行按钮」）：
-                // `PillButton` 的选中态就是那颗动作蓝（`featuredButton`，§主题）。
-                // `selected` 跟着"现在能不能按"走而不是恒定 true —— 恒定 true 的话，
-                // 禁用时那颗按钮会是**蓝底灰字**（`PillButton` 的底不看 `enabled`，
-                // 只有字变灰），看着像坏掉了，而不是"现在不能按"。
-                val runnable = state.canInstall && state.installDraft.isNotBlank()
-                PillButton(
-                    text = if (state.installing) "提交中…" else "执行",
-                    selected = runnable,
-                    enabled = runnable,
-                    onClick = onSubmit,
-                )
-            }
-            // 这里原来还有一行两颗旗标（`-D` / 「离线优先」）与它下面那句解释 ——
-            // 2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」整段下线，
-            // 理由见本函数的 KDoc。**空了就是空了**：不拿一句"离线优先已开启"去填这个位置
-            // —— 那是把"没有开关"说成"有个开关正开着"。
-            state.installProgress?.let { p -> InstallProgressRow(p) }
+    Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
+        // **这一段没有小标题了**（2026-10-17 用户口径：「安装这个小字标题去掉，改成输入框
+        // 左侧，叫安装依赖」）：原来那一行小字「安装」占掉一整行高度却什么也没说，
+        // 换成输入框左边那三个字，读起来就是「安装依赖 [______]（执行）」。
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 标签不用 MUTED 小字：它现在与输入框同一行，是这一行的**主语**，
+            // 用小灰字会被读成输入框的副说明。
+            //
+            // **它现在是那根"弹簧"**（2026-10-17 第二批用户口径：「安装依赖的输入框
+            // 长度短一点（右对齐）」）：输入框改成定宽之后，左边多出来的空间全归标签，
+            // 于是「标签贴左、框与执行钮贴右」这条版式是 Row 自己算出来的，不是靠
+            // 一个写死的 `Spacer(width)` 撑 —— 后者在窄屏上会把这一行顶出屏幕
+            // （标签不会让位），而 `weight(1f)` 只会把标签压窄。
+            Text(
+                "安装依赖",
+                color = ThemeColors.text,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+            // 版式抄首页搜索框（[CapsuleInputField]，两个屏共用同一份），只把宽度收窄。
+            // **定宽而不是 `weight`**：`weight` 会把它拉回"占满剩余"的老样子，
+            // 而这条口径要的正是"短一点"。
+            CapsuleInputField(
+                value = state.installDraft,
+                onValueChange = onDraft,
+                placeholder = "如 axios@1.7.0",
+                modifier = Modifier.width(INSTALL_FIELD_WIDTH),
+                enabled = state.canInstall,
+                onSubmit = onSubmit,
+            )
+            Spacer(Modifier.width(8.dp))
+            // **蓝色执行按钮**（用户口径「右边的安装按钮改成蓝色执行按钮」）：
+            // `PillButton` 的选中态就是那颗动作蓝（`featuredButton`，§主题）。
+            // `selected` 跟着"现在能不能按"走而不是恒定 true —— 恒定 true 的话，
+            // 禁用时那颗按钮会是**蓝底灰字**（`PillButton` 的底不看 `enabled`，
+            // 只有字变灰），看着像坏掉了，而不是"现在不能按"。
+            val runnable = state.canInstall && state.installDraft.isNotBlank()
+            PillButton(
+                text = if (state.installing) "提交中…" else "执行",
+                selected = runnable,
+                enabled = runnable,
+                onClick = onSubmit,
+            )
         }
+        // 这里原来还有一行两颗旗标（`-D` / 「离线优先」）与它下面那句解释 ——
+        // 2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」整段下线，
+        // 理由见本函数的 KDoc。**空了就是空了**：不拿一句"离线优先已开启"去填这个位置
+        // —— 那是把"没有开关"说成"有个开关正开着"。
+        state.installProgress?.let { p -> InstallProgressRow(p) }
     }
 }
 
@@ -406,83 +435,134 @@ private fun InstallProgressRow(p: InstallProgressState) {
 }
 
 /**
- * 「依赖列表」：已装依赖收进一张**白卡**，卡头可点开可收起、**默认收起**。
+ * 「安装依赖 + 依赖列表」这一组（2026-10-18 第十一批第 29 条，用户口径原文「安装依赖和
+ * 依赖列表合并成一个列表分组」）。
  *
- * 2026-10-17 两改（同一屏、同一天、用户口径递进）：
- * 1. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成一张卡；
- * 2. 「依赖列表是弄成一个白色胶囊列表，参考任务中心的列表，点下可以伸展开，默认是收起来的」
- *    —— 卡头换成任务中心那条 [CollapseHeader]（**同一份几何**，不是抄一份），
- *    初值改成收起。
+ * **它不是一条 item，是一串 item**：安装行一段、卡头一段、之后每颗依赖各一段，整组由
+ * [cardSlice] 拼成**一张卡**（相邻两段同色贴紧，缝看不见）。一条改动同时办掉两件事：
  *
- * **为什么默认收起**：这一屏最常同时看的是"清单 + 下面那个日志大框"。清单默认摊开时，
- * 装到几十上百个包的机器上日志框会被顶出屏幕外；而收起态的卡头自己就写着条数
- * （「已装依赖（37）」），不看内容也知道装了多少。
+ * 1. **合成一个分组**：安装与依赖落在同一张白卡里，卡头就是那棵树的账；
+ * 2. **这一页从此只有一个可滚动容器。** 此前依赖列表是**卡里再套一个 LazyColumn**
+ *    （高度上限 `DEP_LIST_MAX_HEIGHT`），于是这一屏有两层竖向滚动 —— 拖动要在两层之间
+ *    交接、内层滚到头外层才接管，手感是断的（第十一批第 31 条，用户口径「依赖列表滑动
+ *    还是很卡」）。摊平成列表项之后，只有可见的行才组合、才绘制，滚动只有一条路。
  *
- * **为什么展开后仍然卡内自滚**：理由同上，只是推迟到用户主动摊开之后 —— 高度自限
- * （[DEP_LIST_MAX_HEIGHT]）且**内容少时不吃满**（`heightIn(max=)` 是上限不是固定高）：
- * 三个依赖的项目不该看到一张空荡荡的大卡。
+ * **为什么默认收起**（2026-10-17 用户口径「点下可以伸展开，默认是收起来的」，照旧）：
+ * 这一屏最常同时看的是"清单 + 下面那个日志大框"，装到几十上百个包的机器上全摊开会把日志
+ * 顶到很远；而收起态的卡头自己写着条数（「全局依赖（37）」），不看内容也知道装了多少。
  *
- * **卡头与空态措辞跟着作用域走**（2026-10-17 第二批）：作用域是「全局」时写"项目依赖"
- * 就是一句错话 —— 全局那棵 node_modules 不属于任何项目。
+ * ~~展开后仍然卡内自滚~~（2026-10-17 那版口径）：它的代价正是上面第 2 点，本条作废它。
  *
- * 行键仍是 `name@version`，但**它的唯一性现在由宿主读口保证** —— `list()` 按
- * `(name, version)` 归一出"包清单"（lock v3 的键是安装位置，同一个包同版本会在不同
- * 父级各落一份，2026-10-17 的那次闪退就是键重复）。守卫在
- * `InstallCoordinatorTest`「list 同一包同版本落两个位置 → 归一成一条」。
+ * **条数与称呼跟着作用域走**（2026-10-17 第二批）：作用域是「全局」时写"项目依赖"就是一句
+ * 错话 —— 全局那棵 node_modules 不属于任何项目。**只在读到了的时候才报数**：没读到时的 0
+ * 不是"没有依赖"，是"还不知道"。
+ *
+ * 行键仍是 `name@version`，唯一性由宿主读口保证 —— `list()` 按 `(name, version)` 归一出
+ * "包清单"（lock v3 的键是安装位置，同一个包同版本会在不同父级各落一份，2026-10-17 的那次
+ * 闪退就是键重复）。守卫在 `InstallCoordinatorTest`「list 同一包同版本落两个位置 → 归一成一条」。
  */
-@Composable
-private fun DependencyListCard(
+private fun LazyListScope.dependenciesGroup(
     state: NpmState,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onDraft: (String) -> Unit,
+    onSubmit: () -> Unit,
     onRemove: (String) -> Unit,
     onReinstall: (NpmRowState) -> Unit,
 ) {
-    // 初值 false = 默认收起（用户口径）。用 `rememberSaveable` 与任务中心那两个组头
-    // 同一条：转屏、退到后台再回来，不该把用户刚点开的那张卡弹回去。
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    PanelCard {
-        CollapseHeader(
-            // 条数只在**读到了**的时候写进卡头：没读到时的 0 不是"没有依赖"，是"还不知道"
-            // （`LoadState` 那条纪律：三态各自只能说自己那一句）。
-            //
-            // 称呼跟着作用域走（2026-10-17 第二批）：缺省作用域已是「全局」（[NpmState.of]），
-            // 那时写死"项目依赖"就是**天天在说错话** —— 全局那棵 node_modules 不属于任何项目。
-            title = when {
-                !state.load.isLoaded -> "依赖列表"
-                state.scopeIsGlobal -> "全局依赖（${state.installed.size}）"
-                else -> "项目依赖（${state.installed.size}）"
-            },
-            expanded = expanded,
-            onClick = { expanded = !expanded },
-        )
-        if (!expanded) return@PanelCard
-        when {
-            // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
-            !state.load.isLoaded ->
-                EmptyHint("还没读到依赖清单：点右上角「刷新」再试，或看下面日志里怎么说的")
-            state.installed.isEmpty() ->
-                EmptyHint(
-                    if (state.scopeIsGlobal) "读到了，全局还没有依赖（先装点什么）"
-                    else "读到了，这个项目还没有依赖（先装点什么）",
-                )
-            else -> LazyColumn(
-                Modifier.fillMaxWidth().heightIn(max = DEP_LIST_MAX_HEIGHT),
-                contentPadding = PaddingValues(vertical = 4.dp),
-            ) {
-                // 行间**不画横线**（2026-10-17 用户口径「依赖列表取消横线分隔」）：
-                // 与设置页/管理面板同一条 —— TG 的列表靠行距与左缩进分列，不靠分隔线
-                // （见 `SettingsCard` 的 KDoc）。
-                items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
-                    InstalledRow(
-                        row = row,
-                        enabled = state.canInstall,
-                        onRemove = onRemove,
-                        onReinstall = onReinstall,
+    // 展开之后卡头下面还有几段：读到但是空的、没读到的，各占一段（三态各说各的那句话）；
+    // 收起时是 0 段。卡片**下缘**那两道圆角长在最后一段上，所以要先把段数算出来。
+    val rows = if (expanded && state.load.isLoaded) state.installed else emptyList()
+    val bodySlices = if (expanded) maxOf(1, rows.size) else 0
+    item(key = "npm-install") {
+        Column(Modifier.cardSlice(ThemeColors.background, first = true, last = false)) {
+            InstallRow(state = state, onDraft = onDraft, onSubmit = onSubmit)
+        }
+    }
+    item(key = "npm-deps-header") {
+        Column(Modifier.cardSlice(ThemeColors.background, first = false, last = bodySlices == 0)) {
+            CollapseHeader(title = depsTitle(state), expanded = expanded, onClick = onToggle)
+        }
+    }
+    if (!expanded) return
+    if (rows.isEmpty()) {
+        item(key = "npm-deps-empty") {
+            Column(Modifier.cardSlice(ThemeColors.background, first = false, last = true)) {
+                // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
+                if (!state.load.isLoaded) {
+                    EmptyHint("还没读到依赖清单：点右上角「刷新」再试，或看下面日志里怎么说的")
+                } else {
+                    EmptyHint(
+                        if (state.scopeIsGlobal) "读到了，全局还没有依赖（先装点什么）"
+                        else "读到了，这个项目还没有依赖（先装点什么）",
                     )
                 }
             }
         }
+        return
+    }
+    itemsIndexed(rows, key = { _, row -> "npm-dep-${row.name}@${row.version}" }) { index, row ->
+        Column(
+            Modifier.cardSlice(
+                ThemeColors.background,
+                first = false,
+                last = index == rows.lastIndex,
+            ),
+        ) {
+            InstalledRow(
+                row = row,
+                enabled = state.canInstall,
+                onRemove = onRemove,
+                onReinstall = onReinstall,
+            )
+        }
     }
 }
+
+/**
+ * 这一组的卡头文字（称呼与条数都跟着作用域走，见 [dependenciesGroup]）。
+ *
+ * 只在**读到了**的时候才写条数：没读到时的 0 不是"没有依赖"，是"还不知道"。
+ */
+private fun depsTitle(state: NpmState): String = when {
+    !state.load.isLoaded -> "依赖列表"
+    state.scopeIsGlobal -> "全局依赖（${state.installed.size}）"
+    else -> "项目依赖（${state.installed.size}）"
+}
+
+/**
+ * 分组卡的一段：[first] 圆上面两角、[last] 圆下面两角，中间段四角全平。
+ *
+ * 一段一条 `LazyColumn` item，卡片是**拼**出来的 —— 相邻两段同色、上下贴紧，缝看不见。
+ * [PanelCard] 那种"一条 item 包住整张卡"的写法分不出段，于是做不到"每颗依赖各占一条
+ * item、各自懒加载"：整组会变成一条比屏幕还高的 item，可见与否**整条都要重画**。
+ *
+ * 颜色由调用方传、本件不是 `@Composable`：`ThemeColors` 只在组合里读得到，把它留在调用点，
+ * 这一件就还是个普通修饰符 —— 与本仓 [Modifier.pressable] 那批同路。
+ */
+private fun Modifier.cardSlice(color: Color, first: Boolean, last: Boolean): Modifier {
+    val shape = sliceShape(first, last)
+    val laid = this
+        .fillMaxWidth()
+        .padding(
+            start = CARD_MARGIN,
+            end = CARD_MARGIN,
+            top = if (first) CARD_SPACING else 0.dp,
+            bottom = if (last) CARD_SPACING else 0.dp,
+        )
+    // **中间段完全不裁**：四角是平的，没有圆角要裁住内容，`clip` 那一层 `graphicsLayer`
+    // 就是白挂的 —— 而依赖列表里绝大多数段都是中间段。
+    // 底色一律走 `background(color, shape)`：它是**按形状画一块**，不挂图层。
+    return (if (first || last) laid.clip(shape) else laid).background(color, shape)
+}
+
+/** 段的形状：只有整组的第一段与最后一段各圆两道角，中间段四角全平。 */
+private fun sliceShape(first: Boolean, last: Boolean): Shape = RoundedCornerShape(
+    topStart = if (first) CARD_CORNER else 0.dp,
+    topEnd = if (first) CARD_CORNER else 0.dp,
+    bottomEnd = if (last) CARD_CORNER else 0.dp,
+    bottomStart = if (last) CARD_CORNER else 0.dp,
+)
 
 /**
  * 日志大框（2026-10-17 用户令：「最下面弄个显示日志的大框。灰色背景，胶囊框」）。
@@ -531,7 +611,7 @@ private fun LogCard(state: NpmState) {
             ),
         ) {
             // 不给 key：这一列是"流水"，同一句话出现两次是常事（报错尤其），
-            // 而键重复在本仓已经有过一次闪退（见 [DependencyListCard] 的 KDoc）。
+            // 而键重复在本仓已经有过一次闪退（见 [dependenciesGroup] 的 KDoc）。
             items(lines) { line ->
                 ToneText(
                     text = line.text,
@@ -562,8 +642,10 @@ private fun LogCard(state: NpmState) {
  * （"白 7% 叠 [ThemeColors.background]"），卡一变成 #232326，那两处 #262E36 就跟卡糊在
  * 一起了 —— 跟这次要修的"灰块压灰页"是同一个错，只是换到了深色档。
  *
- * **卡内不统一加内边距**：依赖列表那张卡的头是 [CollapseHeader]（46dp 通栏，文字自带
- * 21dp 缩进），统一加边距会把那条通栏切开。各卡自己用 [CARD_PADDING]。
+ * **卡内不统一加内边距**：各卡自己用 [CARD_PADDING]。
+ * ~~理由是"依赖列表那张卡的头是 [CollapseHeader]（46dp 通栏），统一加边距会把那条通栏
+ * 切开"~~ —— 依赖列表自 2026-10-18 第十一批起不再走 [PanelCard]（改由 [cardSlice] 拼），
+ * 这条理由随之作废；[PanelCard] 剩下的两张卡（作用域、日志）本来也各自留了内边距。
  *
  * `clip` 先于 `background`：圆角要裁住内层（列表行、分隔线），只给 `background` 传
  * shape 只裁底不裁内容。
@@ -580,9 +662,6 @@ private fun PanelCard(content: @Composable () -> Unit) {
         content()
     }
 }
-
-/** 依赖列表的高度上限（约 8 行）：再多就在卡内滚，别把下面的日志大框挤出屏幕。 */
-private val DEP_LIST_MAX_HEIGHT = 300.dp
 
 /** 日志大框的高度上限（约 6~7 行）。 */
 private val LOG_MAX_HEIGHT = 200.dp
@@ -723,8 +802,16 @@ private fun PanelRow(
 }
 
 /**
- * 页底三个维护动作（2026-10-17 第六批用户口径：「清理未声明依赖改名啊，改成清理依赖」+
+ * 页底那三个维护动作（2026-10-17 第六批用户口径：「清理未声明依赖改名啊，改成清理依赖」+
  * 「样式是图片中这样，3个按键。重新做」+「不要加多余的描述」）。
+ *
+ * **它是一条钉在页底的动作栏，不在滚动内容里**（2026-10-18 第十一批第 30 条，用户口径
+ * 「三个按键放在低栏最下面的位置」）：从前它是 `LazyColumn` 里的一条 item，随内容滚 ——
+ * 想按的时候得先滑到它那儿；而这一页上半部分可以很长（作用域、安装、几十条依赖、日志）。
+ * 搬出来之后动作任何时候都够得着。
+ *
+ * 让位（悬浮底栏 + 导航栏 inset）随之从列表的 `contentPadding` 挪到**本条自己**身上
+ * （[TabBarBottomClearance]）：这是同一件事换个地方做，不是多让一份。
  *
  * 三件事各自说清它动的是什么（不靠用户猜 `dedupe` 是什么意思）：
  * - 「清理依赖」= `prune`（用户 2026-10-17 口径改名，此前叫「清理未声明依赖」）；
@@ -755,7 +842,7 @@ private fun PanelRow(
  * 不是另一件并列的事（见 `runDedupeAndPromoteOp`）。
  */
 @Composable
-private fun OptionsCard(
+private fun OptionsBar(
     state: NpmState,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
     onDedupePromote: () -> Unit,
@@ -764,7 +851,14 @@ private fun OptionsCard(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = CARD_MARGIN, vertical = CARD_SPACING),
+            // 底色与页底同色：这一栏压在内容滚动区下面，不透光才切得干净。
+            .background(ThemeColors.surfaceMuted)
+            .padding(
+                start = CARD_MARGIN,
+                end = CARD_MARGIN,
+                top = CARD_SPACING,
+                bottom = CARD_SPACING + TabBarBottomClearance(),
+            ),
         horizontalArrangement = Arrangement.spacedBy(OPTION_TILE_GAP),
     ) {
         OptionTile(
