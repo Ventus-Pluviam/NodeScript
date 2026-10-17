@@ -188,7 +188,7 @@
     <ID>FunctionNaming:LogManagementScreen.kt$@Composable private fun ScriptLogEntryRow( row: ScriptLogRowUi, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongParameterList:LogManagementScreen.kt$( consoleState: ConsoleState, taskLogState: TaskLogState, scriptLogState: com.autoscript.ui.state.ScriptLogState, onRefreshConsole: suspend () -&gt; Unit, onRefreshTaskLog: suspend () -&gt; Unit, onRefreshScriptLog: suspend () -&gt; Unit, onReadScriptLog: suspend (Long) -&gt; List&lt;com.autoscript.domain.host.ConsoleLineRow&gt;, onStopRun: (ActiveRunState) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:Inputs.kt$@Composable fun CapsuleInputField( value: String, onValueChange: (String) -&gt; Unit, placeholder: String, modifier: Modifier = Modifier, leadingGlyph: GlyphKind? = null, focusDismiss: FocusDismissState? = null, enabled: Boolean = true, onSubmit: (() -&gt; Unit)? = null, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionRow( label: String, glyph: GlyphKind, running: Boolean, enabled: Boolean, onClick: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionTile( label: String, glyph: GlyphKind, running: Boolean, enabled: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionsCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onDedupePromote: () -&gt; Unit, onReclaimCache: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ScopeCard(state: NpmState, onSelect: (String) -&gt; Unit)</ID>
   </CurrentIssues>

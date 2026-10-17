@@ -67,7 +67,7 @@ import com.autoscript.ui.theme.ThemeColors
  * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
  * 分段（自上而下）：**作用域与尺寸**（一张卡）· 安装 · **依赖列表**（白卡，卡头可折叠、
- * 默认收起）· **日志大框** · **三个维护选项**（整页最下面）。
+ * 默认收起）· **日志大框** · **三个维护按钮**（整页最下面，[OptionsCard]）。
  *
  * 页底是**任务中心那块灰**（[ThemeColors.surfaceMuted]），页上每一段都是一张白卡
  * （[PanelCard]）—— 与管理面板（本页的入口）同族，见 [PanelCard] 的说明。
@@ -112,7 +112,7 @@ import com.autoscript.ui.theme.ThemeColors
  *     npm 缓存上，"先查缓存"没有任何理由关。`-D` 同理下线（它装的是**开发依赖**，
  *     而这一屏回答的是"跑起来要什么"）；
  * 15. 「清理多余包名字改成清理未声明依赖」—— 文案改口（`prune` 删的就是 lockfile 里
- *     没有声明的那些，旧名字把"多余"说成了主观判断）；
+ *     没有声明的那些，旧名字把"多余"说成了主观判断）。~~这个名字被第 23 条改回短名~~；
  * 16. 「依赖去重执行后让它把依赖自动放进全局作用域中」—— 维护那颗「依赖去重」
  *     改走 `runDedupeAndPromoteOp`（去重当前作用域 → 把项目声明的依赖装一份到全局）；
  * 17. 「去除按lock重装」—— `ci` 那颗按钮下线（**代价**：`NpmMaintenanceAction.CI` 在本页
@@ -135,7 +135,15 @@ import com.autoscript.ui.theme.ThemeColors
  * 22. 「去除维护列表，清理依赖，依赖去重，清理缓存弄成3个选项。这3个样式参考tg的…
  *     点击动效也参考tg的。选项放在最下面」—— 维护卡整张下线，换成页底的 [OptionsCard]
  *     （三个 TG 子菜单式的选项行，按下走 TG 的水波）。**「清理缓存」因此重新有了入口**
- *     （第 11 条记的那个"没有入口"的代价在本条撤销）。
+ *     （第 11 条记的那个"没有入口"的代价在本条撤销）。~~本条那版样式被下一批整条推翻~~，
+ *     见第 24 条。
+ *
+ * **第六批（同一天的第六次现场改动，用户口径原文）**：
+ * 23. 「清理未声明依赖改名啊，改成清理依赖」—— 改回短名（第 15 条那次改口撤销）；
+ * 24. 「样式是图片中这样，3个按键。重新做」+「不要加多余的描述啊」—— 页底那三格从
+ *     "一张白卡里的三行列表 + 卡底一句小字"翻成**三张等宽白卡**（图标在上、文字在下，
+ *     [OptionTile]），那句说明整段下线。几何是从用户给的那张参考图上量的，见各
+ *     `OPTION_TILE_*` 常量。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -647,7 +655,7 @@ private fun ScopeCard(state: NpmState, onSelect: (String) -> Unit) {
  *
  * 不复用设置页那条 `SettingsCellRow`：那是"设置项"的几何（18dp 缩进 / 16sp 标题 /
  * 最小 50dp / 可选图标块），本页的卡内边距是 12dp，两套缩进叠起来会缩到 30dp 去 ——
- * 差别真在几何上。本页另一处"形状像而语义不同"的对照是「动作行」[OptionRow]。
+ * 差别真在几何上。本页另一处"形状像而语义不同"的对照是页底那三格「动作格」[OptionTile]。
  */
 @Composable
 private fun PanelRow(
@@ -678,41 +686,34 @@ private fun PanelRow(
 }
 
 /**
- * 三个维护选项（2026-10-17 第二批用户口径：「去除维护列表，清理依赖，依赖去重，清理缓存
- * 弄成3个选项。这3个样式参考tg的，tg源码在/tmp/tg，点击动效也参考tg的。选项放在最下面」）。
+ * 页底三个维护动作（2026-10-17 第六批用户口径：「清理未声明依赖改名啊，改成清理依赖」+
+ * 「样式是图片中这样，3个按键。重新做」+「不要加多余的描述」）。
  *
  * 三件事各自说清它动的是什么（不靠用户猜 `dedupe` 是什么意思）：
- * - 「清理未声明依赖」= `prune`（文案 2026-10-17 改口，见下）；
+ * - 「清理依赖」= `prune`（用户 2026-10-17 口径改名，此前叫「清理未声明依赖」）；
  * - 「依赖去重」= `dedupe` **+ 提升到全局**（用户口径「依赖去重执行后让它把依赖自动放进
  *   全局作用域中」），走 `runDedupeAndPromoteOp`：两段、两个作用域，各自的成败分开说；
  * - 「清理缓存」= 按各作用域 lock 的并集回收 npm 缓存（`reclaimNpmCacheOp`）。
  *   **这一颗是"回家"的**：2026-10-17 早些时候它随「去除 npm 缓存下面的字，去掉右边的
- *   清理按钮」下线过一次（当时本页没有入口），现在按用户口径做成第三个选项。
+ *   清理按钮」下线过一次（当时本页没有入口），现在按用户口径做成第三颗。
  *
- * ## 三颗按钮 → 三个选项，改的是什么
+ * 样式照用户给的那张参考图：**三张等宽白卡**横排，图标在上、文字在下 ——
+ * 上一版那张「维护」卡里的三行列表连同卡底那句说明一起下线，理由就是用户那句
+ * 「不要加多余的描述」。
  *
- * 原来是「维护」卡里三颗 `PillButton`。换成 TG 的**选项行**（[OptionRow]）：一行 48dp、
- * 24dp 图标 + 16sp 正文、按下走 TG 的水波（`pressableRipple`）。两处必须一起看：
+ * 两处必须一起看：
  * - 「按 lock 重装」（`ci`）**仍然没有入口**（用户 2026-10-17 口径「去除按lock重装」），
- *   宿主那半边与 `NpmMaintenanceAction.CI` 都还在、也还测着；
+ *   宿主那半边与 [NpmMaintenanceAction.CI] 都还在、也还测着；
  * - `prune` 仍然走 [NpmMaintenanceAction] 那条**按枚举转手**的通用路
  *   （`runNpmMaintenanceOp`）；另两颗各有自己的入口，理由见它们各自的 KDoc。
  *
- * ## 禁用与"进行中"的判据
- *
- * 两个重操作选项（prune / dedupe）跟 [NpmState.canInstall] 走，缓存那一颗跟
- * [NpmState.canReclaimCache] 走 —— 两条都是"安装会话全局互斥"这一个事实的两种说法：
- * 安装、维护、回收三者互相排斥。只禁被按下的那一颗会让另两颗看起来还能按，按下去是排队，
- * 用户以为卡了。进行中的那一颗行尾写「进行中…」。
+ * 禁用与"进行中"的判据：两个重操作（cleaning / dedupe）跟 [NpmState.canInstall] 走，
+ * 缓存那一颗跟 [NpmState.canReclaimCache] 走 —— 两条都是"安装会话全局互斥"这一个事实的
+ * 两种说法：安装、维护、回收三者互相排斥。只禁被按下的那一颗会让另两颗看起来还能按，
+ * 按下去是排队，用户以为卡了。进行中的那一颗文字换成「进行中…」。
  *
  * 「依赖去重」按下时记的仍是 [NpmMaintenanceAction.DEDUPE]：提升是它的**后半段**，
  * 不是另一件并列的事（见 `runDedupeAndPromoteOp`）。
- *
- * ## 那句说明为什么留着
- *
- * 「依赖去重」顺带把依赖装一份到全局，是**用户按下去之前有权知道**的事（它改的是落盘的
- * 那棵树，而且影响面超出当前作用域）。卡片下面那句小字就是干这个的，措辞跟着作用域走：
- * 作用域本来就是全局时"提升到全局"是句空话，那里明说这一步会跳过。
  */
 @Composable
 private fun OptionsCard(
@@ -722,82 +723,69 @@ private fun OptionsCard(
     onReclaimCache: () -> Unit,
 ) {
     val busy = state.maintenance
-    PanelCard {
-        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            OptionRow(
-                label = "清理未声明依赖",
-                glyph = GlyphKind.CLEAR,
-                running = busy == NpmMaintenanceAction.PRUNE,
-                enabled = state.canInstall,
-                onClick = { onMaintenance(NpmMaintenanceAction.PRUNE) },
-            )
-            OptionRow(
-                label = "依赖去重",
-                glyph = GlyphKind.LAYERS,
-                running = busy == NpmMaintenanceAction.DEDUPE,
-                enabled = state.canInstall,
-                onClick = onDedupePromote,
-            )
-            OptionRow(
-                label = "清理缓存",
-                glyph = GlyphKind.CACHE,
-                running = state.reclaimingCache,
-                enabled = state.canReclaimCache,
-                onClick = onReclaimCache,
-            )
-            ToneText(
-                if (state.scopeIsGlobal) {
-                    "「依赖去重」拍平当前作用域的重复依赖；当前作用域就是全局，没有可提升的对象。" +
-                        "「清理缓存」按各作用域 lock 需要的那些回收，别的项目离线重装要用的会留下。"
-                } else {
-                    "「依赖去重」拍平当前作用域的重复依赖，并把这里声明的依赖装一份到全局" +
-                        "（别的项目也能用）；「清理缓存」同上，保留集是全部作用域。" +
-                        "三件事都在「${state.scopeLabel}」的 node_modules 上。"
-                },
-                StatusTone.MUTED,
-                style = MaterialTheme.typography.bodySmall,
-                // 左缩进跟**选项行**对齐（18dp = OPTION_SIDE_PADDING），不跟卡内边距
-                // （12dp）—— 那句小字说的是上面那三行，缩进差 6dp 会读成另一段。
-                modifier = Modifier.padding(
-                    start = OPTION_SIDE_PADDING,
-                    end = CARD_PADDING,
-                    top = 6.dp,
-                ),
-            )
-        }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = CARD_MARGIN, vertical = CARD_SPACING),
+        horizontalArrangement = Arrangement.spacedBy(OPTION_TILE_GAP),
+    ) {
+        OptionTile(
+            label = "清理依赖",
+            glyph = GlyphKind.CLEAR,
+            running = busy == NpmMaintenanceAction.PRUNE,
+            enabled = state.canInstall,
+            onClick = { onMaintenance(NpmMaintenanceAction.PRUNE) },
+            modifier = Modifier.weight(1f),
+        )
+        OptionTile(
+            label = "依赖去重",
+            glyph = GlyphKind.LAYERS,
+            running = busy == NpmMaintenanceAction.DEDUPE,
+            enabled = state.canInstall,
+            onClick = onDedupePromote,
+            modifier = Modifier.weight(1f),
+        )
+        OptionTile(
+            label = "清理缓存",
+            glyph = GlyphKind.CACHE,
+            running = state.reclaimingCache,
+            enabled = state.canReclaimCache,
+            onClick = onReclaimCache,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
 /**
- * 一个选项行 —— TG **子菜单项**（`ActionBarMenuSubItem`）的几何：行高 48dp、左 18dp 起手、
- * 24dp 前置图标 + 16sp 正文。按下走 TG 的水波（[pressableRipple]）。
+ * 一颗底部动作按钮 —— 参考图里「设置照片 / 编辑信息 / 设置」那三格的版式：
+ * 图标在上、文字在下，都居中；整格就是一个按钮。按下走 TG 的水波（[pressableRipple]）。
  *
- * **为什么自带一份而不是复用设置页那条 `SettingsCellRow`**：那一条是"设置项"的读法
- * （28dp 彩色圆底图标块 + 可选行尾值 + 缺省那条整块纯色按压），本行是"动作"
- * （灰线图标 + 一个"进行中"的尾巴 + TG 水波）。形状像不等于同一个东西 ——
- * 判断依据是**差在哪一层**：本页的安装输入框与首页搜索框合成了一份 [CapsuleInputField]，
- * 因为那两份差的只是位置、版式逐值相同；这两份差的是按压动效与行尾语义，合并不掉。
+ * **底色取 [ThemeColors.surface] 而不是页面上其他卡用的 [ThemeColors.background]**：
+ * 浅色下两者同值（都是白，与参考图逐像素一致），深色下 `background` 与页底
+ * [ThemeColors.surfaceMuted] 同值 —— 这三格会整块消失，只剩图标文字飘在页上。
+ * 按钮要看得见。
+ *
+ * `clip` 先于 `background`（同 [PanelCard]）：圆角要裁住按下那圈水波，顺带裁住底色。
  *
  * 图标色取 [ThemeColors.barIcon]（TG `actionBarDefaultIcon`）：与 FAB 子钮那颗字形同源
- * —— 本仓"一行带图标的动作"就是这一档灰。禁用时图标跟着文字一起压到三级灰：只把字变灰
- * 而图标照旧，看起来像"这一行的图标还能按"。
- *
- * 行高与触控：48dp 是 TG 子菜单项的值（`ActionBottomSheetItem` 同款），比本页的
- * 读数行（[ROW_MIN_HEIGHT] 44dp）高 —— 这一行是**要按的**，读数行不是。
+ * —— 本仓"一格带图标的动作"就是这一档灰。禁用时图标跟着文字一起压到三级灰：只把字变灰
+ * 而图标照旧，看起来像"这一格还能按"。
  */
 @Composable
-private fun OptionRow(
+private fun OptionTile(
     label: String,
     glyph: GlyphKind,
     running: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = OPTION_ROW_HEIGHT)
+    Column(
+        modifier
+            .height(OPTION_TILE_HEIGHT)
+            .clip(RoundedCornerShape(OPTION_TILE_CORNER))
+            .background(palette.surface)
             .pressableRipple(
                 enabled = enabled,
                 role = Role.Button,
@@ -805,44 +793,48 @@ private fun OptionRow(
                 // 见 pressableRipple 的 KDoc（浅色 10% 黑 ≈ TG 那档 6%）。
                 color = palette.menuSelector,
                 onClick = onClick,
-            )
-            .padding(horizontal = OPTION_SIDE_PADDING),
-        verticalAlignment = Alignment.CenterVertically,
+            ),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Glyph(
             kind = glyph,
             tint = if (enabled) palette.barIcon else palette.textTertiary,
-            size = OPTION_ICON,
+            size = OPTION_TILE_ICON,
         )
-        Spacer(Modifier.width(OPTION_ICON_GAP))
+        Spacer(Modifier.height(OPTION_TILE_ICON_GAP))
         Text(
-            text = label,
+            text = if (running) "进行中…" else label,
             color = if (enabled) palette.text else palette.textTertiary,
             style = MaterialTheme.typography.titleMedium,
             maxLines = 1,
-            modifier = Modifier.weight(1f),
         )
-        if (running) {
-            // 行尾那三个字**比"这一颗变蓝"清楚**：整行染色会与按下的水波混在一起，
-            // 而"哪一件在跑"正是这一屏最需要一眼看出来的事（三颗里只可能有一颗在跑）。
-            ToneText("进行中…", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-        }
     }
 }
 
-/** 选项行高（TG `ActionBarMenuSubItem` 的 `itemHeight` 缺省 48dp）。 */
-private val OPTION_ROW_HEIGHT = 48.dp
+/**
+ * 动作格的几何 —— 四个值都是从用户给的那张参考图上量的（2026-10-17 第六批）。
+ *
+ * 定标：把参考图的卡高认成 [OPTION_TILE_HEIGHT]，其余按同一张图上的像素比例换算
+ * （卡宽 425px : 卡高 188px : 圆角 44px : 图标 73px）。**间距是唯一没有照搬的**：
+ * 图上量出来 ≈ 15dp，取 [CARD_SPACING] 那档 12dp —— 与卡间那条灰缝同宽，同页不该有
+ * 两种缝。
+ *
+ * 卡宽不在这里：三格等宽（`weight(1f)`）+ 左右 [CARD_MARGIN] 由 [OptionsCard] 决定。
+ */
+private val OPTION_TILE_HEIGHT = 88.dp
 
-/** 选项行左右内边距（TG 子菜单项 `setPadding(dp(18), 0, dp(18), 0)`）。 */
-private val OPTION_SIDE_PADDING = 18.dp
+/** 动作格圆角（参考图 ≈ 20dp；本页卡片是 [CARD_CORNER] 的 16dp，图上更圆一档）。 */
+private val OPTION_TILE_CORNER = 20.dp
 
-/** 选项图标边长（TG 子菜单项的 24dp 图标位）。 */
-private val OPTION_ICON = 24.dp
+/** 动作格之间的横缝（12dp，与 [CARD_SPACING] 撑出来的竖向卡间缝同宽）。 */
+private val OPTION_TILE_GAP = 12.dp
 
-/** 图标与文字之间那道缝：TG 是"图标位 18 起、文字 43 起"，扣掉图标本身只剩 1dp，
- *  那是照着图标drawable 自带的白边画的；本仓的字形是**满格**的（见 `Glyphs.kt` 的
- *  坐标都在 0.1~0.9），照抄 1dp 会贴在一起，故取 16dp。 */
-private val OPTION_ICON_GAP = 16.dp
+/** 动作格图标边长（参考图 ≈ 32dp；本页其他字形是 24dp 那一档）。 */
+private val OPTION_TILE_ICON = 32.dp
+
+/** 图标与文字之间那道缝。 */
+private val OPTION_TILE_ICON_GAP = 8.dp
 
 /**
  * 已装包一行：名字 + 版本 + 尺寸 + 「重装 ⟳」+ 「卸载」。
