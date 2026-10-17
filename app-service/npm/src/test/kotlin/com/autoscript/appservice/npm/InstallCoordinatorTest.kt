@@ -955,6 +955,76 @@ class InstallCoordinatorTest {
     }
 
     @Test
+    fun `list 同一包同版本落两个位置 → 归一成一条（重复的键会让依赖页当场崩）`() = runBlocking {
+        // lock v3 的键是**安装位置**，不是包的身份 —— peer 冲突的典型形态：根上 c@2，
+        // a 与 b 各嵌一份 c@1（`node_modules/a/node_modules/c` 与 `node_modules/b/node_modules/c`
+        // 是同名同版的两份）。依赖管理页用 `items(key = "<name>@<version>")` 铺这份清单，
+        // 键重复时 Compose **当场抛**（`Key "c@1.0.0" was already used`）——
+        // 2026-10-17 设备实测的「依赖装多了，查看的时候容易闪退」。
+        writeLock(
+            "p1",
+            """{"lockfileVersion":3,"packages":{"":{"dependencies":{"a":"1.0.0"}},
+                "node_modules/a":{"version":"1.0.0"},
+                "node_modules/b":{"version":"1.0.0"},
+                "node_modules/c":{"version":"2.0.0"},
+                "node_modules/a/node_modules/c":{"version":"1.0.0"},
+                "node_modules/b/node_modules/c":{"version":"1.0.0"}}}""",
+        )
+        val list = coordinator().list("p1", 0)
+        assertEquals(
+            listOf("a", "b", "c", "c"),
+            list.map { it.name },
+            "5 个安装位置 / 4 个不同的 包@版本：c@1.0.0 的两份落点归一成一条",
+        )
+        assertEquals(
+            list.size,
+            list.distinctBy { "${it.name}@${it.version}" }.size,
+            "同名同版不许出现两次 —— 它就是 Compose 那个 key，重复即崩",
+        )
+    }
+
+    // ═══ 读口不许把阻塞落在调用线程上（2026-10-17 设备实测「依赖装多了查看时闪退」） ═══
+
+    @Test
+    fun `快照读取不落在调用线程上（依赖装多了 = 主线程上一趟全树遍历）`() = runBlocking {
+        // 「调用线程」在这里冒充「主线程」：进依赖管理页 / 点刷新 / 安装期间每 400ms 一次
+        // 的续拉，都是 MainActivity 的 `rememberCoroutineScope()`（= Main）直接 await
+        // `host.npmSnapshot()` 的。这一趟要遍历全部项目目录、逐项目解析两份 lock、
+        // 逐棵 node_modules 全树算尺寸、再遍历一遍缓存目录 —— suspend 只给"可挂起"的许可，
+        // **不搬线程**，所以不包 IO 的话它整趟落在主线程上：Android 上就是 ANR。
+        // 本机 JVM 没有 ANR 那道守门人，这条断言是它在单测里的替身。
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0","integrity":"sha512-x"}}}""")
+        val caller = Thread.currentThread()
+        val walked = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+        val looked = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+        val c = coordinator(
+            // 尺寸那一趟进 [InstallCoordinator.nodeModulesBytes] 的第一件事就是读时钟。
+            now = { walked.add(Thread.currentThread()); 1_000L },
+            // 缺口那一趟逐条查缓存。
+            cache = CacheIndex { looked.add(Thread.currentThread()); false },
+        )
+        c.snapshot()
+        assertTrue(walked.isNotEmpty(), "node_modules 尺寸那一趟必须真被走到 —— 没走到的话这条断言是在自欺")
+        assertTrue(looked.isNotEmpty(), "缓存查命中那一趟必须真被走到")
+        assertTrue(
+            walked.none { it === caller },
+            "目录遍历落在调用方线程上了：Android 上就是主线程 ANR（用户看到的是「一查看就闪退」）",
+        )
+        assertTrue(looked.none { it === caller }, "缓存遍历落在调用方线程上了")
+    }
+
+    @Test
+    fun `offlineGap 也不落在调用线程上（同一条主线程纪律）`() = runBlocking {
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0","integrity":"sha512-x"}}}""")
+        val caller = Thread.currentThread()
+        val looked = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+        val c = coordinator(cache = CacheIndex { looked.add(Thread.currentThread()); false })
+        c.offlineGap("p1")
+        assertTrue(looked.isNotEmpty(), "缓存查命中那一趟必须真被走到")
+        assertTrue(looked.none { it === caller }, "读这份 lock + 查缓存落在调用方线程上了")
+    }
+
+    @Test
     fun `offlineGap = lock 闭包减去缓存命中`() = runBlocking {
         writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/a":{"version":"1.0.0","integrity":"sha512-hit"},"node_modules/b":{"version":"2.0.0","integrity":"sha512-miss"},"node_modules/c":{"version":"3.0.0"}}}""")
         val c = coordinator(cache = CacheIndex { it == "sha512-hit" })

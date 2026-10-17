@@ -111,8 +111,16 @@ fun NpmScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         }
-        state.opError?.let {
-            ToneText(it, StatusTone.PROBLEM, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        // 「同一句失败只说一次」（2026-10-17 用户令「取消上面位置的报错，留下面就行」）：
+        // 提交安装/卸载失败时，这条与安装卡里阶段条收尾那行「失败：<原文>」是同一句话
+        // （两个都来自宿主那次失败），别再一上一下说两遍。留**下面**那条 —— 它挨着
+        // "这次操作"的上下文（输入行、阶段条）。判据在 [NpmState.progressFailureShown]：
+        // 下面那行拿不到原文（画的是「（无详情）」）时这条照画，宁可重复不可失语；
+        // 校验拒绝与维护/回收失败也照画 —— 它们没有阶段条，这是唯一的落点。
+        if (!state.progressFailureShown) {
+            state.opError?.let {
+                ToneText(it, StatusTone.PROBLEM, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
         }
         state.opNotice?.let {
             ToneText(it, StatusTone.MUTED, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))

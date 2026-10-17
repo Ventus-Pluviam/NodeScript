@@ -22,7 +22,11 @@ data class NpmState(
     /** 面板上正在看的那个项目（null = 一个项目都没有 / 还没读到）。 */
     val selectedProjectId: String? = null,
     val snapshot: NpmPanelSnapshot? = null,
-    /** 上一次操作的失败原文（≠ 读失败：两条账分开）。 */
+    /**
+     * 上一次操作的失败原文（≠ 读失败：两条账分开）。
+     *
+     * 画不画它取决于 [progressFailureShown]：阶段条收尾已经说了这次失败时，界面上就只说一次。
+     */
     val opError: String? = null,
     /** 上一次操作的结论回执（现取即清，不缓存）。 */
     val opNotice: String? = null,
@@ -102,6 +106,24 @@ data class NpmState(
             val c: NodeModulesStats = project?.cache ?: return null
             return "npm 缓存（全机一份）：${NpmRowState.bytes(c.totalBytes)}"
         }
+
+    /**
+     * 阶段条收尾那行是不是**已经在说这次失败**了（[InstallProgressRow] 画的
+     * `失败：<原文>`）。
+     *
+     * 2026-10-17 用户令：「取消上面位置的报错，留下面就行」—— 提交安装/卸载失败时，
+     * 顶上那条 [opError] 与阶段条收尾那行是**同一句话**（两个都来自宿主那次失败），
+     * 屏幕上同一句报错说两遍、一上一下。
+     *
+     * 判据里那句 `detail` 非空是必须的：阶段条在拿不到原文时画的是「失败：（无详情）」——
+     * 那时若把顶上那条按下去，用户就**看不到失败的原因**了。宁可重复，不可失语。
+     * 于是这条属性的含义精确地是「下面那行**有话**，且说的就是这次失败」。
+     *
+     * 注意它不管**别处没有它**的失败：校验拒绝（还没提交、没有阶段条）、维护/回收失败
+     * （不进安装会话）都只有 [opError] 这一个落点，顶上那条照画。
+     */
+    val progressFailureShown: Boolean
+        get() = installProgress?.let { it.done && !it.ok && !it.detail.isNullOrBlank() } == true
 
     /** 输入行与旗标是否可提交（没有项目 / 已有动作在跑 / 没读到 → 不可）。 */
     val canInstall: Boolean

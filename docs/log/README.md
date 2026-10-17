@@ -1,5 +1,23 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-17：依赖装多了「查看时闪退」——`list` 归一 + 读口落 IO；顶上那条报错与阶段条重复）
+
+- [2026-10-17 · 依赖装多了「查看时闪退」+ 同一句报错说两遍](2026-10-17.md) 一条目（最新）：
+  用户口径原文「**取消上面位置的报错，留下面就行**」「**依赖装多了，查看的时候容易闪退**」。
+  **崩** = 已装清单是从 lockfile v3 的 `packages` **逐键**读出来的平铺闭包，而 lock v3 的键是
+  **安装位置**不是包的身份（peer 冲突时同一个 包@版本 会在不同父级各落一份），依赖页又用
+  `items(key = "name@version")` 铺它 —— **键重复 Compose 当场抛**（`Key "…" was already used`），
+  装得越多越容易撞上；药 = `list()` 按 `(name, version)` 归一（`offlineGap` 不归一，缺口判据是 integrity）。
+  **卡** = `snapshot()` 一趟是「全项目遍历 + 每项目两份 lock 解析 + 每棵 node_modules 全树算尺寸 +
+  缓存遍历」，而进页面/刷新/安装期间每 400ms 的续拉都是**主线程**直接 await（suspend 不搬线程）；
+  药 = `list`/`offlineGap`/`storage`/`snapshot`/`reclaimCache` 与 `nodeModulesBytes`、控制台轻操作取数
+  **整趟落 `Dispatchers.IO`**（本文件既有写法 `crossCheckRegistry`/`cacheStorage`，本批补漏）。
+  **重复报错** = 顶上 `opError` 与阶段条收尾那行是同一句话；药 = 新增 `NpmState.progressFailureShown`
+  （收尾 + 失败 + **`detail` 非空**），顶上有条件让位 —— 「宁可重复，不可失语」。
+  回归闸 `InstallCoordinatorTest` +3 / `NpmStateTest` +1，**两条对拍都做了**（换回 HEAD 版 → 3 条全红；
+  判据钉成 false → 红）。本机真跑：npm 31 类（`InstallCoordinatorTest` 101 全过）、`NpmStateTest` 8、
+  detekt 两模块零 findings（baseline 零改动）；**Compose 面与真机归设备自测**。
+
 ## 最新追记（2026-10-17：CI 红修——门面方法面冻结清单没跟着 `history()` 下线（本机「没跑的套件不是绿的套件」））
 
 - [2026-10-17 · CI 红修：门面方法面冻结清单](2026-10-17.md) 一条目（最新）：

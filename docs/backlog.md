@@ -1,5 +1,17 @@
 # AutoScript 待办池（backlog）
 
+## 2026-10-17 追记（依赖面板闪退那批顺带发现的一条：同类隐患在地处不在依赖页）
+
+### 待核实：`LogManagementScreen` 的行键是 `hashCode()`，同一行文本重复即键重复
+
+| 项 | 内容 |
+|---|---|
+| 证据位置 | [`LogManagementScreen.kt`](../ui/src/main/kotlin/com/autoscript/ui/screens/LogManagementScreen.kt) 执行详情那一段：`items(lines, key = { it.hashCode() })`（`lines: List<String>`） |
+| 机制 | 与 2026-10-17 修掉的依赖页闪退**同一类**：Compose 的 `LazyColumn` 在键重复时**当场抛**（`androidx.compose.ui.layout.LayoutNodeSubcompositionsState`：`Key "…" was already used`）。字符串 `hashCode()` 相等即键相等 —— 两行**内容完全相同**的原始行必然同键 |
+| 核实状态 | **未在设备上撞到**（机制已确证，可达性未证）。那一屏的行文本是 `"<at>|<level>|<text>"`，带毫秒时间戳，故"同一行两次"要求**同毫秒 + 同级 + 同正文**才发生 —— 脚本一次 `console.log` 打两遍同内容时最可能；真撞上是崩，不是画错 |
+| 成本 | 一行（改 `itemsIndexed(lines) { i, raw -> ... }`，或给行加序号键） |
+| 建议批次 | 与下一次动日志页时同批；**单独为它开一批不值**（改的是渲染键，本地也验不了 Compose 面） |
+
 ## 2026-10-12 追记（批 107：脚本设置页 —— 线程与内存上限，两档全做）
 
 ### 做掉的那半：外审 M2 全清 + 一页新设置

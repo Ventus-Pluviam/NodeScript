@@ -484,15 +484,40 @@ class InstallCoordinator(
 
     // ══════════ 轻操作（Kotlin 直读，零 Node 进程） ══════════
 
-    override suspend fun list(projectId: String, depth: Int): List<PkgNode> {
-        val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
-        return locked.map { PkgNode(name = it.name, version = it.version) }
-    }
+    /**
+     * 已装清单（§10.9.1）：lockfile v3 的 `packages` 段逐键读出来的**平铺闭包**。
+     *
+     * **按 (name, version) 归一**（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：
+     * lock v3 的键是**安装位置**（`node_modules/c`、`node_modules/a/node_modules/c`…），不是包的
+     * 身份 —— 同一个包同一个版本可以在不同父级各落一份（peer 冲突时最常见：根上是 c@2，
+     * a 与 b 各嵌一份 c@1）。不归一的后果不是"多画一行"那么轻：依赖管理页的清单用
+     * `items(key = "<name>@<version>")` 铺，**键重复时 Compose 当场抛**（
+     * `androidx.compose.ui.layout.LayoutNodeSubcompositionsState` 那句
+     * `Key "c@1.0.0" was already used`）——用户看到的就是"依赖装多了，一进这一页就闪退"。
+     * 装得越多，两份同名同版越可能撞上。
+     *
+     * 归一之后这份清单是**包清单**而不是**位置清单**：页面本来不画路径，两行一模一样的字
+     * 配两个「卸载」对用户没有任何信息量（`npm uninstall` 认的也是名字，不是位置）。
+     *
+     * **整趟落 IO**：[LockfileReader.readLocked] 是"读整份 lock 再手写解析"（依赖多时几百 KB），
+     * 而界面那条链（`rememberCoroutineScope()` = Main）是直接 await 它的 —— suspend 只给
+     * "可挂起"的许可，**不搬线程**；安装期间界面还每 400ms 拉一次快照。包 IO 是本文件既有写法
+     * （见 [cacheStorage] 与 [crossCheckRegistry] 的 KDoc）。
+     */
+    override suspend fun list(projectId: String, depth: Int): List<PkgNode> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
+                .distinctBy { it.name to it.version }
+                .map { PkgNode(name = it.name, version = it.version) }
+        }
 
+    /** 离线闭包缺口（读法与 [list] 同一份 lock、同一趟 IO，故一并挪出调用线程）。 */
     override suspend fun offlineGap(projectId: String): List<MissingPkg> =
-        LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
-            .filter { it.integrity == null || !cacheIndex.has(it.integrity) }
-            .map { MissingPkg(it.name, it.version, it.resolvedSize) }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
+                .filter { it.integrity == null || !cacheIndex.has(it.integrity) }
+                .map { MissingPkg(it.name, it.version, it.resolvedSize) }
+        }
 
     override suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String?) {
         val npmrc = layout.npmrc(
@@ -556,24 +581,30 @@ class InstallCoordinator(
      * 「装了依赖但还没落 lock」的项目也要出现在面板上（它有一棵 node_modules 要管），
      * 而只有 lock 的项目反倒没有可管的东西。两者取并集是过度设计 —— 目录是超集。
      */
-    override suspend fun snapshot(): NpmPanelSnapshot {
-        val stats = storage()
-        // 缓存体积**全机一份**，故在循环外量一次（循环里量就是同一个数字抄 N 遍，
-        // 而每遍都是一次全目录遍历 —— 见 cacheStorage 的 KDoc）。
-        val cache = cacheStorage()
-        val projects = stats.keys.sorted().map { id ->
-            NpmProjectSnapshot(
-                projectId = id,
-                installed = list(id, depth = 0),
-                offlineGap = offlineGap(id),
-                storage = stats[id],
-                quotaBytes = config.projectQuotaBytes,
-                quotaWarnRatio = config.quotaWarnRatio,
-                cache = cache,
-            )
+    override suspend fun snapshot(): NpmPanelSnapshot =
+        // 整趟落 IO（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：这一趟是
+        // 「全项目目录遍历 + 每项目两份 lock 解析 + 每棵 node_modules 全树算尺寸 + 缓存目录遍历」，
+        // 全在**同一次调用**里；而进这一页、点刷新、以及安装期间每 400ms 一次的续拉，
+        // 都是主线程那条协程直接 await 它的。依赖装到几十上百个包时，这就是主线程上一次
+        // 几百毫秒的阻塞 —— Android 上表现为 ANR，用户看到的就是"一查看就闪退"。
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val stats = storage()
+            // 缓存体积**全机一份**，故在循环外量一次（循环里量就是同一个数字抄 N 遍，
+            // 而每遍都是一次全目录遍历 —— 见 cacheStorage 的 KDoc）。
+            val cache = cacheStorage()
+            val projects = stats.keys.sorted().map { id ->
+                NpmProjectSnapshot(
+                    projectId = id,
+                    installed = list(id, depth = 0),
+                    offlineGap = offlineGap(id),
+                    storage = stats[id],
+                    quotaBytes = config.projectQuotaBytes,
+                    quotaWarnRatio = config.quotaWarnRatio,
+                    cache = cache,
+                )
+            }
+            NpmPanelSnapshot(projects = projects)
         }
-        return NpmPanelSnapshot(projects = projects)
-    }
 
     /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条那颗 cache clean 按钮）。
@@ -590,72 +621,85 @@ class InstallCoordinator(
      * 回收失败（目录被占/权限）抛 [AutojsException] 原文：这个动作的产物是**磁盘上少了
      * 东西**，静默失败会让用户以为清了其实没清（下一次点才发现还是满的）。
      */
-    override suspend fun reclaimCache(): NpmCacheReclaimReport {
-        val cacheDir = resolveCacheDir()
-        val keep = LinkedHashSet<String>()
-        val unreadable = ArrayList<String>()
-        if (Files.isDirectory(layout.projectsRoot)) {
-            Files.list(layout.projectsRoot).use { s ->
-                s.filter { Files.isDirectory(it) }.forEach { proj ->
-                    // 盘上读回的目录名：判不过判据就跳过（与 `storage()` 同款纪律 ——
-                    // 一个别人留下的怪目录不该让「回收缓存」整个失败）。
-                    val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
-                    val lock = layout.lockfile(pid)
-                    // 没 lockfile = 「这个项目还没装过」，正常，不点名；
-                    // lockfile **在**但读不出来（目录冒充、损坏到读不动、半路被删）= 点名：
-                    // 那种项目不是「不需要保护」，是「想保护但保护不了」，用户有权知道。
-                    if (!Files.exists(lock)) return@forEach
-                    val locked = try {
-                        LockfileReader.readLocked(lock)
-                    } catch (e: Exception) {
-                        unreadable += pid.value
-                        return@forEach
+    override suspend fun reclaimCache(): NpmCacheReclaimReport =
+        // 落 IO 的理由与 [snapshot] 同族（2026-10-17）：这一趟要遍历全部项目的 lock、
+        // 遍历整个缓存目录并真删文件，而这颗按钮是**主线程那条协程**直接 await 的
+        // （`reclaimNpmCacheOp`）。包一层 `withContext` 是"做阻塞调用的那一层自己声明它是 IO"
+        // 在别处（[cacheStorage]）已有的写法。
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val cacheDir = resolveCacheDir()
+            val keep = LinkedHashSet<String>()
+            val unreadable = ArrayList<String>()
+            if (Files.isDirectory(layout.projectsRoot)) {
+                Files.list(layout.projectsRoot).use { s ->
+                    s.filter { Files.isDirectory(it) }.forEach { proj ->
+                        // 盘上读回的目录名：判不过判据就跳过（与 `storage()` 同款纪律 ——
+                        // 一个别人留下的怪目录不该让「回收缓存」整个失败）。
+                        val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
+                        val lock = layout.lockfile(pid)
+                        // 没 lockfile = 「这个项目还没装过」，正常，不点名；
+                        // lockfile **在**但读不出来（目录冒充、损坏到读不动、半路被删）= 点名：
+                        // 那种项目不是「不需要保护」，是「想保护但保护不了」，用户有权知道。
+                        if (!Files.exists(lock)) return@forEach
+                        val locked = try {
+                            LockfileReader.readLocked(lock)
+                        } catch (e: Exception) {
+                            unreadable += pid.value
+                            return@forEach
+                        }
+                        locked.mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
                     }
-                    locked.mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
                 }
             }
+            val report = try {
+                NpmCacheReclaim.reclaim(cacheDir, keep)
+            } catch (e: java.io.IOException) {
+                throw AutojsException(ErrorCode.ERR_IO, "缓存回收失败（${cacheDir}）：${e.message}", e)
+            }
+            // 记一条：与 install/prune 同一条纪律 —— 「清了多少」是用户回看时唯一能对上的凭据。
+            // detail 里带上读不到 lock 的项目名：那些项目的包**没有**被保护，用户有权知道。
+            val why = buildString {
+                append("removed=${report.removedEntries} entries/")
+                append(report.removedBytes / 1024 / 1024).append("MB；保留 ").append(report.keptEntries)
+                append(" 条（lock 闭包 ").append(report.keepCount).append(" 项）")
+                if (report.indexRebuilt) append("；顺带修复了缓存索引里的悬空引用")
+                if (unreadable.isNotEmpty()) append("；以下项目 lock 读不出来，其依赖未被保护：").append(unreadable.sorted())
+            }
+            opLog.log(OpName.CACHE_RECLAIM, "", true, why)
+            NpmCacheReclaimReport(
+                removedEntries = report.removedEntries,
+                removedBytes = report.removedBytes,
+                keptEntries = report.keptEntries,
+                keptBytes = report.keptBytes,
+                keepCount = report.keepCount,
+                indexRebuilt = report.indexRebuilt,
+            )
         }
-        val report = try {
-            NpmCacheReclaim.reclaim(cacheDir, keep)
-        } catch (e: java.io.IOException) {
-            throw AutojsException(ErrorCode.ERR_IO, "缓存回收失败（${cacheDir}）：${e.message}", e)
-        }
-        // 记一条：与 install/prune 同一条纪律 —— 「清了多少」是用户回看时唯一能对上的凭据。
-        // detail 里带上读不到 lock 的项目名：那些项目的包**没有**被保护，用户有权知道。
-        val why = buildString {
-            append("removed=${report.removedEntries} entries/")
-            append(report.removedBytes / 1024 / 1024).append("MB；保留 ").append(report.keptEntries)
-            append(" 条（lock 闭包 ").append(report.keepCount).append(" 项）")
-            if (report.indexRebuilt) append("；顺带修复了缓存索引里的悬空引用")
-            if (unreadable.isNotEmpty()) append("；以下项目 lock 读不出来，其依赖未被保护：").append(unreadable.sorted())
-        }
-        opLog.log(OpName.CACHE_RECLAIM, "", true, why)
-        return NpmCacheReclaimReport(
-            removedEntries = report.removedEntries,
-            removedBytes = report.removedBytes,
-            keptEntries = report.keptEntries,
-            keptBytes = report.keptBytes,
-            keepCount = report.keepCount,
-            indexRebuilt = report.indexRebuilt,
-        )
-    }
 
-    override suspend fun storage(): Map<String, NodeModulesStats> {
-        if (!Files.isDirectory(layout.projectsRoot)) return emptyMap()
-        val out = LinkedHashMap<String, NodeModulesStats>()
-        Files.list(layout.projectsRoot).use { s ->
-            s.filter { Files.isDirectory(it) }.forEach { proj ->
-                val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
-                val pkgs = LockfileReader.readLocked(layout.lockfile(pid)).size
+    override suspend fun storage(): Map<String, NodeModulesStats> =
+        // 落 IO 的理由与 [snapshot] 同族（2026-10-17）：这一趟逐项目算 node_modules 全树尺寸。
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            if (!Files.isDirectory(layout.projectsRoot)) return@withContext emptyMap()
+            // 盘上的项目目录名先收成一个 list：`Files.list` 的 `use` 块里**调不了挂起函数**
+            // （`Stream.forEach` 收的是 Java 的 `Consumer`，不是内联 lambda），而下面那一趟
+            // 尺寸（挂起、自己落 IO）必须按项目逐个走。收名字这一步只是一次目录列举。
+            val ids = ArrayList<ProjectId>()
+            Files.list(layout.projectsRoot).use { s ->
+                s.filter { Files.isDirectory(it) }.forEach { proj ->
+                    val pid = ProjectId.createOrNull(proj.fileName.toString())
+                    if (pid != null) ids.add(pid)
+                }
+            }
+            val out = LinkedHashMap<String, NodeModulesStats>()
+            for (pid in ids) {
                 out[pid.value] = NodeModulesStats(
                     projectId = pid.value,
-                    pkgCount = pkgs,
+                    pkgCount = LockfileReader.readLocked(layout.lockfile(pid)).size,
                     totalBytes = nodeModulesBytes(pid),
                 )
             }
+            out
         }
-        return out
-    }
 
     /**
      * npm 缓存体积（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）。
@@ -819,20 +863,26 @@ class InstallCoordinator(
             )
             return
         }
-        val text = when (cmd.sub) {
-            "ls", "list" -> {
-                val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
-                if (locked.isEmpty()) "（没有已装的依赖：package-lock.json 不存在或为空）"
-                else locked.sortedBy { it.name }.joinToString("\n") { "${it.name}@${it.version}" }
-            }
-            "audit" -> {
-                val report = audit(projectId, offline = true)
-                if (report.vulnerabilities.isEmpty()) "离线 OSV 库：未发现已知漏洞（offline=${report.offline}）"
-                else report.vulnerabilities.joinToString("\n") {
-                    "${it.severity} ${it.pkgName} ${it.id}"
+        // 取数的两档都落 IO（2026-10-17）：`ls`/`list` 是"读整份 lock 再解析"，`audit` 是
+        // "读整份 lock 再查 OSV 库" —— 控制台那一屏同样是主线程在 await 这条链。
+        // 两行 consoleLine 留在**外面**发：`SeqRing` 本身任意线程可用（见其 KDoc），
+        // 但"取数在 IO、投递回调用线程"让这段的顺序仍然只有一处说了算。
+        val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            when (cmd.sub) {
+                "ls", "list" -> {
+                    val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
+                    if (locked.isEmpty()) "（没有已装的依赖：package-lock.json 不存在或为空）"
+                    else locked.sortedBy { it.name }.joinToString("\n") { "${it.name}@${it.version}" }
                 }
+                "audit" -> {
+                    val report = audit(projectId, offline = true)
+                    if (report.vulnerabilities.isEmpty()) "离线 OSV 库：未发现已知漏洞（offline=${report.offline}）"
+                    else report.vulnerabilities.joinToString("\n") {
+                        "${it.severity} ${it.pkgName} ${it.id}"
+                    }
+                }
+                else -> "（内部错误：$cmd 不在轻操作白名单里）"
             }
-            else -> "（内部错误：$cmd 不在轻操作白名单里）"
         }
         consoleLine(projectId, NpmConsoleLine(NpmConsoleLineKind.OUTPUT, text, at))
         consoleLine(
@@ -1058,14 +1108,25 @@ class InstallCoordinator(
         }
     }
 
-    /** 项目 node_modules 尺寸：缓存优先，过期才真遍历（见 [sizeCache]；只服务配额预检与 [storage]）。 */
-    private fun nodeModulesBytes(projectId: ProjectId): Long {
-        val at = now()
-        sizeCache[projectId]?.let { if (at - it.atMillis < SIZE_CACHE_TTL_MILLIS) return it.bytes }
-        return DirSizer.sizeBytes(layout.nodeModules(projectId)).also {
-            sizeCache[projectId] = MeasuredSize(it, at)
+    /**
+     * 项目 node_modules 尺寸：缓存优先，过期才真遍历（见 [sizeCache]；只服务配额预检与 [storage]）。
+     *
+     * **这是挂起函数，且整趟落 IO**（2026-10-17）：缓存命中时它一次 `now()` 就返回，
+     * **未命中时它全树遍历** node_modules —— 那是几万个文件的 stat。两个调用方
+     * （[storage] 与 [enqueueHeavy] 的配额预检）都在主线程那条链上（进页面 / 点「安装」），
+     * 而 60s 的 TTL 意味着每隔一分钟就会在主线程上重演一次。声明在这里而不是两个调用点
+     * 各包一层：**做阻塞调用的那一层自己声明它是 IO**（与 [cacheStorage] 同一条）。
+     */
+    private suspend fun nodeModulesBytes(projectId: ProjectId): Long =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val at = now()
+            sizeCache[projectId]?.let {
+                if (at - it.atMillis < SIZE_CACHE_TTL_MILLIS) return@withContext it.bytes
+            }
+            DirSizer.sizeBytes(layout.nodeModules(projectId)).also {
+                sizeCache[projectId] = MeasuredSize(it, at)
+            }
         }
-    }
 
     // ══════════ 编排核心 ══════════
 

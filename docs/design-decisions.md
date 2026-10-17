@@ -12,6 +12,52 @@
 
 ---
 
+## 91. 依赖面板清单按「包」归一，不按「安装位置」；读口一律离开调用线程（2026-10-17，设备实测）
+
+**背景（用户口径原文）**：「**取消上面位置的报错，留下面就行**」+「**依赖装多了，查看的时候
+容易闪退**」。前一句界面措辞，后一句是**崩溃**报告 —— 两条都不是"再想想"的事，故直接落地。
+
+**决策一：`list()` 归一 `(name, version)` —— 清单是「包清单」，不是「位置清单」。**
+lockfile v3 的 `packages` 键是**安装位置**（`node_modules/c`、`node_modules/a/node_modules/c`…），
+不是包的身份：peer 冲突时同一个 包@版本 会在不同父级各落一份（根上 c@2，a 与 b 各嵌一份 c@1）。
+不归一的表现不是"多画一行"那么轻 —— 依赖管理页用 `items(key = "<name>@<version>")` 铺这份清单，
+**键重复时 Compose 当场抛**（`Key "c@1.0.0" was already used. …`），用户看到的就是
+「依赖装多了，一查看就闪退」；装得越多越容易撞上。归一的语义依据：这个页面不画路径，
+两行一模一样的字配两个「卸载」没有任何信息量，而 `npm uninstall` 认的**本来就是名字**。
+**`offlineGap` 刻意不归一**：缺口的判据是 integrity，同一 包@版本 的两份落点共用同一个
+integrity，按位置去重只会丢信息（这条差别写进 `offlineGap` 的 KDoc，免得被"顺手统一"掉）。
+
+**决策二：重读口整趟落 `Dispatchers.IO`，"不搬线程"这件事不再靠记忆。**
+`suspend` 只给"可挂起"的许可，**不给搬线程**；而界面那条协程是
+`rememberCoroutineScope()`（= Main），进页面 / 点刷新 / 安装期间每 400ms 的续拉都**直接 await**
+`host.npmSnapshot()` —— 于是「全项目目录遍历 + 每项目两份 lock 解析 + 每棵 node_modules 全树
+算尺寸 + 缓存目录遍历」整趟落在主线程上，Android 表现为 ANR。**落点是"做阻塞调用的那一层
+自己声明"**（本文件既有写法：`crossCheckRegistry` 因 `NetworkOnMainThreadException` 补过一处、
+`cacheStorage` 一直如此），本批把漏的补齐：`list` / `offlineGap` / `storage` / `snapshot` /
+`reclaimCache`、`nodeModulesBytes`（改挂起 —— 它的两个调用方 `storage()` 与 `enqueueHeavy`
+的配额预检都在主线程链上，60s TTL 意味着每分钟重演一次）、控制台轻操作的取数（`npm ls`）。
+**代价如实记**：嵌套一层 `withContext` 对已在 IO 上的调用是一次多余的线程切换（微秒级，
+相对文件 IO 可忽略）—— 换来的是"每个读口各自安全"，不依赖调用方记得包。
+**一处结构让路**：`storage()` 里 `Files.list(...).use { forEach { } }` 的 `Stream.forEach`
+收的是 Java 的 `Consumer`（非内联 lambda），**里面调不了挂起函数**，故先收项目目录名、
+再按名字逐个走尺寸那一趟。
+
+**决策三：同一句失败只说一次，但**宁可重复，不可失语**。**
+提交安装/卸载失败时，顶上那条 `opError` 与安装卡里阶段条收尾那行「失败：<原文>」来自**同一次
+失败**，屏幕上说两遍。界面判据 = `NpmState.progressFailureShown`（阶段条**收尾 + 失败 +
+`detail` 非空**）：三条缺一不可 —— `detail` 为空时下面画的是「失败：（无详情）」，
+把顶上那条按下去用户就**看不到原因**了；校验拒绝（还没提交，没有阶段条）与维护/回收失败
+（不进安装会话）都只有 `opError` 一个落点，照画。**"留下面"不等于"删上面"**：删了就有一条
+路径彻底失语。
+
+**未动**：`npm audit` / `AuditReport`（包的安全审计，与已下线的审计页同名不同物）；`depth` 参数
+（宿主侧只用 0：lockfile 是平铺闭包，画树要真跑 `npm ls --all`）。
+
+**记进 backlog 的一条**（不在本批修）：`LogManagementScreen` 的 `items(lines, key = { it.hashCode() })`
+是同一类隐患。
+
+---
+
 ## 90. 去掉审计（页面 + 落盘账），操作事实改打系统日志；系统日志跨重启（2026-10-17，用户口径）
 
 **背景（用户口径原文）**：「**去除审计这个东西，把这个日志输出到系统日志中**」+

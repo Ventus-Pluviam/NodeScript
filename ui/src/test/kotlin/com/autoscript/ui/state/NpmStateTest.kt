@@ -1,5 +1,6 @@
 package com.autoscript.ui.state
 
+import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmProjectSnapshot
@@ -132,5 +133,43 @@ class NpmStateTest {
         )
         val state = NpmState.of(NpmPanelSnapshot(listOf(withGap)))
         assertEquals(listOf("esbuild"), state.project!!.offlineGap.map { it.name })
+    }
+
+    /**
+     * 「同一句失败只说一次」的判据（2026-10-17 用户令「取消上面位置的报错，留下面就行」）。
+     *
+     * 三档缺一不可：下面那行**说了**这次失败 → 顶上那条让位；下面那行只是「（无详情）」→
+     * 顶上那条照画（否则用户看不到失败原因）；还在跑 → 顶上那条照画（那说的是另一件事）。
+     */
+    @Test
+    fun `阶段条收尾说了这次失败时顶上那条才让位`() {
+        val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+
+        val running = base.copy(
+            opError = "npm 退出码 1: E404 Not Found",
+            installProgress = InstallProgressState(InstallEvent.Phase.DOWNLOAD),
+        )
+        assertFalse(running.progressFailureShown, "还在跑：阶段条没在说失败，顶上那条不许被吞")
+
+        val failedWithDetail = running.copy(
+            installProgress = InstallProgressState(
+                phase = InstallEvent.Phase.DONE,
+                done = true,
+                ok = false,
+                detail = "npm 退出码 1: E404 Not Found",
+            ),
+        )
+        assertTrue(failedWithDetail.progressFailureShown, "下面那行已经把这次失败连原文都说了")
+
+        val failedWithoutDetail = running.copy(
+            installProgress = InstallProgressState(phase = InstallEvent.Phase.DONE, done = true, ok = false),
+        )
+        assertFalse(failedWithoutDetail.progressFailureShown, "下面画的是「（无详情）」—— 顶上那条是唯一有原文的地方")
+        assertFalse(
+            running.copy(installProgress = InstallProgressState(phase = InstallEvent.Phase.DONE, done = true, ok = true))
+                .progressFailureShown,
+            "成功收尾不是失败：这句判据不许把成功也当成「已经说过了」",
+        )
+        assertFalse(base.progressFailureShown, "没有阶段条（校验拒绝 / 维护 / 回收）时，顶上那条是唯一落点")
     }
 }
