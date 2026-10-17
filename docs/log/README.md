@@ -1,5 +1,19 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-18 第八批：撤掉「进行中…」文字 + 补上 TG 的长按触感）
+
+- [2026-10-18 · 依赖页第八批（撤「进行中…」+ 长按触感）](2026-10-18.md) 一条目（最新）：
+  用户口径「**撤掉，实现触感反馈**」。
+  **一**：那颗「进行中…」是我自己加的（不是 TG 的），按口径撤掉 —— `OptionTile` 的 `running`
+  参数、三个调用点的 `busy == …`、`OptionsCard` 的 `val busy` 一并删。状态没消失：
+  `canInstall` / `canReclaimCache` 在会话期间本来就是 false，三颗一起变灰就是状态；
+  TG 这三颗 `supportsLoading` 也是 false（扫光只挂在 gift / call / video / … 上）。
+  **二**：触感照 `ProfileActionsView.onTouchEvent` 的 `ACTION_UP` 分支 —— **松手那一刻**按
+  "按了多久"决定震不震（`> 250ms` 且手指仍在格内 → `LONG_PRESS`），不是按住中震；
+  走 `MutableInteractionSource`（与缩放共用同一个 source），`Cancel` 不震。
+  **三**：:ui 编译、:ui detekt（69 文件 / 0 smells，baseline 精确签名文本去掉 `running`）、
+  31 个 :ui 测试类全绿。
+
 ## 最新追记（2026-10-18 第七批：三个动作格的几何**改成照 TG 源码**（`ProfileActionsView`），按压从水波换成 `ButtonBounce` 缩放回弹）
 
 - [2026-10-18 · 依赖页第七批（照 TG 源码取值 + 缩放回弹）](2026-10-18.md) 一条目（最新）：

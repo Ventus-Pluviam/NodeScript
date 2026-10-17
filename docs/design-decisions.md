@@ -12,6 +12,25 @@
 
 ---
 
+## 101. 动作格不显示「进行中」，长按触感在**松手时**按按压时长判定（2026-10-18，用户口径）
+
+**用户口径原文**：「**撤掉，实现触感反馈**」。
+
+**决策一：不显示「进行中」。** 那颗文字是第七批之外自加的，撤掉；状态由**禁用变灰**承担
+（`canInstall` / `canReclaimCache` 在安装会话期间为 false）。这与 TG 一致：这三颗
+（`SET_PHOTO` / `EDIT_INFO` / `SETTINGS`）的 `supportsLoading` 是 false —— 那套横向扫光的
+`LoadingDrawable` 只挂在 gift / call / video / join / report / leave / voice / stream / stop 上。
+
+**决策二：触感照 TG 的时序，在 `ACTION_UP` 判时长。** `ProfileActionsView.onTouchEvent` 的
+`ACTION_UP` 分支是「`System.currentTimeMillis() - downTime > 250` 且手指仍在格内 →
+`performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)`」—— 即**松手那一刻**按"按了多久"
+决定震不震，**不是**按住到 250ms 就震。实现走与缩放回弹共用的 `MutableInteractionSource`：
+`Press` 记时刻、`Release` 比 250ms、`Cancel` 不震；门槛 `OPTION_TILE_HAPTIC_DELAY_MS = 250L`
+取源码原值。**不接管 `pointerInput`** —— `clickable` 已经在发这三个交互，多收一路即可，
+无障碍、禁用、滑走取消的语义全部沿用。
+
+---
+
 ## 100. 三个动作格照 TG `ProfileActionsView` 的**源码**取值，按压是 `ButtonBounce` 缩放回弹而不是水波（2026-10-18，用户口径）
 
 **用户口径原文**：「**你去看tg源码啊，/tmp/tg**」「**你对着图做干嘛**」。

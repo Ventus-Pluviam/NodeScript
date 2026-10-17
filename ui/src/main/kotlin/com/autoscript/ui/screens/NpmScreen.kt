@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,7 +44,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -162,6 +165,11 @@ import com.autoscript.ui.theme.ThemeColors
  *     350ms 过冲回弹）—— 参考图就是 TG「我的资料」那一行的三颗
  *     （`KEY_SET_PHOTO` / `KEY_EDIT_INFO` / `KEY_SETTINGS`）。`Modifier.pressableRipple`
  *     随之**整件删除**（它只为这三格而来）。见 [OptionTile] 的 KDoc。
+ *
+ * **第八批（2026-10-18，用户口径原文）**：
+ * 26. 「撤掉，实现触感反馈」—— 撤掉 [OptionTile] 上那颗「进行中…」文字（TG 这三颗本来就没有
+ *     loading 态：`supportsLoading` 为 false，那套扫光只挂在 gift / call / … 上），
+ *     补上 TG 那条**长按触感**：`ACTION_UP` 时按住超过 250ms 且手指仍在格内 → `LONG_PRESS`。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -726,10 +734,11 @@ private fun PanelRow(
  * - `prune` 仍然走 [NpmMaintenanceAction] 那条**按枚举转手**的通用路
  *   （`runNpmMaintenanceOp`）；另两颗各有自己的入口，理由见它们各自的 KDoc。
  *
- * 禁用与"进行中"的判据：两个重操作（cleaning / dedupe）跟 [NpmState.canInstall] 走，
- * 缓存那一颗跟 [NpmState.canReclaimCache] 走 —— 两条都是"安装会话全局互斥"这一个事实的
- * 两种说法：安装、维护、回收三者互相排斥。只禁被按下的那一颗会让另两颗看起来还能按，
- * 按下去是排队，用户以为卡了。进行中的那一颗文字换成「进行中…」。
+ * 禁用判据：两个重操作（cleaning / dedupe）跟 [NpmState.canInstall] 走，缓存那一颗跟
+ * [NpmState.canReclaimCache] 走 —— 两条都是"安装会话全局互斥"这一个事实的两种说法：
+ * 安装、维护、回收三者互相排斥。只禁被按下的那一颗会让另两颗看起来还能按，按下去是排队，
+ * 用户以为卡了。**跑起来没有「进行中」文字**（2026-10-18 用户口径「撤掉」）—— 三颗一起
+ * 变灰就是状态本身；TG 这三颗也没有 loading 态（见 [OptionTile]）。
  *
  * 「依赖去重」按下时记的仍是 [NpmMaintenanceAction.DEDUPE]：提升是它的**后半段**，
  * 不是另一件并列的事（见 `runDedupeAndPromoteOp`）。
@@ -741,7 +750,6 @@ private fun OptionsCard(
     onDedupePromote: () -> Unit,
     onReclaimCache: () -> Unit,
 ) {
-    val busy = state.maintenance
     Row(
         Modifier
             .fillMaxWidth()
@@ -751,7 +759,6 @@ private fun OptionsCard(
         OptionTile(
             label = "清理依赖",
             glyph = GlyphKind.CLEAR,
-            running = busy == NpmMaintenanceAction.PRUNE,
             enabled = state.canInstall,
             onClick = { onMaintenance(NpmMaintenanceAction.PRUNE) },
             modifier = Modifier.weight(1f),
@@ -759,7 +766,6 @@ private fun OptionsCard(
         OptionTile(
             label = "依赖去重",
             glyph = GlyphKind.LAYERS,
-            running = busy == NpmMaintenanceAction.DEDUPE,
             enabled = state.canInstall,
             onClick = onDedupePromote,
             modifier = Modifier.weight(1f),
@@ -767,7 +773,6 @@ private fun OptionsCard(
         OptionTile(
             label = "清理缓存",
             glyph = GlyphKind.CACHE,
-            running = state.reclaimingCache,
             enabled = state.canReclaimCache,
             onClick = onReclaimCache,
             modifier = Modifier.weight(1f),
@@ -800,19 +805,45 @@ private fun OptionsCard(
  * （本页其他卡那个）：它与页底 `surfaceMuted` 同值 #161E27，这三格会整块消失。
  *
  * `clip` 先于 `background`（同 [PanelCard]）：缩放与圆角要先裁住底色。
+ *
+ * **长按触感**（`onTouchEvent` 的 `ACTION_UP` 分支）：按住超过 **250ms** 且手指仍在格内，
+ * 松手时给一次 `HapticFeedbackConstants.LONG_PRESS`。注意它**不是**在按住的过程中震，
+ * 而是在**松手那一刻**按"按了多久"决定震不震 —— 本件照这个口径：从 `PressInteraction.Press`
+ * 记下按下时刻，`Release` 时比 250ms，`Cancel`（滑走/取消）不震。
+ *
+ * **没有「进行中」态**：TG 这三颗 `supportsLoading` 是 false（那套横向扫光的 `LoadingDrawable`
+ * 只挂在 gift / call / video / join / report / leave / voice / stream / stop 上）。跑起来时
+ * 三颗一起变灰就是状态（[NpmState.canInstall] / [NpmState.canReclaimCache] 在会话期间为 false）。
  */
 @Composable
 private fun OptionTile(
     label: String,
     glyph: GlyphKind,
-    running: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
+    val haptics = LocalHapticFeedback.current
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
+    LaunchedEffect(source, enabled) {
+        if (!enabled) return@LaunchedEffect
+        var downAt = 0L
+        source.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> downAt = System.currentTimeMillis()
+                is PressInteraction.Release -> {
+                    val held = System.currentTimeMillis() - downAt
+                    if (downAt != 0L && held > OPTION_TILE_HAPTIC_DELAY_MS) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+                    downAt = 0L
+                }
+                is PressInteraction.Cancel -> downAt = 0L
+            }
+        }
+    }
     val pressedT by animateFloatAsState(
         targetValue = if (pressed && enabled) 1f else 0f,
         animationSpec = if (pressed && enabled) {
@@ -855,7 +886,7 @@ private fun OptionTile(
         )
         Spacer(Modifier.height(OPTION_TILE_ICON_GAP))
         Text(
-            text = if (running) "进行中…" else label,
+            text = label,
             color = if (enabled) palette.text else palette.textTertiary,
             fontSize = OPTION_TILE_TEXT_SIZE,
             fontWeight = FontWeight.Bold,
@@ -905,6 +936,9 @@ private val OPTION_TILE_TEXT_SIZE = 11.sp
 
 /** 按下末态的缩放（`ButtonBounce.getScale(0.04f)` → 0.96）。 */
 private const val OPTION_TILE_PRESS_SCALE = 0.96f
+
+/** 长按触感的门槛（`ProfileActionsView.onTouchEvent`：`System.currentTimeMillis() - downTime > 250`）。 */
+private const val OPTION_TILE_HAPTIC_DELAY_MS = 250L
 
 /**
  * 已装包一行：名字 + 版本 + 尺寸 + 「重装 ⟳」+ 「卸载」。
