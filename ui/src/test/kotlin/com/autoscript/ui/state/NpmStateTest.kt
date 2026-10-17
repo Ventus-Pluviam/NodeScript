@@ -56,28 +56,78 @@ class NpmStateTest {
     /**
      * 作用域那一行怎么说（2026-10-17「项目选择改成依赖作用域，下拉框加个全局」）。
      *
-     * 三条各自钉一个**不许冒充**：空串不许显示成空（用户读成"没读到"）、
-     * 还没读到不许冒充「全局」（那是"还不知道"，不是"知道，是全局"）、
-     * 缺省仍然落在第一个项目上（全局排最后，插到最前面就是一次没人要求过的行为变更）。
+     * 两条各自钉一个**不许冒充**：空串不许显示成空（用户读成"没读到"）、
+     * 还没读到不许冒充「全局」（那是"还不知道"，不是"知道，是全局"）。
+     *
+     * 缺省档 2026-10-17 第二批**改成全局**（用户口径「依赖作用域，默认为全局」）——
+     * 那条断言从"缺省是第一条"翻了过来，断言里写的理由也随之换掉。
      */
     @Test
-    fun `作用域标签：空串说「全局」，没读到说「—」，缺省仍是第一个项目`() {
+    fun `作用域标签：空串说「全局」，没读到说「—」，缺省落在全局`() {
         val global = NpmProjectSnapshot(
             projectId = NpmTargetScope.GLOBAL,
             installed = emptyList(),
             offlineGap = emptyList(),
-            storage = null,
+            storage = stats(0),
         )
         val loaded = NpmState.of(NpmPanelSnapshot(listOf(project("demo"), global)))
 
-        assertEquals("demo", loaded.scopeLabel, "缺省是第一条；全局排最后，不抢缺省位")
-        assertEquals(
-            "全局",
-            NpmState.withProject(loaded, NpmTargetScope.GLOBAL).scopeLabel,
-            "空串在屏幕上必须说成人话",
-        )
+        assertEquals(NpmTargetScope.GLOBAL, loaded.selectedProjectId, "缺省落在全局那一档")
+        assertEquals(NpmState.withProject(loaded, NpmTargetScope.GLOBAL).scopeLabel, "全局")
         assertEquals("—", NpmState.NOT_LOADED.scopeLabel, "还没读到 ≠ 全局：那是两句话")
         assertEquals("—", NpmState.failed(RuntimeException()).scopeLabel, "读失败也不冒充成全局")
+    }
+
+    /**
+     * 缺省回落的**三档顺序**（2026-10-17 第二批）。
+     *
+     * 中间那档（"快照里没有全局那条"）不是凑数的：全局那一条是**宿主拼上去的**
+     * （`InstallCoordinator.globalSnapshot`），测试替身与非本宿主的快照里可以没有它 ——
+     * 那时凭空选中空串就是选了一个清单里不存在的条目，屏幕上表现为"作用域写着全局、
+     * 下面什么也没有"。
+     */
+    @Test
+    fun `缺省回落：上次选的保住，没有全局那条时退到第一条`() {
+        val withoutGlobal = NpmPanelSnapshot(listOf(project("alpha"), project("beta")))
+        assertEquals("alpha", NpmState.of(withoutGlobal).selectedProjectId, "没有全局那条 → 第一条")
+
+        val withGlobal = NpmPanelSnapshot(
+            listOf(
+                project("alpha"),
+                project("beta"),
+                NpmProjectSnapshot(NpmTargetScope.GLOBAL, emptyList(), emptyList(), stats(0)),
+            ),
+        )
+        assertEquals(NpmTargetScope.GLOBAL, NpmState.of(withGlobal).selectedProjectId)
+
+        // 用户手动选了 beta → 刷新不许把他换回全局（那条纪律一字未动）。
+        val picked = NpmState.of(withGlobal).copy(selectedProjectId = "beta")
+        assertEquals("beta", NpmState.of(withGlobal, picked).selectedProjectId)
+        // beta 消失了 → 回落到缺省档（此刻是全局，不是"第一条"）。
+        val shrunk = NpmPanelSnapshot(
+            listOf(project("alpha"), NpmProjectSnapshot(NpmTargetScope.GLOBAL, emptyList(), emptyList(), stats(0))),
+        )
+        assertEquals(NpmTargetScope.GLOBAL, NpmState.of(shrunk, picked).selectedProjectId)
+    }
+
+    /**
+     * `scopeIsGlobal` 是界面换称呼的**唯一**判据（依赖列表的卡头、「还没有依赖」那句）。
+     *
+     * 钉住"没读到 ≠ 全局"：`NOT_LOADED` 与读失败态下它是 false —— 那时屏幕上不画依赖列表
+     * 的内容，"是不是全局"没有对象；返回 true 会让空态去说"全局还没有依赖"，
+     * 而此刻根本还不知道在管哪一棵。
+     */
+    @Test
+    fun `scopeIsGlobal 认空串，且没读到时不冒充`() {
+        val global = NpmProjectSnapshot(NpmTargetScope.GLOBAL, emptyList(), emptyList(), stats(0))
+        val g = NpmState.of(NpmPanelSnapshot(listOf(global)))
+        assertTrue(g.scopeIsGlobal)
+
+        val project = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+        assertFalse(project.scopeIsGlobal, "项目作用域不是全局")
+
+        assertFalse(NpmState.NOT_LOADED.scopeIsGlobal)
+        assertFalse(NpmState.failed(RuntimeException()).scopeIsGlobal)
     }
 
     @Test

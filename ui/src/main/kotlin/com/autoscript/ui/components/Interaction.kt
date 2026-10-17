@@ -8,6 +8,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -169,6 +170,59 @@ fun Modifier.pressableLongPress(
         enabled = enabled,
         role = role,
         onLongClick = onLongClick,
+        onClick = onClick,
+    )
+}
+
+/**
+ * 带 **TG 水波**按压反馈的 `Modifier.clickable`（2026-10-17 第二批新增，供依赖管理页那三个
+ * 选项行用 —— 用户口径「点击动效也参考 tg 的」）。
+ *
+ * ## 它和 [pressable] 不是同一个动效，两份都留着
+ *
+ * [pressable] 画的是**整块纯色覆盖**（按下即整行亮起 / 按钮整格变暗）。本件画的是
+ * **从指尖扩散的水波**。两种都是 TG 里真实存在的，只是用在不同控件上：
+ *
+ * - TG 的列表行、子菜单项走 `Theme.getSelectorDrawable(false)` → `createSelectorDrawable(color,
+ *   RIPPLE_MASK_ALL)` —— 掩码是**整个格子**（`Theme.java` 的 `getSelectorDrawable(false)`），于是那是个
+ *   `RippleDrawable`：圆心在触点、半径长到铺满整行。API 23 起这条路渲染出来的就是水波，
+ *   不是"整行变暗"（[Interaction.kt] 顶上那条 KDoc 里"TG 的列表行是整行变暗"的说法，
+ *   准确说是**老 API** 上 `SelectorDrawable` 的掩码档；本仓此前统一走纯色覆盖是**本仓
+ *   的选择**，不是 TG 的现状）。
+ * - TG 的页签、小圆形按钮走 `key_actionBarDefaultSelector` / `stickers_menuSelector` 那几档 ——
+ *   行高只有 40dp 上下，水波还没铺满就松手了，纯色覆盖更跟手（[rememberPressIndication]
+ *   的 KDoc 记的就是这一档的算术）。
+ *
+ * 所以本件**不取代** [pressable]，也**不是**全仓缺省：给新控件选哪一个，看它是"一行"还是"一格"。
+ *
+ * ## 实现为什么直接借 M3 的 `ripple`
+ *
+ * `MaterialTheme` 的 `ripple(bounded = true, color = …)` 与 TG 那条
+ * `RippleDrawable(colorStateList, null, ColorDrawable(0xffffffff))` 是同一个东西：
+ * 掩码是整块矩形（bounded）、圆心跟着触点（`setRippleRadialAutoCenter` 的效果）。
+ * 手搓一个 `IndicationNodeFactory` 只会把这段几何重写一遍，而重写的那份一旦和
+ * `pressable` 的实现细节（挂载期订阅、`equals/hashCode`）漂开，就又是一种"按下没反应"。
+ *
+ * @param color 水波色；缺省 [ThemeColors.pressedOverlay]，与 [pressable] 同源
+ *   （TG 两档选择器色不同，但要区分时**显式传**，不在这里猜）。
+ */
+@Composable
+fun Modifier.pressableRipple(
+    enabled: Boolean = true,
+    role: Role? = null,
+    color: Color? = null,
+    onClick: () -> Unit,
+): Modifier {
+    val indication = ripple(
+        bounded = true,
+        color = color ?: ThemeColors.pressedOverlay,
+    )
+    val source = remember { MutableInteractionSource() }
+    return clickable(
+        interactionSource = source,
+        indication = indication,
+        enabled = enabled,
+        role = role,
         onClick = onClick,
     )
 }

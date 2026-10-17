@@ -581,8 +581,15 @@ class InstallCoordinator(
      * 行为变更，而"全局排在项目后面"在语义上也对（先看具体的，再看兜底的）。
      *
      * 全局那条**永远在**（哪怕 `files/scripts/node_modules` 还没建）：作用域下拉里得先有这一项，
-     * 用户才谈得上"往全局装"。没建时它的 `storage` 是 `null`（= 界面上那一行尺寸不画，
-     * 见 [NpmProjectSnapshot] 的纪律：没量到 ≠ 0 字节）。
+     * 用户才谈得上"往全局装"。
+     *
+     * **2026-10-17 第二批：`storage` 不再因为目录不存在而给 `null`。** 用户看到的现象是
+     * 「全局作用域下没有 node_modules 那一行」—— 原因是全局那条走了"没量到就不画"这条档，
+     * 而**项目**那条永远不会：`storage()` 给每个项目都构造一份 `NodeModulesStats`，
+     * 目录不存在时 `totalBytes` 就是 0，界面照样画一行「node_modules 0 B」。
+     * 同一个物理事实（这棵 node_modules 还没建）在两档作用域上画出了两种界面，
+     * 而"缺省作用域"正要改成全局（见 [NpmState.of]）—— 那时这一页一进来就少一行，
+     * 读起来像坏了。现在两档**同口径**：都给 `storage`，没建就是 0 字节。
      */
     override suspend fun snapshot(): NpmPanelSnapshot =
         // 整趟落 IO（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：这一趟是
@@ -610,33 +617,28 @@ class InstallCoordinator(
     /**
      * 全局作用域那一条（[NpmTargetScope.GLOBAL]），**永远返回一条**（见 [snapshot] 的 KDoc）。
      *
-     * 三个字段各自"量不到就是 null/空"，不含糊：
-     * - `storage`：`files/scripts/node_modules` **不存在**时给 `null` —— 界面那一行据此不画，
-     *   而不是画成 "0 B"（"这个作用域不占地方"是另一句话）；
+     * 三个字段各自"量不到就是空"，不含糊：
+     * - `storage`：**恒非 null**（2026-10-17 第二批改的口径，理由见 [snapshot] 的 KDoc）——
+     *   `files/scripts/node_modules` 还没建时 `totalBytes` 就是 0，与项目那条同款：
+     *   界面画「node_modules 0 B」，而不是整行消失；
      * - `installed` / `offlineGap`：读的是全局那份 `package-lock.json`，没装过就是空的
      *   （"没装过"与"装了 0 个包"在这里是同一件事，故不需要第三态）；
      * - `cache`：与项目那条同源（缓存全机一份，量一次抄过来）。
      */
-    private suspend fun globalSnapshot(cache: NodeModulesStats): List<NpmProjectSnapshot> {
-        val exists = Files.isDirectory(layout.globalNodeModules)
-        return listOf(
+    private suspend fun globalSnapshot(cache: NodeModulesStats): List<NpmProjectSnapshot> =
+        listOf(
             NpmProjectSnapshot(
                 projectId = NpmTargetScope.GLOBAL,
                 installed = installedWithSizes(NpmTargetScope.GLOBAL),
                 offlineGap = offlineGap(NpmTargetScope.GLOBAL),
-                storage = if (exists) {
-                    NodeModulesStats(
-                        projectId = NpmTargetScope.GLOBAL,
-                        pkgCount = LockfileReader.readLocked(layout.globalLockfile).size,
-                        totalBytes = nodeModulesBytesOf(layout.globalNodeModules, now()),
-                    )
-                } else {
-                    null
-                },
+                storage = NodeModulesStats(
+                    projectId = NpmTargetScope.GLOBAL,
+                    pkgCount = LockfileReader.readLocked(layout.globalLockfile).size,
+                    totalBytes = nodeModulesBytesOf(layout.globalNodeModules, now()),
+                ),
                 cache = cache,
             ),
         )
-    }
 
     /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条那颗 cache clean 按钮）。

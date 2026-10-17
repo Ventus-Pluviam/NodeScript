@@ -39,7 +39,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -58,7 +57,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -78,13 +76,13 @@ import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.BAR_MORE_DOTS_WEIGHT
 import com.autoscript.ui.components.BarMoreDotsSize
+import com.autoscript.ui.components.CapsuleInputField
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.centerInRoot
 import com.autoscript.ui.components.DismissFocusOnWindowBlur
 import com.autoscript.ui.components.RegisterFocusDismiss
 import com.autoscript.ui.components.dismissFocusOnTapOutside
 import com.autoscript.ui.components.rememberFocusDismissState
-import com.autoscript.ui.components.reportFocusBounds
 import com.autoscript.ui.components.EaseOutQuint
 import com.autoscript.ui.components.OvershootEasing
 import com.autoscript.ui.components.rememberPressIndication
@@ -755,8 +753,9 @@ private fun ProjectMenu(
  * 提示词 15sp 半透明、输入文字 15sp（`editText.setTextSize(15)`）。
  *
  * 框本身的版式在 [CapsuleInputField]（2026-10-16 起与新建对话框共用同一份 —— 那一份
- * 就是这里原先逐值写死的那几个数）；本函数只剩"搜索框这一处"的两件事：槽位内边距、
- * 放大镜、以及把聚焦态报给「点外面收键盘」那套。
+ * 就是这里原先逐值写死的那几个数；2026-10-17 它搬到 `components/Inputs.kt`，多了第三个
+ * 使用点：依赖管理页的「安装依赖」输入框，那一处还多要 `enabled` / `onSubmit` 两个参数）；
+ * 本函数只剩"搜索框这一处"的两件事：槽位内边距、放大镜、以及把聚焦态报给「点外面收键盘」那套。
  */
 @Composable
 private fun SearchField(
@@ -776,69 +775,6 @@ private fun SearchField(
         // 上报自己的 bounds 与聚焦态：容器据此判"这一下点在框外"（见 `FocusDismiss`）。
         focusDismiss = focusDismiss,
     )
-}
-
-/**
- * 胶囊输入框 —— **搜索框与新建对话框共用这一份版式**（2026-10-16 用户口径：新建弹窗的
- * 输入框"和搜索框一样"）。灰底（[Colors.fieldBackground]，白底压 5% 黑 —— 与任务中心那颗
- * 白药丸不是一个键）、圆角 20dp（40dp 高上 20dp 圆角 = 两端全圆）、高 40dp、
- * 槽内水平 12dp、文字与提示词 15sp（[MaterialTheme.typography.bodyLarge]）、
- * 光标 [Colors.cursor]（`groupcreate_cursor`，与强调色不是一个键）、**无投影**。
- *
- * 为什么抽出来共用：用户要的是"一样"，两份拷贝只能靠"记得同步改两处"维持一样 ——
- * 共用之后"一样"是结构上的事实。搜索框那颗放大镜由 [leadingGlyph] 给，新建对话框不给
- * （那一格只有名字要填）。
- *
- * 不用 M3 `TextField`：它自带的 56dp 最小高与大内边距塞不进 40dp 的行高里
- * （批 25 实机：hint 文字被上下裁掉一截），而这套输入用不上它的 label/indicator 装饰 ——
- * 直接 `BasicTextField` + 自己摆 `Row`，内边距就是版式要的那几个 dp。
- *
- * @param focusDismiss 非 null 时这个框上报自己的 bounds/聚焦态（搜索框那一份，见
- *   `FocusDismiss`）。新建对话框**不报**：它是模态，点外面就是关掉它，不参与那套判据。
- */
-@Composable
-private fun CapsuleInputField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    modifier: Modifier = Modifier,
-    leadingGlyph: GlyphKind? = null,
-    focusDismiss: com.autoscript.ui.components.FocusDismissState? = null,
-) {
-    val palette = ThemeColors
-    Row(
-        modifier
-            .height(40.dp)
-            .background(palette.fieldBackground, RoundedCornerShape(20.dp)),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Spacer(Modifier.width(12.dp))
-        if (leadingGlyph != null) {
-            Glyph(kind = leadingGlyph, tint = palette.text.copy(alpha = 0.6f))
-            Spacer(Modifier.width(12.dp))
-        }
-        Box(Modifier.weight(1f)) {
-            if (value.isEmpty()) {
-                Text(
-                    text = placeholder,
-                    color = palette.text.copy(alpha = 0.5f),
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                )
-            }
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.text),
-                cursorBrush = SolidColor(palette.cursor),
-                modifier = Modifier.fillMaxWidth().then(
-                    if (focusDismiss == null) Modifier else Modifier.reportFocusBounds(focusDismiss),
-                ),
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-    }
 }
 
 /**

@@ -101,6 +101,7 @@ import com.autoscript.ui.state.removeInstalled
 import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
 import com.autoscript.ui.state.runDedupeAndPromoteOp
+import com.autoscript.ui.state.reclaimNpmCacheOp
 import com.autoscript.ui.state.reinstallInstalled
 import com.autoscript.ui.state.loadNpmSnapshot
 import com.autoscript.ui.state.loadConsoleCmd
@@ -836,14 +837,17 @@ class MainActivity : ComponentActivity() {
                 onSubmitInstall = { scope.launch { npmState = submitInstall(hostSummary(), npmState) } },
                 onRemoveInstalled = { name -> scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) } },
                 onBack = onCloseNpm,
-                // 「依赖去重」那颗按钮是**两件事**（去重 + 提升到全局），所以它有自己的一条
-                // 入口而不是从 `onMaintenance` 转手 —— 见 `MaintenanceCard` 的 KDoc。
+                // 「依赖去重」那个选项是**两件事**（去重 + 提升到全局），所以它有自己的一条
+                // 入口而不是从 `onMaintenance` 转手 —— 见 `OptionsCard` 的 KDoc。
                 onDedupePromote = { scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) } },
                 onReinstall = { row ->
                     // 名字与版本都取自这一行（宿主读 lockfile 的结果），不是用户敲的 ——
                     // 走的是与「卸载」同一条命令通道，门禁强度因此不取决于按的是哪一颗。
                     scope.launch { npmState = reinstallInstalled(hostSummary(), npmState, row.name, row.version) }
                 },
+                // 「清理缓存」那个选项（2026-10-17 第二批回到页面上）：它**不占安装会话**
+                // （只删几个缓存文件），所以走的是 `reclaimingCache` 那一条独立的状态位。
+                onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
                 modifier = Modifier,
             )
             ManagementPage.ENV -> ScriptEnvScreen(

@@ -130,6 +130,12 @@ enum class GlyphKind {
 
     /** 重装（依赖列表每行那颗 ⟳）：开口圆环 + 弧端箭头。 */
     REFRESH,
+
+    /** 依赖去重（依赖页「依赖去重」那颗选项）：三层叠片 —— 重复的东西拍成一层。 */
+    LAYERS,
+
+    /** 清理缓存（依赖页「清理缓存」那颗选项）：圆柱（数据/缓存盘的通用字形）。 */
+    CACHE,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -528,6 +534,47 @@ fun Glyph(
                 drawPath(
                     path(0.763f to 0.119f, 0.776f to 0.268f, 0.631f to 0.230f),
                     tint,
+                    style = stroke,
+                )
+            }
+
+            // 叠层：顶上一枚菱形（四点闭合）+ 下面两道 V 折线。三笔的间距与那两道 V 的
+            // 开口（0.10↔0.90）取自"叠片"的通用画法 —— 画成三条平行横线读起来是"列表"，
+            // 画成三个方块是"网格"，只有菱形+折线这一个形态在 24dp 下还能读出"层"。
+            GlyphKind.LAYERS -> {
+                drawPath(
+                    path(0.50f to 0.10f, 0.90f to 0.32f, 0.50f to 0.54f, 0.10f to 0.32f).apply { close() },
+                    tint,
+                    style = stroke,
+                )
+                drawPath(path(0.10f to 0.56f, 0.50f to 0.78f, 0.90f to 0.56f), tint, style = stroke)
+                drawPath(path(0.10f to 0.74f, 0.50f to 0.96f, 0.90f to 0.74f), tint, style = stroke)
+            }
+
+            // 缓存：圆柱（顶面椭圆 + 两条侧边 + 底弧）。顶面那圈用 `drawArc` 画**整圈**
+            // （0→360、`useCenter=false`）：它比"画一个椭圆再擦掉下半"少一步，而
+            // `drawOval` 不在这一格的风格里（本文件其它字形都走 path/arc 两条路）。
+            // 底弧只画下半（0→180，顺时针从左到右经过下方），侧边因此只到 0.74 ——
+            // 三条线在 24dp 上接得上，不会在同一点上叠出两个圆头。
+            GlyphKind.CACHE -> {
+                drawArc(
+                    color = tint,
+                    startAngle = 0f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = at(0.17f, 0.13f),
+                    size = Size(0.66f * u, 0.26f * u),
+                    style = stroke,
+                )
+                drawPath(path(0.17f to 0.26f, 0.17f to 0.74f), tint, style = stroke)
+                drawPath(path(0.83f to 0.26f, 0.83f to 0.74f), tint, style = stroke)
+                drawArc(
+                    color = tint,
+                    startAngle = 0f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = at(0.17f, 0.61f),
+                    size = Size(0.66f * u, 0.26f * u),
                     style = stroke,
                 )
             }

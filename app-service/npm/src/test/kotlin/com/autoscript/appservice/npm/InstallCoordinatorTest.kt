@@ -1278,9 +1278,15 @@ class InstallCoordinatorTest {
     /**
      * 作用域下拉里**永远有「全局」这一项**（哪怕一次都没装过）—— 没有它，用户就无从
      * "往全局装第一包"。
+     *
+     * **`storage` 恒非 null**（2026-10-17 第二批改的口径）：用户看到的现象是"全局作用域下
+     * 没有 node_modules 那一行"。原因是全局那条走了"没量到就不画"，而**项目**那条永远
+     * 不会 —— `storage()` 给每个项目都构造一份读数，目录不存在时 `totalBytes` 就是 0，
+     * 界面照样画一行「node_modules 0 B」。同一个物理事实在两档作用域上画出两种界面。
+     * 现在两档同口径，这条断言钉的就是它：**没建也要给 0 字节，不给 null**。
      */
     @Test
-    fun `快照最后一条永远是全局作用域，没装过时尺寸不画`() = runBlocking {
+    fun `快照最后一条永远是全局作用域，没装过时尺寸是 0 而不是不画`() = runBlocking {
         seedProjectLock("p1")
 
         val snap = coordinator().snapshot()
@@ -1288,11 +1294,14 @@ class InstallCoordinatorTest {
         assertEquals(
             listOf("p1", NpmTargetScope.GLOBAL),
             snap.projects.map { it.projectId },
-            "全局排最后：面板缺省选第一条，插到最前面会悄悄把缺省作用域从「第一个项目」换成「全局」",
+            "全局排最后：缺省由呈现层挑（见 NpmState.of），这里只保证它一定在清单里",
         )
         val global = snap.projects.last()
-        assertNull(global.storage, "files/scripts/node_modules 还没建 → 不画（不是 0 字节）")
+        assertEquals(0L, global.storage!!.totalBytes, "没建就是 0 字节 —— 与项目那条同口径")
+        assertEquals(0, global.storage!!.pkgCount, "没装过就没有包")
         assertTrue(global.installed.isEmpty(), "没装过就是没装过")
+        // 同一个物理事实在两档作用域上必须是同一个样子：项目那条也照画。
+        assertEquals(0L, snap.projects.first().storage!!.totalBytes)
     }
 
     @Test

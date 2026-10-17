@@ -43,22 +43,16 @@
     <ID>FunctionNaming:Menus.kt$@Composable private fun MenuItemRow(action: MenuAction, position: Int, onDismiss: () -&gt; Unit)</ID>
     <ID>FunctionNaming:Menus.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ActionBottomSheet( title: String, onDismiss: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
     <ID>FunctionNaming:Motion.kt$fun OvershootEasing(tension: Float): Easing</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, onDedupePromote: () -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, onDedupePromote: () -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, onReclaimCache: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun DependencyListCard( state: NpmState, onRemove: (String) -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallCard( state: NpmState, onDraft: (String) -&gt; Unit, onSubmit: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallField( value: String, onChange: (String) -&gt; Unit, enabled: Boolean, onSubmit: () -&gt; Unit, modifier: Modifier, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallProgressRow(p: InstallProgressState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow( row: NpmRowState, enabled: Boolean, onRemove: (String) -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun LogCard(state: NpmState)</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceButton( label: String, action: NpmMaintenanceAction, busy: NpmMaintenanceAction?, enabled: Boolean, onClick: (NpmMaintenanceAction) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onDedupePromote: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelRow( label: String, hint: String? = null, trailing: @Composable () -&gt; Unit, onClick: (() -&gt; Unit)? = null, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ProjectPickerCard( projects: List&lt;NpmProjectSnapshot&gt;, selectedId: String?, onSelect: (String) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ReinstallButton(name: String, enabled: Boolean, onClick: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun StorageCard(state: NpmState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelCard(content: @Composable () -&gt; Unit)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable fun FileListLayer(showOverlays: Boolean)</ID>
-    <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CapsuleInputField( value: String, onValueChange: (String) -&gt; Unit, placeholder: String, modifier: Modifier = Modifier, leadingGlyph: GlyphKind? = null, focusDismiss: com.autoscript.ui.components.FocusDismissState? = null, )</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateEntryDialogs( creating: ProjectState.CreationKind?, onDismiss: () -&gt; Unit, onConfirm: (name: String, isFolder: Boolean) -&gt; Unit, atRoot: Boolean, )</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateFab( onCreateFile: () -&gt; Unit, onCreateFolder: () -&gt; Unit, modifier: Modifier = Modifier, atRoot: Boolean, )</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun EmptyFilesHint(filtered: Boolean, inFolder: Boolean)</ID>
@@ -139,7 +133,7 @@
     <ID>LongMethod:ProjectScreen.kt$@Composable fun FileListLayer(showOverlays: Boolean)</ID>
     <ID>LongMethod:TaskCenterScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun TaskCenterScreen( state: TaskCenterState, /** 控制台状态：本屏只取在途执行那几样（activeRuns/停止三态/读账），不碰日志行。 */ console: ConsoleState, onRunNow: (TaskRowState) -&gt; Unit, onCancel: (TaskRowState) -&gt; Unit, onRegister: (RegistrationForm) -&gt; Unit, onStopRun: (ActiveRunState) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongParameterList:ConsoleScreen.kt$( state: ConsoleCmdState, projects: List&lt;String&gt;, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onDraft: (String) -&gt; Unit, onRun: () -&gt; Unit, /** 停掉在跑的命令（2026-10-11 批 94：`state.running` 时「执行」换成「停止」）。 */ onStop: () -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, /** * 命令历史（最近的在最前，已去重）—— 由宿主读口给（`HostSummary.consoleHistory`）。 * * 缺省空表：没接线 / 还没读到就是"没有历史可补"，不是错误。 * 界面**不自己存**：历史要跨进程重启还在，那是落盘的事（`ConsoleHistory`）。 */ history: List&lt;String&gt; = emptyList(), )</ID>
-    <ID>LongParameterList:NpmScreen.kt$( state: NpmState, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, onDedupePromote: () -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>LongParameterList:NpmScreen.kt$( state: NpmState, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, onDedupePromote: () -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, onReclaimCache: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LoopWithTooManyJumpStatements:DeletionParticles.kt$DeletionParticles$for</ID>
     <ID>MatchingDeclarationName:Glyphs.kt$GlyphKind</ID>
     <ID>MatchingDeclarationName:Refresh.kt$RefreshAction</ID>
@@ -193,5 +187,9 @@
     <ID>FunctionNaming:LogManagementScreen.kt$@Composable private fun ScriptLogDetail( runId: Long, onReadScriptLog: suspend (Long) -&gt; List&lt;com.autoscript.domain.host.ConsoleLineRow&gt;, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:LogManagementScreen.kt$@Composable private fun ScriptLogEntryRow( row: ScriptLogRowUi, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongParameterList:LogManagementScreen.kt$( consoleState: ConsoleState, taskLogState: TaskLogState, scriptLogState: com.autoscript.ui.state.ScriptLogState, onRefreshConsole: suspend () -&gt; Unit, onRefreshTaskLog: suspend () -&gt; Unit, onRefreshScriptLog: suspend () -&gt; Unit, onReadScriptLog: suspend (Long) -&gt; List&lt;com.autoscript.domain.host.ConsoleLineRow&gt;, onStopRun: (ActiveRunState) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:Inputs.kt$@Composable fun CapsuleInputField( value: String, onValueChange: (String) -&gt; Unit, placeholder: String, modifier: Modifier = Modifier, leadingGlyph: GlyphKind? = null, focusDismiss: FocusDismissState? = null, enabled: Boolean = true, onSubmit: (() -&gt; Unit)? = null, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionRow( label: String, glyph: GlyphKind, running: Boolean, enabled: Boolean, onClick: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun OptionsCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onDedupePromote: () -&gt; Unit, onReclaimCache: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ScopeCard(state: NpmState, onSelect: (String) -&gt; Unit)</ID>
   </CurrentIssues>
 </SmellBaseline>

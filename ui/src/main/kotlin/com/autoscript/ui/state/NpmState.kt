@@ -95,6 +95,19 @@ data class NpmState(
     val scopeLabel: String
         get() = selectedProjectId?.let { NpmTargetScope.label(it) } ?: "—"
 
+    /**
+     * 当前作用域是不是「全局」（2026-10-17 第二批）。
+     *
+     * 界面拿它换称呼：依赖列表的卡头、「还没有依赖」那句、维护卡的说明都随作用域改口 ——
+     * 缺省作用域改成全局（见 [of]）之后，屏幕上再写死"项目"就是**天天都在说错话**。
+     * 判据只有一处（[NpmTargetScope.isGlobal]），界面不自己比空串。
+     *
+     * 还没读到（[selectedProjectId] 为 null）时是 false：那时屏幕上根本不画依赖列表的内容
+     * （三态各说各的，见 `DependencyListCard`），"是不是全局"没有对象。
+     */
+    val scopeIsGlobal: Boolean
+        get() = selectedProjectId?.let { NpmTargetScope.isGlobal(it) } == true
+
     /** 当前项目的读数（没选 / 读到的快照里没这个作用域 → null，界面据此说"还没有这个作用域"）。 */
     val project: NpmProjectSnapshot?
         get() = snapshot?.projects?.firstOrNull { it.projectId == selectedProjectId }
@@ -170,13 +183,23 @@ data class NpmState(
         val NOT_LOADED = NpmState(LoadState.NotLoaded)
 
         /**
-         * 读到了：**默认选中第一个项目**（面板总要有个主体）；已有选择且它还在就保持
-         * —— 刷新不该把用户正在看的项目换掉（那是"手一滑跳走了"的经典形态）。
+         * 读到了：**默认选中「全局」**（2026-10-17 第二批，用户口径「依赖作用域，默认为全局」）；
+         * 已有选择且它还在就保持 —— 刷新不该把用户正在看的项目换掉（那是"手一滑跳走了"的经典形态）。
+         *
+         * **缺省换成全局不是随手改的**：这一页最常做的事是"装一个包试试"，而全局那份装在
+         * `files/scripts/node_modules`（见 [NpmTargetScope]），任何项目都够得着；项目那份
+         * 只对那一个项目有效。缺省落在"用得最多、影响面最广"的那一档才对。
+         *
+         * 三档回落，**顺序不能换**：用户上次选的（还在）→ 快照里那条全局 → 第一条项目。
+         * 中间那档不是多余的：测试与非本宿主的快照里可以**没有**全局那条（它是宿主拼上去的），
+         * 那时凭空选一个空串就是选了一个不存在的条目 —— 界面上表现为"作用域那行写着全局，
+         * 下面什么也没有"。最后一档兜住"一个项目都没有"之外的任何残局。
          */
         fun of(snapshot: NpmPanelSnapshot, previous: NpmState = NOT_LOADED) = NpmState(
             load = LoadState.Loaded,
             selectedProjectId = previous.selectedProjectId
                 ?.takeIf { id -> snapshot.projects.any { it.projectId == id } }
+                ?: snapshot.projects.firstOrNull { NpmTargetScope.isGlobal(it.projectId) }?.projectId
                 ?: snapshot.projects.firstOrNull()?.projectId,
             snapshot = snapshot,
             // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、「在途」与阶段条
