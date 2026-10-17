@@ -4,10 +4,12 @@ import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.InstallEvent
+import androidx.compose.runtime.Immutable
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import java.time.ZoneId
+import kotlin.LazyThreadSafetyMode
 
 /**
  * 依赖管理页呈现态（纯数据，Compose 之外可 JVM 测）。
@@ -20,6 +22,7 @@ import java.time.ZoneId
  * 操作面（安装/维护/缓存回收）与读取分开记账：操作失败**不清依赖清单**（清单没变），
  * 与项目页 `opError` 同一条纪律。
  */
+@Immutable
 data class NpmState(
     val load: LoadState,
     /** 面板上正在看的那个项目（null = 一个项目都没有 / 还没读到）。 */
@@ -108,11 +111,30 @@ data class NpmState(
     val scopeIsGlobal: Boolean
         get() = selectedProjectId?.let { NpmTargetScope.isGlobal(it) } == true
 
-    /** 当前项目的读数（没选 / 读到的快照里没这个作用域 → null，界面据此说"还没有这个作用域"）。 */
-    val project: NpmProjectSnapshot?
-        get() = snapshot?.projects?.firstOrNull { it.projectId == selectedProjectId }
+    /**
+     * 当前项目的读数（没选 / 读到的快照里没这个作用域 → null，界面据此说"还没有这个作用域"）。
+     *
+     * **与 [installed] / [sizeLabel] / [cacheSizeLabel] / [logLines] 一样是"算一次、留着"**，
+     * 不是每次读现算的 `get()`。理由见 [installed]。
+     */
+    val project: NpmProjectSnapshot? by lazy(LazyThreadSafetyMode.NONE) {
+        snapshot?.projects?.firstOrNull { it.projectId == selectedProjectId }
+    }
 
-    val installed: List<NpmRowState> get() = project?.installed.orEmpty().map { NpmRowState.of(it) }
+    /**
+     * 依赖清单（界面那一行行）。
+     *
+     * **`by lazy` 而不是 `get()`**（2026-10-18 第十一批之后接着改的这一版）：从前它是个
+     * `get()`，于是**每一次读都重新 `.map` 一遍整份清单**、造一整列新的 [NpmRowState]。
+     * 而依赖列表的每一次组合都要读它，卡头那行还要为了一句条数**再读一次 `.size`**
+     * （`state.installed.size` —— 为了一个长度又映射一整个列表）。包一多，这就是纯白扔。
+     *
+     * 取"算一次"而不是"每次读现算"：一份 `NpmState` 是不可变的（全是 `val`，`copy` 出新的一份），
+     * 这份投影在它的一生里不会变 —— 算一次就够，多算的都是浪费。
+     */
+    val installed: List<NpmRowState> by lazy(LazyThreadSafetyMode.NONE) {
+        project?.installed.orEmpty().map { NpmRowState.of(it) }
+    }
 
     /**
      * node_modules 尺寸一行 —— **2026-10-17 起只有尺寸，没有「/ 512MB」**。
@@ -124,8 +146,7 @@ data class NpmState(
      * 两态各自说一句：没读到 / 没量到 → null（**不画**，那个位置写 "0 B" 是在说
      * "这个项目不占地方"）；量到了 → 真实数字（量到 0 就如实说 0 B）。
      */
-    val sizeLabel: String?
-        get() = project?.storage?.let { NpmRowState.bytes(it.totalBytes) }
+    val sizeLabel: String? by lazy(LazyThreadSafetyMode.NONE) { project?.storage?.let { NpmRowState.bytes(it.totalBytes) } }
 
     /**
      * npm 缓存尺寸（§10.9 第 5 条的 `npm-cache` 尺寸栏）—— **只有数字**。
@@ -134,8 +155,7 @@ data class NpmState(
      * 「本项目缓存 12MB」是撒谎，用户会以为删掉这个项目就能腾出那 12MB）。
      * 量不到（老宿主没实现这个口）→ null（不画），与 [sizeLabel] 同一条纪律：没量到 ≠ 0 字节。
      */
-    val cacheSizeLabel: String?
-        get() = project?.cache?.let { NpmRowState.bytes(it.totalBytes) }
+    val cacheSizeLabel: String? by lazy(LazyThreadSafetyMode.NONE) { project?.cache?.let { NpmRowState.bytes(it.totalBytes) } }
 
     /**
      * 日志大框里要画的行（**只读的投影**，页面上半部分不再有红字）。
@@ -152,8 +172,8 @@ data class NpmState(
      *   比少显示几行糟得多（与「控制台」页 `gap` 那条同一条纪律）。
      * - 一条都没有时给一句**怎么做才有**的话，而不是一个空框。
      */
-    val logLines: List<NpmLogLine>
-        get() = buildList {
+    val logLines: List<NpmLogLine> by lazy(LazyThreadSafetyMode.NONE) {
+        buildList {
             if (consoleTruncated) add(NpmLogLine("更早的输出已裁掉，这里只留最近 $LOG_KEEP 行", StatusTone.MUTED))
             (load as? LoadState.Failed)?.let {
                 add(NpmLogLine("读取失败：${it.reason}（下面显示的是上次读到的，可能已过期）", StatusTone.PROBLEM))
@@ -162,6 +182,7 @@ data class NpmState(
             opNotice?.let { add(NpmLogLine(it, StatusTone.MUTED)) }
             consoleLines.forEach { add(NpmLogLine(it.timeText + "  " + it.text, it.tone)) }
         }
+    }
 
     /**
      * 「清理」（回收缓存）那颗按钮能不能按。
@@ -305,13 +326,19 @@ data class NpmLogLine(val text: String, val tone: StatusTone)
  * 宿主给的 `sizeBytes <= 0` 意思是"这个包不在盘上"（lock 里有、目录里没有），
  * 画成 "0 B" 是在说"这个包不占地方"，那是另一句话。
  */
+@Immutable
 data class NpmRowState(
     val name: String,
     val version: String,
     val sizeBytes: Long = 0,
 ) {
-    /** 人类可读的尺寸（[NpmRowState.bytes] 同款口径）；宿主没量到 → null（界面不画）。 */
-    val sizeLabel: String? get() = if (sizeBytes > 0) bytes(sizeBytes) else null
+    /**
+     * 人类可读的尺寸（[NpmRowState.bytes] 同款口径）；宿主没量到 → null（界面不画）。
+     *
+     * 是 `val` 不是 `get()`：`bytes()` 走 `String.format`（MB 那一档），每次读都格式化一遍
+     * 是白扔 —— 一行里的尺寸画一次就够。
+     */
+    val sizeLabel: String? = if (sizeBytes > 0) bytes(sizeBytes) else null
 
     companion object {
         fun of(node: com.autoscript.domain.npm.PkgNode) =

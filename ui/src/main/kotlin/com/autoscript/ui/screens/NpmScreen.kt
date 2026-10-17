@@ -53,6 +53,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
@@ -276,7 +277,7 @@ fun NpmScreen(
             // 默认为全局，放进和 node_modules 和 npm 缓存同一个列表分组」）。三行回答的是
             // 同一个问题——"这一屏在管哪一棵 node_modules、它有多大"——分成两张卡时那几个
             // 数字之间隔着一条灰缝，读起来像两件事。
-            item { ScopeCard(state, onSelectProject) }
+            item(contentType = SLICE_SCOPE) { ScopeCard(state, onSelectProject) }
             // 安装依赖 + 依赖列表**合成一组**（第十一批第 29 条）：整组一张卡，一段一行。
             dependenciesGroup(
                 state = state,
@@ -290,7 +291,7 @@ fun NpmScreen(
             // 日志大框在**滚动内容的最下面**（第十批第 28 条）。它现在跟在"安装 + 依赖列表"
             // 那一组后面 —— 页底那条固定的动作栏不占列表位置，所以"日志在最后"这条口径
             // 一个字没改，改的只是它上面少了三颗动作。
-            item { LogCard(state) }
+            item(contentType = SLICE_LOG) { LogCard(state) }
         }
         // 三个维护动作**钉在页底**（第十一批第 30 条）：从列表里搬出来，不再随内容滚 ——
         // 这一页的动作任何时候都够得着，而上面那个日志框可以很长。
@@ -474,19 +475,19 @@ private fun LazyListScope.dependenciesGroup(
     // 收起时是 0 段。卡片**下缘**那两道圆角长在最后一段上，所以要先把段数算出来。
     val rows = if (expanded && state.load.isLoaded) state.installed else emptyList()
     val bodySlices = if (expanded) maxOf(1, rows.size) else 0
-    item(key = "npm-install") {
+    item(key = "npm-install", contentType = SLICE_INSTALL) {
         Column(Modifier.cardSlice(ThemeColors.background, first = true, last = false)) {
             InstallRow(state = state, onDraft = onDraft, onSubmit = onSubmit)
         }
     }
-    item(key = "npm-deps-header") {
+    item(key = "npm-deps-header", contentType = SLICE_HEADER) {
         Column(Modifier.cardSlice(ThemeColors.background, first = false, last = bodySlices == 0)) {
             CollapseHeader(title = depsTitle(state), expanded = expanded, onClick = onToggle)
         }
     }
     if (!expanded) return
     if (rows.isEmpty()) {
-        item(key = "npm-deps-empty") {
+        item(key = "npm-deps-empty", contentType = SLICE_EMPTY) {
             Column(Modifier.cardSlice(ThemeColors.background, first = false, last = true)) {
                 // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
                 if (!state.load.isLoaded) {
@@ -501,7 +502,15 @@ private fun LazyListScope.dependenciesGroup(
         }
         return
     }
-    itemsIndexed(rows, key = { _, row -> "npm-dep-${row.name}@${row.version}" }) { index, row ->
+    itemsIndexed(
+        rows,
+        key = { _, row -> "npm-dep-${row.name}@${row.version}" },
+        // **六种 item 形状必须各报各的类型**：类型为 null 时它们共用一个复用池，
+        // 一条依赖行滚出视野后节点被下一件"看起来同类型"的东西取走 —— 取到安装行/日志卡
+        // 那种形状对不上的，Compose 只能把复用出来的组合整个丢掉重来，**比不复用还慢**。
+        // 上一版全屏 5 种形状挤在一个池子里，正是这个池子在每次滚动时互相顶掉。
+        contentType = { _, _ -> SLICE_DEP },
+    ) { index, row ->
         Column(
             Modifier.cardSlice(
                 ThemeColors.background,
@@ -541,7 +550,7 @@ private fun depsTitle(state: NpmState): String = when {
  * 这一件就还是个普通修饰符 —— 与本仓 [Modifier.pressable] 那批同路。
  */
 private fun Modifier.cardSlice(color: Color, first: Boolean, last: Boolean): Modifier {
-    val shape = sliceShape(first, last)
+    val shape = if (first) SliceHeadShape else if (last) SliceTailShape else SliceBodyShape
     val laid = this
         .fillMaxWidth()
         .padding(
@@ -556,13 +565,16 @@ private fun Modifier.cardSlice(color: Color, first: Boolean, last: Boolean): Mod
     return (if (first || last) laid.clip(shape) else laid).background(color, shape)
 }
 
-/** 段的形状：只有整组的第一段与最后一段各圆两道角，中间段四角全平。 */
-private fun sliceShape(first: Boolean, last: Boolean): Shape = RoundedCornerShape(
-    topStart = if (first) CARD_CORNER else 0.dp,
-    topEnd = if (first) CARD_CORNER else 0.dp,
-    bottomEnd = if (last) CARD_CORNER else 0.dp,
-    bottomStart = if (last) CARD_CORNER else 0.dp,
-)
+/**
+ * 列表 item 的**类型**（`contentType`）。一屏里有六种形状，类型必须分开报 ——
+ * 见 [dependenciesGroup] 里那条注释。这些都是字符串常量，比的是值。
+ */
+private const val SLICE_SCOPE = "npm-scope-card"
+private const val SLICE_LOG = "npm-log-card"
+private const val SLICE_INSTALL = "npm-install-slice"
+private const val SLICE_HEADER = "npm-deps-header-slice"
+private const val SLICE_EMPTY = "npm-deps-empty-slice"
+private const val SLICE_DEP = "npm-dep-slice"
 
 /**
  * 日志大框（2026-10-17 用户令：「最下面弄个显示日志的大框。灰色背景，胶囊框」）。
@@ -668,6 +680,36 @@ private val LOG_MAX_HEIGHT = 200.dp
 
 /** 卡片圆角（`SettingsCard` / 任务中心 `Card` 同一档 16dp）。 */
 private val CARD_CORNER = 16.dp
+
+/**
+ * 段的形状：只有整组的第一段与最后一段各圆两道角，中间段四角全平。
+ *
+ * **三个形状是文件级的常量，不是每次调用现造的**：它们在整屏里只有三种取值，
+ * 每段 item 各造一个的话，`RoundedCornerShape` 的相等判断虽然还是成立（值相等），
+ * 但每组合一次就是一次无谓的分配 —— 列表里这种"每次组合都造一遍"的东西攒起来就是卡。
+ */
+private val SliceHeadShape: Shape = RoundedCornerShape(
+    topStart = CARD_CORNER,
+    topEnd = CARD_CORNER,
+    bottomEnd = 0.dp,
+    bottomStart = 0.dp,
+)
+
+/** 分组卡最后那一段：只圆下面两角（形状常量的说明见 [SliceHeadShape]）。 */
+private val SliceTailShape: Shape = RoundedCornerShape(
+    topStart = 0.dp,
+    topEnd = 0.dp,
+    bottomEnd = CARD_CORNER,
+    bottomStart = CARD_CORNER,
+)
+
+/** 分组卡中间那些段：四角全平（形状常量的说明见 [SliceHeadShape]）。 */
+private val SliceBodyShape: Shape = RoundedCornerShape(
+    topStart = 0.dp,
+    topEnd = 0.dp,
+    bottomEnd = 0.dp,
+    bottomStart = 0.dp,
+)
 
 /** 卡片左右外边距（设置页/管理面板/任务中心三处都是 12dp）。 */
 private val CARD_MARGIN = 12.dp
@@ -1054,13 +1096,23 @@ private fun InstalledRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(row.name, color = ThemeColors.text, modifier = Modifier.weight(1f))
-        ToneText(row.version, StatusTone.MUTED)
+        // 三处文字**都限一行**（项目页 `FileRow` 那两行也是这么写的）：包名可以很长
+        // （`@babel/plugin-transform-async-generator-functions`），不给上限就换行 ——
+        // 一行的排版高矮不一，滚动时要一遍遍重排、上下跳动。溢出行尾省略号。
+        Text(
+            row.name,
+            color = ThemeColors.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        ToneText(row.version, StatusTone.MUTED, maxLines = 1)
         row.sizeLabel?.let {
             ToneText(
                 it,
                 StatusTone.MUTED,
                 style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
                 modifier = Modifier.padding(start = 8.dp),
             )
         }
@@ -1073,6 +1125,10 @@ private fun InstalledRow(
             enabled = enabled,
             onClick = { onRemove(row.name) },
             modifier = Modifier.padding(start = 8.dp),
+            // **列表行里不带动画**（见 `PillButton` 的 `animated`）：一行两颗动画
+            // = 每进入视野的一行现造 2 个 `Animatable` + 2 条协程，而这一颗的选中态
+            // 是个常量 `false`，动画从来没有真的跑过一帧。
+            animated = false,
         )
     }
 }

@@ -76,7 +76,7 @@
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun Dot(tone: StatusTone, modifier: Modifier = Modifier, size: Int = 8)</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun EmptyHint(text: String, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun LabeledRow( label: String, value: String, tone: StatusTone = StatusTone.NEUTRAL, modifier: Modifier = Modifier, )</ID>
-    <ID>FunctionNaming:Scaffolds.kt$@Composable fun PillButton( text: String, selected: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier, enabled: Boolean = true, )</ID>
+    <ID>FunctionNaming:Scaffolds.kt$@Composable fun PillButton( text: String, selected: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier, enabled: Boolean = true, animated: Boolean = true, )</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun ScrollToTopButton( visible: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun SectionHeader(text: String, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:Scaffolds.kt$@Composable fun Separator(indentDp: Int = 16, modifier: Modifier = Modifier)</ID>
