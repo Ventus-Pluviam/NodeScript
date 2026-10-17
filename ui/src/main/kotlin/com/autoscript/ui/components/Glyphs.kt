@@ -3,6 +3,7 @@ package com.autoscript.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -142,12 +143,72 @@ enum class GlyphKind {
 private const val StrokeRatio = 0.085f
 
 /**
+ * [Glyph] 一次绘制要用的临时对象 —— `Path` 与 `Stroke` 都留住复用（理由见 [Glyph] 的 KDoc）。
+ *
+ * 借出是**按顺序**的：每次绘制开头 [begin]，后面每个 `path()` 取池子里的下一条并 `reset()`。
+ * 池子只增不减 —— 一个字形最多几笔，长到那个数就封顶，之后一帧一个新对象都不造。
+ */
+private class GlyphScratch {
+
+    private val paths = ArrayList<Path>(4)
+    private var used = 0
+
+    private var cachedStroke: Stroke? = null
+    private var cachedU = 0f
+    private var cachedWeight = 0f
+
+    /** 每次绘制开头调一次：把上一帧借出去的 Path 全部收回。 */
+    fun begin() {
+        used = 0
+    }
+
+    /** 取一条**空的** Path（池子不够才新建）。 */
+    fun path(): Path {
+        val reused = if (used < paths.size) paths[used] else Path().also { paths.add(it) }
+        used++
+        return reused.also { it.reset() }
+    }
+
+    /** 取这一帧的描边（线宽只跟 `u` 与 `weight` 有关，不必每帧重建）。 */
+    fun stroke(u: Float, weight: Float): Stroke {
+        val hit = cachedStroke
+        if (hit != null && cachedU == u && cachedWeight == weight) return hit
+        return Stroke(
+            width = u * StrokeRatio * weight,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round,
+        ).also {
+            cachedStroke = it
+            cachedU = u
+            cachedWeight = weight
+        }
+    }
+}
+
+/**
  * 画一个页签图标。
  *
  * @param tint 线条色（调用方给：选中 = 强调色，未选中 = 次级灰）。
  * @param weight 线宽倍率。**选中项略微加粗** —— 这套图标是线性的，没有"填充版"可切，
- *   加粗就是它这一档语言里的"实心"（TG 底栏选中项也是靠视觉重量拉开，不是靠颜色一条）。
+ *   加粗就是这一档语言里的"实心"（TG 底栏选中项也是靠视觉重量拉开，不是靠颜色一条）。
  *   实心字形（[GlyphKind.MORE_VERT]）没有线宽可加，它缩放的是**点半径**（见那一格）。
+ *
+ * ## 为什么画的时候要自己拿一个池子（2026-10-18）
+ *
+ * 用户口径「依赖列表滑动起来帧率怎么只有60」。查下来这条绘制链路上**确有一处每帧分配**：
+ * `Canvas` 的绘制 lambda **每一帧都会重跑一遍**（列表滚动时可见行每帧都要重画），而原来的
+ * `path(...)` 是 `Path().apply { … }` —— **每画一笔就新建一个 `Path`**。Compose 的 `Path`
+ * 背后是一个 Skia 原生对象，于是每一个可见字形、每一帧都在造 1~4 个原生对象再丢掉
+ * （底栏 5 个 + 顶栏 + 依赖列表每一行的 ⟳…）。滚动时这是纯粹的白扔。
+ *
+ * 改法**不动任何一个字形的几何**：`path(...)` 改成从 [GlyphScratch] 里取一条**复用**的
+ * `Path`（`reset()` 后重画），`Stroke` 也按 `(u, weight)` 缓存住。调用点一处没改，字形逐条
+ * 与原来等价。
+ *
+ * **复用安全的前提**（都成立才敢这么做）：① 每个 `path(...)` 都是**立刻**喂给 `drawPath`，
+ * 全文件没有 `val p = path(...)` 这种把两条 Path 同时留活的写法 —— 池子按顺序借出即可；
+ * ② 池子按 `remember` 挂在**这一个** Canvas 节点上，不与别的字形共用；
+ * ③ 绘制 lambda 在 UI 线程录制期跑，改的是自己上一步刚 reset 的那条 Path。
  */
 @Composable
 fun Glyph(
@@ -157,15 +218,13 @@ fun Glyph(
     size: Dp = 24.dp,
     weight: Float = 1f,
 ) {
+    val scratch = remember { GlyphScratch() }
     Canvas(modifier.size(size)) {
+        scratch.begin()
         val u = this.size.minDimension
-        val stroke = Stroke(
-            width = u * StrokeRatio * weight,
-            cap = StrokeCap.Round,
-            join = StrokeJoin.Round,
-        )
+        val stroke = scratch.stroke(u, weight)
         fun at(x: Float, y: Float) = Offset(x * u, y * u)
-        fun path(vararg points: Pair<Float, Float>): Path = Path().apply {
+        fun path(vararg points: Pair<Float, Float>): Path = scratch.path().apply {
             points.forEachIndexed { i, (x, y) ->
                 if (i == 0) moveTo(x * u, y * u) else lineTo(x * u, y * u)
             }
