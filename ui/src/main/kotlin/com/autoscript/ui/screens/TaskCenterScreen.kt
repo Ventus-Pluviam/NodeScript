@@ -1,6 +1,5 @@
 package com.autoscript.ui.screens
 
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -73,6 +72,7 @@ import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
+import com.autoscript.ui.components.CollapseHeader
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.DismissFocusOnWindowBlur
 import com.autoscript.ui.components.RegisterFocusDismiss
@@ -310,7 +310,7 @@ fun TaskCenterScreen(
                         Card {
                             // 空组照样能收放（批 44 用户拍板）：组头是开关，不是内容指示器 ——
                             // 有没有行是内容自己的事，灰三角/点不动会让两个头长得不一样。
-                            GroupHeader(
+                            CollapseHeader(
                                 title = "运行中的任务",
                                 expanded = runsExpanded,
                                 onClick = { runsExpanded = !runsExpanded },
@@ -347,7 +347,7 @@ fun TaskCenterScreen(
                         Spacer(Modifier.height(12.dp))
                         // 白色圆角卡片二：定时任务。
                         Card {
-                            GroupHeader(
+                            CollapseHeader(
                                 title = "定时任务",
                                 expanded = tasksExpanded,
                                 onClick = { tasksExpanded = !tasksExpanded },
@@ -538,68 +538,6 @@ private fun Card(content: @Composable () -> Unit) {
         content()
     }
 }
-
-/**
- * 分组头（批 41 按用户口径重做：白底 + 右端三角，TG `CollapseTextCell` 的几何）：
- *
- * - **46dp 白条**（`CollapseTextCell` 的 `onMeasure` 恒 46dp）、文字缩进 21dp、
- *   14sp（`textView.setTextSize(dp(14))`）、正文色（`windowBackgroundWhiteBlackText`）；
- * - **右端三角**（[GlyphKind.CHEVRON]，14dp 同 `arrow_more` 的格）：收起 = 尖朝下
- *   （rotation 0）、展开 = 尖朝上（180°，340ms `EASE_OUT_QUINT` —— 与 TG 的
- *   `collapsedArrow.animate().rotation(…)` 同一条时间线）；
- * - **空组照样有三角、照样能收放**（批 44 用户拍板，推翻批 41 那条）：组头是**开关**
- *   不是内容指示器 —— 拿内容有没有来灰掉三角，同一排的两个头就会长得不一样，而
- *   "点不动"本身还得靠试才知道。空组展开后就是空的（不铺占位句）。
- */
-@Composable
-private fun GroupHeader(
-    title: String,
-    expanded: Boolean,
-    onClick: () -> Unit,
-) {
-    val palette = ThemeColors
-    // 展开因子驱动旋转：0 = 收起（尖朝下）、1 = 展开（尖朝上）。TG 的插值器
-    // EASE_OUT_QUINT = cubic-bezier(.23, 1, .32, 1)，340ms。
-    val expandFraction by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = tween(durationMillis = 340, easing = EaseOutQuint),
-        label = "groupChevron",
-    )
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(46.dp)
-            .background(palette.background)
-            .pressable(
-                role = Role.Button,
-                overlay = palette.pressedOverlay,
-                onClick = onClick,
-            )
-            .padding(start = 21.dp, end = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = title,
-            color = palette.text,
-            style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium),
-        )
-        Spacer(Modifier.weight(1f))
-        Glyph(
-            kind = GlyphKind.CHEVRON,
-            tint = palette.text,
-            size = 14.dp,
-            modifier = Modifier.graphicsLayer {
-                rotationZ = 180f * expandFraction
-            },
-        )
-    }
-}
-
-/**
- * cubic-bezier(.23, 1, .32, 1)（TG `CubicBezierInterpolator.EASE_OUT_QUINT`）：
- * 快出缓收的五次缓出 —— 与 [OvershootEasing] 一样是「TG 的手感」那组常量。
- */
-private val EaseOutQuint = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
 /** 卡片内的空/错位一行（不是 [EmptyHint] 那种大留白居中 —— 卡内行要密）。 */
 @Composable

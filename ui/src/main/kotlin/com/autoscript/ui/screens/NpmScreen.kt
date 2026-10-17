@@ -22,13 +22,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
+import com.autoscript.ui.components.CollapseHeader
 import com.autoscript.ui.components.EmptyHint
 import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.Separator
@@ -46,15 +52,22 @@ import com.autoscript.ui.theme.ThemeColors
  * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
  * 分段（自上而下）：项目选择（多项目时）· 尺寸/配额 · 安装 · 维护 ·
- * **依赖列表**（卡片，卡内自滚）· **日志大框**（最下面）。
+ * **依赖列表**（白卡，卡头可折叠、默认收起）· **日志大框**（最下面）。
  *
- * **2026-10-17 现场改的三处（用户口径）**：
+ * 页底是**任务中心那块灰**（[ThemeColors.surfaceMuted]），页上每一段都是一张白卡
+ * （[PanelCard]）—— 与管理面板（本页的入口）同族，见 [PanelCard] 的说明。
+ *
+ * **2026-10-17 现场改的五处（用户口径）**：
  * 1. 「删除顶上的报错。不需要它」—— 顶栏下面那两组字（读失败 / 操作报错 / 回执）
  *    整段下线，页面上半部分**不再出现红字**；
  * 2. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成
- *    [DependencyListCard]（灰底胶囊卡 + 高度自限 + 卡内自滚）；
+ *    [DependencyListCard]（白卡 + 高度自限 + 卡内自滚）；
  * 3. 「最下面弄个显示日志的大框。灰色背景，胶囊框」—— [LogCard]，内容按当场裁定
- *    「两者都显示」= 先本页这次操作的账、后 npm 输出（组装在 [NpmState.logLines]）。
+ *    「两者都显示」= 先本页这次操作的账、后 npm 输出（组装在 [NpmState.logLines]）；
+ * 4. 「背景颜色改成任务中心背景一样的颜色」—— 页底 + 顶栏改 [ThemeColors.surfaceMuted]，
+ *    页上的块（原来靠[ThemeColors.fieldBackground]在白页上浮起来）整批翻成白卡；
+ * 5. 「依赖列表是弄成一个白色胶囊列表，参考任务中心的列表，点下可以伸展开，默认是收起来的」
+ *    —— 卡头换成 [CollapseHeader]（与任务中心同一份几何），初值收起。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -106,9 +119,15 @@ fun NpmScreen(
     // 宿主是入队即返回的，一次现取多半只拿到 `QUEUED`，再点一次就能看到下一步。
     // 续拉在 `MainActivity.reloadNpm()` 里与快照一起发生 —— 本屏不持有读口。
     val refresh = rememberRefreshAction { onRefresh() }
-    Column(modifier.fillMaxSize().background(ThemeColors.background)) {
+    // 页底与**任务中心/管理面板同一块灰**（2026-10-17 用户口径：「背景颜色改成任务中心
+    // 背景一样的颜色」）：浅色 #F1F1F3、深色 #161E27（深色下 `surfaceMuted` 与
+    // `background` 同值，所以这一改只动浅色档）。顶栏跟着传同一个色 —— 缺省是"与屏底
+    // 同色"（见 `ActionBar.background` 的说明），页底换了而这里不传，就会出现
+    // "白栏压灰页"那道缝（任务中心批 41 踩过同一个坑）。
+    Column(modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
         ActionBar(
             title = "依赖管理",
+            background = ThemeColors.surfaceMuted,
             onBack = onBack,
             actions = {
                 ActionBarAction("刷新", refresh::trigger)
@@ -127,7 +146,7 @@ fun NpmScreen(
             if (projects.size > 1) {
                 item {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        Modifier.fillMaxWidth().padding(horizontal = CARD_MARGIN, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         projects.forEach { p ->
@@ -181,52 +200,54 @@ private fun InstallCard(
     onToggleOffline: (Boolean) -> Unit,
     onSubmit: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        ToneText("安装（装进当前项目的 node_modules）", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-        Row(
-            Modifier.fillMaxWidth().padding(top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            InstallField(
-                value = state.installDraft,
-                onChange = onDraft,
-                enabled = state.canInstall,
-                onSubmit = onSubmit,
-                modifier = Modifier.weight(1f),
+    PanelCard {
+        Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
+            ToneText("安装（装进当前项目的 node_modules）", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                InstallField(
+                    value = state.installDraft,
+                    onChange = onDraft,
+                    enabled = state.canInstall,
+                    onSubmit = onSubmit,
+                    modifier = Modifier.weight(1f),
+                )
+                PillButton(
+                    text = if (state.installing) "提交中…" else "安装",
+                    selected = state.installing,
+                    enabled = state.canInstall && state.installDraft.isNotBlank(),
+                    onClick = onSubmit,
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PillButton(
+                    text = "-D（开发依赖）",
+                    selected = state.installDev,
+                    enabled = state.canInstall,
+                    onClick = { onToggleDev(!state.installDev) },
+                )
+                PillButton(
+                    text = "离线优先",
+                    selected = state.installOffline,
+                    enabled = state.canInstall,
+                    onClick = { onToggleOffline(!state.installOffline) },
+                )
+            }
+            // 「离线优先」不是「仅离线」—— 这条旗标让 npm 先查缓存、缺了仍会联网。
+            // 用一个词把两件事混成一件，用户会在断网时以为"勾了就能装上"。
+            ToneText(
+                "「离线优先」= 先查本地缓存，缺的仍会联网；真正断网要装，靠的是缓存里恰好有全部依赖。",
+                StatusTone.MUTED,
+                style = MaterialTheme.typography.bodySmall,
             )
-            PillButton(
-                text = if (state.installing) "提交中…" else "安装",
-                selected = state.installing,
-                enabled = state.canInstall && state.installDraft.isNotBlank(),
-                onClick = onSubmit,
-            )
+            state.installProgress?.let { p -> InstallProgressRow(p) }
         }
-        Row(
-            Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            PillButton(
-                text = "-D（开发依赖）",
-                selected = state.installDev,
-                enabled = state.canInstall,
-                onClick = { onToggleDev(!state.installDev) },
-            )
-            PillButton(
-                text = "离线优先",
-                selected = state.installOffline,
-                enabled = state.canInstall,
-                onClick = { onToggleOffline(!state.installOffline) },
-            )
-        }
-        // 「离线优先」不是「仅离线」—— 这条旗标让 npm 先查缓存、缺了仍会联网。
-        // 用一个词把两件事混成一件，用户会在断网时以为"勾了就能装上"。
-        ToneText(
-            "「离线优先」= 先查本地缓存，缺的仍会联网；真正断网要装，靠的是缓存里恰好有全部依赖。",
-            StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-        )
-        state.installProgress?.let { p -> InstallProgressRow(p) }
     }
 }
 
@@ -317,13 +338,21 @@ private fun InstallProgressRow(p: InstallProgressState) {
 }
 
 /**
- * 「依赖列表」：已装依赖收进一张**灰底胶囊卡**，列表在卡片**内部**自己滚
- * （2026-10-17 用户令：「弄个依赖列表，把已装依赖收进去」）。
+ * 「依赖列表」：已装依赖收进一张**白卡**，卡头可点开可收起、**默认收起**。
  *
- * **为什么内部滚动**：依赖装到几十上百个时，直接铺在页面里会把下面那个日志大框挤到
- * 屏幕外 —— 而"装到一半看清单变没变 + 看 npm 说了什么"正是这一屏最常同时看的两件事。
- * 高度自限（[DEP_LIST_MAX_HEIGHT]）且**内容少时不吃满**（`heightIn(max=)` 是上限不是
- * 固定高）：三个依赖的项目不该看到一张空荡荡的大卡。
+ * 2026-10-17 两改（同一屏、同一天、用户口径递进）：
+ * 1. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成一张卡；
+ * 2. 「依赖列表是弄成一个白色胶囊列表，参考任务中心的列表，点下可以伸展开，默认是收起来的」
+ *    —— 卡头换成任务中心那条 [CollapseHeader]（**同一份几何**，不是抄一份），
+ *    初值改成收起。
+ *
+ * **为什么默认收起**：这一屏最常同时看的是"清单 + 下面那个日志大框"。清单默认摊开时，
+ * 装到几十上百个包的机器上日志框会被顶出屏幕外；而收起态的卡头自己就写着条数
+ * （「已装依赖（37）」），不看内容也知道装了多少。
+ *
+ * **为什么展开后仍然卡内自滚**：理由同上，只是推迟到用户主动摊开之后 —— 高度自限
+ * （[DEP_LIST_MAX_HEIGHT]）且**内容少时不吃满**（`heightIn(max=)` 是上限不是固定高）：
+ * 三个依赖的项目不该看到一张空荡荡的大卡。
  *
  * 行键仍是 `name@version`，但**它的唯一性现在由宿主读口保证** —— `list()` 按
  * `(name, version)` 归一出"包清单"（lock v3 的键是安装位置，同一个包同版本会在不同
@@ -332,23 +361,32 @@ private fun InstallProgressRow(p: InstallProgressState) {
  */
 @Composable
 private fun DependencyListCard(state: NpmState, onRemove: (String) -> Unit) {
+    // 初值 false = 默认收起（用户口径）。用 `rememberSaveable` 与任务中心那两个组头
+    // 同一条：转屏、退到后台再回来，不该把用户刚点开的那张卡弹回去。
+    var expanded by rememberSaveable { mutableStateOf(false) }
     PanelCard {
-        ToneText(
-            "依赖列表（${state.installed.size}）",
-            StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
+        CollapseHeader(
+            // 条数只在**读到了**的时候写进卡头：没读到时的 0 不是"没有依赖"，是"还不知道"
+            // （`LoadState` 那条纪律：三态各自只能说自己那一句）。
+            title = if (state.load.isLoaded) "已装依赖（${state.installed.size}）" else "已装依赖",
+            expanded = expanded,
+            onClick = { expanded = !expanded },
         )
-        if (state.load.isLoaded && state.installed.isEmpty()) {
-            EmptyHint("读到了，这个项目还没有依赖（先装点什么）")
-            return@PanelCard
-        }
-        LazyColumn(
-            Modifier.fillMaxWidth().heightIn(max = DEP_LIST_MAX_HEIGHT),
-            contentPadding = PaddingValues(vertical = 4.dp),
-        ) {
-            items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
-                InstalledRow(row, enabled = state.canInstall, onRemove = onRemove)
-                Separator()
+        if (!expanded) return@PanelCard
+        when {
+            // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
+            !state.load.isLoaded ->
+                EmptyHint("还没读到依赖清单：点右上角「刷新」再试，或看下面日志里怎么说的")
+            state.installed.isEmpty() ->
+                EmptyHint("读到了，这个项目还没有依赖（先装点什么）")
+            else -> LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = DEP_LIST_MAX_HEIGHT),
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
+                items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
+                    InstalledRow(row, enabled = state.canInstall, onRemove = onRemove)
+                    Separator()
+                }
             }
         }
     }
@@ -378,7 +416,12 @@ private fun LogCard(state: NpmState) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.lastIndex)
     }
     PanelCard {
-        ToneText("日志", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+        ToneText(
+            "日志",
+            StatusTone.MUTED,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(start = CARD_PADDING, end = CARD_PADDING, top = 10.dp),
+        )
         if (lines.isEmpty()) {
             EmptyHint("还没有日志：装一次依赖、或到「控制台」敲一条 npm 命令，这里就有它的输出")
             return@PanelCard
@@ -386,7 +429,12 @@ private fun LogCard(state: NpmState) {
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxWidth().heightIn(max = LOG_MAX_HEIGHT),
-            contentPadding = PaddingValues(top = 4.dp),
+            contentPadding = PaddingValues(
+                start = CARD_PADDING,
+                end = CARD_PADDING,
+                top = 6.dp,
+                bottom = CARD_PADDING,
+            ),
         ) {
             // 不给 key：这一列是"流水"，同一句话出现两次是常事（报错尤其），
             // 而键重复在本仓已经有过一次闪退（见 [DependencyListCard] 的 KDoc）。
@@ -402,15 +450,38 @@ private fun LogCard(state: NpmState) {
     }
 }
 
-/** 灰底胶囊卡外壳（依赖列表与日志大框共用一种皮；[PANEL_CORNER] 是那颗"胶囊"的圆角）。 */
+/**
+ * 白卡外壳（本页每一段共用一种皮）。
+ *
+ * **2026-10-17 第二改：这一页从"白页 + 灰块"翻成"灰页 + 白卡"。** 起因是用户口径
+ * 「背景颜色改成任务中心背景一样的颜色」—— 页底从 [ThemeColors.background] 换成
+ * [ThemeColors.surfaceMuted] 之后，页上那些灰块（[ThemeColors.fieldBackground] 的
+ * 胶囊、输入框）就跟页底糊在一起了（浅色档 #F4F4F4 压在 #F1F1F3 上，差 3/255），
+ * 等于控件消失。于是这一页的块整批翻白，两者恰好是对调的：**原来是"白页上的灰块"，
+ * 现在是"灰页上的白卡"**，卡内那些灰块（安装输入框、未点亮的进度格）读法与原来一致。
+ *
+ * 几何取任务中心那张 `Card`：左右缩 12dp、圆角 16dp、无描边无阴影；底色也照它取
+ * [ThemeColors.background]（浅色 = 白，深色 = #161E27）。**深色下卡与页同值、整页一色**
+ * —— 这是任务中心本来的样子（批 67/68 把"夜间的黑"统一定成 #161E27），不是漏改；
+ * 换成比屏底亮一档的 [ThemeColors.surface] 反而会坏掉卡里的两处灰块：
+ * [ThemeColors.fieldBackground]（安装输入框、未点亮的进度格）**是按 `background` 配的**
+ * （"白 7% 叠 [ThemeColors.background]"），卡一变成 #232326，那两处 #262E36 就跟卡糊在
+ * 一起了 —— 跟这次要修的"灰块压灰页"是同一个错，只是换到了深色档。
+ *
+ * **卡内不统一加内边距**：依赖列表那张卡的头是 [CollapseHeader]（46dp 通栏，文字自带
+ * 21dp 缩进），统一加边距会把那条通栏切开。各卡自己用 [CARD_PADDING]。
+ *
+ * `clip` 先于 `background`：圆角要裁住内层（列表行、分隔线），只给 `background` 传
+ * shape 只裁底不裁内容。
+ */
 @Composable
 private fun PanelCard(content: @Composable () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .background(ThemeColors.fieldBackground, RoundedCornerShape(PANEL_CORNER))
-            .padding(PANEL_PADDING),
+            .padding(horizontal = CARD_MARGIN, vertical = CARD_SPACING)
+            .clip(RoundedCornerShape(CARD_CORNER))
+            .background(ThemeColors.background),
     ) {
         content()
     }
@@ -422,12 +493,17 @@ private val DEP_LIST_MAX_HEIGHT = 300.dp
 /** 日志大框的高度上限（约 6~7 行）。 */
 private val LOG_MAX_HEIGHT = 200.dp
 
-/** 两张卡的圆角（用户口径「胶囊框」；比页面里 10dp 的输入框更圆，但不做成真正的
- *  半圆端 —— 那样四角会把长行切掉）。 */
-private val PANEL_CORNER = 18.dp
+/** 卡片圆角（`SettingsCard` / 任务中心 `Card` 同一档 16dp）。 */
+private val CARD_CORNER = 16.dp
 
-/** 卡片内边距（角越圆，内容越不能贴边）。 */
-private val PANEL_PADDING = 12.dp
+/** 卡片左右外边距（设置页/管理面板/任务中心三处都是 12dp）。 */
+private val CARD_MARGIN = 12.dp
+
+/** 卡片之间的竖向间距（上下各 6dp → 卡间 12dp，与任务中心两张卡之间那条灰缝同宽）。 */
+private val CARD_SPACING = 6.dp
+
+/** 卡片内边距（依赖列表那张卡除外：它的头是通栏的 [CollapseHeader]）。 */
+private val CARD_PADDING = 12.dp
 
 /**
  * 尺寸/配额一行（§10.9.5 的配额条）。
@@ -447,27 +523,29 @@ private fun QuotaCard(state: NpmState) {
     // 缓存是全局读数，项目目录出问题时它照样是有效的。
     val cache = state.cacheLabel
     if (label == null && cache == null) return
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        if (label != null && snap != null) {
-            ToneText("node_modules：$label", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-            when {
-                snap.quotaFraction == null ->
-                    ToneText("未量到", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-                snap.overQuota -> ToneText(
-                    "已达配额上限：新的安装会被拒（用下面的「清理多余包」腾地方）",
-                    StatusTone.PROBLEM,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                snap.quotaWarned -> ToneText(
-                    "已用超过 80%：再装大包可能撞上限",
-                    StatusTone.ATTENTION,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+    PanelCard {
+        Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
+            if (label != null && snap != null) {
+                ToneText("node_modules：$label", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+                when {
+                    snap.quotaFraction == null ->
+                        ToneText("未量到", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+                    snap.overQuota -> ToneText(
+                        "已达配额上限：新的安装会被拒（用下面的「清理多余包」腾地方）",
+                        StatusTone.PROBLEM,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    snap.quotaWarned -> ToneText(
+                        "已用超过 80%：再装大包可能撞上限",
+                        StatusTone.ATTENTION,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
+            // 文案里那句「全机一份」由 [NpmState.cacheLabel] 给（缓存按内容寻址、跨项目共享，
+            // 写成「本项目缓存」会让人以为删掉这个项目就能腾出这些字节）。
+            cache?.let { ToneText(it, StatusTone.MUTED, style = MaterialTheme.typography.bodySmall) }
         }
-        // 文案里那句「全机一份」由 [NpmState.cacheLabel] 给（缓存按内容寻址、跨项目共享，
-        // 写成「本项目缓存」会让人以为删掉这个项目就能腾出这些字节）。
-        cache?.let { ToneText(it, StatusTone.MUTED, style = MaterialTheme.typography.bodySmall) }
     }
 }
 
@@ -493,43 +571,45 @@ private fun MaintenanceCard(
     onReclaimCache: () -> Unit,
 ) {
     val busy = state.maintenance
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        ToneText(
-            "维护（都在当前项目的 node_modules 上）",
-            StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(
-            Modifier.fillMaxWidth().padding(top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // 三颗维护按钮在**任一动作**进行中整体禁用（`globalSession` 全局互斥，同时只跑一个
-            // 安装会话）—— 包括安装输入行那次：只禁被按下的那颗会让另外几颗看起来还能按，
-            // 按下去是排队，用户以为卡了。
-            val enabled = state.canInstall || busy != null
-            MaintenanceButton("清理多余包", NpmMaintenanceAction.PRUNE, busy, enabled, onMaintenance)
-            MaintenanceButton("依赖去重", NpmMaintenanceAction.DEDUPE, busy, enabled, onMaintenance)
-            MaintenanceButton("按 lock 重装", NpmMaintenanceAction.CI, busy, enabled, onMaintenance)
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            PillButton(
-                text = if (state.reclaimingCache) "回收中…" else "回收缓存",
-                selected = false,
-                enabled = !state.reclaimingCache && busy == null && !state.installing,
-                onClick = onReclaimCache,
+    PanelCard {
+        Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
+            ToneText(
+                "维护（都在当前项目的 node_modules 上）",
+                StatusTone.MUTED,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // 三颗维护按钮在**任一动作**进行中整体禁用（`globalSession` 全局互斥，同时只跑一个
+                // 安装会话）—— 包括安装输入行那次：只禁被按下的那颗会让另外几颗看起来还能按，
+                // 按下去是排队，用户以为卡了。
+                val enabled = state.canInstall || busy != null
+                MaintenanceButton("清理多余包", NpmMaintenanceAction.PRUNE, busy, enabled, onMaintenance)
+                MaintenanceButton("依赖去重", NpmMaintenanceAction.DEDUPE, busy, enabled, onMaintenance)
+                MaintenanceButton("按 lock 重装", NpmMaintenanceAction.CI, busy, enabled, onMaintenance)
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PillButton(
+                    text = if (state.reclaimingCache) "回收中…" else "回收缓存",
+                    selected = false,
+                    enabled = !state.reclaimingCache && busy == null && !state.installing,
+                    onClick = onReclaimCache,
+                )
+            }
+            // 这一句不是装饰：这颗按钮删的是别的项目离线重装要用的东西的**补集**，
+            // 用户有权在按之前知道保留判据是什么。
+            ToneText(
+                "回收缓存只删没有任何项目 lock 需要的包（离线重装仍可用）；" +
+                    "「按 lock 重装」会先验 lock 签名，签名不对会被拒。",
+                StatusTone.MUTED,
+                style = MaterialTheme.typography.bodySmall,
             )
         }
-        // 这一句不是装饰：这颗按钮删的是别的项目离线重装要用的东西的**补集**，
-        // 用户有权在按之前知道保留判据是什么。
-        ToneText(
-            "回收缓存只删没有任何项目 lock 需要的包（离线重装仍可用）；" +
-                "「按 lock 重装」会先验 lock 签名，签名不对会被拒。",
-            StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }
 
