@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -31,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.ActionBar
@@ -96,6 +100,21 @@ import com.autoscript.ui.theme.ThemeColors
  *     —— [InstallCard] 那一行小标题整行下线，省下的一行给了「安装依赖 [输入框]（执行）」；
  * 13. 「还有依赖列表取消横线分隔」（第二批的尾巴）。
  *
+ * **第四批（同一天的第四次现场改动，用户口径原文）**：
+ * 14. 「去掉开发依赖，和离线优先。默认开启离线优先」—— [InstallCard] 那两颗旗标**整行下线**，
+ *     `--prefer-offline` 变成**写死**的行为（见 `NpmInstallOps.INSTALL_FLAGS`）。刻意**不留**
+ *     一颗"默认点亮、可以关掉"的旗标：能关掉的默认值就是两次行为，而 §10 的离线能力全建在
+ *     npm 缓存上，"先查缓存"没有任何理由关。`-D` 同理下线（它装的是**开发依赖**，
+ *     而这一屏回答的是"跑起来要什么"）；
+ * 15. 「清理多余包名字改成清理未声明依赖」—— 文案改口（`prune` 删的就是 lockfile 里
+ *     没有声明的那些，旧名字把"多余"说成了主观判断）；
+ * 16. 「依赖去重执行后让它把依赖自动放进全局作用域中」—— [MaintenanceCard] 那颗「依赖去重」
+ *     改走 `runDedupeAndPromoteOp`（去重当前作用域 → 把项目声明的依赖装一份到全局）；
+ * 17. 「去除按lock重装」—— `ci` 那颗按钮下线（**代价**：`NpmMaintenanceAction.CI` 在本页
+ *     没有入口了，宿主那半边与单测都还在 —— 想放回来随时可以）；
+ * 18. 「在依赖列表里，加一个重装的图标按钮，依赖列表显示一下各个依赖占用的空间大小」
+ *     —— [InstalledRow] 每行多一颗 ⟳（重装这一行那个包，与「卸载」并排）与一个尺寸读数。
+ *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
  * `files/.ns/install-history.jsonl` 一并去掉，本页这些操作（安装 / 卸载 / 镜像源变更…）
@@ -117,7 +136,7 @@ import com.autoscript.ui.theme.ThemeColors
  *
  * **变更半边已落（2026-10-09 批 87）**：原文写的是「不画安装输入行/进度条」——
  * 那条口径的前提是"没有执行体"，而执行体（`runConsoleCommand`）批 84 已经落了。
- * 本批补上输入行 + 两颗旗标 + 阶段条 + 清单行「卸载」，走的是与控制台**同一条**宿主口
+ * 本批补上输入行 + 阶段条 + 清单行「卸载」，走的是与控制台**同一条**宿主口
  * （门禁强度不取决于用户从哪个界面按下去）。
  *
  * 维护动作（§10.9 第 5 条的动作半边，2026-10-09 批 86）落在配额条下面一行：
@@ -134,11 +153,11 @@ fun NpmScreen(
     onSelectProject: (String) -> Unit,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
     onInstallDraft: (String) -> Unit,
-    onToggleDev: (Boolean) -> Unit,
-    onToggleOffline: (Boolean) -> Unit,
     onSubmitInstall: () -> Unit,
     onRemoveInstalled: (String) -> Unit,
     onBack: () -> Unit,
+    onDedupePromote: () -> Unit,
+    onReinstall: (NpmRowState) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 「刷新」兼作进度续拉（`:ui` 没有常驻轮询循环，见 `pollInstallEvents` 的 KDoc）：
@@ -180,13 +199,11 @@ fun NpmScreen(
                 InstallCard(
                     state = state,
                     onDraft = onInstallDraft,
-                    onToggleDev = onToggleDev,
-                    onToggleOffline = onToggleOffline,
                     onSubmit = onSubmitInstall,
                 )
             }
-            item { MaintenanceCard(state, onMaintenance) }
-            item { DependencyListCard(state, onRemoveInstalled) }
+            item { MaintenanceCard(state, onMaintenance, onDedupePromote) }
+            item { DependencyListCard(state, onRemoveInstalled, onReinstall) }
             // 日志大框在**最下面**（用户口径），上面是这一屏的读数与动作。
             item { LogCard(state) }
         }
@@ -194,12 +211,19 @@ fun NpmScreen(
 }
 
 /**
- * 安装输入行 + 旗标 + 阶段进度条（§10.9 第 1 条的变更半边，2026-10-09 批 87）。
+ * 安装输入行 + 阶段进度条（§10.9 第 1 条的变更半边，2026-10-09 批 87）。
  *
- * **两颗旗标只有两颗**（`-D` 与「离线优先」）：§10.9 第 1 条还提到「registry 选择器」，
- * 但镜像源已经是一个**全局**配置面（§10.9 第 8 条，管理面板 → 镜像源管理），
- * 在这里再放一个选择器就是第二份 registry 判据 —— 而且它会让人以为"这次安装用这家、
- * 下次用那家"，与"全局缺省"那条口径直接冲突。
+ * **一颗旗标都没有了**（2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」）。
+ * 原先两颗（`-D` 与「离线优先」）各自下线的理由不同：
+ * - 「离线优先」**不是删掉这个能力**，而是把它变成写死的缺省（`--prefer-offline`，
+ *   见 `NpmInstallOps.INSTALL_FLAGS`）。做成一颗可关的旗标等于说"还有另一种装法"，
+ *   而 §10 的离线能力全建在 npm 缓存上 —— 先查缓存没有理由关；
+ * - `-D` 是**语义**上的下线：它装的东西属于"开发这个包的人才要"的那一档，而这一屏
+ *   回答的是"这个脚本跑起来要什么"。
+ *
+ * §10.9 第 1 条还提到「registry 选择器」，同样不放：镜像源是一个**全局**配置面
+ * （§10.9 第 8 条，管理面板 → 镜像源管理），在这里再放一个选择器就是第二份 registry
+ * 判据 —— 而且它会让人以为"这次安装用这家、下次用那家"，与"全局缺省"那条口径直接冲突。
  *
  * **进度条是六档阶段条，不是百分比**（见 [InstallProgressState] 的 KDoc）：
  * job 数拿不到，画百分比就是编一个数。
@@ -212,8 +236,6 @@ fun NpmScreen(
 private fun InstallCard(
     state: NpmState,
     onDraft: (String) -> Unit,
-    onToggleDev: (Boolean) -> Unit,
-    onToggleOffline: (Boolean) -> Unit,
     onSubmit: () -> Unit,
 ) {
     PanelCard {
@@ -249,30 +271,10 @@ private fun InstallCard(
                     onClick = onSubmit,
                 )
             }
-            Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                PillButton(
-                    text = "-D（开发依赖）",
-                    selected = state.installDev,
-                    enabled = state.canInstall,
-                    onClick = { onToggleDev(!state.installDev) },
-                )
-                PillButton(
-                    text = "离线优先",
-                    selected = state.installOffline,
-                    enabled = state.canInstall,
-                    onClick = { onToggleOffline(!state.installOffline) },
-                )
-            }
-            // 「离线优先」不是「仅离线」—— 这条旗标让 npm 先查缓存、缺了仍会联网。
-            // 用一个词把两件事混成一件，用户会在断网时以为"勾了就能装上"。
-            ToneText(
-                "「离线优先」= 先查本地缓存，缺的仍会联网；真正断网要装，靠的是缓存里恰好有全部依赖。",
-                StatusTone.MUTED,
-                style = MaterialTheme.typography.bodySmall,
-            )
+            // 这里原来还有一行两颗旗标（`-D` / 「离线优先」）与它下面那句解释 ——
+            // 2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」整段下线，
+            // 理由见本函数的 KDoc。**空了就是空了**：不拿一句"离线优先已开启"去填这个位置
+            // —— 那是把"没有开关"说成"有个开关正开着"。
             state.installProgress?.let { p -> InstallProgressRow(p) }
         }
     }
@@ -387,7 +389,11 @@ private fun InstallProgressRow(p: InstallProgressState) {
  * `InstallCoordinatorTest`「list 同一包同版本落两个位置 → 归一成一条」。
  */
 @Composable
-private fun DependencyListCard(state: NpmState, onRemove: (String) -> Unit) {
+private fun DependencyListCard(
+    state: NpmState,
+    onRemove: (String) -> Unit,
+    onReinstall: (NpmRowState) -> Unit,
+) {
     // 初值 false = 默认收起（用户口径）。用 `rememberSaveable` 与任务中心那两个组头
     // 同一条：转屏、退到后台再回来，不该把用户刚点开的那张卡弹回去。
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -414,7 +420,12 @@ private fun DependencyListCard(state: NpmState, onRemove: (String) -> Unit) {
                 // 与设置页/管理面板同一条 —— TG 的列表靠行距与左缩进分列，不靠分隔线
                 // （见 `SettingsCard` 的 KDoc）。
                 items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
-                    InstalledRow(row, enabled = state.canInstall, onRemove = onRemove)
+                    InstalledRow(
+                        row = row,
+                        enabled = state.canInstall,
+                        onRemove = onRemove,
+                        onReinstall = onReinstall,
+                    )
                 }
             }
         }
@@ -670,22 +681,35 @@ private fun ProjectPickerCard(
 /**
  * 维护动作一行（§10.9 第 5 条「包大小管理页」的动作半边）。
  *
- * 四颗按钮，**每颗都写清它改的是什么**（不靠用户猜 `dedupe` 是什么意思）：
- * `prune`/`dedupe`/`ci` 入队走安装会话（几十秒量级），缓存回收是瞬间的本地删除 ——
- * 后者的回执是**一次算出来的读数**而不是"入队了"，两者在界面上不共用一套措辞。
+ * **两颗按钮**（2026-10-17 第四批从三颗减到两颗），每颗都写清它改的是什么
+ * （不靠用户猜 `dedupe` 是什么意思）：
+ * - 「清理未声明依赖」= `prune`：删掉 lockfile 里没有声明的那些。文案 2026-10-17 改口
+ *   （用户口径「清理多余包名字改成清理未声明依赖」）—— 旧名字把一件**有判据**的事
+ *   （lock 里有没有它）说成了主观判断（"多余"由谁定？）；
+ * - 「依赖去重」= `dedupe` **+ 提升到全局**：用户口径「依赖去重执行后让它把依赖自动放进
+ *   全局作用域中」。它不再只是 [NpmMaintenanceAction.DEDUPE] 一次的转手，走的是
+ *   `runDedupeAndPromoteOp`（两段、两个作用域，各自的成败分开说 —— 见那个函数的 KDoc）。
+ *
+ * 下线的那颗是「按 lock 重装」（`ci`，用户口径「去除按lock重装」）：它要求先有一次
+ * 成功安装签出的 lock，签名不对会被拒 —— 这个门禁在本页解释成本高、收益又只有一种
+ * 场景（lock 与 node_modules 漂了）。宿主的 `NpmMaintenanceAction.CI` 与那条验签路径
+ * **都还在、也还测着**，控制台照样敲得动，只是本页不再有入口。
  *
  * **不做「cache clean 全清」**（用户 2026-10-09 裁定）：§10 整卷的离线能力全建在
- * npm 缓存上，全清等于把紧挨着的「按 lock 重装」变成必须联网。这颗按钮删的是
- * 「没有任何项目 lock 需要的那些」，按钮文案因此写「回收」而不是「清空」。
+ * npm 缓存上，全清等于把离线安装整个废掉。宿主那颗回收删的是「没有任何作用域 lock
+ * 需要的那些」，因此文案写「回收」而不是「清空」。
  *
- * 三颗维护按钮在任一动作进行中**整体禁用**（`globalSession` 全局互斥，同时只跑一个
- * 安装会话 —— 只禁被按下的那颗会让另外两颗看起来还能按，按下去是排队，用户以为卡了）。
+ * 两颗维护按钮在任一动作进行中**整体禁用**（`globalSession` 全局互斥，同时只跑一个
+ * 安装会话 —— 只禁被按下的那颗会让另一颗看起来还能按，按下去是排队，用户以为卡了）。
  * 被按下的那颗显示「进行中」，所以 [NpmState.maintenance] 记的是**哪一个**。
+ * 「依赖去重」那颗按下时记的仍是 [NpmMaintenanceAction.DEDUPE]：提升是它的**后半段**，
+ * 不是另一件并列的事。
  */
 @Composable
 private fun MaintenanceCard(
     state: NpmState,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
+    onDedupePromote: () -> Unit,
 ) {
     val busy = state.maintenance
     PanelCard {
@@ -701,21 +725,35 @@ private fun MaintenanceCard(
                 Modifier.fillMaxWidth().padding(top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // 三颗维护按钮在**任一动作**进行中整体禁用（`globalSession` 全局互斥，同时只跑一个
-                // 安装会话）—— 包括安装输入行那次：只禁被按下的那颗会让另外几颗看起来还能按，
+                // 两颗维护按钮在**任一动作**进行中整体禁用（`globalSession` 全局互斥，同时只跑一个
+                // 安装会话）—— 包括安装输入行那次：只禁被按下的那颗会让另一颗看起来还能按，
                 // 按下去是排队，用户以为卡了。
                 val enabled = state.canInstall || busy != null
-                MaintenanceButton("清理多余包", NpmMaintenanceAction.PRUNE, busy, enabled, onMaintenance)
-                MaintenanceButton("依赖去重", NpmMaintenanceAction.DEDUPE, busy, enabled, onMaintenance)
-                MaintenanceButton("按 lock 重装", NpmMaintenanceAction.CI, busy, enabled, onMaintenance)
+                MaintenanceButton("清理未声明依赖", NpmMaintenanceAction.PRUNE, busy, enabled, onMaintenance)
+                // 「依赖去重」**不走** [MaintenanceButton] 那条按枚举转手的路：它要做两件事
+                // （去重 + 提升到全局），而 [MaintenanceButton] 的回调签名是
+                // `(NpmMaintenanceAction) -> Unit` —— 硬塞进去就得让 `onMaintenance` 去猜
+                // "这次 dedupe 是不是还要顺带提升"，那等于把这段编排拆到两个地方。
+                // 忙碌判据仍与它同源（都看 `busy == DEDUPE`）。
+                PillButton(
+                    text = if (busy == NpmMaintenanceAction.DEDUPE) "依赖去重…" else "依赖去重",
+                    selected = busy == NpmMaintenanceAction.DEDUPE,
+                    enabled = enabled,
+                    onClick = onDedupePromote,
+                )
             }
             // 「回收缓存」那颗按钮**不在这儿**（2026-10-17 用户口径：缓存那一行「右侧弄成清理
             // 的按钮」）—— 它搬到了 [StorageCard] 的缓存行里，与它要腾的那份读数同一行：
             // 用户按下去图的就是看那个数字变没变。
-            // 这一句不是装饰：「按 lock 重装」会先验 lock 签名，签名不对会被拒，
-            // 用户有权在按之前知道门禁是什么。
+            // 这一句不是装饰：去重改的是**落盘的那棵树**，用户有权在按之前知道它动的是什么。
             ToneText(
-                "「按 lock 重装」会先验 lock 签名，签名不对会被拒。",
+                // 措辞跟着作用域走：作用域已经是「全局」时"提升到全局"是句空话，
+                // 那边的回执会明说这一步跳过了（见 `runDedupeAndPromoteOp`）。
+                if (state.selectedProjectId != null && NpmTargetScope.isGlobal(state.selectedProjectId)) {
+                    "「依赖去重」拍平当前作用域的重复依赖；当前作用域就是全局，没有可提升的对象。"
+                } else {
+                    "「依赖去重」拍平当前作用域的重复依赖，并把这里声明的依赖装一份到全局（别的项目也能用）。"
+                },
                 StatusTone.MUTED,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -741,14 +779,29 @@ private fun MaintenanceButton(
 }
 
 /**
- * 已装包一行：名字 + 版本 + 「卸载」。
+ * 已装包一行：名字 + 版本 + 尺寸 + 「重装 ⟳」+ 「卸载」。
  *
- * **卸载那颗按钮走的是命令通道**（`npm uninstall <name>` → `runNpmPanelCommand`），
- * 不是另开一条 `facade.uninstall` 的宿主口 —— 门禁强度不该取决于用户从哪个界面按下去
- * （与安装输入行同一条纪律）。包名来自这份清单（宿主读 lockfile 的结果），不是用户敲的。
+ * **两个动作都走命令通道**（`npm uninstall <name>` / `npm install <name>@<version> --no-save`
+ * → `runNpmPanelCommand`），不是另开 `facade.uninstall` / `facade.reinstall` 的宿主口 ——
+ * 门禁强度不该取决于用户从哪个界面按下去（与安装输入行同一条纪律）。包名与版本都来自
+ * 这份清单（宿主读 lockfile 的结果），不是用户敲的。
+ *
+ * **尺寸（2026-10-17 用户口径「依赖列表显示一下各个依赖占用的空间大小」）**：宿主
+ * 走一遍 `node_modules` 量出来（`NodeModulesSizing.kt` 的 `packageSizesOf`），lockfile 里没有字节数
+ * —— 在此之前 `PkgNode.sizeBytes` 恒为 0，这一格就永远画不出来。
+ * 量不到（包在 lock 里、盘上却没有）→ **不画**（[NpmRowState.sizeLabel] 为 null），
+ * 不写 "0 B"：与这一页另两处尺寸同一条纪律，0 B 是在说"这个包不占地方"。
+ *
+ * 尺寸用[StatusTone.MUTED]小字、贴着版本号后面：它是**读数**不是动作，
+ * 与右边那两颗按钮拉开字形差别，否则一行里四个东西分不出哪些能按。
  */
 @Composable
-private fun InstalledRow(row: NpmRowState, enabled: Boolean, onRemove: (String) -> Unit) {
+private fun InstalledRow(
+    row: NpmRowState,
+    enabled: Boolean,
+    onRemove: (String) -> Unit,
+    onReinstall: (NpmRowState) -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -756,6 +809,17 @@ private fun InstalledRow(row: NpmRowState, enabled: Boolean, onRemove: (String) 
     ) {
         Text(row.name, color = ThemeColors.text, modifier = Modifier.weight(1f))
         ToneText(row.version, StatusTone.MUTED)
+        row.sizeLabel?.let {
+            ToneText(
+                it,
+                StatusTone.MUTED,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+        // 重装排在「卸载」**前面**：「卸载」是不可逆的那一颗（这一屏没有确认框），
+        // 主动作排在外侧等于把手滑的落点放在破坏性按键上（与项目页「▶ 在 ⋮ 左边」同一条读法）。
+        ReinstallButton(name = row.name, enabled = enabled, onClick = { onReinstall(row) })
         PillButton(
             text = "卸载",
             selected = false,
@@ -765,3 +829,45 @@ private fun InstalledRow(row: NpmRowState, enabled: Boolean, onRemove: (String) 
         )
     }
 }
+
+/**
+ * 行尾那颗 ⟳（重装这一行那个包）—— **图标按钮**，与[InstalledRow]的「卸载」并排
+ * （用户口径 2026-10-17：「在依赖列表里，加一个重装的图标按钮」，追问后定为「每一行一个
+ * （和「卸载」并排）」）。
+ *
+ * **为什么是图标而不是第二颗胶囊**：这一行已经有两个读数（版本、尺寸），再放一颗带字的
+ * 胶囊会把包名挤到一格；重装的语义（同一件事再来一遍）正好是 ⟳ 这个字形在说的事。
+ *
+ * 触控 36dp 是有算术的：行内上下各 4dp 内边距，36 + 4 + 4 = 44 = [ROW_MIN_HEIGHT]
+ * —— 再大这颗按钮会把**每一行**都撑高，一张 8 行的列表就多出半行的高度。
+ *
+ * 位置绑定（[contentDescription]）**带上包名**：一颗只说"重装"的按钮在无障碍朗读里
+ * 与另一行的同名按钮分不开（与项目页行尾那颗 ⋮ 的「更多（<文件名>）」同一条）。
+ */
+@Composable
+private fun ReinstallButton(name: String, enabled: Boolean, onClick: () -> Unit) {
+    val palette = ThemeColors
+    Box(
+        Modifier
+            .size(REINSTALL_TOUCH)
+            .pressable(
+                enabled = enabled,
+                role = Role.Button,
+                overlay = palette.menuSelector,
+                shape = CircleShape,
+                onClick = onClick,
+            )
+            .semantics { contentDescription = "重装（$name）" },
+        contentAlignment = Alignment.Center,
+    ) {
+        // 色取次级灰而不是黑：它是行尾的第二颗按钮，不是这一行的主动作
+        // （主动作是「卸载」，那颗是带字的胶囊，本身就重）。
+        Glyph(kind = GlyphKind.REFRESH, tint = palette.textTertiary, size = REINSTALL_ICON)
+    }
+}
+
+/** 重装那颗 ⟳ 的触控目标（见 [ReinstallButton] 里那道算术）。 */
+private val REINSTALL_TOUCH = 36.dp
+
+/** 重装那颗 ⟳ 的图标边长。 */
+private val REINSTALL_ICON = 18.dp

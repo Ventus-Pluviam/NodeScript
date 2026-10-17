@@ -127,6 +127,9 @@ enum class GlyphKind {
 
     /** 发送（悬浮窗底部输入框右侧那颗箭头）：一条横杆 + 箭头。 */
     SEND,
+
+    /** 重装（依赖列表每行那颗 ⟳）：开口圆环 + 弧端箭头。 */
+    REFRESH,
 }
 
 /** 线宽 ÷ 图标边长。四个字形共用一条，粗细才不会一格一个样。 */
@@ -499,6 +502,34 @@ fun Glyph(
             GlyphKind.SEND -> {
                 drawPath(path(0.16f to 0.50f, 0.80f to 0.50f), tint, style = stroke)
                 drawPath(path(0.58f to 0.28f, 0.82f to 0.50f, 0.58f to 0.72f), tint, style = stroke)
+            }
+
+            // 重装：开口圆环（40°→320°，缺口在右侧）+ 弧端一支箭头 —— 「同一件事再来一遍」
+            // 就是这个字形在说的话。**开口 + 箭头两样都要**：只画一个整圆会被读成"环形进度"
+            // 或"齿轮"，只画半圈又认不出方向。
+            //
+            // 箭头那三点的来历（不是随手挑的坐标）：弧的**终点**在 320°，即
+            // `(0.5 + 0.36·cos320°, 0.5 + 0.36·sin320°) ≈ (0.776, 0.268)`；
+            // 该点的切线（行进方向，顺时针）是 `(-sin320°, cos320°) ≈ (0.64, 0.77)`，
+            // 两支倒刺就是从终点沿**反切线**转 ±35°、各退 0.15 得到
+            // —— 于是"尖朝行进方向、V 口朝后"这句话在坐标上成立。
+            // 18dp 下这条箭头只剩两三个像素，但它给出的**方向**比精度重要。
+            GlyphKind.REFRESH -> {
+                val r = 0.36f * u
+                drawArc(
+                    color = tint,
+                    startAngle = 40f,
+                    sweepAngle = 280f,
+                    useCenter = false,
+                    topLeft = Offset(0.5f * u - r, 0.5f * u - r),
+                    size = Size(2 * r, 2 * r),
+                    style = stroke,
+                )
+                drawPath(
+                    path(0.763f to 0.119f, 0.776f to 0.268f, 0.631f to 0.230f),
+                    tint,
+                    style = stroke,
+                )
             }
         }
     }

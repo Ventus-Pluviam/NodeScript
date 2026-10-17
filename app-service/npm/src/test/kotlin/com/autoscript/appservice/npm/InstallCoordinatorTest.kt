@@ -2057,6 +2057,175 @@ class InstallCoordinatorTest {
         assertEquals(0L, c.cacheStorage().totalBytes)
     }
 
+    // ═══ 声明的依赖 → 提升到全局（2026-10-17「依赖去重执行后让它把依赖自动放进全局作用域中」） ═══
+
+    /**
+     * 取的是**声明的**依赖（`dependencies` + `devDependencies`），不是 lock 的闭包。
+     *
+     * 三条一起断，因为它们是同一个决定的三个面：
+     * - **闭包太大**：lock 的 500 个包全提到全局，等于每次点这颗按钮都把整棵树抄一遍；
+     * - **范围而不是锁定版本**：`axios@^1.7.0` 让全局那份跟着项目一起走小版本，
+     *   写死 `1.7.0` 反而会与项目里那棵树分家；
+     * - **同名只算一次、按名字排序**：否则两个段里都写了的包会被拼进 argv 两遍
+     *   （npm 会报重复），而顺序不定则每次提升的 argv 都不一样 —— 没法对拍。
+     */
+    @Test
+    fun `声明的依赖：两个段都要、带范围、排序、同名只算一次`() {
+        val root = Files.createDirectories(layout.projectRoot(ProjectId("p1")))
+        Files.write(
+            root.resolve("package.json"),
+            (
+                """{"name":"p1","version":"1.0.0",""" +
+                    """"dependencies":{"esbuild":"^0.21.5","axios":"^1.7.0","left-pad":""},""" +
+                    """"devDependencies":{"jest":"~29.0.0","axios":"^1.7.0"}}"""
+                ).toByteArray(),
+        )
+
+        assertEquals(
+            listOf("axios@^1.7.0", "esbuild@^0.21.5", "jest@~29.0.0", "left-pad"),
+            NpmScriptResolver.declaredSpecs(root),
+        )
+    }
+
+    @Test
+    fun `声明的依赖：没有清单是 null，有清单但没声明是空清单`() {
+        val root = Files.createDirectories(layout.projectRoot(ProjectId("p1")))
+        assertNull(NpmScriptResolver.declaredSpecs(root), "没清单 = 无从知道要提升什么")
+
+        Files.write(root.resolve("package.json"), """{"name":"p1","version":"1.0.0"}""".toByteArray())
+        assertEquals(
+            emptyList<String>(),
+            NpmScriptResolver.declaredSpecs(root),
+            "有清单、只是没声明依赖 —— 与「没有清单」是两件事（上游两句话也不同）",
+        )
+    }
+
+    /**
+     * 提升走的是**与控制台逐字相同的那条重操作路**（门禁强度不取决于用户是从哪个界面
+     * 按下去的），且落点是 `files/scripts/` 那一棵 —— 项目里那些包靠 Node 向上查找自动优先，
+     * 所以不需要任何 NODE_PATH 之类的额外机制（见 `NpmTargetScope` 的 KDoc）。
+     */
+    @Test
+    fun `提升到全局：装到 files_scripts 那一棵，回显记在全局那份控制台里`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0"}}""")
+        val exec = FakeExecutor()
+        val c = coordinator(executor = exec)
+
+        c.promoteToGlobal("p1")
+
+        val op = exec.calls.single()
+        assertEquals(NpmTargetScope.GLOBAL, op.projectId, "目标固定是全局作用域")
+        assertEquals(listOf("install", "axios@^1.7.0", "--prefer-offline"), op.args)
+        assertEquals(layout.projectsRoot, op.projectRoot, "落点是 files/scripts/ 本身")
+
+        val lines = c.consoleOutput(NpmTargetScope.GLOBAL, 0, 16).lines
+        assertTrue(
+            lines.any { it.line.text.contains("axios@^1.7.0") },
+            "这次安装真跑在全局，账就得记在全局那份上：${lines.map { it.line.text }}",
+        )
+    }
+
+    @Test
+    fun `提升到全局：没清单、没声明各是一句话，且都不排队`() = runBlocking {
+        val exec = FakeExecutor()
+        val c = coordinator(executor = exec)
+        Files.createDirectories(layout.projectRoot(ProjectId("p1")))
+
+        val noManifest = assertThrows(AutojsException::class.java) {
+            runBlocking { c.promoteToGlobal("p1") }
+        }
+        assertEquals(ErrorCode.ERR_FILE_NOT_FOUND, noManifest.error)
+        assertTrue(noManifest.message!!.contains("package.json"), "要说清缺的是哪份东西")
+
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{}}""")
+        val empty = assertThrows(AutojsException::class.java) {
+            runBlocking { c.promoteToGlobal("p1") }
+        }
+        assertEquals(ErrorCode.ERR_NOT_FOUND, empty.error)
+        assertTrue(empty.message!!.contains("dependencies"), "空声明与没清单不是一回事：${empty.message}")
+
+        assertTrue(exec.calls.isEmpty(), "两次都不该排队")
+    }
+
+    // ═══ 每行尺寸（2026-10-17「依赖列表显示一下各个依赖占用的空间大小」） ═══
+
+    /**
+     * 字节按**顶层那一段**分摊 —— 判据见 `InstallCoordinator.topLevelPkgOf`。
+     *
+     * 这里刻意把三类容易算错的都摆上：
+     * - **scoped 包**取前两段（`@babel/core`），只取第一段的话 `@babel` 会变成一个包名；
+     * - **`.bin` 那堆 shim 与 `.package-lock.json`** 不算在任何包头上：那是 npm 的记账；
+     * - **嵌套的**（`esbuild/node_modules/tiny`）算在 `esbuild` 头上 —— 它是 esbuild 装进来的；
+     * - lock 里有、盘上没有的包给 **0**（不是省略）：界面据此**不画**那一格，
+     *   而"没量到"与"这个包不占地方"在屏幕上必须是两句话。
+     */
+    @Test
+    fun `每行尺寸：按顶层包分摊字节，记账文件不算在任何包头上`() = runBlocking {
+        val nm = Files.createDirectories(layout.nodeModules(ProjectId("p1")))
+        val esbuild = Files.createDirectories(nm.resolve("esbuild"))
+        Files.write(esbuild.resolve("bin"), ByteArray(1000))
+        Files.write(esbuild.resolve("README"), ByteArray(24))
+        Files.write(Files.createDirectories(nm.resolve("@babel/core")).resolve("index.js"), ByteArray(500))
+        Files.write(Files.createDirectories(nm.resolve(".bin")).resolve("esbuild"), ByteArray(64))
+        // 散在 node_modules 根下的文件（nameCount = 1）与 scope 目录下的散文件（nameCount = 2）
+        // —— 都构不成一个包，两个都不许出现在结果里。
+        Files.write(nm.resolve(".package-lock.json"), ByteArray(2048))
+        Files.write(nm.resolve("README.md"), ByteArray(16))
+        Files.write(Files.createDirectories(nm.resolve("@babel")).resolve("README.md"), ByteArray(8))
+        Files.write(
+            Files.createDirectories(nm.resolve("esbuild/node_modules/tiny")).resolve("index.js"),
+            ByteArray(10),
+        )
+        seedProjectLock("p1", "esbuild" to null, "@babel/core" to null, "not-on-disk" to null)
+
+        val p1 = coordinator().snapshot().projects.single { it.projectId == "p1" }
+
+        assertEquals(
+            mapOf("esbuild" to 1034L, "@babel/core" to 500L, "not-on-disk" to 0L),
+            p1.installed.associate { it.name to it.sizeBytes },
+            "esbuild = 1000 + 24 + 10（嵌套的算它的）；.bin 那 64 字节不落在任何包上",
+        )
+
+        // 判据本身单独再断一次（**不是**重复上面那条）：上面那半个断言只看得见 lock 里有名字的包，
+        // 于是"把 `.bin` 也算成一个包"这种错它**发现不了**（多出来的键根本进不了那张表）。
+        // 这里断的是分摊结果的原样，`packageSizesOf` 是 internal，测试看得见。
+        val raw = packageSizesOf(nm, System.currentTimeMillis())
+        assertEquals(
+            setOf("esbuild", "@babel/core"),
+            raw.keys,
+            "记账文件（.bin/、.package-lock.json）与散文件都不成包：$raw",
+        )
+        assertEquals(1034L, raw["esbuild"])
+        assertEquals(500L, raw["@babel/core"])
+    }
+
+    /**
+     * 与 [InstallCoordinator.storage] 同一条 TTL 纪律：这一趟是**全量遍历**，
+     * 每次都走一遍盘的话，依赖列表每刷新一次就要在几十万个文件上爬一遍。
+     *
+     * 代价如实记：盘上变了而时钟没走 → 回的是缓存里的旧值（陈旧上界 = TTL）。
+     */
+    @Test
+    fun `每行尺寸走缓存：TTL 内不重算，过期才重测`() = runBlocking {
+        var clock = 1_000_000L
+        val c = coordinator(now = { clock })
+        val nm = Files.createDirectories(layout.nodeModules(ProjectId("p1")))
+        val pkg = Files.createDirectories(nm.resolve("esbuild"))
+        Files.write(pkg.resolve("index.js"), ByteArray(1000))
+        seedProjectLock("p1", "esbuild" to null)
+
+        // `projects` 里还有一条全局作用域（`snapshot()` 最后那条永远在），故按 id 挑。
+        suspend fun p1() = c.snapshot().projects.single { it.projectId == "p1" }.installed.single().sizeBytes
+
+        assertEquals(1000L, p1())
+
+        Files.write(pkg.resolve("index.js"), ByteArray(4000))
+        assertEquals(1000L, p1(), "TTL 内必须命中缓存，不再遍历")
+
+        clock += InstallCoordinator.SIZE_CACHE_TTL_MILLIS + 1
+        assertEquals(4000L, p1(), "TTL 过期必须重测")
+    }
+
     /** 记录式执行体（真引擎未接时它是 T1 的唯一可断言落点）。每次调用清一次记录面。 */
     private fun recording(): ScriptOpExecutor {
         scriptOps.clear()

@@ -18,6 +18,10 @@ class PackageManagerFacadeContractTest {
             // 重操作
             "install", "ci", "update", "uninstall", "dedupe", "prune",
             "audit", "importOfflineBundle", "importTarball", "cancel",
+            // 提升到全局（2026-10-17「依赖去重执行后让它把依赖自动放进全局作用域中」——
+            // 「去重并提升到全局」那颗按钮的后半。与 install 同族：它就是把**声明的**依赖
+            // 装一份到全局作用域，故走同一条重操作路，不新开一条"搬包"的语义）
+            "promoteToGlobal",
             // 轻操作
             "list", "offlineGap", "config", "storage", "snapshot",
             // 全局镜像源（§10.9 第 8 条；读口 + 写口，界面不经桥）

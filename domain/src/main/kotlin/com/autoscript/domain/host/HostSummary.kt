@@ -539,6 +539,27 @@ interface HostSummary {
         )
 
     /**
+     * 把一个项目声明的依赖**提升到全局作用域**（2026-10-17 用户口径：依赖去重之后
+     * 「把依赖自动放进全局作用域中」）。
+     *
+     * 与 [runNpmMaintenance] 是**两条口**而不是给那个枚举加一个动作：这条的产物落在
+     * **另一个作用域**上（`files/scripts/node_modules`），而维护那三颗按钮动的都是
+     * "当前作用域这一棵"。合成一个动作名会让"这颗按钮动的是谁"在枚举上读不出来。
+     *
+     * 语义与三条刻意（取声明而不是闭包、带范围而不是版本、固定全局）见
+     * [com.autoscript.domain.npm.PackageManagerFacade.promoteToGlobal]。
+     *
+     * 项目没有 `package.json` / 没声明任何依赖时**抛**（不返回空句柄冒充成功）。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
+     */
+    suspend fun promoteNpmToGlobal(projectId: String): com.autoscript.domain.npm.InstallHandle =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "提升到全局未接线：本宿主没有接上 npm 安装会话入口",
+        )
+
+    /**
      * 控制台输出读数（seq 游标拉取，与 [console] 同口径）。
      *
      * [NpmConsoleSnapshot.running] 由实现按**句柄账**判定（不是「有没有新行」）：

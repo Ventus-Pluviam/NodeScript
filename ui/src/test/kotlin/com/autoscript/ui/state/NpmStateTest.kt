@@ -167,6 +167,38 @@ class NpmStateTest {
         assertNull(NpmState.of(NpmPanelSnapshot(listOf(project("demo")))).cacheSizeLabel, "量不到 → 不画")
     }
 
+    /**
+     * 每行那个尺寸读数（2026-10-17 用户口径「依赖列表显示一下各个依赖占用的空间大小」）。
+     *
+     * 三态各自钉一句：量到就说数字、**量不到就不画**、量到 0 也**不画** ——
+     * 后两样都来自宿主同一个约定（`sizeBytes <= 0` = 这个包不在盘上，见 [NpmRowState.sizeLabel]），
+     * 而 "0 B" 在屏幕上说的是"这个包不占地方"，那是另一句话。
+     * 宿主侧量得对不对不由这一条管（那是 `InstallCoordinatorTest` 的事）。
+     */
+    @Test
+    fun `每行尺寸：量到说数字，量不到、量到 0 都不画`() {
+        val state = NpmState.of(
+            NpmPanelSnapshot(
+                listOf(
+                    project(
+                        "demo",
+                        installed = listOf(
+                            PkgNode("esbuild", "0.21.5", 3L * 1024 * 1024),
+                            PkgNode("@babel/core", "7.24.0"),
+                            PkgNode("zero", "1.0.0", 0),
+                            PkgNode("tiny", "1.0.0", 512),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("3 MB", null, null, "512 B"),
+            state.installed.map { it.sizeLabel },
+            "没量到与量到 0 都不画；量到的照实说",
+        )
+    }
+
     @Test
     fun `已装清单保留名字与版本`() {
         val state = NpmState.of(

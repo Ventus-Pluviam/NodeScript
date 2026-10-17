@@ -71,6 +71,39 @@ internal object NpmScriptResolver {
     }
 
     /**
+     * 项目 `package.json` 里**声明**的依赖，拼成可以直接喂给 `npm install` 的包说明符
+     * （2026-10-17，「去重并提升到全局」那条路的取数口）。
+     *
+     * 两段都收（`dependencies` + `devDependencies`）、**顺序固定**（按名字排序）：
+     * - 为什么连 `devDependencies` 一起：提升到全局是为了"别的项目也能用"，而全局那份
+     *   清单里没有"开发/生产"这个区分（npm 只对**当前项目**算 `--omit=dev`）。挑挑拣拣
+     *   反而会让"我明明提升了、另一个项目却找不到"变成一个说不清的现象。
+     * - 为什么排序：同一次提升两次跑出来的命令必须逐字相同（日志能对上、测试能断言）。
+     *
+     * **范围原样带上**（`{"axios": "^1.7.0"}` → `axios@^1.7.0`）：全局那份跟着项目一起走小版本，
+     * 两边不会分家；钉死到某一次 lock 里的具体版本则项目一升级就对不上。没写范围的
+     * （`"axios": ""`）就只给名字。
+     *
+     * manifest 不存在 → `null`（与 [projectScripts] 同款：那是"没有这个项目 / 还没装过"，
+     * 不是"声明了 0 条"）；声明段缺失或为空 → 空表。
+     */
+    fun declaredSpecs(projectRoot: Path): List<String>? {
+        val manifest = manifestOf(projectRoot) ?: return null
+        val out = ArrayList<Pair<String, String>>()
+        for (section in listOf("dependencies", "devDependencies")) {
+            val fields = (manifest[section] as? DomainJson.Value.Obj)?.fields ?: continue
+            for ((name, v) in fields) {
+                if (name.isBlank()) continue
+                val range = (v as? DomainJson.Value.S)?.v?.trim().orEmpty()
+                out += name to range
+            }
+        }
+        return out.distinctBy { it.first }
+            .sortedBy { it.first }
+            .map { (name, range) -> if (range.isEmpty()) name else "$name@$range" }
+    }
+
+    /**
      * `node_modules` 里声明了名为 [bin] 的 bin 的那个包（纯 JS 白名单已过）。
      *
      * 扫描深度 1（`node_modules/<pkg>`）+ 深度 2 的 scope（`node_modules/@scope/<pkg>`），

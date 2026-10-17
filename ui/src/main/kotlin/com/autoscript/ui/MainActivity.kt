@@ -100,6 +100,8 @@ import com.autoscript.ui.state.pollConsoleWhileRunning
 import com.autoscript.ui.state.removeInstalled
 import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
+import com.autoscript.ui.state.runDedupeAndPromoteOp
+import com.autoscript.ui.state.reinstallInstalled
 import com.autoscript.ui.state.loadNpmSnapshot
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
@@ -831,11 +833,17 @@ class MainActivity : ComponentActivity() {
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
                 onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },
-                onToggleDev = { npmState = npmState.copy(installDev = it) },
-                onToggleOffline = { npmState = npmState.copy(installOffline = it) },
                 onSubmitInstall = { scope.launch { npmState = submitInstall(hostSummary(), npmState) } },
                 onRemoveInstalled = { name -> scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) } },
                 onBack = onCloseNpm,
+                // 「依赖去重」那颗按钮是**两件事**（去重 + 提升到全局），所以它有自己的一条
+                // 入口而不是从 `onMaintenance` 转手 —— 见 `MaintenanceCard` 的 KDoc。
+                onDedupePromote = { scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) } },
+                onReinstall = { row ->
+                    // 名字与版本都取自这一行（宿主读 lockfile 的结果），不是用户敲的 ——
+                    // 走的是与「卸载」同一条命令通道，门禁强度因此不取决于按的是哪一颗。
+                    scope.launch { npmState = reinstallInstalled(hostSummary(), npmState, row.name, row.version) }
+                },
                 modifier = Modifier,
             )
             ManagementPage.ENV -> ScriptEnvScreen(

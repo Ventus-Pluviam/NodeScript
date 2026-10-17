@@ -1037,6 +1037,21 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 把项目声明的依赖提升到全局作用域（2026-10-17，[HostSummary] 的生产实现）。
+     *
+     * 与 [runNpmMaintenance] 同一条纪律：走的是**装配产物里那个 facade**（第二个
+     * `InstallCoordinator` 会拿另一份 layout，那就装到别处去了）；未接线**抛**，
+     * 不返回一个空句柄 —— 界面会把它念成"已提升"，而磁盘上什么也没发生。
+     */
+    override suspend fun promoteNpmToGlobal(projectId: String): InstallHandle {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：提升到全局暂不可用" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：依赖无处提升到全局（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.promoteToGlobal(projectId)
+    }
+
+    /**
      * 缓存回收（§10.9 第 5 条，[HostSummary] 的生产实现）。
      *
      * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个

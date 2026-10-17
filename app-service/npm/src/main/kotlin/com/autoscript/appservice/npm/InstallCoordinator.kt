@@ -212,26 +212,17 @@ class InstallCoordinator(
     private val handleSeq = AtomicLong(0)
 
     /**
-     * 项目 node_modules 的已测尺寸（键 = projectId），[SIZE_CACHE_TTL_MILLIS] 内直接复用。
+     * 逐包尺寸（键 = projectId → 包名 → 字节），[SIZE_CACHE_TTL_MILLIS] 内直接复用。
      *
-     * 为什么缓存：配额预检原本**每次安装**都全量 `Files.walk` 一遍 node_modules
-     * （大项目十万级文件、秒级），而它跑在拿全局会话锁**之前** —— 直接顶在
-     * 「点安装 → 有反应」之间；`storage()` 读口同理（能力中心轮询会反复问）。
+     * 2026-10-17 新增（用户口径：「依赖列表显示一下各个依赖占用的空间大小」）。不缓存的话，
+     * 依赖管理页每 400ms 一次的续拉都会把**每个作用域**的 node_modules 整棵再走一遍 ——
+     * 那正是 2026-10-17 那次「依赖装多了，一查看就闪退」的形态（当时的 `snapshot()` 已经在
+     * 落 IO，但那是"不阻塞主线程"，不是"可以无限次重算"）。
      *
-     * 为什么敢缓存：这条配额是**项目的礼貌上限**，不是磁盘满的真防线 —— 真防线是
-     * [freeSpaceProbe]，每次安装都真读文件系统可用空间，不受这里影响。代价是
-     * **最多 [SIZE_CACHE_TTL_MILLIS] 的陈旧**：本进程装完**不失效**（一失效就等于
-     * 每次安装照旧全量遍历，正是要修的东西），脚本自己跑 npm 装的那部分更看不见 ——
-     * 期间可能放行一次把项目顶过配额的安装，表现是 npm 自己报 ENOSPC 或下次预检拦下，
-     * 不会静默写坏数据（尺寸只决定「让不让开始」，不参与任何写路径决策）。
-     *
-     * 条目数 = 见过的项目数（每个一条小记录，随项目数有界，不随安装次数增长）——
-     * 与 [projectLocks] 的逐出不同，这里**不能**用完即摘：摘了就等于每次都重算。
+     * 与 [sizeCache] **分开两张表**而不是合成一张：那张只回答"这个作用域一共多大"，
+     * 这张回答"里面每个包多大"，键的粒度不同；合成一张要么每次多算一半用不上的东西，
+     * 要么让两个读口互相覆盖。两张表各自 TTL 一致、各自有界（随项目数增长）。
      */
-    private val sizeCache = ConcurrentHashMap<ProjectId, MeasuredSize>()
-
-    private data class MeasuredSize(val bytes: Long, val atMillis: Long)
-
     private data class TrackedOp(
         val handle: InstallHandle,
         val nonce: String,
@@ -607,7 +598,7 @@ class InstallCoordinator(
             val projects = stats.keys.sorted().map { id ->
                 NpmProjectSnapshot(
                     projectId = id,
-                    installed = list(id, depth = 0),
+                    installed = installedWithSizes(id),
                     offlineGap = offlineGap(id),
                     storage = stats[id],
                     cache = cache,
@@ -631,13 +622,13 @@ class InstallCoordinator(
         return listOf(
             NpmProjectSnapshot(
                 projectId = NpmTargetScope.GLOBAL,
-                installed = list(NpmTargetScope.GLOBAL, depth = 0),
+                installed = installedWithSizes(NpmTargetScope.GLOBAL),
                 offlineGap = offlineGap(NpmTargetScope.GLOBAL),
                 storage = if (exists) {
                     NodeModulesStats(
                         projectId = NpmTargetScope.GLOBAL,
                         pkgCount = LockfileReader.readLocked(layout.globalLockfile).size,
-                        totalBytes = nodeModulesBytes(ProjectId.ROOT),
+                        totalBytes = nodeModulesBytesOf(layout.globalNodeModules, now()),
                     )
                 } else {
                     null
@@ -751,7 +742,7 @@ class InstallCoordinator(
                 out[pid.value] = NodeModulesStats(
                     projectId = pid.value,
                     pkgCount = LockfileReader.readLocked(layout.lockfile(pid)).size,
-                    totalBytes = nodeModulesBytes(pid),
+                    totalBytes = nodeModulesBytesOf(layout.nodeModules(pid), now()),
                 )
             }
             out
@@ -1165,24 +1156,46 @@ class InstallCoordinator(
     }
 
     /**
-     * 项目 node_modules 尺寸：缓存优先，过期才真遍历（见 [sizeCache]；只服务配额预检与 [storage]）。
+     * 已装清单，每条带上它**实际占的字节数**（`PkgNode.sizeBytes`，2026-10-17 新增）。
      *
-     * **这是挂起函数，且整趟落 IO**（2026-10-17）：缓存命中时它一次 `now()` 就返回，
-     * **未命中时它全树遍历** node_modules —— 那是几万个文件的 stat。两个调用方
-     * （[storage] 与 [enqueueHeavy] 的配额预检）都在主线程那条链上（进页面 / 点「安装」），
-     * 而 60s 的 TTL 意味着每隔一分钟就会在主线程上重演一次。声明在这里而不是两个调用点
-     * 各包一层：**做阻塞调用的那一层自己声明它是 IO**（与 [cacheStorage] 同一条）。
+     * 两件事分开取，因为它们本来就是两件事：条目来自 [list]（读 lockfile，权威是 manifest），
+     * 尺寸来自 [packageSizes]（走一遍 node_modules，权威是磁盘）。名字对不上的（lock 里有、
+     * 盘上没有）**保留 0** —— 界面据此不画那一段数字，而不是画成 "0 B"：那是"这个包不占地方"，
+     * 与"这个包不在盘上"是两句话。
      */
-    private suspend fun nodeModulesBytes(projectId: ProjectId): Long =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val at = now()
-            sizeCache[projectId]?.let {
-                if (at - it.atMillis < SIZE_CACHE_TTL_MILLIS) return@withContext it.bytes
-            }
-            DirSizer.sizeBytes(layout.nodeModules(projectId)).also {
-                sizeCache[projectId] = MeasuredSize(it, at)
-            }
-        }
+    /**
+     * 已装清单 + 每包尺寸（2026-10-17 用户口径「依赖列表显示一下各个依赖占用的空间大小」）。
+     *
+     * 量尺寸那一段住在 [NpmPackageSizes.kt]（`packageSizesOf`）：那是它自己一个算法
+     * —— 怎么把字节分摊到包头上、TTL 多长 —— 与"快照怎么拼"不是一件事。
+     * 这里只做一件：把量到的数字贴回清单（**量不到 = 0**，界面据此不画那一格，
+     * 见 `NpmRowState.sizeLabel`）。
+     */
+    private suspend fun installedWithSizes(projectId: String): List<PkgNode> {
+        val sizes = packageSizesOf(layout.nodeModules(ProjectId(projectId)), now())
+        return list(projectId, depth = 0).map { it.copy(sizeBytes = sizes[it.name] ?: 0L) }
+    }
+
+    // ══════════ 提升到全局（2026-10-17，「去重并提升到全局」那条路的后半） ══════════
+
+    /**
+     * 把一个项目**声明的**依赖装一份到全局作用域（语义与三条刻意见
+     * [PackageManagerFacade.promoteToGlobal] 的 KDoc）。
+     *
+     * **走的是与控制台逐字相同的那条重操作路**：同一次 [NpmConsoleKeys.packageSpecsIn]
+     * 取包说明符 → 同一次 [crossCheckRegistry] 多镜像交叉校验 → 同一次 [enqueueHeavy]
+     * （磁盘预检 / 项目锁 / 全局会话 / journal 事务）。门禁强度不该取决于用户是敲进来的
+     * 还是按一颗按钮 —— 与 [runConsoleCommand] 里那段注释同一条纪律。
+     *
+     * ECHO 行落在**全局**那份控制台里（`consoleLine(GLOBAL, …)`）：这次安装真跑在全局，
+     * 把回显记到项目那份去，等于在一个作用域的账本上记另一棵树发生的事。
+     */
+    override suspend fun promoteToGlobal(projectId: String): InstallHandle {
+        val plan = promotePlanOf(layout.projectRoot(ProjectId(projectId)), projectId)
+        consoleLine(NpmTargetScope.GLOBAL, echoLine("npm " + plan.args.joinToString(" "), now()))
+        crossCheckRegistry(NpmTargetScope.GLOBAL, NpmConsoleKeys.packageSpecsIn(plan.specs), listOf("install"))
+        return enqueueHeavy(NpmTargetScope.GLOBAL, plan.args)
+    }
 
     // ══════════ 编排核心 ══════════
 

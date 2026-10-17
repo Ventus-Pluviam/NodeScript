@@ -50,16 +50,6 @@ data class NpmState(
      * 在 JVM 单测里断言"失败时不清草稿"这条纪律。
      */
     val installDraft: String = "",
-    /** 勾了 `-D`（写进 `dependencies.devDependencies`）。 */
-    val installDev: Boolean = false,
-    /**
-     * 勾了「离线优先」（`--prefer-offline`）。
-     *
-     * 措辞是**「优先」不是「仅离线」**：这条旗标让 npm 先查缓存、缺了仍会联网。
-     * 真正的"断网也得装上"是另一回事（那要缓存里恰好有全部闭包），界面不该
-     * 用一个词把两件事混成一件。
-     */
-    val installOffline: Boolean = false,
     /** 有安装/卸载命令在途（防连点；与 [maintenance] 同一条理由）。 */
     val installing: Boolean = false,
     /**
@@ -189,13 +179,11 @@ data class NpmState(
                 ?.takeIf { id -> snapshot.projects.any { it.projectId == id } }
                 ?: snapshot.projects.firstOrNull()?.projectId,
             snapshot = snapshot,
-            // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、旗标勾选、
-            // 「在途」与阶段条都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建
-            // 一份就等于每次刷新把用户打到一半的包名和正在跑的进度条一起清空。
+            // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、「在途」与阶段条
+            // 都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建一份就等于每次刷新
+            // 把用户打到一半的包名和正在跑的进度条一起清空。
             // `installed` 那一侧不需要这样：它本来就来自 `snapshot`（宿主才是权威）。
             installDraft = previous.installDraft,
-            installDev = previous.installDev,
-            installOffline = previous.installOffline,
             installing = previous.installing,
             installProgress = previous.installProgress,
             installSeq = previous.installSeq,
@@ -215,9 +203,8 @@ data class NpmState(
          * 对那个游标却不是）—— 包括 `Finished`，于是阶段条会永远停在「进行中」。
          * 归 0 不是"重头开始"，而是"把这个项目还留在环里的那些事件全取回来"。
          *
-         * 归零的**只有项目域的那两样**：草稿与旗标是用户的输入（`axios` 换个项目照样是
-         * 要装的东西），`installing` 记的是全局在途（安装会话是全局互斥的，换个项目看
-         * 不会让它停下来）。
+         * 归零的**只有项目域的那两样**：草稿是用户的输入（`axios` 换个项目照样是要装的东西），
+         * `installing` 记的是全局在途（安装会话是全局互斥的，换个项目看不会让它停下来）。
          */
         fun withProject(previous: NpmState, projectId: String): NpmState =
             if (previous.selectedProjectId == projectId) {
@@ -284,17 +271,32 @@ internal const val LOG_PAGE = 256
  */
 data class NpmLogLine(val text: String, val tone: StatusTone)
 
-/** 已装包一行（名字 + 版本；`sizeBytes` 不在这一层 —— `list()` 直读 lockfile，量不到尺寸）。 */
+/**
+ * 已装包一行（名字 + 版本 + **尺寸**）。
+ *
+ * **尺寸是 2026-10-17 才有的**（用户口径：「依赖列表显示一下各个依赖占用的空间大小」）。
+ * 在此之前 `PkgNode.sizeBytes` 恒为 0 —— `list()` 直读 lockfile，而 lockfile 里没有字节数。
+ * 现在由宿主的 `snapshot()` 补上（走一遍 node_modules，见 `InstallCoordinator.packageSizes`）。
+ *
+ * [sizeLabel] 的两态与本页另两处尺寸**同一条纪律**：量到就说数字，**量不到就不画** ——
+ * 宿主给的 `sizeBytes <= 0` 意思是"这个包不在盘上"（lock 里有、目录里没有），
+ * 画成 "0 B" 是在说"这个包不占地方"，那是另一句话。
+ */
 data class NpmRowState(
     val name: String,
     val version: String,
+    val sizeBytes: Long = 0,
 ) {
+    /** 人类可读的尺寸（[NpmRowState.bytes] 同款口径）；宿主没量到 → null（界面不画）。 */
+    val sizeLabel: String? get() = if (sizeBytes > 0) bytes(sizeBytes) else null
+
     companion object {
-        fun of(node: com.autoscript.domain.npm.PkgNode) = NpmRowState(node.name, node.version)
+        fun of(node: com.autoscript.domain.npm.PkgNode) =
+            NpmRowState(node.name, node.version, node.sizeBytes)
 
         /**
          * 字节数的可读形态（二进制档，与系统口径一致）。`< 1KB` 不写成 `0KB`；
-         * 整 MB 不带小数（配额是 512 MB，写成 "512.0 MB" 是把常量伪装成测量值）。
+         * 整 MB 不带小数（写成 "512.0 MB" 是把一个整数伪装成测量值）。
          */
         fun bytes(n: Long): String = when {
             n < 1024 -> "$n B"
