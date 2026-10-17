@@ -1,6 +1,7 @@
 package com.autoscript.ui.state
 
 import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.NpmMaintenanceAction
@@ -92,7 +93,19 @@ data class NpmState(
     /** 留的行超过上限、更早的已经裁掉（日志框据此说一句"上面这段不是全部"）。 */
     val consoleTruncated: Boolean = false,
 ) {
-    /** 当前项目的读数（没选 / 读到的快照里没这个项目 → null，界面据此说"没有项目"）。 */
+    /**
+     * 界面怎么说当前作用域（2026-10-17 用户口径：「项目选择改成依赖作用域，然后下拉框加个全局」）。
+     *
+     * 措辞来自 [NpmTargetScope.label]（`""` → 「全局」），**不在界面里另写一份**：
+     * 宿主写给事件/日志的 `projectId` 也是空串，两边对同一个值必须是一种说法。
+     *
+     * 还没读到（[selectedProjectId] 为 null）时给 `"—"` 而不是 `"全局"` —— 那是"还不知道"，
+     * 与"知道，是全局"是两件事。
+     */
+    val scopeLabel: String
+        get() = selectedProjectId?.let { NpmTargetScope.label(it) } ?: "—"
+
+    /** 当前项目的读数（没选 / 读到的快照里没这个作用域 → null，界面据此说"还没有这个作用域"）。 */
     val project: NpmProjectSnapshot?
         get() = snapshot?.projects?.firstOrNull { it.projectId == selectedProjectId }
 

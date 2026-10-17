@@ -5,6 +5,7 @@ import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.npm.NpmRegistryKeys
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.InstallFlags
@@ -1250,6 +1251,113 @@ class InstallCoordinatorTest {
         assertEquals(0, r.keptEntries)
         assertEquals(0, r.keepCount)
         assertFalse(r.indexRebuilt)
+    }
+
+    // ═══ 全局作用域（2026-10-17「项目选择改成依赖作用域，下拉框加个全局」） ═══
+
+    /**
+     * 全局依赖的家就是 `files/scripts/node_modules` —— 它的名字**过得了项目号判据**
+     * （没有点、没有分隔符），不排掉的话依赖面板会凭空多出一个叫 `node_modules` 的"项目"，
+     * 还自带一棵自己的 node_modules 尺寸。用户看到一个自己从没建过的项目。
+     */
+    @Test
+    fun `项目根下的 node_modules 不算项目（那是全局依赖的家）`() = runBlocking {
+        val pkg = Files.createDirectories(layout.globalNodeModules.resolve("left-pad"))
+        Files.write(pkg.resolve("index.js"), ByteArray(4096))
+        seedProjectLock("p1")
+        // 安装暂存目录同名同族（`InstallJournal.stagePath`），安装进行中它会短暂出现在项目根下。
+        Files.createDirectories(layout.projectsRoot.resolve("node_modules.part-abc123"))
+
+        val ids = coordinator().storage().keys
+
+        assertTrue("node_modules" !in ids, "全局那棵不是项目：$ids")
+        assertTrue("node_modules.part-abc123" !in ids, "暂存目录也不是项目：$ids")
+        assertEquals(setOf("p1"), ids, "只该剩真项目")
+    }
+
+    /**
+     * 作用域下拉里**永远有「全局」这一项**（哪怕一次都没装过）—— 没有它，用户就无从
+     * "往全局装第一包"。
+     */
+    @Test
+    fun `快照最后一条永远是全局作用域，没装过时尺寸不画`() = runBlocking {
+        seedProjectLock("p1")
+
+        val snap = coordinator().snapshot()
+
+        assertEquals(
+            listOf("p1", NpmTargetScope.GLOBAL),
+            snap.projects.map { it.projectId },
+            "全局排最后：面板缺省选第一条，插到最前面会悄悄把缺省作用域从「第一个项目」换成「全局」",
+        )
+        val global = snap.projects.last()
+        assertNull(global.storage, "files/scripts/node_modules 还没建 → 不画（不是 0 字节）")
+        assertTrue(global.installed.isEmpty(), "没装过就是没装过")
+    }
+
+    @Test
+    fun `全局装了之后快照里那条带上尺寸与清单`() = runBlocking {
+        val pkg = Files.createDirectories(layout.globalNodeModules.resolve("axios"))
+        Files.write(pkg.resolve("index.js"), ByteArray(2048))
+        seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
+
+        val global = coordinator().snapshot().projects.single { it.projectId == NpmTargetScope.GLOBAL }
+
+        assertEquals(2048L, global.storage!!.totalBytes, "量的是 files/scripts/node_modules")
+        assertEquals(1, global.storage!!.pkgCount, "包数读的是全局那份 lock")
+        assertEquals(listOf("axios"), global.installed.map { it.name })
+    }
+
+    /**
+     * **最容易漏的一处**：全局那份 lock 是项目根下的一个**文件**，而按目录扫的循环只看得见
+     * 目录 —— 漏掉它，凡是"只被全局依赖用着"的包都会被当成没人要的删掉，全局那份离线重装
+     * 当场失效，而用户点这一下时完全看不出自己刚把什么删了。
+     */
+    @Test
+    fun `回收也保全局 lock 需要的包（它在项目根下，目录扫描看不见它）`() = runBlocking {
+        val g = seedCacheContent("global-pkg")
+        val orphan = seedCacheContent("orphan")
+        seedProjectLock(NpmTargetScope.GLOBAL, "g" to g)
+
+        val r = coordinator().reclaimCache()
+
+        assertTrue(Files.isRegularFile(cacheContentFile(g)), "全局 lock 需要的必须留着")
+        assertFalse(Files.exists(cacheContentFile(orphan)), "没有 lock 引用的才删")
+        assertEquals(1, r.removedEntries)
+        assertEquals(1, r.keepCount)
+    }
+
+    @Test
+    fun `全局 lock 读不出来时点名「全局」而不是留个空名字`() = runBlocking {
+        // 目录冒充 lockfile —— 与上面那条项目版同一手法：`LockfileReader` 对半截 JSON 是
+        // 尽力而为不抛，只有这种才真的读失败。
+        Files.createDirectories(layout.globalLockfile)
+        val h = newOpLog()
+
+        coordinator(opLog = h).reclaimCache()
+
+        val detail = h.all().single { it.op == OpName.CACHE_RECLAIM }.detail!!
+        assertTrue(detail.contains("全局"), "点名要说人话，不能留一个空串：$detail")
+        assertTrue(detail.contains("未被保护"), "且要说清后果：$detail")
+    }
+
+    /**
+     * 全局在宿主侧落到 `files/scripts/` 那一棵 —— **与项目走的是同一套寻址**，
+     * 不是另开一条分支（这正是"用根层哨兵编码全局"换来的东西）。
+     */
+    @Test
+    fun `全局作用域读的是 files-scripts 那棵的 lock，与项目不串`() = runBlocking {
+        seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
+        seedProjectLock("p1", "left-pad" to null)
+        val c = coordinator()
+
+        assertEquals(listOf("axios"), c.list("", 0).map { it.name }, "全局那份 lock 落在 files/scripts/ 下")
+        assertEquals(listOf("left-pad"), c.list("p1", 0).map { it.name }, "项目那份落在 files/scripts/p1/ 下")
+        assertEquals(
+            layout.projectsRoot.resolve("node_modules"),
+            layout.globalNodeModules,
+            "全局的 node_modules 就在项目根本层 —— Node 逐级向上找时它才在项目的祖先链上",
+        )
     }
 
     // ═══ 快照导出（§10.9.4 高信任通道） ═══

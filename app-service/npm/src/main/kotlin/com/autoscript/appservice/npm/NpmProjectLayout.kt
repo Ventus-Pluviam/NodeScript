@@ -26,7 +26,55 @@ class NpmProjectLayout(val projectsRoot: Path) {
     fun nodeModules(projectId: ProjectId): Path = projectRoot(projectId).resolve("node_modules")
     fun npmrc(projectId: ProjectId): Path = projectRoot(projectId).resolve(".npmrc")
 
+    /** 全局依赖的 node_modules：`files/scripts/node_modules`（见 [NpmTargetScope]）。 */
+    val globalNodeModules: Path get() = nodeModules(ProjectId.ROOT)
+
+    /** 全局那份清单与锁：`files/scripts/package.json` / `package-lock.json`。 */
+    val globalLockfile: Path get() = lockfile(ProjectId.ROOT)
+
+    /**
+     * 项目根下**真正是项目**的那些目录（已排序），三个枚举点共用。
+     *
+     * 过滤三档，缺一不可：
+     * - 不是目录的（`package.json` / `package-lock.json` / `.npmrc` 这几个文件）；
+     * - 目录名过不了 [ProjectId] 判据的（别人留下的怪目录）；
+     * - **保留名**（[isReservedDirName]）—— 2026-10-17 起 `files/scripts/` 本层多了一个
+     *   `node_modules`（全局依赖的家），而这个名字**过得了项目号判据**（没有点、没有分隔符），
+     *   不排掉的话面板的项目列表里会凭空多出一个叫 `node_modules` 的"项目"，
+     *   它还会带上一棵自己的 node_modules 尺寸 —— 用户看到一个自己从没建过的项目。
+     *
+     * 静默跳过而不是抛（与 [com.autoscript.appservice.scriptrepo.core.FsProjectStore.listIds]
+     * 同一条）：这里面对的是"盘上有什么"，一个怪目录不该让整张面板打不开。
+     */
+    fun projectIds(): List<ProjectId> {
+        if (!Files.isDirectory(projectsRoot)) return emptyList()
+        val out = ArrayList<ProjectId>()
+        Files.list(projectsRoot).use { s ->
+            s.filter { Files.isDirectory(it) }.forEach { dir ->
+                val name = dir.fileName.toString()
+                if (isReservedDirName(name)) return@forEach
+                out += ProjectId.createOrNull(name) ?: return@forEach
+            }
+        }
+        return out.sortedBy { it.value }
+    }
+
     companion object {
+        /**
+         * 项目根下**不是项目**的目录名（[projectIds] 用）。
+         *
+         * 只有两类，都是 npm 自己造出来的：
+         * - `node_modules` —— 全局依赖的家（[globalNodeModules]），名字过得了项目号判据；
+         * - `node_modules.part-<nonce>` —— 安装暂存目录（`InstallJournal.stagePath`），
+         *   安装进行中它会短暂出现在项目根下，同样是个合法项目名。
+         *
+         * `ScriptPaths.NODE_MODULES_DIR` 是那两类的字面量来源（文件列表早就按它整段滤掉
+         * node_modules，本处与它同源，不另写一份 "node_modules"）。
+         */
+        fun isReservedDirName(name: String): Boolean =
+            name == ScriptPaths.NODE_MODULES_DIR ||
+                name.startsWith("${ScriptPaths.NODE_MODULES_DIR}.part-")
+
         /**
          * 项目号判据的**别名**（2026-10-09 批 84）：字面量已上提到
          * [com.autoscript.domain.scripts.ScriptPaths.PROJECT_ID] —— 界面侧的命令行校验

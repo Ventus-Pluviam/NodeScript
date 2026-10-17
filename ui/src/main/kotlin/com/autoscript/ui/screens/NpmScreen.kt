@@ -51,13 +51,14 @@ import com.autoscript.ui.state.InstallProgressState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
 /**
  * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
- * 分段（自上而下）：项目选择（多项目时）· 尺寸/配额 · 安装 · 维护 ·
+ * 分段（自上而下）：依赖作用域 · 尺寸 · 安装 · 维护 ·
  * **依赖列表**（白卡，卡头可折叠、默认收起）· **日志大框**（最下面）。
  *
  * 页底是**任务中心那块灰**（[ThemeColors.surfaceMuted]），页上每一段都是一张白卡
@@ -81,8 +82,19 @@ import com.autoscript.ui.theme.ThemeColors
  *    磁盘预检上（唯一还会拒安装的资源闸）；
  * 8. 「npm 缓存…弄成列表，右侧弄成清理的按钮」+「安装（装进当前项目的 node_modules）
  *    描述改成安装就行」+「依赖列表取消横线分隔」+「没有日志时就直接显示暂无日志」；
- * 9. 「再加一个全局依赖的功能…优先读取项目依赖」—— **本批未做**，见
- *    `docs/log/2026-10-17.md` 那条里的"未做"与 `docs/backlog.md`。
+ * 9. 「再加一个全局依赖的功能…优先读取项目依赖」—— 第二批**未做**（契约级改动），
+ *    第三批补上，见下。
+ *
+ * **第三批（同一天的第二次现场改动，用户口径原文）**：
+ * 10. 「项目选择改成依赖作用域，然后下拉框加个全局」—— [ProjectPickerCard] 改名，下拉里
+ *     多一档「全局」（`files/scripts/node_modules`，见 [NpmTargetScope]）。那一档**永远在**，
+ *     于是这一行也永远画得出来 —— 一个项目都没有时它仍然回答"这一屏在管哪棵 node_modules"；
+ * 11. 「去除 npm 缓存下面的字，去掉右边的清理按钮」—— [StorageCard] 那两行现在**逐字同形**
+ *     （名字 + 数字）。**代价**：「回收缓存」在本页从此没有入口（宿主与 `reclaimNpmCacheOp`
+ *     都还在、也还测着，只是没人调）；
+ * 12. 「安装这个小字标题去掉，改成输入框左侧，叫安装依赖，右边的安装按钮改成蓝色执行按钮」
+ *     —— [InstallCard] 那一行小标题整行下线，省下的一行给了「安装依赖 [输入框]（执行）」；
+ * 13. 「还有依赖列表取消横线分隔」（第二批的尾巴）。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -121,7 +133,6 @@ fun NpmScreen(
     onRefresh: suspend () -> Unit,
     onSelectProject: (String) -> Unit,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
-    onReclaimCache: () -> Unit,
     onInstallDraft: (String) -> Unit,
     onToggleDev: (Boolean) -> Unit,
     onToggleOffline: (Boolean) -> Unit,
@@ -164,7 +175,7 @@ fun NpmScreen(
                     ProjectPickerCard(projects, state.selectedProjectId, onSelectProject)
                 }
             }
-            item { StorageCard(state, onReclaimCache) }
+            item { StorageCard(state) }
             item {
                 InstallCard(
                     state = state,
@@ -207,14 +218,17 @@ private fun InstallCard(
 ) {
     PanelCard {
         Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
-            // 标题就是「安装」（2026-10-17 用户口径）：「装进当前项目的 node_modules」那句解释
-            // 由上面那行「项目选择」担着 —— 装到哪儿不再需要在这一行里重复一遍。
-            ToneText("安装", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+            // **这一段没有小标题了**（2026-10-17 用户口径：「安装这个小字标题去掉，改成输入框
+            // 左侧，叫安装依赖」）：原来那一行小字「安装」占掉一整行高度却什么也没说，
+            // 换成输入框左边那三个字，读起来就是「安装依赖 [______]（执行）」。
             Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp),
+                Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // 标签不用 MUTED 小字：它现在与输入框同一行，是这一行的**主语**，
+                // 用小灰字会被读成输入框的副说明。
+                Text("安装依赖", color = ThemeColors.text, style = MaterialTheme.typography.bodyMedium)
                 InstallField(
                     value = state.installDraft,
                     onChange = onDraft,
@@ -222,15 +236,21 @@ private fun InstallCard(
                     onSubmit = onSubmit,
                     modifier = Modifier.weight(1f),
                 )
+                // **蓝色执行按钮**（用户口径「右边的安装按钮改成蓝色执行按钮」）：
+                // `PillButton` 的选中态就是那颗动作蓝（`featuredButton`，§主题）。
+                // `selected` 跟着"现在能不能按"走而不是恒定 true —— 恒定 true 的话，
+                // 禁用时那颗按钮会是**蓝底灰字**（`PillButton` 的底不看 `enabled`，
+                // 只有字变灰），看着像坏掉了，而不是"现在不能按"。
+                val runnable = state.canInstall && state.installDraft.isNotBlank()
                 PillButton(
-                    text = if (state.installing) "提交中…" else "安装",
-                    selected = state.installing,
-                    enabled = state.canInstall && state.installDraft.isNotBlank(),
+                    text = if (state.installing) "提交中…" else "执行",
+                    selected = runnable,
+                    enabled = runnable,
                     onClick = onSubmit,
                 )
             }
             Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
+                Modifier.fillMaxWidth().padding(top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 PillButton(
@@ -522,18 +542,23 @@ private val ROW_MIN_HEIGHT = 44.dp
 /**
  * 尺寸读数两行（§10.9.5）：node_modules 与 npm 缓存。
  *
- * **2026-10-17 两改（同一天的用户口径）**：
+ * **2026-10-17 三改（同一天的用户口径，第三批）**：
  * - 「node_modules 取消 512MB 限制」—— 那一行**只剩尺寸**，配额条与 80%/100% 两档提示
  *   整个下线（配额源头是 `InstallConfig` 的 512MB 硬编码，已摘；判据换锚的事见
  *   `InstallCoordinator.enqueueHeavy` 的 KDoc）；
- * - 「npm 缓存…弄成列表，右侧弄成清理的按钮」—— 「回收缓存」那颗从「维护」搬到这里，
- *   与它要腾的那份读数同一行：用户按下去图的就是看那个数字变没变。
+ * - 「npm 缓存…右侧弄成清理的按钮」—— 「回收缓存」从「维护」搬到这里（同一天早些时候）；
+ * - 「去除 npm 缓存下面的字，去掉右边的清理按钮」—— **两样又都去掉了**，
+ *   于是这一行现在只剩「名字 + 数字」，与上面 node_modules 那行**逐字同形**。
+ *
+ * **代价如实记**：「回收缓存」这个动作在依赖管理页上**没有入口了**。宿主那条路
+ * （`HostSummary.reclaimNpmCache` → 协调器 `reclaimCache`）与呈现层的 `reclaimNpmCacheOp`
+ * 都还在、也还测着，只是本屏不再调用 —— 想放回来（或放到别处）随时可以。
  *
  * 两行**各自独立判空**：量不到 node_modules 不该把缓存那一行也吞掉（反之亦然）——
- * 缓存是全局读数，项目目录出问题时它照样是有效的。两行都量不到时整张卡不画。
+ * 缓存是全局读数，作用域目录出问题时它照样是有效的。两行都量不到时整张卡不画。
  */
 @Composable
-private fun StorageCard(state: NpmState, onReclaimCache: () -> Unit) {
+private fun StorageCard(state: NpmState) {
     val size = state.sizeLabel
     val cacheSize = state.cacheSizeLabel
     if (size == null && cacheSize == null) return
@@ -543,22 +568,9 @@ private fun StorageCard(state: NpmState, onReclaimCache: () -> Unit) {
                 PanelRow(label = "node_modules", trailing = { ToneText(it, StatusTone.MUTED) })
             }
             cacheSize?.let {
-                PanelRow(
-                    label = "npm 缓存",
-                    // 缓存按内容寻址、跨项目共享（§10.2）—— 写成「本项目缓存」是撒谎：
-                    // 用户会以为删掉这个项目就能腾出这些字节。
-                    hint = "全机一份，跨项目共享；清理只删没有项目 lock 需要的包（离线重装仍可用）",
-                    trailing = {
-                        ToneText(cacheSize, StatusTone.MUTED)
-                        PillButton(
-                            text = if (state.reclaimingCache) "清理中…" else "清理",
-                            selected = false,
-                            enabled = state.canReclaimCache,
-                            onClick = onReclaimCache,
-                            modifier = Modifier.padding(start = 8.dp),
-                        )
-                    },
-                )
+                // 行标题写「npm 缓存」而不是「本项目缓存」：缓存按内容寻址、全机一份
+                // （§10.2），用户会以为删掉这个作用域就能腾出这些字节。
+                PanelRow(label = "npm 缓存", trailing = { ToneText(it, StatusTone.MUTED) })
             }
         }
     }
@@ -600,16 +612,20 @@ private fun PanelRow(
 }
 
 /**
- * 「项目选择」一行 + 下拉（2026-10-17 用户口径：「把顶栏那个项目切换按钮换成一个列表，
- * 列表名字叫项目选择，然后点了用下拉框选取」）。
+ * 「依赖作用域」一行 + 下拉（2026-10-17 用户口径，第三批改名：
+ * 「项目选择改成依赖作用域，然后下拉框加个全局」）。
  *
- * 换掉的是原先那一排胶囊（`PillButton`）：项目多起来时那一排会换行、把页面往下顶，
- * 而它要回答的其实只有一个问题 —— "现在看的是哪个项目"。
+ * 第一版是「项目选择」，换掉原先那一排胶囊（`PillButton`）—— 项目多起来时那一排会换行、
+ * 把页面往下顶。改名是因为**这一行管的已经不只是项目**：全局依赖（`files/scripts/node_modules`，
+ * 见 [NpmTargetScope]）也是同一类东西的一个取值 —— 它回答的是"这一屏在管哪一棵 node_modules"，
+ * 而不是"哪个项目"。名字与它真正回答的问题对上了，下拉里那个「全局」才不显得是硬塞的。
  *
- * **只有一个项目时不开下拉**：菜单里只列它自己，等于暗示"还有别的可以选"（原分段控件
- * 那条 KDoc 的理由保留）。行本身照画 —— 它回答的是"现在看的是哪个项目"，与可选项多少无关。
+ * **只有一个选项时不开下拉**：菜单里只列它自己，等于暗示"还有别的可以选"。行本身照画 ——
+ * 它回答的是"现在管的是哪一棵"，与可选项多少无关。
  *
  * 当前那一项在菜单里标「（当前）」：菜单里不打勾的话，下拉一开就分不出自己在哪一项上。
+ * 全局那一项显示成「全局」而不是空串（[NpmTargetScope.label]）—— 菜单里出现一行空白，
+ * 用户只会读成"这一项坏了"。
  */
 @Composable
 private fun ProjectPickerCard(
@@ -622,9 +638,9 @@ private fun ProjectPickerCard(
     Box {
         PanelCard {
             PanelRow(
-                label = "项目选择",
+                label = "依赖作用域",
                 trailing = {
-                    ToneText(selectedId ?: "—", StatusTone.MUTED)
+                    ToneText(selectedId?.let { NpmTargetScope.label(it) } ?: "—", StatusTone.MUTED)
                     if (pickable) {
                         Glyph(
                             kind = GlyphKind.CHEVRON,
@@ -641,8 +657,9 @@ private fun ProjectPickerCard(
             expanded = open,
             onDismiss = { open = false },
             actions = projects.map { p ->
+                val name = NpmTargetScope.label(p.projectId)
                 MenuAction(
-                    label = if (p.projectId == selectedId) "${p.projectId}（当前）" else p.projectId,
+                    label = if (p.projectId == selectedId) "$name（当前）" else name,
                     onClick = { onSelect(p.projectId) },
                 )
             },
@@ -674,7 +691,9 @@ private fun MaintenanceCard(
     PanelCard {
         Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
             ToneText(
-                "维护（都在当前项目的 node_modules 上）",
+                // 措辞跟着作用域走（2026-10-17）：作用域可以是「全局」，那时说"当前项目"
+                // 就是一句错话 —— 维护动的是当前作用域那棵 node_modules。
+                "维护（都在「${state.scopeLabel}」的 node_modules 上）",
                 StatusTone.MUTED,
                 style = MaterialTheme.typography.bodySmall,
             )

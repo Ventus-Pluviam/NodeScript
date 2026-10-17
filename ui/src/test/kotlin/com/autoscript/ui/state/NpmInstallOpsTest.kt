@@ -6,6 +6,7 @@ import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.SequencedInstallEvent
 import kotlinx.coroutines.runBlocking
@@ -38,12 +39,23 @@ class NpmInstallOpsTest {
     private fun loaded(vararg projects: NpmProjectSnapshot) =
         NpmState.of(NpmPanelSnapshot(projects.toList()))
 
+    /** 全局作用域那一条（`files/scripts/node_modules`，`projectId` 是空串哨兵）。 */
+    private fun globalProject() = NpmProjectSnapshot(
+        projectId = NpmTargetScope.GLOBAL,
+        installed = emptyList(),
+        offlineGap = emptyList(),
+        storage = null,
+    )
+
     /** 记录被提交的那一行，并可按需失败 / 按需回一批事件。 */
     private class PanelHost(
         private val fail: Throwable? = null,
         private val events: List<InstallEvent> = emptyList(),
     ) : FakeHost() {
         val lines = mutableListOf<String>()
+
+        /** 每一行是发给**哪个作用域**的（全局那条是空串）。 */
+        val targets = mutableListOf<String>()
         var polls = 0
         var lastSince = -1L
 
@@ -51,6 +63,7 @@ class NpmInstallOpsTest {
 
         override suspend fun runNpmPanelCommand(projectId: String, line: String): NpmConsoleHandle {
             lines += line
+            targets += projectId
             fail?.let { throw it }
             return NpmConsoleHandle(handleId = "con-1", projectId = projectId, line = line, enqueuedAtMillis = 1L)
         }
@@ -124,6 +137,27 @@ class NpmInstallOpsTest {
         val state = submitInstall(host, empty)
         assertTrue(host.lines.isEmpty())
         assertTrue(state.opError!!.contains("还没有选中的项目"))
+    }
+
+    /**
+     * 作用域选「全局」时，命令落在空串哨兵上 —— **不是**被当成"没选项目"。
+     *
+     * 这一条钉的是 2026-10-17 那次判据放宽：`NpmConsoleKeys.rejectProjectId("")` 从前
+     * 是拒收的，而全局作用域的编码恰好就是那个空串 —— 放宽之前，界面上选「全局」按下
+     * 执行会拿到一句「项目号不合法（不能为空）」，而用户手里根本没有一个叫这个名字的
+     * 项目可选，他只会以为"全局"这个选项是坏的。
+     */
+    @Test
+    fun `作用域「全局」不被当成「没选项目」：命令带着空串哨兵发出去`() = runBlocking {
+        assertTrue(NpmTargetScope.GLOBAL.isEmpty(), "全局的编码就是那个空串哨兵（前提变了这条要跟着改）")
+        val host = PanelHost()
+        val picked = NpmState.withProject(loaded(project("demo"), globalProject()), NpmTargetScope.GLOBAL)
+
+        val state = submitInstall(host, picked.copy(installDraft = "axios"))
+
+        assertEquals(listOf("npm install axios"), host.lines, "全局也要发得出去")
+        assertEquals(listOf(NpmTargetScope.GLOBAL), host.targets, "发出去的是空串哨兵，不是被抹成 null")
+        assertNull(state.opError, "不许报「项目号不合法」：${state.opError}")
     }
 
     @Test

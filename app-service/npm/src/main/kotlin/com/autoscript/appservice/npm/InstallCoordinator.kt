@@ -24,6 +24,7 @@ import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmRegistrySnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.PackageManagerFacade
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.npm.PkgNode
@@ -582,6 +583,15 @@ class InstallCoordinator(
      * 项目列表 = `storage()` 的键（= 项目根下的目录），**不是** lockfile 的键：
      * 「装了依赖但还没落 lock」的项目也要出现在面板上（它有一棵 node_modules 要管），
      * 而只有 lock 的项目反倒没有可管的东西。两者取并集是过度设计 —— 目录是超集。
+     *
+     * **2026-10-17 起多一条：全局作用域**（用户口径「项目选择改成依赖作用域，然后下拉框加个
+     * 全局」）。它**排在最后**，不是随手：面板缺省选中的是第一条（[NpmState.of]），把它插在
+     * 最前面会把所有人打开这一页的缺省作用域从"第一个项目"悄悄换成"全局"——那是个没人要求过的
+     * 行为变更，而"全局排在项目后面"在语义上也对（先看具体的，再看兜底的）。
+     *
+     * 全局那条**永远在**（哪怕 `files/scripts/node_modules` 还没建）：作用域下拉里得先有这一项，
+     * 用户才谈得上"往全局装"。没建时它的 `storage` 是 `null`（= 界面上那一行尺寸不画，
+     * 见 [NpmProjectSnapshot] 的纪律：没量到 ≠ 0 字节）。
      */
     override suspend fun snapshot(): NpmPanelSnapshot =
         // 整趟落 IO（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：这一趟是
@@ -602,9 +612,40 @@ class InstallCoordinator(
                     storage = stats[id],
                     cache = cache,
                 )
-            }
+            } + globalSnapshot(cache)
             NpmPanelSnapshot(projects = projects)
         }
+
+    /**
+     * 全局作用域那一条（[NpmTargetScope.GLOBAL]），**永远返回一条**（见 [snapshot] 的 KDoc）。
+     *
+     * 三个字段各自"量不到就是 null/空"，不含糊：
+     * - `storage`：`files/scripts/node_modules` **不存在**时给 `null` —— 界面那一行据此不画，
+     *   而不是画成 "0 B"（"这个作用域不占地方"是另一句话）；
+     * - `installed` / `offlineGap`：读的是全局那份 `package-lock.json`，没装过就是空的
+     *   （"没装过"与"装了 0 个包"在这里是同一件事，故不需要第三态）；
+     * - `cache`：与项目那条同源（缓存全机一份，量一次抄过来）。
+     */
+    private suspend fun globalSnapshot(cache: NodeModulesStats): List<NpmProjectSnapshot> {
+        val exists = Files.isDirectory(layout.globalNodeModules)
+        return listOf(
+            NpmProjectSnapshot(
+                projectId = NpmTargetScope.GLOBAL,
+                installed = list(NpmTargetScope.GLOBAL, depth = 0),
+                offlineGap = offlineGap(NpmTargetScope.GLOBAL),
+                storage = if (exists) {
+                    NodeModulesStats(
+                        projectId = NpmTargetScope.GLOBAL,
+                        pkgCount = LockfileReader.readLocked(layout.globalLockfile).size,
+                        totalBytes = nodeModulesBytes(ProjectId.ROOT),
+                    )
+                } else {
+                    null
+                },
+                cache = cache,
+            ),
+        )
+    }
 
     /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条那颗 cache clean 按钮）。
@@ -630,12 +671,30 @@ class InstallCoordinator(
             val cacheDir = resolveCacheDir()
             val keep = LinkedHashSet<String>()
             val unreadable = ArrayList<String>()
+            // 全局那份 lock 先算进来（2026-10-17，见 [NpmTargetScope]）：全局依赖装在
+            // `files/scripts/node_modules`，而它的 lock 是**项目根下的一个文件**，
+            // 下面那个按目录扫的循环看不见它 —— 漏掉的话，凡是"只被全局依赖用着"的包
+            // 都会被当成没人要的删掉，全局那份离线重装当场失效，而用户在点这一下时
+            // 完全看不出自己刚把什么删了。与 [snapshot] 一样，先看 lock 在不在：
+            // 没装过全局 = 正常，不点名。
+            if (Files.exists(layout.globalLockfile)) {
+                try {
+                    LockfileReader.readLocked(layout.globalLockfile)
+                        .mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
+                } catch (e: Exception) {
+                    // 读不出来 = 「想保护但保护不了」，与项目那个分支同一条：点名。
+                    unreadable += NpmTargetScope.label(NpmTargetScope.GLOBAL)
+                }
+            }
             if (Files.isDirectory(layout.projectsRoot)) {
                 Files.list(layout.projectsRoot).use { s ->
                     s.filter { Files.isDirectory(it) }.forEach { proj ->
-                        // 盘上读回的目录名：判不过判据就跳过（与 `storage()` 同款纪律 ——
-                        // 一个别人留下的怪目录不该让「回收缓存」整个失败）。
-                        val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
+                        // 盘上读回的目录名：判不过判据、或是保留名（`node_modules` 之类）就跳过
+                        // （与 `storage()` 同款纪律 —— 一个别人留下的怪目录不该让「回收缓存」
+                        // 整个失败）。
+                        val name = proj.fileName.toString()
+                        if (NpmProjectLayout.isReservedDirName(name)) return@forEach
+                        val pid = ProjectId.createOrNull(name) ?: return@forEach
                         val lock = layout.lockfile(pid)
                         // 没 lockfile = 「这个项目还没装过」，正常，不点名；
                         // lockfile **在**但读不出来（目录冒充、损坏到读不动、半路被删）= 点名：
@@ -679,17 +738,14 @@ class InstallCoordinator(
     override suspend fun storage(): Map<String, NodeModulesStats> =
         // 落 IO 的理由与 [snapshot] 同族（2026-10-17）：这一趟逐项目算 node_modules 全树尺寸。
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            if (!Files.isDirectory(layout.projectsRoot)) return@withContext emptyMap()
             // 盘上的项目目录名先收成一个 list：`Files.list` 的 `use` 块里**调不了挂起函数**
             // （`Stream.forEach` 收的是 Java 的 `Consumer`，不是内联 lambda），而下面那一趟
             // 尺寸（挂起、自己落 IO）必须按项目逐个走。收名字这一步只是一次目录列举。
-            val ids = ArrayList<ProjectId>()
-            Files.list(layout.projectsRoot).use { s ->
-                s.filter { Files.isDirectory(it) }.forEach { proj ->
-                    val pid = ProjectId.createOrNull(proj.fileName.toString())
-                    if (pid != null) ids.add(pid)
-                }
-            }
+            //
+            // **保留名过滤在 [NpmProjectLayout.projectIds] 里**（2026-10-17）：项目根本层现在
+            // 多了一个 `node_modules`（全局依赖的家，见 [NpmTargetScope]），它过得了项目号判据，
+            // 不排掉就会在这里变成一个叫 node_modules 的"项目"。判据收一处，三个枚举点共用。
+            val ids = layout.projectIds()
             val out = LinkedHashMap<String, NodeModulesStats>()
             for (pid in ids) {
                 out[pid.value] = NodeModulesStats(

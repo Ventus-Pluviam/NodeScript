@@ -94,7 +94,6 @@ import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.ConsoleState
 import com.autoscript.ui.state.scriptOutputLines
-import com.autoscript.ui.state.reclaimNpmCacheOp
 import com.autoscript.ui.state.pollInstallEvents
 import com.autoscript.ui.state.pollInstallWhileRunning
 import com.autoscript.ui.state.pollConsoleWhileRunning
@@ -831,7 +830,6 @@ class MainActivity : ComponentActivity() {
                 onRefresh = { reloadNpm() },
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
-                onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
                 onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },
                 onToggleDev = { npmState = npmState.copy(installDev = it) },
                 onToggleOffline = { npmState = npmState.copy(installOffline = it) },

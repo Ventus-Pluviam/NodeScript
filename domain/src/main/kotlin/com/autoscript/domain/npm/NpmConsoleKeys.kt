@@ -91,6 +91,10 @@ object NpmConsoleKeys {
     /**
      * 项目号合法性：合法 → null；不合法 → **拒收原文**。
      *
+     * **空串合法**（2026-10-17）：它是根层哨兵，在本仓的依赖面上读作「全局」作用域
+     * （[NpmTargetScope]）—— 依赖管理页的「依赖作用域」那一行选「全局」时传下来的就是它。
+     * 于是"这个命令落在哪棵 node_modules 上"这件事，全局与项目走的是同一个参数。
+     *
      * 判据在 [com.autoscript.domain.scripts.ScriptPaths.PROJECT_ID]（项目路径约定的
      * 单一事实来源），本函数只是把它翻成一句给用户看的话 —— 界面当场拒与落盘侧
      * `require` 因此同源。
@@ -104,12 +108,20 @@ object NpmConsoleKeys {
      * 判据不再是可枚举的字符集，话术再写成"只允许字母数字"就是**又一次**话术与判据漂开
      * （而且这次漂的方向是"用户照话术写中文名以为不合法"）。
      *
+     * 话术**不再写"不能为空"**：空串现在是合法输入（全局作用域），照旧那么写就是
+     * 话术与判据又漂一次 —— 而且漂的方向是"用户按话术以为全局不合法"。
+     *
      * 注：本命令行按**空白分词**，所以带空格的项目名在这里敲不出来 —— 那是这条命令行的
      * 输入形态所限，不是本判据的事（判据只有一份，不为它收窄）。
      */
     fun rejectProjectId(projectId: String): String? =
-        if (com.autoscript.domain.scripts.ScriptPaths.isValidProjectId(projectId)) null
-        else "项目号不合法（不能为空，也不能含 / 、\\ 、. 或控制字符）：$projectId"
+        // 空串**放行**（2026-10-17）：它是根层哨兵 [com.autoscript.domain.scripts.ProjectId.ROOT]，
+        // 在依赖面板上读作「全局」作用域（见 [NpmTargetScope]）—— 全局依赖就装在
+        // `files/scripts/node_modules`，与项目那条走同一套寻址。
+        // 放行它**不放松防逃逸**：`projectsRoot.resolve("")` 恒等自身，逃不出项目根；
+        // 真正管逃逸的那一条（不含 `/` `\` `.` 与控制字符）一字未动。
+        if (projectId.isEmpty() || com.autoscript.domain.scripts.ScriptPaths.isValidProjectId(projectId)) null
+        else "项目号不合法（不能含 / 、\\ 、. 或控制字符）：$projectId"
 
     /** 进入特权模式的入口词（用户口径 2026-10-09：`su` = root，`shizuku` = adb）。 */
     const val ENTER_ROOT = "su"

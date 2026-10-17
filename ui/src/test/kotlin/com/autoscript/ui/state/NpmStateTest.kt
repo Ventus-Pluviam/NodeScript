@@ -11,6 +11,7 @@ import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmPanelSnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.PkgNode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -51,6 +52,33 @@ class NpmStateTest {
         offlineGap = emptyList(),
         storage = storage,
     )
+
+    /**
+     * 作用域那一行怎么说（2026-10-17「项目选择改成依赖作用域，下拉框加个全局」）。
+     *
+     * 三条各自钉一个**不许冒充**：空串不许显示成空（用户读成"没读到"）、
+     * 还没读到不许冒充「全局」（那是"还不知道"，不是"知道，是全局"）、
+     * 缺省仍然落在第一个项目上（全局排最后，插到最前面就是一次没人要求过的行为变更）。
+     */
+    @Test
+    fun `作用域标签：空串说「全局」，没读到说「—」，缺省仍是第一个项目`() {
+        val global = NpmProjectSnapshot(
+            projectId = NpmTargetScope.GLOBAL,
+            installed = emptyList(),
+            offlineGap = emptyList(),
+            storage = null,
+        )
+        val loaded = NpmState.of(NpmPanelSnapshot(listOf(project("demo"), global)))
+
+        assertEquals("demo", loaded.scopeLabel, "缺省是第一条；全局排最后，不抢缺省位")
+        assertEquals(
+            "全局",
+            NpmState.withProject(loaded, NpmTargetScope.GLOBAL).scopeLabel,
+            "空串在屏幕上必须说成人话",
+        )
+        assertEquals("—", NpmState.NOT_LOADED.scopeLabel, "还没读到 ≠ 全局：那是两句话")
+        assertEquals("—", NpmState.failed(RuntimeException()).scopeLabel, "读失败也不冒充成全局")
+    }
 
     @Test
     fun `首帧与成功空项目分开`() {
