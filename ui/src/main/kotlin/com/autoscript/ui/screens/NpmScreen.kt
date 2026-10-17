@@ -1,6 +1,14 @@
 package com.autoscript.ui.screens
 
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -28,17 +36,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.CapsuleInputField
 import com.autoscript.ui.components.ActionBarAction
@@ -50,7 +62,6 @@ import com.autoscript.ui.components.GlyphKind
 import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.pressable
-import com.autoscript.ui.components.pressableRipple
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.rememberRefreshAction
@@ -142,8 +153,15 @@ import com.autoscript.ui.theme.ThemeColors
  * 23. 「清理未声明依赖改名啊，改成清理依赖」—— 改回短名（第 15 条那次改口撤销）；
  * 24. 「样式是图片中这样，3个按键。重新做」+「不要加多余的描述啊」—— 页底那三格从
  *     "一张白卡里的三行列表 + 卡底一句小字"翻成**三张等宽白卡**（图标在上、文字在下，
- *     [OptionTile]），那句说明整段下线。几何是从用户给的那张参考图上量的，见各
- *     `OPTION_TILE_*` 常量。
+ *     [OptionTile]），那句说明整段下线。
+ *
+ * **第七批（2026-10-18，用户口径原文）**：
+ * 25. 「你去看tg源码啊，/tmp/tg」「你对着图做干嘛」—— 第 24 条那版几何是**从截图上量的**，
+ *     作废。改成照 TG `ProfileActionsView` 的源码取原值（54dp / 16dp / 24dp / 11dp 粗体 /
+ *     7dp 缝），按压从 M3 水波换成 TG 的 `ButtonBounce` 缩放回弹（0.96、60ms 按下、
+ *     350ms 过冲回弹）—— 参考图就是 TG「我的资料」那一行的三颗
+ *     （`KEY_SET_PHOTO` / `KEY_EDIT_INFO` / `KEY_SETTINGS`）。`Modifier.pressableRipple`
+ *     随之**整件删除**（它只为这三格而来）。见 [OptionTile] 的 KDoc。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -697,7 +715,8 @@ private fun PanelRow(
  *   **这一颗是"回家"的**：2026-10-17 早些时候它随「去除 npm 缓存下面的字，去掉右边的
  *   清理按钮」下线过一次（当时本页没有入口），现在按用户口径做成第三颗。
  *
- * 样式照用户给的那张参考图：**三张等宽白卡**横排，图标在上、文字在下 ——
+ * 样式照 TG `ProfileActionsView`（「我的资料」那一行的三颗）：**三张等宽白卡**横排，
+ * 图标在上、文字在下，按下是缩放回弹而不是水波 —— 取值与出处见 [OptionTile]。
  * 上一版那张「维护」卡里的三行列表连同卡底那句说明一起下线，理由就是用户那句
  * 「不要加多余的描述」。
  *
@@ -757,19 +776,30 @@ private fun OptionsCard(
 }
 
 /**
- * 一颗底部动作按钮 —— 参考图里「设置照片 / 编辑信息 / 设置」那三格的版式：
- * 图标在上、文字在下，都居中；整格就是一个按钮。按下走 TG 的水波（[pressableRipple]）。
+ * 一颗底部动作按钮 —— **照 TG `ProfileActionsView` 的源码做**（2026-10-18 用户口径
+ * 「你去看tg源码啊，/tmp/tg 你对着图做干嘛」）。参考图就是 TG 的「我的资料」那一行
+ * （`MODE_MY_PROFILE` 的三颗：`KEY_SET_PHOTO` / `KEY_EDIT_INFO` / `KEY_SETTINGS`），
+ * 所以取值一律以 `TMessagesProj/src/main/java/org/telegram/ui/Components/ProfileActionsView.java`
+ * 为准，不再从截图上量。
  *
- * **底色取 [ThemeColors.surface] 而不是页面上其他卡用的 [ThemeColors.background]**：
- * 浅色下两者同值（都是白，与参考图逐像素一致），深色下 `background` 与页底
- * [ThemeColors.surfaceMuted] 同值 —— 这三格会整块消失，只剩图标文字飘在页上。
- * 按钮要看得见。
+ * **几何（源码原值）**：`ProfileActionsView(context, dp(74))` 传进来 74dp，构造函数里
+ * `targetHeight = 74 - ypadding(12) - top(8)` = **54dp** 就是按钮矩形的高；圆角
+ * `getRoundRadius()` = `dp(16)`；图标 `updateBounds()` 里 `drawableSize = dp(24)`；
+ * 文字 `new Text(cs, 11, AndroidUtilities.bold())` —— 11dp、粗体。
  *
- * `clip` 先于 `background`（同 [PanelCard]）：圆角要裁住按下那圈水波，顺带裁住底色。
+ * **按压是缩放回弹，不是水波**（`ButtonBounce`）：按下 `setPressed(true)` → `pressedT` 走
+ * **60ms**、`CubicBezierInterpolator.DEFAULT`（`cubic-bezier(0.25, 0.1, 0.25, 1)`）到 1；
+ * 松手 → **350ms**、`OvershootInterpolator(5f)` 回到 0。缩放量
+ * `getScale(0.04f)` = `0.96 + 0.04 * (1 - pressedT)`，即按下时整格缩到 **0.96**、松手带一点过冲。
+ * 之前那版走的 `ripple`（水波）**已整件删掉**：TG 这一行本来就不是水波。
  *
- * 图标色取 [ThemeColors.barIcon]（TG `actionBarDefaultIcon`）：与 FAB 子钮那颗字形同源
- * —— 本仓"一格带图标的动作"就是这一档灰。禁用时图标跟着文字一起压到三级灰：只把字变灰
- * 而图标照旧，看起来像"这一格还能按"。
+ * **底色取 [ThemeColors.surface]**：TG 那里是 `btnColor`，跟着资料页头部的主题色算
+ * （`ProfileActivity.setBackgroundColorId`：有 peer 色就取 `patternColor` 45%、否则按
+ * actionBar 明度分三档），本应用没有那层头部，照搬公式只会算出一个没有由来的颜色；
+ * 本页的读法是"灰页上的白卡"，参考图里也是白。深色下不能取 `background`
+ * （本页其他卡那个）：它与页底 `surfaceMuted` 同值 #161E27，这三格会整块消失。
+ *
+ * `clip` 先于 `background`（同 [PanelCard]）：缩放与圆角要先裁住底色。
  */
 @Composable
 private fun OptionTile(
@@ -781,17 +811,38 @@ private fun OptionTile(
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val pressedT by animateFloatAsState(
+        targetValue = if (pressed && enabled) 1f else 0f,
+        animationSpec = if (pressed && enabled) {
+            // 按下：60ms，CubicBezierInterpolator.DEFAULT。
+            tween(durationMillis = 60, easing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f))
+        } else {
+            // 松手：350ms 回弹带过冲（TG 用 OvershootInterpolator(5f)，Compose 这边对应
+            // 一条高回弹的弹簧）。
+            spring(
+                dampingRatio = Spring.DampingRatioHighBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            )
+        },
+        label = "optionTilePress",
+    )
+    val scale = OPTION_TILE_PRESS_SCALE + (1f - OPTION_TILE_PRESS_SCALE) * (1f - pressedT)
     Column(
         modifier
             .height(OPTION_TILE_HEIGHT)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(OPTION_TILE_CORNER))
             .background(palette.surface)
-            .pressableRipple(
+            .clickable(
+                interactionSource = source,
+                indication = null,
                 enabled = enabled,
                 role = Role.Button,
-                // 借的是 menuSelector 的**墨色**：M3 会把 alpha 换成 pressedAlpha(0.1)，
-                // 见 pressableRipple 的 KDoc（浅色 10% 黑 ≈ TG 那档 6%）。
-                color = palette.menuSelector,
                 onClick = onClick,
             ),
         verticalArrangement = Arrangement.Center,
@@ -806,35 +857,54 @@ private fun OptionTile(
         Text(
             text = if (running) "进行中…" else label,
             color = if (enabled) palette.text else palette.textTertiary,
-            style = MaterialTheme.typography.titleMedium,
+            fontSize = OPTION_TILE_TEXT_SIZE,
+            fontWeight = FontWeight.Bold,
             maxLines = 1,
         )
     }
 }
 
 /**
- * 动作格的几何 —— 四个值都是从用户给的那张参考图上量的（2026-10-17 第六批）。
+ * 动作格的几何 —— **全部是 TG `ProfileActionsView` 的源码原值**（2026-10-18；此前那版是从
+ * 用户给的截图上量的，用户口径「你去看tg源码啊 /tmp/tg 你对着图做干嘛」，量出来的值已作废）。
  *
- * 定标：把参考图的卡高认成 [OPTION_TILE_HEIGHT]，其余按同一张图上的像素比例换算
- * （卡宽 425px : 卡高 188px : 圆角 44px : 图标 73px）。**间距是唯一没有照搬的**：
- * 图上量出来 ≈ 15dp，取 [CARD_SPACING] 那档 12dp —— 与卡间那条灰缝同宽，同页不该有
- * 两种缝。
+ * | 常量 | 值 | 出处 |
+ * |---|---|---|
+ * | [OPTION_TILE_HEIGHT] | 54dp | `ProfileActionsView(context, dp(74))` − `ypadding(12)` − `top(8)` |
+ * | [OPTION_TILE_CORNER] | 16dp | `getRoundRadius()` = `dp(16)` |
+ * | [OPTION_TILE_ICON] | 24dp | `updateBounds()` 里的 `drawableSize = dp(24)` |
+ * | [OPTION_TILE_TEXT_SIZE] | 11sp | `new Text(cs, 11, AndroidUtilities.bold())` |
+ * | [OPTION_TILE_GAP] | 7dp | `betweenPadding = xpadding / 2f`，`xpadding = dpf2(14)` |
+ * | [OPTION_TILE_PRESS_SCALE] | 0.96 | `getScale(0.04f)` 在按下末态的值 |
  *
- * 卡宽不在这里：三格等宽（`weight(1f)`）+ 左右 [CARD_MARGIN] 由 [OptionsCard] 决定。
+ * 两处**刻意与源码不同**，都是为了跟本页对齐：
+ * - 左右外边距用 [CARD_MARGIN]（12dp）而不是 TG 的 `xpadding` 14dp —— 这一行上下的卡都从
+ *   12dp 起手，差 2dp 会看成没对齐；
+ * - 竖向间距用 [CARD_SPACING]（6dp）而不是 TG 的 `top 8dp` + `ypadding 12dp` —— 本页的卡间缝
+ *   就是这条，同一页不该有两种缝。
+ *
+ * 文字 11sp 与源码的 `dp(11)` 在默认字体缩放下逐像素相同；用 sp 是为了跟随系统字体大小
+ * （TG 的 `Text` 类一律用 dp，不跟随）。
  */
-private val OPTION_TILE_HEIGHT = 88.dp
+private val OPTION_TILE_HEIGHT = 54.dp
 
-/** 动作格圆角（参考图 ≈ 20dp；本页卡片是 [CARD_CORNER] 的 16dp，图上更圆一档）。 */
-private val OPTION_TILE_CORNER = 20.dp
+/** 动作格圆角（`ProfileActionsView.getRoundRadius()` = `dp(16)`）。 */
+private val OPTION_TILE_CORNER = 16.dp
 
-/** 动作格之间的横缝（12dp，与 [CARD_SPACING] 撑出来的竖向卡间缝同宽）。 */
-private val OPTION_TILE_GAP = 12.dp
+/** 动作格之间的横缝（`betweenPadding = xpadding / 2f` = 7dp）。 */
+private val OPTION_TILE_GAP = 7.dp
 
-/** 动作格图标边长（参考图 ≈ 32dp；本页其他字形是 24dp 那一档）。 */
-private val OPTION_TILE_ICON = 32.dp
+/** 动作格图标边长（`updateBounds()` 的 `drawableSize = dp(24)`）。 */
+private val OPTION_TILE_ICON = 24.dp
 
-/** 图标与文字之间那道缝。 */
-private val OPTION_TILE_ICON_GAP = 8.dp
+/** 图标与文字之间那道缝（`textPadding = dpf2(4)`）。 */
+private val OPTION_TILE_ICON_GAP = 4.dp
+
+/** 按钮文字字号（`new Text(cs, 11, bold)`）。 */
+private val OPTION_TILE_TEXT_SIZE = 11.sp
+
+/** 按下末态的缩放（`ButtonBounce.getScale(0.04f)` → 0.96）。 */
+private const val OPTION_TILE_PRESS_SCALE = 0.96f
 
 /**
  * 已装包一行：名字 + 版本 + 尺寸 + 「重装 ⟳」+ 「卸载」。

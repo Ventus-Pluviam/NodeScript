@@ -12,7 +12,50 @@
 
 ---
 
+## 100. 三个动作格照 TG `ProfileActionsView` 的**源码**取值，按压是 `ButtonBounce` 缩放回弹而不是水波（2026-10-18，用户口径）
+
+**用户口径原文**：「**你去看tg源码啊，/tmp/tg**」「**你对着图做干嘛**」。
+
+**决策一：几何的唯一事实来源是源码，不是截图。** 第 99 项那版是把用户给的截图当尺子量的
+（定标卡高 88dp → 88dp 高 / 20dp 圆角 / 32dp 图标 / 16sp 文字）。查到
+`TMessagesProj/src/main/java/org/telegram/ui/Components/ProfileActionsView.java` 之后，
+截图与源码其实是**自洽的**，错的是定标：
+
+| 项 | 源码出处 | 值 |
+|---|---|---|
+| 高 | `ProfileActionsView(context, dp(74))` − `ypadding(12)` − `top(8)` | 54dp |
+| 圆角 | `getRoundRadius()` = `dp(16)` | 16dp |
+| 图标 | `updateBounds()` 的 `drawableSize = dp(24)` | 24dp |
+| 文字 | `new Text(cs, 11, AndroidUtilities.bold())`（`Text` 构造函数 `paint.setTextSize(dp(11))`） | 11dp 粗体 |
+| 横缝 | `betweenPadding = xpadding / 2f`，`xpadding = dpf2(14)` | 7dp |
+
+参考图正是 `MODE_MY_PROFILE` 的三颗（`KEY_SET_PHOTO` / `KEY_EDIT_INFO` / `KEY_SETTINGS`）。
+
+**决策二：按压是缩放回弹，`pressableRipple` 整件删除。** `onTouchEvent` → `hit.bounce.setPressed()`；
+`ButtonBounce` 按下 `pressedT` 走 **60ms** / `CubicBezierInterpolator.DEFAULT`
+（`cubic-bezier(0.25, 0.1, 0.25, 1)`）到 1，松手 **350ms** / `OvershootInterpolator(5f)` 回 0；
+缩放量 `getScale(0.04f)` = `0.96 + 0.04 × (1 − pressedT)`。**这一行从来不是水波** ——
+第 98 项决策二讲的水波是 TG 的**列表行 / 子菜单项**（`getSelectorDrawable`），不是这一行；
+把两者当成同一个东西是当时的误读。
+
+**决策三：两处刻意不照源码，都是为了跟本页对齐。** 左右外边距用 `CARD_MARGIN` 12dp
+（源码 `xpadding` 14dp：这一行上下的卡都从 12dp 起手，差 2dp 会看成没对齐）；竖向间距用
+`CARD_SPACING` 6dp（源码 `top 8dp` + `ypadding 12dp`：同一页不该有两种缝）。文字用 **11sp**
+而不是源码的 `dp(11)`：默认字体缩放下逐像素相同，sp 能跟随系统字体大小（TG 的 `Text` 类一律用 dp）。
+
+**随代码一起消失的一条实测结论**（记在这里，免得以后重查）：M3 的 `ripple(bounded = true, color = X)`
+**只借 X 的 RGB** —— 链子末步 `UnprojectedRipple.calculateRippleColor` 是 `color.copy(alpha = …)`，
+`Color.copy` 的 default-mask 14 只盖红/绿/蓝，换上去的 alpha 是 `RippleDefaults.rippleAlpha.pressedAlpha`
+（`RippleAlpha(dragged 0.16, focused 0.1, hovered 0.08, pressed 0.1)` → 0.1；API < 28 先 ×2 再 clamp）。
+
+---
+
 ## 99. 页底三个动作是三张**等宽白卡**（图标在上、文字在下），几何照用户给的参考图量（2026-10-17，用户口径）
+
+> ~~**本项的「几何来源」那半已被第 100 项推翻**（2026-10-18，用户口径「你去看tg源码啊，/tmp/tg」
+> 「你对着图做干嘛」）：从截图上量的 88dp / 20dp / 32dp / 16sp 作废，改取 TG `ProfileActionsView`
+> 的源码原值；按压也从水波换成 `ButtonBounce` 缩放回弹。**版式（三张等宽白卡、图标在上文字在下）
+> 与「卡底那句说明下线」照旧有效**，原文保留不删。~~
 
 **用户口径原文**：「**清理未声明依赖改名啊，改成清理依赖**」「**样式是图片中这样，3个按键。重新做**」
 「**不要加多余的描述啊**」（第三句是在参考图之后补的，指的是那三格下面那段小字）。

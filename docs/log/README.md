@@ -1,5 +1,23 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-18 第七批：三个动作格的几何**改成照 TG 源码**（`ProfileActionsView`），按压从水波换成 `ButtonBounce` 缩放回弹）
+
+- [2026-10-18 · 依赖页第七批（照 TG 源码取值 + 缩放回弹）](2026-10-18.md) 一条目（最新）：
+  用户口径「**你去看tg源码啊，/tmp/tg**」「**你对着图做干嘛**」。
+  **一**：版式（三张等宽白卡、图标在上文字在下）照旧，**推翻的是取值来源** —— 昨天那版是拿截图
+  当尺子量的（定标卡高 88dp → 88/20/32/16sp），现在取
+  `org/telegram/ui/Components/ProfileActionsView.java` 的源码原值：`ProfileActionsView(context, dp(74))`
+  − `ypadding(12)` − `top(8)` = **54dp** 高、`getRoundRadius()` = **16dp**、`drawableSize = dp(24)`、
+  `new Text(cs, 11, bold)` = **11sp 粗体**、`betweenPadding = xpadding/2f` = **7dp**。
+  参考图就是 `MODE_MY_PROFILE` 的三颗（`KEY_SET_PHOTO`/`KEY_EDIT_INFO`/`KEY_SETTINGS`）——
+  查到源码后截图与源码自洽，差的是**定标错了**。
+  **二**：按压换掉 —— TG 这一行走 `ButtonBounce`，不是水波：按下 60ms /
+  `cubic-bezier(0.25,0.1,0.25,1)` 缩到 **0.96**，松手 350ms / `OvershootInterpolator(5f)` 过冲回弹；
+  `Modifier.pressableRipple` **整件删除**（唯一调用方就是这三格）。
+  **三**：两处刻意不照源码 —— 左右 12dp（本页 `CARD_MARGIN`，源码 14dp）、竖向 6dp（本页
+  `CARD_SPACING`，源码 `top 8` + `ypadding 12`）；文字用 11sp 而非 `dp(11)`，默认字体缩放下逐像素相同。
+  **四**：:ui 编译、:ui detekt（69 文件 / 0 smells）、31 个 :ui 测试类全绿。
+
 ## 最新追记（2026-10-17 第六批：**「清理未声明依赖」改名「清理依赖」** / 页底三个动作**重新做成三张等宽白卡** / **卡底那句说明下线**）
 
 - [2026-10-17 · 依赖页第六批（改名 + 三张等宽白卡）](2026-10-17.md) 一条目（最新）：
