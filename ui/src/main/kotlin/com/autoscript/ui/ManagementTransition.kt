@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import com.autoscript.ui.components.claimPointerHits
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlin.math.min
@@ -147,9 +148,9 @@ internal fun <T> ManagementTransition(
 ) {
     // `under` 是盖在底下的那一层，`top` 是盖在上面的（null = 没有覆盖层）。
     //
-    // **为什么不能用「当前显示的那层」当底层**：从审计返回依赖管理时 `page` 变回依赖管理，
-    // 而它此刻正是 `top`。若底层也画它，用户会看到同一页淡出又淡入。`under` 存的是
-    // 「`top` 之前那一层」，返回时它已经在那儿了。
+    // **为什么不能用「当前显示的那层」当底层**：从镜像源管理返回依赖管理时 `page` 变回
+    // 依赖管理，而它此刻正是 `top`。若底层也画它，用户会看到同一页淡出又淡入。`under`
+    // 存的是「`top` 之前那一层」，返回时它已经在那儿了。
     var under by remember { mutableStateOf(page) }
     var top by remember { mutableStateOf<T?>(null) }
     // 1 = 上层完全就位（初值：首帧没有覆盖层，直接就位，不做进场动画）。
@@ -415,7 +416,15 @@ internal fun <T> ManagementTransition(
                             )
                         }
                     }
-                    .matchParentSize(),
+                    .matchParentSize()
+                    // **子页在前台时，面板那层不该再收得到触摸**（2026-10-16 用户报
+                    // 「日志管理页点空白进入依赖管理，退出来日志管理退不出来」）：
+                    // 子页的空白处没有手势管，同一坐标在面板层恰是「依赖管理」入口行，
+                    // 触摸穿透下去就把它点了 —— 状态机于是被推出两层设计（日志管理
+                    // 被顶进 under、依赖管理当了 top），退出路径随之中断。
+                    // 挂在这里 = "这一层被命中就挡住下面的兄弟"，事件一个都不消费
+                    // （子页自己的按压/滚动一字未动；机制与取舍见它的 KDoc）。
+                    .claimPointerHits(),
             ) {
                 // 子页内容 + **窗口圆角**裁剪（TG `:1136-1155` 的 round-rect）。
                 // 内容不是 `matchParentSize`（它不参与父级尺寸计算），直接用 `fillMaxSize`。

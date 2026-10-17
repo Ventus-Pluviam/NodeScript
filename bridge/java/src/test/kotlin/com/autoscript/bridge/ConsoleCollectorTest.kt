@@ -159,6 +159,45 @@ class ConsoleCollectorTest {
         assertEquals(listOf("still-here"), lines.map { it.text })
     }
 
+    /**
+     * 回放（2026-10-17「系统日志不要每次进 app 都清除」）：预置进环、**不回调 sink**、
+     * seq 重新分配。
+     *
+     * 三条都是**行为判据**，不是实现细节：① 不回调 sink —— 回调了就是每次启动把盘上
+     * 那批再抄一遍，文件每次开机翻一倍；② seq 重新分配 —— 拉取方游标从 0 起，
+     * 沿用盘上旧 seq 会让第一批行"游标已越过"而永远读不到；③ 预置的行照样被 drain 读到。
+     */
+    @Test
+    fun `回放预置进环且不回调落盘缝`() {
+        val sunk = mutableListOf<ConsoleLine>()
+        val c = ConsoleCollector(
+            lineSink = { sunk += it },
+            restored = listOf(
+                ConsoleLine(seq = 999L, runId = 0L, level = "info", text = "上一世的装配行", atMillis = 111L),
+                ConsoleLine(seq = 1000L, runId = 0L, level = "warn", text = "上一世的告警", atMillis = 222L),
+            ),
+        )
+        assertTrue(sunk.isEmpty(), "回放不许回调落盘缝（否则每次启动把盘上那批再抄一遍）")
+        val (cursor, lines) = c.drain(0, 10)
+        assertEquals(listOf("上一世的装配行", "上一世的告警"), lines.map { it.text })
+        assertEquals(listOf(1L, 2L), lines.map { it.seq }, "seq 由本进程重新分配（游标从 0 起）")
+        assertEquals(2L, cursor)
+        assertEquals(listOf(111L, 222L), lines.map { it.atMillis }, "原始时刻要保住（日志页显示的是它）")
+        // 之后的新行接着排下去，不与回放行撞号。
+        assertEquals(3L, c.append(0L, "info", "本世的").seq)
+    }
+
+    @Test
+    fun `回放超出容量时取最后那批且不算丢弃`() {
+        val c = ConsoleCollector(
+            capacity = 3,
+            restored = (1..5).map { ConsoleLine(seq = 0L, runId = 0L, level = "info", text = "line-$it") },
+        )
+        assertEquals(3, c.size())
+        assertEquals(listOf("line-3", "line-4", "line-5"), c.drain(0, 10).second.map { it.text })
+        assertEquals(0L, c.droppedCount(), "丢的是上一世就没装下的那部分，不是本世的账")
+    }
+
     @Test
     fun `并发写满时容量与丢弃数精确`() = runBlocking(AuthenticatedRunContext(EngineId(0), 42, 1, CapabilityMask.ALL)) {
         val c = ConsoleCollector(capacity = 19)

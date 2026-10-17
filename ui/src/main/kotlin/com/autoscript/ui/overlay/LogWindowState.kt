@@ -1,14 +1,16 @@
 package com.autoscript.ui.overlay
 
+import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleLineState
 
 /**
  * 执行日志悬浮窗的**纯状态**（2026-10-13 用户令；JVM 可测，不碰 Android）。
  *
- * 悬浮窗回答四个问题："看谁的输出"（[boundRunId]，由 [bind] 从在途表现值绑定）、
- * "看到哪"（[watermarkSeq]，清空按钮只推水位）、"多大"（[fullscreen] 紧凑/全屏切换）、
- * "摆在哪"（[x]/[y]，拖动改它，见 [movedTo]）。
+ * 悬浮窗回答四个问题："看谁的输出"（[boundRunId]，由 [bind] 绑定 —— **绑定不随
+ * 结算解除**：用户令「执行完不要自动清理输出」）、"看到哪"（[watermarkSeq]，
+ * 清空按钮只推水位）、"多大"（[fullscreen] 紧凑/全屏切换）、"摆在哪"（[x]/[y]，
+ * 拖动改它，见 [movedTo]）。
  *
  * **为什么绑定走"归属匹配"而不是调用方传 runId**：`runScriptFile`/`runTaskNow`
  * 那两条链**不回 runId**（挂起到结算只回 Unit）—— 调用方在开窗那一刻根本不知道
@@ -16,6 +18,11 @@ import com.autoscript.ui.state.ConsoleLineState
  * 按归属找到"这次触发起来的那条 run"（同归属取最大 runId = 最近一次）。
  * 定时任务在后台自己跑起来时**不调 open**（用户令：后台不弹窗），故误绑窗口不存在 ——
  * 窗开着的时候同归属的新 run 只可能是用户刚点的那一次（池容量默认 1，串行）。
+ *
+ * **快速脚本的兜底补绑**（2026-10-15 用户令「有时点执行日志不显示在悬浮窗上」）：
+ * 起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间 —— 在途表一次都没
+ * 见过它，从开窗起一次都没绑上过。此时 [bind] 收一个从行里摘出的 [fallbackRunId]
+ * 补绑（详见 [bind] 的 KDoc），窗口仍能画刚跑完的输出，而不是永远停在「未开始」。
  */
 data class LogWindowState(
     val projectId: String,
@@ -24,10 +31,19 @@ data class LogWindowState(
     val watermarkSeq: Long = 0L,
     /** 紧凑/全屏（系统宿主 updateViewLayout，in-app 宿主改 Box 尺寸）。 */
     val fullscreen: Boolean = false,
-    /** 绑定的在途 run（null = 这次执行还没进在途表 / 已结算）。 */
+    /** 绑定的 run（null = 这次执行还没进在途表 / 还没跑起来过；**结算不在此列**）。 */
     val boundRunId: Long? = null,
     /** 绑定那条 run 此刻冻没冻住（暂停按钮的图标与可用态就看它）。 */
     val paused: Boolean = false,
+    /**
+     * 绑定那条 run 此刻还在不在途（false = 已结算：跑完/被停/崩溃）。
+     *
+     * 结算**不解绑**（用户令「脚本执行完不要自动清理输出」），窗口继续画刚跑完的
+     * 输出 —— 于是「还在跑」与「跑完了」必须另有一处说得清：**第一颗钮**（在途画暂停、
+     * 已结算画重跑）与它的可用态以本字段为判据（2026-10-15 用户令后标题不再缀后缀，
+     * 见 [titleText]）。
+     */
+    val running: Boolean = false,
     /**
      * 紧凑态窗左上角（**dp**，相对宿主坐标系：系统窗 = 屏幕、in-app 窗 = 应用内容区）。
      *
@@ -37,13 +53,50 @@ data class LogWindowState(
      */
     val x: Float = 0f,
     val y: Float = 0f,
+    /**
+     * 底部输入框里正在敲的那一行（2026-10-16 用户令：悬浮窗最下面放输入框 + 蓝色箭头）。
+     *
+     * **为什么草稿住状态里而不是内容层 `remember`**：两个宿主画的是**同一个窗**
+     * （系统离屏 `ComposeView` 与 in-app 兜底窗），切宿主不该把敲了一半的一行弄丢；
+     * 而内容层是**无状态**的（全由参数进，见 `LogWindowContent` 的 KDoc）——
+     * 草稿放进去就等于"系统窗那次 `setContent` 重喂会清空输入框"。
+     *
+     * 送出去之后由调用方清空（[LogWindowController.sendInput] 成功才清）：失败还留着，
+     * 用户不必重敲 —— 与"失败不假装送到"同一条纪律。
+     */
+    val inputDraft: String = "",
+    /**
+     * 底部输入框**已经送出去**的那几行（宿主侧回显；2026-10-16 用户报「输入框输进去的
+     * 数字也没有显示在悬浮窗里」）。
+     *
+     * **为什么回显要由窗口做，而不是等脚本自己回声**：引擎里脚本的 stdin/stdout 都是
+     * 管道，`readline` 的 `terminal` 恒为 `false`（真终端才有 `isTTY`）—— 于是
+     * "敲什么屏幕上就有什么"这件终端的事**没有人做**：那份回显本来就是 TTY 驱动干的，
+     * 脚本侧没有等价物（`readline` 在 `terminal:false` 下不回显，见 `readline-bridge`
+     * 的 KDoc）。窗口在这个形态里**就是**那台终端，所以由它把送出去的行写进行流。
+     *
+     * 与 [inputDraft] 的分工：草稿是"还没送出去的"，[echoes] 是"已经送出去的" ——
+     * 送出成功才添（[LogWindowController.sendInput]），失败留在草稿里不添。
+     */
+    val echoes: List<InputEcho> = emptyList(),
 ) {
     /**
      * 窗标题（**单一归一化点**）：`/$projectId/$relPath` —— 用户口径的
      * `/data/test.js` 就是这个形状（relPath 是项目内路径，首段不是项目名，
      * 见 `ScriptLogRead` 的 KDoc；`/` 前缀是显示形态，落盘/索引一律不用它）。
+     *
+     * **不缀「· 已结束」**（2026-10-15 用户令「不需要在悬浮窗路径栏那里加已结束三个字」）。
+     * 曾缀过（结算不解绑那批加的，理由是把「跑完了」与「还在跑」在标题上分开）——
+     * 用户不要它：路径栏就是**路径**，状态由第一颗钮自己说（跑完 = 重跑图标、
+     * 在途 = 暂停图标，那颗钮本来就是三态的事实源），标题再缀一遍是重复且占宽。
+     * 「已结算」这个事实仍留在状态里（[running]，暂停钮的可用态与
+     * 「本次执行没有输出」那句仍读它），只是不再上标题。
+     *
+     * **根层条目的 `projectId` 是空串**（[com.autoscript.domain.scripts.ProjectId.ROOT]）：
+     * 直接拼会渲染成 `//x.js`，故项目段走 [ScriptPaths.fullRelPath]（判据只有一份，
+     * 2026-10-16）。
      */
-    val title: String get() = "/$projectId/$relPath"
+    val titleText: String get() = "/" + ScriptPaths.fullRelPath(projectId, relPath)
 
     /**
      * 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。
@@ -60,17 +113,43 @@ data class LogWindowState(
      * 在途表现值 → 绑定/更新（每次 `reloadConsole` 后调用）。
      *
      * - 同归属（projectId + scriptPath 都对上）取最大 runId = 最近一次触发；
-     * - 窗开着但表里没有同归属（启动失败/门禁拒/已结算）→ boundRunId = null，
-     *   窗显示「本次执行未开始」空态，用户手动关（不自关：失败 toast 已经说了原因，
-     *   窗再自关等于抢话）；
+     * - 窗开着但表里没有同归属 → **不落 null 覆盖当前绑定**（2026-10-15 用户令
+     *   「脚本执行完不要自动清理输出」）：在途表是"正在跑的"这一句，run 结算离开
+     *   在途表是**执行完成**不是「没有这回事」—— 一结算就把窗口切回「未开始」空态，
+     *   等于把刚跑完的日志在用户眼前自动清掉。窗口保持绑在最后一条同归属 run 上，
+     *   输出照常可见；只有一种情况落空态：**从开窗起一次都没绑上过**（启动失败/
+     *   门禁拒 —— 失败 toast 已经说了原因，窗再自关等于抢话，故留空态手动关）；
+     * - [fallbackRunId]：快速脚本的兜底（用户令「有时点执行日志不显示在悬浮窗上」）。
+     *   起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间 —— 在途表从开窗起
+     *   一次都没见过它，上面那层"结算不解绑"救不到（它**从没绑上过**）。此时从行里摘
+     *   出的归属（调用方现算，见 `MainActivity` 轮询处）**补绑**：仍为 null（没绑上也没
+     *   补位）才落空态。行摘的 risk 受「池容量默认 1 串行 + 窗只开给用户刚点的那一次」
+     *   约束 —— 归属不会错，最多是"跑了 A 又紧跟跑 B、A 的行先到"把 B 的窗先指向 A，
+     *   下一轮同归属在途 B 现身后立刻换回（误绑窗口只存在一帧，且输出仍如实按行归属画）。
+     *   **它不被当作"跑起来过"**：[running]/[paused] 都只看在途表（match），补绑号
+     *   running 恒 false —— 第一颗钮画重跑、暂停钮置灰，画的是"刚跑完"不是"正在跑"；
+     *   **归属过滤是硬要求**（2026-10-16 修）：调用方给的这个号必须已经按
+     *   `projectId` + `relPath` 过滤过（见 `fallbackRunIdFor`）—— 此前调用方取的是
+     *   全库最新非引擎外行，窗刚开时会被补到**上一次别的脚本**的输出上，
+     *   用户读到的是「它跑了上一次那个脚本」。本函数**不替调用方补这道过滤**：
+     *   它只看得到 runId，看不到归属（行里没有归属字段）；
      * - paused 随绑定 run 同步（run 结算消失后 paused 回 false，不留僵尸态）。
      */
-    fun bind(activeRuns: List<ActiveRunState>): LogWindowState {
+    fun bind(activeRuns: List<ActiveRunState>, fallbackRunId: Long? = null): LogWindowState {
         val match = activeRuns
             .filter { it.projectId == projectId && it.scriptPath == relPath }
             .maxByOrNull { it.runId }
+        // keep = 已绑过的那条；match 为 null（结算/未起跑）时保留它 —— **结算不解绑**。
+        // paused 只看 match：keep 若还在表里它就必然被 match 选中（同一套归属过滤，
+        // 取最大），故不存在"keep 在表里而 match 为 null"的第三态。
+        val keep = boundRunId
         return copy(
-            boundRunId = match?.runId,
+            // 补绑只在「从开窗起一次都没绑上过」时生效：keep 非空（绑过）就不碰 ——
+            // 已绑的那条再快也不能被行里摘出的号顶掉（同一归属重复触发时行按实际归属画）。
+            // **0 不作补位**（引擎外哨兵，防御性兜底：调用方已滤、这里再滤一道，
+            // 0 落进来会把窗绑到"引擎外行"上，标题会说谎）。
+            boundRunId = match?.runId ?: keep ?: fallbackRunId?.takeIf { it != 0L },
+            running = match != null,
             paused = match?.paused == true,
         )
     }
@@ -105,6 +184,42 @@ data class LogWindowState(
         return lines.filter { it.runId == bound && it.seq > watermarkSeq }
     }
 
+    /**
+     * 日志块的**行流**：脚本输出与用户输入回显按 seq 归并（[echoes] 的 KDoc 讲了
+     * 为什么回显必须存在）。
+     *
+     * [lines] 传**未过滤**的 console 行现值（宿主手里那份）—— 过滤由本函数**自己**做
+     * （[visible]）：调用方手里已经过滤过一遍也照样对（过滤是幂等的），而"忘了先过滤"
+     * 不会再悄悄把别条 run 的行画进窗里。
+     *
+     * **未绑定 → 空表，回显也不例外**（与 [visible] 同一条口径：空态由内容层画，
+     * 不在这里编一行假的）。
+     *
+     * 归并键是 [InputEcho.atSeq]：一条回显插在**"最后一条 seq ≤ atSeq 的脚本行"之后**。
+     * 这个位置不是装饰 —— 回显要是统一缀在末尾，「提示语 → 脚本结果 → 我刚敲的那一行」
+     * 会把因果读反（脚本明明是收到那一行才出的结果）。多条回显按 atSeq 升序插入
+     * （同值保持送出顺序）。
+     */
+    fun rows(lines: List<ConsoleLineState>): List<LogWindowRow> {
+        if (boundRunId == null) return emptyList()
+        val shown = visible(lines)
+        if (echoes.isEmpty()) return shown.map(LogWindowRow::Output)
+        val out = ArrayList<LogWindowRow>(shown.size + echoes.size)
+        var i = 0
+        for (e in echoes.sortedBy { it.atSeq }) {
+            while (i < shown.size && shown[i].seq <= e.atSeq) {
+                out += LogWindowRow.Output(shown[i])
+                i++
+            }
+            out += LogWindowRow.Input(e.text)
+        }
+        while (i < shown.size) {
+            out += LogWindowRow.Output(shown[i])
+            i++
+        }
+        return out
+    }
+
     companion object {
         /**
          * 紧凑尺寸（**dp 数**，日志窗是"盯着看"的面，不是阅读器 —— 默认不大）。
@@ -119,4 +234,28 @@ data class LogWindowState(
         const val COMPACT_WIDTH_DP: Float = 340f
         const val COMPACT_HEIGHT_DP: Float = 420f
     }
+}
+
+/**
+ * 一条**用户送回脚本的输入**（[LogWindowState.echoes] 的一项）。
+ *
+ * @property atSeq 送出那一刻窗里可见的**最大 seq**（一条可见行都没有时 = 水位）——
+ *   它决定这一行画在哪两条脚本输出之间（见 [LogWindowState.rows]）。
+ * @property text 送进脚本 stdin 的**那一行原文**（trim 之后的那份）：画的是
+ *   "脚本收到的是什么"，不是"输入框里看起来是什么"。
+ */
+data class InputEcho(val atSeq: Long, val text: String)
+
+/**
+ * 日志块行流的一项：脚本输出 / 用户输入回显（见 [LogWindowState.rows]）。
+ *
+ * 两态而非"再塞一条假的 [ConsoleLineState]"：后者得给回显编一个级别、一个时间戳，
+ * 于是它会跟着日志行一起进"按级别过滤/复制"那类面（那两样对用户输入都不成立）。
+ */
+sealed interface LogWindowRow {
+    /** 脚本进程的一行输出（绑定的那条 run）。 */
+    data class Output(val line: ConsoleLineState) : LogWindowRow
+
+    /** 用户送回脚本的一行（窗口侧回显；见 [LogWindowState.echoes]）。 */
+    data class Input(val text: String) : LogWindowRow
 }

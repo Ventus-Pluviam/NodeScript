@@ -49,7 +49,12 @@ class DemoScriptTest {
      *
      * 两条命名空间：`device.*` 回假设备值；`console.log` 回空并把**文本原样打到 stdout**
      * —— 于是本测断言的正是用户在控制台屏上会看到的那几行（示例脚本的输出走桥上
-     * `console` namespace，不是裸 console.log：引擎的排水线程对子进程 stdout 读即弃）。
+     * `console` namespace；裸 console.log 自 2026-10-15 起也落这条面，见下段）。
+     *
+     * **2026-10-15 起示例脚本那五行走的就是这条 `console` namespace 的 `log`**：kBootstrap
+     * 在 require 真脚本之前装了全局 console 包装（`installConsoleBridge`，用户令「js 的语法
+     * 都要和原来的调用方式一样」），裸 `console.log` 与 `auto.console.log` 落到同一条数据面 ——
+     * 本测因此也是那条包装的**回归门**：包装断了，`__bridge_call__` marker 里就会少掉五条。
      * 白名单外的调用回 `ERR_NOT_IMPLEMENTED` 错误帧：示例脚本的调用面是承诺，
      * 多一条就该红（错误原文会照 demo 的失败路径进 stderr）。
      *

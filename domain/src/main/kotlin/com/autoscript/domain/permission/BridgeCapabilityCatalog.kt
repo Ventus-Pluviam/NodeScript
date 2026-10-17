@@ -110,6 +110,8 @@ object BridgeCapabilityCatalog {
      * - `channel*` 是脚本**自有**命名通道（按发起执行私有，见 `EnginesNamespaceHandler`
      *   的「命名通道」段），不触达其他执行、不改宿主状态 → `NONE`；
      * - `heartbeat` 由连接身份单独约束（只能替自身打点），掩码上不再加码；
+     * - `stdinIdle` 同款：只关**自己**那条执行的 stdin 写端（runId 来自连接身份，
+     *   payload 里根本没有这个字段）→ `NONE`；
      * - `exec` 拉起**新执行**（新进程 + 新桥连接 + 新掩码）→ 最重，加 `SCHEDULER_WRITE`。
      */
     private val METHOD_REQUIRED: Map<Pair<String, String>, CapabilityMask> = mapOf(
@@ -124,6 +126,10 @@ object BridgeCapabilityCatalog {
         ("engines" to "channelEmit") to CapabilityMask.NONE,
         ("engines" to "channelDrain") to CapabilityMask.NONE,
         ("engines" to "channelClose") to CapabilityMask.NONE,
+        // 关的是**调用方自己**那条执行的 stdin 写端（目标 runId 取自认证连接身份，
+        // 不是 payload）—— 触达不到别的执行、也不改宿主状态，与 stop/status 同一条
+        // "自我操作不需要跨脚本位"口径（归属判据在 handler：根本没给 runId 这个入口）。
+        ("engines" to "stdinIdle") to CapabilityMask.NONE,
     )
 
     /** 命名空间级要求；未申报 → [UNKNOWN_NAMESPACE_REQUIRED]（默认拒）。 */

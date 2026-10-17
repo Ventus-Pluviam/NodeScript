@@ -10,11 +10,11 @@ import com.autoscript.domain.host.ScriptLogSnapshot
 import com.autoscript.appservice.npm.ShellOpExecutor
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.shell.asShellOpExecutor
+import com.autoscript.shell.runArchiveHighWater
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
-import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.InstallEventBatch
@@ -40,6 +40,7 @@ import com.autoscript.shell.AlarmPort
 import com.autoscript.shell.AlarmReceiver
 import com.autoscript.shell.AlarmSchedulerProvider
 import com.autoscript.shell.HostLog
+import com.autoscript.shell.OpLogHostSink
 import com.autoscript.shell.LockKeyStore
 import com.autoscript.shell.AndroidAlarmPort
 import com.autoscript.shell.AndroidBridgeBinder
@@ -312,6 +313,14 @@ class AppShellApplication : Application(), HostSummary {
             // `Paths.get` 而不是 `Path.of`：后者在 Android 上 since=34（`api-versions.xml` 实查），
             // minSdk 26 下 lint 的 NewApi 会红 —— 全仓 main 源已统一回 `Paths.get`（since=26）。
             val nativeLibDir = Paths.get(applicationInfo.nativeLibraryDir)
+            // 引擎四件 .so（hostBinary / libnodePath / npmNodeBin / npmLibnode）**唯一合法
+            // 落位** = nativeLibDir（jniLibs 交付，§19；useLegacyPackaging 安装期解压位）。
+            // 不许改成 files/.ns —— 2026-10-14 真机 bug：批 109 改名连带把这几处串成
+            // nsDir.resolve，Kotlin 不报错、设备上全量 ERR_FILE_NOT_FOUND
+            // （design-decisions §77.3 记的就是这种「改名的碰撞」）。落位门 =
+            // AppShellEnginePathsTest（读本文件钉接收者）；改这几处要连门一起改。
+            // 第四件（npmLibnode，2026-10-17）：与 npmNodeBin 是**同一件必填件的两半** ——
+            // noden 起来头一件事就是按 AUTOSCRIPT_LIBNODE 去 dlopen 它，缺了 exit 2。
             // §8.5 意图日志的存储引擎：SQLite（打开前做一次性迁移 jsonl → SQLite，
             // 带原 runId）。**打不开不回落**（2026-10-08 裁定）—— 异常直接冒到本函数的
             // catch，判本次装配失败：壳保持未就绪、闹钟走漏投记账，不拿一条锚点靠
@@ -320,6 +329,14 @@ class AppShellApplication : Application(), HostSummary {
             // ArchitectureTest「平台实现只许装配包碰」看住）。
             val nsDir = filesDir.resolve(".ns")
             val intentStore = PlatformWiring.intentStore(appContext, nsDir)
+            // runId 高水位（2026-10-14 真机 bug 的装配侧）：档案里**已用过的最大 engineRunId**。
+            // 引擎的 runId 分配器是**进程内**的（每次 App 重启从 1 重数），而 engineRunId 是
+            // 跨进程持久的身份 —— 不把水位作为构造配置喂下去，新进程第一次执行就会重发上一
+            // 进程用掉的号，`SqliteRunArchive.put` 撞「终态记录不可改写」响亮失败（用户看到的
+            // 是「执行失败：终态记录不可改写」+ 悬浮窗空态）。取数在这里：本函数是同步的，
+            // 而引擎由 `AppShellKit` 装配期 eager 建（池构造）—— 只有这一层读得到。打不开即抛
+            // （与 intentStore 同一条无回落纪律）：拿 0 冒充"没有历史"正是本条要修的病。
+            val engineRunIdHighWater = runArchiveHighWater(appContext, nsDir)
             // 运行档案与任务注册表（批 102 P4）：生产面换 SQLite，各带一次性 jsonl 迁移。
             // 与 intentStore 同一纪律 —— 打不开即抛（异常冒到本函数的失败分支：记日志、
             // 壳保持未就绪、闹钟走漏投记账），**不回落 jsonl**。
@@ -335,8 +352,10 @@ class AppShellApplication : Application(), HostSummary {
                         engineId,
                         NodeEngineConfig(
                             filesDir = filesDir,
-                            hostBinary = nsDir.resolve("libnoden.so"),
-                            libnodePath = nsDir.resolve("libnode.so"),
+                            // 构造即站在历史之后（见上面那处读取的 KDoc）。
+                            runIdHighWater = engineRunIdHighWater,
+                            hostBinary = nativeLibDir.resolve("libnoden.so"),
+                            libnodePath = nativeLibDir.resolve("libnode.so"),
                             hostSocketName = bridge?.socketName,
                             // facade 落位根（§12.4）：引擎按 bootstrap.js 在位与否决定
                             // 注入与否（选填纪律）—— 这里只给"应该在哪"，落位归 assemble。
@@ -386,7 +405,15 @@ class AppShellApplication : Application(), HostSummary {
                 npmCliSource = AssetsRead.npmCliSource(appContext.assets),
                 // npm 执行体的 Node 宿主 = 与脚本引擎同一个 noden（§19 交付位）：
                 // 设备上它就是 nativeLibraryDir/libnoden.so，ProcessBuilder 直接 exec。
-                npmNodeBin = nsDir.resolve("libnoden.so").toString(),
+                npmNodeBin = nativeLibDir.resolve("libnoden.so").toString(),
+                // npm 会话宿主（同一个 noden）要 dlopen 的那件：`main.cpp` 按
+                // AUTOSCRIPT_LIBNODE 找它，缺了直接 exit 2（2026-10-17 设备实测 bug）。
+                npmLibnode = nativeLibDir.resolve("libnode.so"),
+                // npm 操作事实的去向（2026-10-17 用户令「去掉审计、改打系统日志」）：
+                // 原先 `:app-service:npm` 自己写一本 `files/.ns/install-history.jsonl`，
+                // 现在只把事实交出来，由这里接到 [HostLog]（logcat + 日志管理页
+                // 「系统日志」段 runId=0）。**恒传**：缺了 → 装完什么都没留下。
+                opLog = OpLogHostSink,
                 // 应用密钥（§10.5-1 T2 / §11.3 第 8 条）：lock 带外签名与快照签名的
                 // 密钥面 = Android Keystore（首次运行建一把，之后一直取那把）。
                 // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
@@ -753,6 +780,19 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 往一次在途执行的脚本进程 stdin 送一行（[HostSummary] 的生产实现；2026-10-16
+     * 悬浮窗底部输入框那颗蓝色箭头）。
+     *
+     * 壳没装好就抛（与 [pauseRun] 同一条纪律）；false = 已结算/从未存在，或管道已随
+     * 进程关闭 —— 引擎侧如实回，UI 按 false 反馈。
+     */
+    override suspend fun sendInput(runId: Long, line: String): Boolean {
+        val built = assembled
+            ?: error("壳未装配（装配中或失败）：无法把输入送进脚本")
+        return built.sendInput(runId, line)
+    }
+
+    /**
      * 脚本输出日志的文件列表（[HostSummary] 的生产实现；2026-10-13）。
      *
      * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：只读 `filesDir/.ns/script-logs/`
@@ -816,12 +856,21 @@ class AppShellApplication : Application(), HostSummary {
      * 新建文件/文件夹（[HostSummary] 的生产实现，项目页 FAB 操作面）。
      *
      * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：落盘只看 `files/scripts/` 目录。
-     * 合法性/撞名裁决在 [ScriptFileOps]（原文抛给 UI）。
+     * 合法性/撞名/层级存在性裁决在 [ScriptFileOps]（原文抛给 UI）。
+     *
+     * [dirRelPath] 就是"用户在哪一层按的新建"（2026-10-16 用户口径）：透传给
+     * [ScriptFileOps]，本层不解释路径。
      */
-    override suspend fun createEntry(projectId: String, name: String, isFolder: Boolean) {
+    override suspend fun createEntry(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String?,
+    ) {
+        val files = filesDir.toPath()
         when (isFolder) {
-            true -> ScriptFileOps.createFolder(filesDir.toPath(), projectId, name)
-            false -> ScriptFileOps.createFile(filesDir.toPath(), projectId, name)
+            true -> ScriptFileOps.createFolder(files, projectId, name, dirRelPath)
+            false -> ScriptFileOps.createFile(files, projectId, name, dirRelPath)
         }
     }
 
@@ -842,6 +891,26 @@ class AppShellApplication : Application(), HostSummary {
     override suspend fun saveScriptFile(projectId: String, relPath: String, content: String) {
         ScriptFileOps.save(filesDir.toPath(), projectId, relPath, content)
     }
+
+    /**
+     * 删一个条目（[HostSummary] 的生产实现，文件列表菜单「删除」/ 多选批量删除）。
+     *
+     * 同 [createEntry]：只看 `files/scripts/` 落盘，**不依赖壳寄存器** —— 装配中/失败时
+     * 删除照常可用（此时"能删不能跑"正是用户该看到的全貌）。递归与三道闸在
+     * [ScriptFileOps.delete]（原文抛给 UI）。
+     */
+    override suspend fun deleteEntry(projectId: String, relPath: String) {
+        ScriptFileOps.delete(filesDir.toPath(), projectId, relPath)
+    }
+
+    /**
+     * 条目（文件或文件夹）的绝对路径（[HostSummary] 的生产实现，「复制绝对路径」）。
+     *
+     * 判据（防越界 + 首段与项目名一致）与读写口同源，见 [ScriptFileOps.absolutePath]。
+     * **不查存在性**：复制一条路径不该因为文件刚被删就失败（用户要的往往正是"它原来在哪"）。
+     */
+    override suspend fun absolutePathOf(projectId: String, relPath: String): String =
+        ScriptFileOps.absolutePath(filesDir.toPath(), projectId, relPath)
 
     /**
      * 语法高亮会话工厂（[HostSummary] 的生产实现，编辑器前端调用）。
@@ -946,21 +1015,6 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 安装审计史读数（§10.5-2，[HostSummary] 的生产实现）。
-     *
-     * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个
-     * `InstallCoordinator` 会各自持一本审计账，读侧读到的那本与写侧写进去的那本就不是同一本）；
-     * 未接线**抛**，不返回空表 —— 空表是「读成功且真的一条都没有」的样子。
-     */
-    override suspend fun npmHistory(): List<InstallHistoryEntry> {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：审计史暂不可读" }
-        val facade = checkNotNull(built.npmFacade) {
-            "npm 未接线：审计史无处读取（原因见装配日志的 npmCliFailure）"
-        }
-        return facade.history()
-    }
-
-    /**
      * 依赖维护动作（§10.9 第 5 条，[HostSummary] 的生产实现）。
      *
      * 直接转给 facade 的同名方法：`ci` 那条路**必须**经过 facade 的 `ci()`
@@ -983,9 +1037,24 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
+     * 把项目声明的依赖提升到全局作用域（2026-10-17，[HostSummary] 的生产实现）。
+     *
+     * 与 [runNpmMaintenance] 同一条纪律：走的是**装配产物里那个 facade**（第二个
+     * `InstallCoordinator` 会拿另一份 layout，那就装到别处去了）；未接线**抛**，
+     * 不返回一个空句柄 —— 界面会把它念成"已提升"，而磁盘上什么也没发生。
+     */
+    override suspend fun promoteNpmToGlobal(projectId: String): InstallHandle {
+        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：提升到全局暂不可用" }
+        val facade = checkNotNull(built.npmFacade) {
+            "npm 未接线：依赖无处提升到全局（原因见装配日志的 npmCliFailure）"
+        }
+        return facade.promoteToGlobal(projectId)
+    }
+
+    /**
      * 缓存回收（§10.9 第 5 条，[HostSummary] 的生产实现）。
      *
-     * 与 [npmHistory] 同一条纪律：读的是**装配产物里那个 facade**（第二个
+     * 与 [npmSnapshot] 同一条纪律：读的是**装配产物里那个 facade**（第二个
      * `InstallCoordinator` 会拿另一份缓存目录，那就删到别处去了）；未接线**抛**，
      * 不回一份「删了 0 条」的报告 —— 那个数字会被界面原样念给用户。
      */

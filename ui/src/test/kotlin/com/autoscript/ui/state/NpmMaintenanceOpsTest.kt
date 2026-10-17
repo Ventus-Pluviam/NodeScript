@@ -7,6 +7,11 @@ import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NodeModulesStats
+import com.autoscript.domain.npm.NpmTargetScope
+import com.autoscript.domain.npm.NpmConsoleLine
+import com.autoscript.domain.npm.NpmConsoleLineKind
+import com.autoscript.domain.npm.NpmConsoleSnapshot
+import com.autoscript.domain.npm.SequencedConsoleLine
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -29,8 +34,6 @@ class NpmMaintenanceOpsTest {
         installed = emptyList(),
         offlineGap = emptyList(),
         storage = NodeModulesStats(projectId = id, pkgCount = 1, totalBytes = bytes),
-        quotaBytes = 512L * 1024 * 1024,
-        quotaWarnRatio = 0.8,
     )
 
     private fun loaded(vararg projects: NpmProjectSnapshot) =
@@ -41,9 +44,12 @@ class NpmMaintenanceOpsTest {
         private val fail: Throwable? = null,
         private val report: NpmCacheReclaimReport = NpmCacheReclaimReport(3, 3L * 1024 * 1024, 7, 9L * 1024 * 1024, 7, false),
         private val snapshot: () -> NpmPanelSnapshot = { NpmPanelSnapshot(listOf()) },
+        /** 「提升到全局」单独一个失败位：去重成了、提升没成是**真会发生的**那一档。 */
+        private val promoteFail: Throwable? = null,
     ) : FakeHost() {
         val calls = mutableListOf<Pair<String, NpmMaintenanceAction>>()
         var reclaims = 0
+        val promoted = mutableListOf<String>()
 
         override suspend fun npmSnapshot(): NpmPanelSnapshot = snapshot()
 
@@ -57,6 +63,12 @@ class NpmMaintenanceOpsTest {
             reclaims++
             fail?.let { throw it }
             return report
+        }
+
+        override suspend fun promoteNpmToGlobal(projectId: String): InstallHandle {
+            promoted += projectId
+            promoteFail?.let { throw it }
+            return InstallHandle(id = "h2", projectId = NpmTargetScope.GLOBAL, enqueuedAtMillis = 1L)
         }
     }
 
@@ -75,13 +87,15 @@ class NpmMaintenanceOpsTest {
     }
 
     @Test
-    fun `三颗按钮各自的回执互不相同（不然用户不知道按的是哪颗）`() {
+    fun `每个动作的回执互不相同（不然用户不知道按的是哪一颗）`() {
         val notices = NpmMaintenanceAction.entries.map { action ->
             runBlocking {
                 runNpmMaintenanceOp(MaintenanceHost(), loaded(project()), action).opNotice
             }
         }
-        assertEquals(3, notices.toSet().size, "三颗按钮的回执必须各自可辨：$notices")
+        // 枚举仍是三个取值（界面 2026-10-17 只露两颗：`dedupe` 改走去重+提升那条路、
+        // `ci` 整颗下线）—— 这条断的是**通用路本身**：谁被接回来，回执照样分得开。
+        assertEquals(3, notices.toSet().size, "每个动作的回执必须各自可辨：$notices")
         assertTrue(notices[2]!!.contains("验 lock 签名"), "ci 要先验 lock 签名，回执得先说：${notices[2]}")
     }
 
@@ -118,7 +132,76 @@ class NpmMaintenanceOpsTest {
         // 宿主说 prune 完只剩 1MB：界面必须显示 1MB，而不是沿用操作前的 10MB
         val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 1L * 1024 * 1024))) })
         val next = runNpmMaintenanceOp(host, loaded(project("demo", 10L * 1024 * 1024)), NpmMaintenanceAction.PRUNE)
-        assertEquals("1 MB / 512 MB", next.quotaLabel, "回读的才是现状")
+        assertEquals("1 MB", next.sizeLabel, "回读的才是现状")
+    }
+
+    // ═══ 去重 + 提升到全局（2026-10-17 用户口径「依赖去重执行后让它把依赖自动放进全局作用域中」） ═══
+
+    @Test
+    fun `去重并提升：先 dedupe 当前作用域，再把它是谁提升上去`() = runBlocking {
+        val host = MaintenanceHost()
+        val next = runDedupeAndPromoteOp(host, loaded(project("demo")))
+
+        assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls, "第一段是当前作用域上的去重")
+        assertEquals(listOf("demo"), host.promoted, "第二段提升的是**这个**作用域声明的依赖")
+        assertNull(next.maintenance, "跑完必须把忙碌标记清掉，否则那颗按钮永远转圈")
+        assertNull(next.opError)
+        val n = next.opNotice!!
+        assertTrue(n.contains("dedupe"), "第一段干了什么要说：$n")
+        assertTrue(n.contains("提升到全局"), "第二段干了什么更要说 —— 那是这颗按钮的意思：$n")
+        assertFalse(n.contains("已完成"), "入队 ≠ 完成：不许替用户宣布结果：$n")
+    }
+
+    @Test
+    fun `作用域已经是全局 → 不提升，且回执明说这一步跳过了`() = runBlocking {
+        val host = MaintenanceHost()
+        val picked = NpmState.withProject(loaded(project("demo"), project(NpmTargetScope.GLOBAL)), NpmTargetScope.GLOBAL)
+        val next = runDedupeAndPromoteOp(host, picked)
+
+        assertEquals(listOf(NpmMaintenanceAction.DEDUPE), host.calls.map { it.second }, "去重照样跑")
+        assertTrue(host.promoted.isEmpty(), "把自己提升到自己身上是句空话，不该发出去")
+        // **必须明说跳过了**：不然用户会以为"提升"那半截悄悄失败了（这正是这条按钮的语义）。
+        assertTrue(next.opNotice!!.contains("全局"), "实为 ${next.opNotice}")
+        assertTrue(next.opNotice!!.contains("没有可提升"), "实为 ${next.opNotice}")
+    }
+
+    @Test
+    fun `去重失败 → 整颗报失败，且不做后段`() = runBlocking {
+        val raw = "npm 退出码 1: ERESOLVE could not resolve"
+        val host = MaintenanceHost(fail = IllegalStateException(raw))
+        val next = runDedupeAndPromoteOp(host, loaded(project("demo")))
+
+        assertEquals(raw, next.opError, "失败原文必须原样到达界面")
+        assertTrue(host.promoted.isEmpty(), "依赖树还乱着就往外提升 = 把一个半成品抄成全局的基准")
+        assertNull(next.opNotice, "失败不许留成功回执")
+        assertNull(next.maintenance)
+    }
+
+    /**
+     * **部分失败两个都给** —— 这是这一颗按钮最容易撒的谎：去重真的跑了（几十秒），
+     * 只报一句「提升失败」会让用户以为整颗按钮什么也没干，于是再点一次，去重被重跑一遍。
+     */
+    @Test
+    fun `去重成了、提升失败 → 两个都给，去重不许被报成失败`() = runBlocking {
+        val host = MaintenanceHost(promoteFail = IllegalStateException("没有可提升的依赖声明：package.json 里 dependencies/devDependencies 都是空的"))
+        val next = runDedupeAndPromoteOp(host, loaded(project("demo")))
+
+        assertEquals(listOf("demo"), host.promoted, "后段确实发出去过")
+        assertTrue(next.opNotice!!.contains("dedupe"), "前段的成果要如实说：${next.opNotice}")
+        assertFalse(next.opNotice!!.contains("失败"), "回执那行不是放失败的地方：${next.opNotice}")
+        assertTrue(next.opError!!.contains("提升到全局失败"), "后段的病因要带出来：${next.opError}")
+        assertTrue(next.opError!!.contains("dependencies"), "原文透传，不另编话术：${next.opError}")
+        assertNull(next.maintenance)
+    }
+
+    @Test
+    fun `去重并提升：没选作用域与宿主未接线，两句话不一样`() = runBlocking {
+        val noPick = runDedupeAndPromoteOp(MaintenanceHost(), NpmState.of(NpmPanelSnapshot(emptyList())))
+        assertTrue(noPick.opError!!.contains("还没有选中的作用域"), "实为 ${noPick.opError}")
+
+        val noHost = runDedupeAndPromoteOp(null, loaded(project("demo")))
+        assertTrue(noHost.opError!!.contains("未接线"), "实为 ${noHost.opError}")
+        assertNull(noHost.opNotice)
     }
 
     // ═══ 缓存回收 ═══
@@ -161,11 +244,51 @@ class NpmMaintenanceOpsTest {
         assertFalse(next.reclaimingCache)
     }
 
+    // ═══ 日志大框那一段的取数（2026-10-17 用户令：最下面弄个显示日志的大框） ═══
+
     @Test
-    fun `回收后必须回读快照（否则配额条还是旧值，看着像没生效）`() = runBlocking {
+    fun `现取读数时顺带把 npm 输出拉进日志框`() = runBlocking {
+        // 宿主缺省那份（`consoleOutput`）在真装配里是有内容的，这里给一段假的：
+        // 断言的是**接线**（读口 → `NpmState.withConsole`），不是环本身的行为。
+        val host = object : FakeHost() {
+            override suspend fun npmSnapshot(): NpmPanelSnapshot = NpmPanelSnapshot(listOf(project("demo")))
+
+            override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot =
+                NpmConsoleSnapshot(
+                    firstSeq = 1,
+                    lastSeq = 2,
+                    lines = listOf(
+                        SequencedConsoleLine(1, NpmConsoleLine(NpmConsoleLineKind.ECHO, "$ npm install axios", 0L)),
+                        SequencedConsoleLine(2, NpmConsoleLine(NpmConsoleLineKind.RESULT, "退出码 0", 0L, ok = true)),
+                    ),
+                    running = false,
+                )
+        }
+        val state = loadNpmSnapshot(host, NpmState.NOT_LOADED)
+        assertEquals(2, state.consoleLines.size, "快照与日志必须是同一趟现取（两条各拉一次会互相矛盾）")
+        assertEquals("$ npm install axios", state.consoleLines.first().text)
+        assertEquals(listOf("退出码 0"), state.consoleLines.drop(1).map { it.text })
+    }
+
+    @Test
+    fun `日志读失败不算这次操作失败（两条账分开）`() = runBlocking {
+        // 这份替身**只**给快照，`consoleOutput` 走 FakeHost 的"未提供"（抛）——
+        // 日志是装饰性的读数：它读不到，清单照样要画出来，也不该在页面上报一句错。
+        val host = object : FakeHost() {
+            override suspend fun npmSnapshot(): NpmPanelSnapshot = NpmPanelSnapshot(listOf(project("demo")))
+        }
+        val state = loadNpmSnapshot(host, NpmState.NOT_LOADED)
+        assertTrue(state.load.isLoaded, "清单读到了就是读到了，不被日志那半拖下水")
+        assertEquals("demo", state.selectedProjectId)
+        assertNull(state.opError, "日志读不到不许冒充成操作失败")
+        assertTrue(state.consoleLines.isEmpty())
+    }
+
+    @Test
+    fun `回收后必须回读快照（否则尺寸那行还是旧值，看着像没生效）`() = runBlocking {
         val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 2L * 1024 * 1024))) })
         val next = reclaimNpmCacheOp(host, loaded(project("demo", 10L * 1024 * 1024)))
-        assertEquals("2 MB / 512 MB", next.quotaLabel)
+        assertEquals("2 MB", next.sizeLabel)
     }
 
     @Test

@@ -51,6 +51,21 @@ class ControllerRunDispatcher(
     private val queueTimeoutMillis: Long? = null,
     /** 分级表（§8.6 铁律 3）；测试注入小值，避免为了验边界真等十几秒。 */
     private val queueTimeoutFor: (TriggerSource) -> Long = DEFAULT_QUEUE_TIMEOUTS,
+    /**
+     * 崩溃行出口（2026-10-16 用户报「有不支持的函数应该在悬浮窗里输出报错」）。
+     *
+     * 病：脚本抛错（`ReferenceError: prompt is not defined` 这类）的**唯一**去处是
+     * `RunSummary.stderrTail` —— 它进档案的 `crashSummary`（任务日志/日志管理看得见），
+     * 但**不进控制台**，于是悬浮窗里那条执行一行输出都没有，画的是
+     * 「本次执行没有输出（已结束）」。用户看见的是"脚本没反应"，而真相（哪一行、
+     * 什么错）就躺在没人读的 stderr 尾部。
+     *
+     * 药：结算为 Failed/Crashed 且有 stderr 尾部时，把它按 `error` 档写一行进控制台，
+     * **归属仍是这次 runId**（与脚本自己的 console 行同一条数据面、同一个归属过滤），
+     * 于是悬浮窗/控制台/日志管理三处同时看得见。缺省 `{ _, _, _ -> }` = 不写
+     * （单测/骨架零改动），生产在 `AppShell.assemble` 接 `ConsoleCollector::append`。
+     */
+    private val crashLine: (runId: Long, level: String, text: String) -> Unit = { _, _, _ -> },
 ) : RunDispatcher {
     init {
         require(queueTimeoutMillis == null || queueTimeoutMillis > 0) {
@@ -96,13 +111,20 @@ class ControllerRunDispatcher(
         val awaitTimeout = pending.timeoutMillis ?: defaultAwaitTimeoutMillis
         return when (val completed = controller.awaitCompletion(started.runId, awaitTimeout)) {
             RuntimeController.Completed.StoppedClean -> DispatchReport(RunOutcome.Succeeded, link, stop)
-            is RuntimeController.Completed.StopTimeout ->
+            is RuntimeController.Completed.StopTimeout -> {
+                // 措辞与 Killed 那条**分开**：软停超时是"四步 quiesce 未净、已 kill 兜底"，
+                // 病因在宿主侧（停不下来），把它说成"脚本异常"就是撒谎（§1 诚实）。
+                crashLine(started.runId, "error", crashText(completed.summary, started.runId, CAUSE_STOP_TIMEOUT))
                 DispatchReport(
                     RunOutcome.Failed(completed.summary?.exitCode, completed.summary?.stderrTail),
                     link,
                     stop,
                 )
-            is RuntimeController.Completed.Killed ->
+            }
+            is RuntimeController.Completed.Killed -> {
+                // 病因进控制台（见 [crashLine]）：脚本抛错时 stderr 尾部是**唯一**写着
+                // "哪一行、什么错"的地方，不写出去等于把病因留在没人读的档案里。
+                crashLine(started.runId, "error", crashText(completed.summary, started.runId, CAUSE_KILLED))
                 // Completed.Killed 两条来路：自然 CRASHED（脚本抛错/宿主 exit≠0）与真被强杀 ——
                 // 措辞必须同时盖住，否则"脚本自己崩了"被日志写成"被强杀"就是撒谎（§1 诚实）。
                 // summary（进程侧退出码 + stderr 尾部）随 outcome 折进档案与意图日志（backlog B11）。
@@ -115,6 +137,7 @@ class ControllerRunDispatcher(
                     link,
                     stop,
                 )
+            }
             is RuntimeController.Completed.UnknownRun ->
                 DispatchReport(
                     RunOutcome.Crashed(
@@ -132,8 +155,43 @@ class ControllerRunDispatcher(
         }
     }
 
+    /**
+     * 崩溃行的**一句话**（见 [crashLine]）：`#runId 病因（exit N）：` + stderr 尾部
+     * （引擎侧已截到 `RunSummary.MAX_DETAIL`）。
+     *
+     * 三条如实口径：
+     * - **退出码是后缀不是病因**：`exit 1` 本身不说明任何事，写着"哪一行、什么错"的是尾部；
+     * - **没有尾部时不编**：只说"引擎未捕获到错误输出"，不拿退出码冒充病因（空话会让用户
+     *   以为看见了原因，而实际什么都没说）；
+     * - **病因前缀按来路分**（[CAUSE_KILLED]/[CAUSE_STOP_TIMEOUT]）：把"宿主停不下来"
+     *   说成"脚本异常"就是撒谎（§1 诚实）。
+     */
+    private fun crashText(
+        summary: com.autoscript.domain.engine.RunSummary?,
+        runId: Long,
+        cause: String,
+    ): String {
+        val tail = summary?.stderrTail?.trim().orEmpty()
+        val code = summary?.exitCode
+        // 退出码是**后缀**不是病因：`exit 1` 本身不说明任何事，真正写着"哪一行、什么错"
+        // 的是 stderr 尾部。没有尾部时如实说"没捕获到"，不拿退出码冒充病因。
+        val head = if (code != null) "$cause（exit $code）" else cause
+        return if (tail.isEmpty()) "#$runId $head（引擎未捕获到错误输出）" else "#$runId $head：\n$tail"
+    }
+
     companion object {
         const val DEFAULT_AWAIT_TIMEOUT_MILLIS: Long = 30_000
+
+        /**
+         * 崩溃行的**病因前缀**两条（措辞与 [RunOutcome] 那两句同源，窗里与控制台/任务日志
+         * 读到的不是两套说法）：
+         * - [CAUSE_KILLED] 盖住 `Completed.Killed` 的两条来路（脚本自己崩 / 真被强杀）——
+         *   只写其中一条就是撒谎；
+         * - [CAUSE_STOP_TIMEOUT] 是**宿主侧**的病因（四步 quiesce 未净、已 kill 兜底），
+         *   与"脚本异常"分开说。
+         */
+        const val CAUSE_KILLED: String = "引擎异常结算（脚本崩溃或被强杀）"
+        const val CAUSE_STOP_TIMEOUT: String = "执行未在期限内退净（已强杀兜底）"
 
         /**
          * 满池排队上限的分级表（§8.6「排队上限由投递方给」的落地默认值；铁律 3，值恒 > 0）。

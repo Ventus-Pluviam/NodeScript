@@ -298,6 +298,11 @@ fun Cell(
  * 本仓只有一层，故把它读成"底与字各自渐变"，曲线与时长照抄 320ms / EASE_OUT_QUINT。
  *
  * @property selected 选中态（见上：底色 + 白字）。
+ * @param animated 底色/字色要不要**渐变**过去。缺省 true（分段控件那一档）。
+ *   **长列表里的胶囊要传 false**：`animateColorAsState` 是按实例建 `Animatable` 的，
+ *   每多一颗就多两个 `Animatable` + 两条订阅协程 + 两次 `SideEffect` —— 列表滚动时
+ *   这些是**跟着每一行进入视野现造**的，而依赖列表那一颗「卸载」的选中态是写死的
+ *   `false`，那条动画一辈子不会真的跑一帧（见 `:ui` 依赖管理页 `InstalledRow` 的调用点）。
  */
 @Composable
 fun PillButton(
@@ -306,24 +311,36 @@ fun PillButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    animated: Boolean = true,
 ) {
     val palette = ThemeColors
+    val bgTarget = if (selected) palette.featuredButton else Color.Transparent
+    val fgTarget = when {
+        !enabled -> palette.textTertiary
+        selected -> palette.featuredButtonText
+        else -> palette.chipText
+    }
     // 选中态**渐变**而不是硬切：分段控件（如页签式的排期选择）连点几下时，
     // 底色/字色一帧一跳很像"没点上"，渐变过去才读得出"选中跑到这一格了"。
-    val bg by animateColorAsState(
-        targetValue = if (selected) palette.featuredButton else Color.Transparent,
-        animationSpec = tween(durationMillis = ChipSwitchDurationMillis, easing = EaseOutQuint),
-        label = "pillBg",
-    )
-    val fg by animateColorAsState(
-        targetValue = when {
-            !enabled -> palette.textTertiary
-            selected -> palette.featuredButtonText
-            else -> palette.chipText
-        },
-        animationSpec = tween(durationMillis = ChipSwitchDurationMillis, easing = EaseOutQuint),
-        label = "pillFg",
-    )
+    val bg: Color
+    val fg: Color
+    if (animated) {
+        val animatedBg by animateColorAsState(
+            targetValue = bgTarget,
+            animationSpec = tween(durationMillis = ChipSwitchDurationMillis, easing = EaseOutQuint),
+            label = "pillBg",
+        )
+        val animatedFg by animateColorAsState(
+            targetValue = fgTarget,
+            animationSpec = tween(durationMillis = ChipSwitchDurationMillis, easing = EaseOutQuint),
+            label = "pillFg",
+        )
+        bg = animatedBg
+        fg = animatedFg
+    } else {
+        bg = bgTarget
+        fg = fgTarget
+    }
     Box(
         modifier = modifier
             .height(ChipHeight)

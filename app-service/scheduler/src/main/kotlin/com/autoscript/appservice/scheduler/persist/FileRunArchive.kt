@@ -81,6 +81,11 @@ class FileRunArchive(private val dir: Path) : RunArchive, AutoCloseable {
         records.values.filter { !it.state.isTerminal }.sortedBy { it.id }
     }
 
+    /** 高水位 = 内存索引里最大的 id（replay 已建好全量索引，不需要另扫一遍文件）。 */
+    override suspend fun maxEngineRunId(): Long = synchronized(writeLock) {
+        records.keys.maxOrNull() ?: 0L
+    }
+
     override fun close() {
         channel.force(true)
         channel.close()

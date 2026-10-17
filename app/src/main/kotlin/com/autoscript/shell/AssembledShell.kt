@@ -289,9 +289,16 @@ class AssembledShell internal constructor(
         // `files/scripts/demo/demo/data/test.js` —— 一句 ERR_FILE_NOT_FOUND，
         // 且**编译期毫无迹象**。削不出（首段不是本项目）当场拒，不静默当项目内路径跑。
         val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath)
+        // 根层（projectId 空串）不是"某个项目"，那句"不在项目 x 下"对它读起来是错的
+        // —— 两种形状各说各的错（2026-10-16 根层可写时分开写）。
         require(internalPath != null) {
-            "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
-                "（relPath 是 files/scripts/ 之下的相对路径，首段应为项目名）"
+            if (projectId.isEmpty()) {
+                "relPath 与根层不一致：$relPath 不是 files/scripts/ 本层的文件" +
+                    "（根层只有一层，没有项目名）"
+            } else {
+                "relPath 与项目不一致：$relPath 不在项目 $projectId 下" +
+                    "（relPath 是 files/scripts/ 之下的相对路径，首段应为项目名）"
+            }
         }
         shell.scheduler.onTriggerFile(projectId = projectId, relPath = internalPath)
     }
@@ -322,4 +329,13 @@ class AssembledShell internal constructor(
 
     /** 与 [pauseRun] 对偶（解冻）。 */
     suspend fun resumeRun(runId: Long): Boolean = shell.controller.resumeRun(runId)
+
+    /**
+     * 往一次在途执行的脚本进程 stdin 送一行（`HostSummary.sendInput` 的装配实现；
+     * 2026-10-16 悬浮窗底部输入框）。
+     *
+     * 与 [pauseRun] 同一条"在途表精确命中"口径：false = 已结算/从未存在，或管道
+     * 已随进程关闭 —— 调用方（悬浮窗）按 false 如实报，不抛。
+     */
+    suspend fun sendInput(runId: Long, line: String): Boolean = shell.controller.sendInput(runId, line)
 }

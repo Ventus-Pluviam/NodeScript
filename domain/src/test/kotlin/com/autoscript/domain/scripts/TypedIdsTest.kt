@@ -39,9 +39,41 @@ class TypedIdsTest {
 
     @Test
     fun `非法项目号 createOrNull 回 null 不抛`() {
-        for (bad in listOf("", "..", ".", "a/b", "a\\b", "a b", "p.1", " a", "a\n", "a:b")) {
+        // 样本按 2026-10-16 放宽后的判据（排除分隔符/点/控制字符）：`a b`、` a`、`a:b`
+        // 这些**原先在名单里**的现在合法了，已挪去下面那条「放宽」用例。
+        for (bad in listOf("", "..", ".", "a/b", "a\\b", "p.1", "a\n", "\t", "a\u0000b")) {
             assertNull(ProjectId.createOrNull(bad), "应回 null: ${bad.replace("\n", "\\n")}")
         }
+    }
+
+    /**
+     * 放宽后的样本（2026-10-16 用户裁定：根层文件夹名允许中文）。
+     *
+     * 判据从"允许清单"（`[A-Za-z0-9_-]+`）换成"**禁止清单**"（不含 `/`、`\`、`.`、控制字符）——
+     * 这条用例钉的是"禁的那几样一个都没放行"，而不是列举放行了什么。
+     */
+    @Test
+    fun `项目号判据放宽到只排除分隔符点与控制字符`() {
+        for (ok in listOf("main", "demo", "我的脚本", "a b", "a:b", "-lead", "9", "A", "任务 1")) {
+            assertTrue(ScriptPaths.isValidProjectId(ok), "应放行: $ok")
+            assertTrue(ProjectId.createOrNull(ok) != null, "应能进类型: $ok")
+        }
+        for (bad in listOf("", ".", "..", "a.b", "a/b", "a\\b", "a\nb", "a\u0000b", "\t")) {
+            assertFalse(ScriptPaths.isValidProjectId(bad), "应拒: ${bad.replace("\n", "\\n")}")
+        }
+    }
+
+    /**
+     * 根层哨兵（2026-10-16）：空串**构造得出来** —— 它是 `files/scripts/` 本层
+     * （[ScriptPaths.projectRoot] 落到 `files/scripts` 本身，见 [ScriptPathsScriptFileTest]），
+     * 但它**不是项目号**：外部输入进不来（[ProjectId.createOrNull] 回 null）。
+     */
+    @Test
+    fun `根层哨兵空串直构造可得但 createOrNull 仍回 null`() {
+        assertEquals("", ProjectId.ROOT.value)
+        assertEquals("", ProjectId("").value)
+        assertNull(ProjectId.createOrNull(""), "桥侧/界面侧照旧拒空项目号")
+        assertFalse(ScriptPaths.isValidProjectId(""), "空串不是项目号 —— 它是「没有项目」的编码")
     }
 
     /** 直构造（`ProjectId(x)`）**必须抛** —— 「没有不校验的后门」是本类的全部价值。 */

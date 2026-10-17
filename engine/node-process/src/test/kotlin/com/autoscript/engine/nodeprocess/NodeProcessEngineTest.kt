@@ -141,10 +141,15 @@ class NodeProcessEngineTest {
         return p
     }
 
-    /** 两个限额缝打包一个参数：这两个是同一件事（脚本资源限额），拆开只会让 `engine()` 顶破 detekt 的参数线。 */
+    /**
+     * 三个缝打包一个参数：拆开会让 `engine()` 顶破 detekt 的参数线（阈值 10，已到顶）。
+     * 前两个是同一件事（脚本资源限额），`grace` 是 stop 语义那一频段的配置 ——
+     * 三者共处一包**不是**设计上的耦合，只是同一个 helper 透传、参数位不够。
+     */
     private data class ScriptLimits(
         val maxHeapMb: () -> Int? = { null },
         val uvThreadPoolSize: () -> Int? = { null },
+        val grace: Long = 3_000,
     )
 
     /** 默认宿主 = 临时目录里的哑文件（绝对路径存在性预检要过；真起进程的是假缝）。 */
@@ -159,7 +164,7 @@ class NodeProcessEngineTest {
         bridgeDist: Path? = null,
         scriptEnv: () -> Map<String, String> = { emptyMap() },
         limits: ScriptLimits = ScriptLimits(),
-        grace: Long = 3_000,
+        runIdHighWater: Long = 0,
     ): NodeProcessEngine {
         // 只有走默认才铺哑文件：预检缺位案显式传"不存在的路径"、PATH 名案传相对名 —— 都原样不动。
         if (hostBinary == defaultHostBinary()) {
@@ -178,7 +183,8 @@ class NodeProcessEngineTest {
                 scriptEnv = scriptEnv,
                 maxHeapMb = limits.maxHeapMb,
                 uvThreadPoolSize = limits.uvThreadPoolSize,
-                stopGraceMillis = grace,
+                runIdHighWater = runIdHighWater,
+                stopGraceMillis = limits.grace,
             ),
             launcher,
             identityIssuer = { _, _, _, _ -> object : com.autoscript.domain.engine.RunIdentityLease {
@@ -509,7 +515,7 @@ class NodeProcessEngineTest {
     fun `stop 语义——SIGTERM 退净回 Clean，忽略信号回 TimedOut partial`() {
         writeScript()
         val launcher = FakeLauncher()
-        val e = engine(launcher, grace = 50)
+        val e = engine(launcher, limits = ScriptLimits(grace = 50))
         runBlocking { e.execute(request()) }
         val proc = launcher.nextProcess
 
@@ -563,6 +569,33 @@ class NodeProcessEngineTest {
         assertEquals(ids.size, ids.toSet().size, "三个独立引擎实例的 runId 不得相撞：$ids")
         assertEquals(ids, ids.sorted(), "runId 单调递增")
         assertTrue(r1.runId > 0)
+    }
+
+    /**
+     * 2026-10-14 真机 bug 的引擎侧回归：**进程重启**后分配器从 1 重新数，会重发上一进程
+     * 用掉的号 —— 档案撞「终态记录不可改写」。装配期把档案高水位喂进
+     * [NodeEngineConfig.runIdHighWater]，构造即站在历史之后。
+     *
+     * **断言全用相对量**：分配器是**跨实例共享**的（类 KDoc「runId 全局唯一」），
+     * 本类其它用例也在推进它 —— 写死数字会变成与执行顺序耦合的假断言。
+     * 水位**只前移不后退**（同一个共享计数器：新实例带更小的水位构造，不得把已发出的号调小）。
+     */
+    @Test
+    fun `构造水位后 runId 接在历史之后 更小的水位不后退`() {
+        writeScript()
+        val used1 = runBlocking { engine(FakeLauncher()).execute(request()) }.runId
+        assertTrue(used1 > 0, "空档不顶时行为不变（仍从当前序列发号）")
+
+        // 模拟"上一进程用掉了 used1"：新实例带着水位构造。
+        val restarted = engine(FakeLauncher(), runIdHighWater = used1)
+        val issued = runBlocking { restarted.execute(request()) }.runId
+        assertTrue(issued > used1, "执行真的拿到历史之后的号（不再撞档案终态行）：$issued")
+
+        // 更小的水位（历史更浅 / 0 = 无历史）不得把共享计数器调小 —— 调小就与本进程
+        // 已发出的号相撞，比原病更糟。
+        engine(FakeLauncher(), runIdHighWater = 1L)
+        val afterShallow = runBlocking { engine(FakeLauncher()).execute(request()) }.runId
+        assertTrue(afterShallow > issued, "带更小水位的实例不得让序列回退：$afterShallow vs $issued")
     }
 
     @Test
@@ -630,7 +663,7 @@ class NodeProcessEngineTest {
     fun `stop 与 kill 路径不等排水——终止手段的产物不填摘要也不付等待`() {
         writeScript()
         val launcher = FakeLauncher()
-        val e = engine(launcher, grace = 50)
+        val e = engine(launcher, limits = ScriptLimits(grace = 50))
         runBlocking { e.execute(request()) }
         val stopped = launcher.nextProcess
         assertEquals(StopResult.Clean, runBlocking { e.stop() })

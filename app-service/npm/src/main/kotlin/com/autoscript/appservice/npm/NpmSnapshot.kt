@@ -37,7 +37,7 @@ import java.util.zip.ZipOutputStream
  */
 class NpmSnapshot(
     private val layout: NpmProjectLayout,
-    /** `files/.ns`（`approve-ledger.jsonl` / `install-history.jsonl` / `lock.sig` 的来源）。 */
+    /** `files/.ns`（`approve-ledger.jsonl` / `lock.sig` 的来源）。 */
     private val ledgerDir: Path? = null,
     private val key: LockSigner.KeyProvider,
 ) {
@@ -185,7 +185,6 @@ class NpmSnapshot(
         add("package-lock.json", root.resolve("package-lock.json"))
         if (ledgerDir != null) {
             add("ledger/approve-ledger.jsonl", ledgerDir.resolve("approve-ledger.jsonl"))
-            add("ledger/install-history.jsonl", ledgerDir.resolve("install-history.jsonl"))
             add("lock.sig", ledgerDir.resolve("lock.sig"))
         }
         val nm = layout.nodeModules(ProjectId(projectId))

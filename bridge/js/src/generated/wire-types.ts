@@ -12,7 +12,7 @@ export const WIRE = {
   "datastore": { facade: 'datastore.ts', methods: ['clear', 'contains', 'get', 'keys', 'put', 'remove'] },
   "device": { facade: 'extras.ts', methods: ['model', 'sdkInt'] },
   "dialogs": { facade: 'extras.ts', methods: ['choose', 'prompt'] },
-  "engines": { facade: 'engines.ts', methods: ['channel', 'channelClose', 'channelDrain', 'channelEmit', 'exec', 'heartbeat', 'poolStats', 'status', 'stop'] },
+  "engines": { facade: 'engines.ts', methods: ['channel', 'channelClose', 'channelDrain', 'channelEmit', 'exec', 'heartbeat', 'poolStats', 'status', 'stdinIdle', 'stop'] },
   "floatingWindow": { facade: 'extras.ts', methods: ['close', 'create'] },
   "images": { facade: 'images.ts', methods: ['crop', 'decode', 'findColor', 'findFeature', 'findImage', 'matchTemplate', 'release', 'resize', 'rotate', 'toGrayscale'] },
   "notification": { facade: 'notification.ts', methods: ['canPost', 'cancel', 'post'] },

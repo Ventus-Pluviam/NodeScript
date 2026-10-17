@@ -142,6 +142,18 @@ class CapabilityMaskTest {
     }
 
     @Test
+    fun `stdinIdle 目录级 NONE——关自己的写端不要求跨脚本位`() {
+        // 与 stop/status 同一条"自我操作不得被路由层预拦"口径：目标 runId 取自认证连接
+        // 身份（payload 里根本没有这个字段），触达不到别的执行 —— 目录若给重档，
+        // 窄掩码脚本连自己的 stdin 都关不掉。
+        assertEquals(
+            CapabilityMask.NONE,
+            BridgeCapabilityCatalog.required("engines", "stdinIdle"),
+            "stdinIdle 目录级必须 NONE：它关的恒是调用方自己那条执行",
+        )
+    }
+
+    @Test
     fun `console 面不要求设备能力`() {
         assertEquals(CapabilityMask.NONE, BridgeCapabilityCatalog.required("console", "log"))
     }

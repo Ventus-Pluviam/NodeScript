@@ -2,6 +2,7 @@ package com.autoscript.ui.state
 
 import com.autoscript.domain.host.RunRow
 import com.autoscript.domain.host.TaskLogSnapshot
+import com.autoscript.domain.scripts.ScriptPaths
 import java.time.ZoneId
 
 /** 任务日志（全部项目的终态历史）的纯呈现态：未读取、失败、成功空列表互不冒充。 */
@@ -37,7 +38,8 @@ data class TaskLogRowState(
 ) {
     /** 复制出去的整段摘要 —— 与画出来的那几行**同源**（改一处两边都改）。 */
     fun summaryText(): String = buildString {
-        append("$projectId / $scriptPath\n")
+        // 项目名走 `projectLabel`：根层条目没有项目，显示「根目录」（否则是「 / x.js」）。
+        append("${ScriptPaths.projectLabel(projectId)} / $scriptPath\n")
         append("#$engineRunId · $stateLabel\n")
         append("开始：${startedText ?: "未记录"}\n")
         append("结束：${finishedText ?: "未记录"}\n")

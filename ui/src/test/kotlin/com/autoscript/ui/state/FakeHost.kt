@@ -10,7 +10,6 @@ import com.autoscript.domain.host.ShellSummary
 import com.autoscript.domain.host.TaskCenterSnapshot
 import com.autoscript.domain.host.TaskLogSnapshot
 import com.autoscript.domain.host.TaskRegistration
-import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.NpmCacheReclaimReport
@@ -76,19 +75,32 @@ open class FakeHost(
     override suspend fun resumeRun(runId: Long): Boolean =
         throw UnsupportedOperationException("本替身未提供 resumeRun（用例按需覆盖）")
 
+    override suspend fun sendInput(runId: Long, line: String): Boolean =
+        throw UnsupportedOperationException("本替身未提供 sendInput（用例按需覆盖）")
+
     override fun overlayAllowed(): Boolean = false
 
     override suspend fun scriptFiles(): ScriptFilesSnapshot =
         throw UnsupportedOperationException("本替身未提供 scriptFiles（用例按需覆盖）")
 
-    override suspend fun createEntry(projectId: String, name: String, isFolder: Boolean): Unit =
-        throw UnsupportedOperationException("本替身未提供 createEntry（用例按需覆盖）")
+    override suspend fun createEntry(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String?,
+    ): Unit = throw UnsupportedOperationException("本替身未提供 createEntry（用例按需覆盖）")
 
     override suspend fun readScriptFile(projectId: String, relPath: String): String =
         throw UnsupportedOperationException("本替身未提供 readScriptFile（用例按需覆盖）")
 
     override suspend fun saveScriptFile(projectId: String, relPath: String, content: String): Unit =
         throw UnsupportedOperationException("本替身未提供 saveScriptFile（用例按需覆盖）")
+
+    override suspend fun deleteEntry(projectId: String, relPath: String): Unit =
+        throw UnsupportedOperationException("本替身未提供 deleteEntry（用例按需覆盖）")
+
+    override suspend fun absolutePathOf(projectId: String, relPath: String): String =
+        throw UnsupportedOperationException("本替身未提供 absolutePathOf（用例按需覆盖）")
 
     override suspend fun runScriptFile(projectId: String, relPath: String): Unit =
         throw UnsupportedOperationException("本替身未提供 runScriptFile（用例按需覆盖）")
@@ -123,9 +135,6 @@ open class FakeHost(
 
     override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot =
         throw UnsupportedOperationException("本替身未提供 consoleOutput（用例按需覆盖）")
-
-    override suspend fun npmHistory(): List<InstallHistoryEntry> =
-        throw UnsupportedOperationException("本替身未提供 npmHistory（用例按需覆盖）")
 
     override suspend fun runNpmMaintenance(
         projectId: String,

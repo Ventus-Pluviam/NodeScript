@@ -2,6 +2,7 @@ package com.autoscript.ui.state
 
 import com.autoscript.domain.host.ScriptLogRow
 import com.autoscript.domain.host.ScriptLogSnapshot
+import com.autoscript.domain.scripts.ScriptPaths
 import java.time.ZoneId
 
 /**
@@ -12,7 +13,7 @@ import java.time.ZoneId
  *
  * 三落点与 `TaskLogState` 同构：未读取 / 失败（保留已读到的行）/ 成功。
  * 标题形态在这里定（`/$projectId/$scriptPath`，与悬浮窗标题同一归一化点 ——
- * 见 `LogWindowState.title`）：快照层只给事实，斜杠形态是呈现偏好。
+ * 见 `LogWindowState.titleText`）：快照层只给事实，斜杠形态是呈现偏好。
  */
 data class ScriptLogState(
     val load: LoadState,
@@ -49,7 +50,9 @@ data class ScriptLogRowUi(
     companion object {
         fun of(row: ScriptLogRow, zone: ZoneId) = ScriptLogRowUi(
             runId = row.runId,
-            title = "/${row.projectId}/${row.scriptPath}",
+            // 根层条目没有项目段（`projectId` 空串）：直接拼会渲染成 `//x.js`，
+            // 故走 `ScriptPaths.fullRelPath`（那条判据只有一份，2026-10-16）。
+            title = "/" + ScriptPaths.fullRelPath(row.projectId, row.scriptPath),
             // 同 `LogWindowState.ext`：`substringAfterLast('/')` 不能带第二参数
             // （传 "" 会让没有斜杠的路径整个变空串）。
             ext = row.scriptPath

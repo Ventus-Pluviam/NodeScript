@@ -32,11 +32,27 @@ class LogWindowStateTest {
     @Test
     fun `标题是斜杠加项目加路径`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
-        assertEquals("/demo/data/test.js", s.title)
+        assertEquals("/demo/data/test.js", s.titleText)
+    }
+
+    /**
+     * 根层条目（`projectId` = 空串哨兵，2026-10-16 用户裁定「根层可写」）：标题不能渲染成
+     * `//x.js`。归属过滤仍按 `(projectId, relPath)` 全等 —— 空串照样是**一个**项目号值，
+     * 于是根层的执行只跟根层的行对上（不会和某个项目里的同名文件串味）。
+     */
+    @Test
+    fun `根层条目的标题是单斜杠且归属只认根层`() {
+        val s = LogWindowState(projectId = "", relPath = "hello.js")
+        assertEquals("/hello.js", s.titleText)
+        assertEquals("js", s.ext, "没有斜杠的路径照样取得到扩展名")
+        // 别的项目里同名文件的行**不算**根层这条执行（归属是 (projectId, relPath) 全等）。
+        val bound = s.bind(listOf(run(7L, projectId = "demo", scriptPath = "hello.js")))
+        assertEquals(null, bound.boundRunId)
+        assertEquals(7L, s.bind(listOf(run(7L, projectId = "", scriptPath = "hello.js"))).boundRunId)
     }
 
     @Test
-    fun `bind 按归属取最大 runId 并同步 paused`() {
+    fun `bind 按归属取最大 runId 并同步 paused 与 running`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
         val bound = s.bind(
             listOf(
@@ -47,16 +63,123 @@ class LogWindowStateTest {
         )
         assertEquals(3L, bound.boundRunId, "同归属取最大 = 最近一次触发")
         assertTrue(bound.paused)
+        assertTrue(bound.running, "在途 = 正在跑")
     }
 
     @Test
-    fun `bind 无同归属则解绑且 paused 回 false`() {
+    fun `从没绑上过（启动失败）→ 空态且 paused 回 false`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
-            .bind(listOf(run(1L)))
-        assertEquals(1L, s.boundRunId)
         val unbound = s.bind(listOf(run(2L, scriptPath = "other.js")))
-        assertEquals(null, unbound.boundRunId, "启动失败/已结算 → 空态，不留僵尸绑定")
+        assertEquals(null, unbound.boundRunId, "启动失败/门禁拒（从开窗起一次都没绑上）→ 空态")
         assertFalse(unbound.paused)
+    }
+
+    /**
+     * 2026-10-15 用户令「有时点执行日志不显示在悬浮窗上」：**起跑即结算的快速脚本**。
+     *
+     * 脚本整个生命周期落在两轮轮询（400ms）之间 —— 在途表从开窗起一次都没见过它，
+     * 「结算不解绑」救不到（它从没绑上过）。兜底补绑从行里摘归属：[fallbackRunId]
+     * 只在「没绑上过」时补位；已绑过的 keep 不被行摘顶掉（同归属重复触发时行按实际归属画）。
+     */
+    @Test
+    fun `bind 没绑上过但行里有归属 兜底补绑`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val bound = s.bind(emptyList(), fallbackRunId = 12L)
+        assertEquals(12L, bound.boundRunId, "行里摘出的归属补位，窗口不落空态")
+        assertFalse(bound.running, "补绑不代表在途")
+        assertFalse(bound.paused)
+        // 补绑后同归属行照常可见；标题**只写路径**（2026-10-15 用户令去掉「· 已结束」）。
+        val lines = listOf(line(seq = 1L, runId = 12L), line(seq = 2L, runId = 12L))
+        assertEquals(listOf(1L, 2L), bound.visible(lines).map { it.seq })
+        assertEquals("/demo/data/test.js", bound.titleText)
+    }
+
+    @Test
+    fun `bind 已绑过时行摘不顶掉 keep`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+            .bind(listOf(run(7L)), fallbackRunId = 12L)
+        val next = s.bind(emptyList(), fallbackRunId = 12L)
+        assertEquals(7L, next.boundRunId, "结算不解绑优先于行摘补绑")
+        assertFalse(next.running)
+    }
+
+    @Test
+    fun `bind 引擎外行号不进补位 仍空态`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val bound = s.bind(emptyList(), fallbackRunId = 0L)
+        assertEquals(null, bound.boundRunId, "引擎外行（runId 0）不是可补的归属")
+    }
+
+    @Test
+    fun `bind 兜底补位号不假充在途 runId`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val bound = s.bind(listOf(run(5L, scriptPath = "other.js")), fallbackRunId = 12L)
+        assertEquals(12L, bound.boundRunId)
+        assertFalse(bound.running, "补位号只画日志，不冒充在途")
+        // 下一轮同归属在途出现 → 换到真在途（补位不挡真实绑定）。
+        val next = bound.bind(listOf(run(13L)))
+        assertEquals(13L, next.boundRunId)
+        assertTrue(next.running)
+    }
+
+    @Test
+    fun `bind 未绑上且无补位 落空态`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        val unbound = s.bind(emptyList(), fallbackRunId = null)
+        assertEquals(null, unbound.boundRunId)
+    }
+
+    /**
+     * 2026-10-15 用户令「脚本执行完不要自动清理输出」：**结算不解绑**。
+     *
+     * 在途表是"正在跑的"这一句 —— run 跑完离开在途表是执行完成，不是「没有这回事」；
+     * 一结算就把窗口切回「本次执行未开始」空态，等于把刚跑完的日志在用户眼前自动清掉。
+     * 窗口保持绑在最后一条同归属 run 上，输出照常可见。只有「从开窗起一次都没绑上过」
+     * （启动失败/门禁拒）才落空态。
+     */
+    @Test
+    fun `bind 结算后保持绑定 输出照常可见`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+            .bind(listOf(run(7L)))
+        assertEquals(7L, s.boundRunId)
+        assertTrue(s.running)
+        // 7 号跑完离开在途表（同归属的空在途表 / 别的归属）：绑定保持、running 回 false。
+        val done = s.bind(emptyList())
+        assertEquals(7L, done.boundRunId, "结算不解绑：窗口仍是刚跑完的那条")
+        assertFalse(done.running, "已结算如实标记")
+        assertFalse(done.paused)
+        // 别的归属出现也不抢绑定（不是新触发）；已在途的 keep 仍会被选回（绑定不丢）。
+        val done2 = done.bind(listOf(run(8L, scriptPath = "other.js"), run(7L)))
+        assertEquals(7L, done2.boundRunId, "别的归属出现也不抢绑定；已在途的 keep 仍绑回")
+        // 有行照常可见（水位之上）；没有同归属也不画空态。
+        val lines = listOf(line(seq = 1L, runId = 7L), line(seq = 2L, runId = 7L))
+        assertEquals(listOf(1L, 2L), done.visible(lines).map { it.seq })
+        // 标题**恒为路径**（2026-10-15 用户令）：跑完/在途/未开始三种态标题一样 ——
+        // 「在不在跑」由第一颗钮（暂停/继续/重跑三态）自己说，不在路径栏重复。
+        assertEquals("/demo/data/test.js", done.titleText)
+        assertEquals("/demo/data/test.js", s.titleText)
+    }
+
+    @Test
+    fun `bind 结算后同归属新 run 换绑到新那条`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+            .bind(listOf(run(7L)))
+            .bind(emptyList()) // 7 号跑完
+        val next = s.bind(listOf(run(9L)))
+        assertEquals(9L, next.boundRunId, "同归属新起一条 → 绑到新的（最近一次触发）")
+        assertTrue(next.running)
+    }
+
+    @Test
+    fun `标题恒为路径——三态都不缀后缀（用户令）`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
+        assertEquals("/demo/data/test.js", s.titleText, "未开始")
+        assertEquals("/demo/data/test.js", s.bind(listOf(run(3L))).titleText, "在途")
+        assertEquals(
+            "/demo/data/test.js",
+            s.bind(listOf(run(3L))).bind(emptyList()).titleText,
+            "已结算：路径栏只写路径（用户令「不需要加已结束三个字」）",
+        )
     }
 
     @Test
@@ -76,6 +199,63 @@ class LogWindowStateTest {
     fun `visible 未绑定回空表`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
         assertTrue(s.visible(listOf(line(1L, 7L))).isEmpty())
+    }
+
+    /**
+     * 行流归并（2026-10-16 用户报「输入框输进去的数字也没有显示在悬浮窗里」）：
+     * 脚本输出 + 用户输入回显，回显按 `atSeq` 插在**送出那一刻的最后一行**之后。
+     *
+     * 位置是这条用例的全部意义 —— 回显要是一律缀在末尾，「提示语 → 脚本结果 →
+     * 我刚敲的那一行」会把因果读反（脚本明明是收到那一行才出的结果）。
+     */
+    @Test
+    fun `rows 把回显插在送出那一刻的最后一行之后`() {
+        val s = LogWindowState(
+            projectId = "demo",
+            relPath = "data/test.js",
+            echoes = listOf(InputEcho(atSeq = 2L, text = "1")),
+        ).bind(listOf(run(7L)))
+        assertEquals(
+            listOf("o:t1", "o:t2", "i:1", "o:t3"),
+            s.rows(listOf(line(1L, 7L), line(2L, 7L), line(3L, 7L))).map(::label),
+        )
+    }
+
+    @Test
+    fun `rows 没有回显时就是可见行原样`() {
+        val s = LogWindowState(projectId = "demo", relPath = "data/test.js").bind(listOf(run(7L)))
+        assertEquals(listOf("o:t1", "o:t2"), s.rows(listOf(line(1L, 7L), line(2L, 7L))).map(::label))
+    }
+
+    /** 多条回显按 `atSeq` 升序各归各的位置（同值保持送出顺序）；`atSeq` 早于所有行 → 排在最前。 */
+    @Test
+    fun `rows 多条回显按 atSeq 归位`() {
+        val s = LogWindowState(
+            projectId = "demo",
+            relPath = "data/test.js",
+            // 故意乱序放进状态：归位靠 atSeq，不靠入列顺序
+            echoes = listOf(InputEcho(atSeq = 3L, text = "后"), InputEcho(atSeq = 0L, text = "先")),
+        ).bind(listOf(run(7L)))
+        assertEquals(
+            listOf("i:先", "o:t1", "o:t2", "o:t3", "i:后"),
+            s.rows(listOf(line(1L, 7L), line(2L, 7L), line(3L, 7L))).map(::label),
+        )
+    }
+
+    @Test
+    fun `rows 未绑定回空表（回显也不例外）`() {
+        val s = LogWindowState(
+            projectId = "demo",
+            relPath = "data/test.js",
+            echoes = listOf(InputEcho(atSeq = 0L, text = "1")),
+        )
+        assertTrue(s.rows(listOf(line(1L, 7L))).isEmpty())
+    }
+
+    /** 行流一项的短标签（`o:` 脚本输出、`i:` 用户输入回显）。 */
+    private fun label(row: LogWindowRow): String = when (row) {
+        is LogWindowRow.Output -> "o:${row.line.text}"
+        is LogWindowRow.Input -> "i:${row.text}"
     }
 
     @Test

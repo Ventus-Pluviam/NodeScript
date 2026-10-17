@@ -1,28 +1,39 @@
 package com.autoscript.ui.state
 
 import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.InstallEvent
+import androidx.compose.runtime.Immutable
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NodeModulesStats
+import com.autoscript.domain.npm.NpmConsoleSnapshot
+import java.time.ZoneId
+import kotlin.LazyThreadSafetyMode
 
 /**
  * 依赖管理页呈现态（纯数据，Compose 之外可 JVM 测）。
  *
  * 与 [TaskLogState]/[ConsoleState] 同一条纪律，另加这一屏特有的两条：
  *
- * - **尺寸没量到 ≠ 尺寸是 0**：[NpmProjectSnapshot.quotaFraction] 为 null 时
- *   进度条画成"未量到"，不画 0% —— 0% 是在说"这个项目不占地方"（见 [quotaLabel]）。
+ * - **尺寸没量到 ≠ 尺寸是 0**：量不到时那一行**不画**，不画成 "0 B" ——
+ *   0 B 是在说"这个项目不占地方"（见 [sizeLabel]）。
  *
  * 操作面（安装/维护/缓存回收）与读取分开记账：操作失败**不清依赖清单**（清单没变），
  * 与项目页 `opError` 同一条纪律。
  */
+@Immutable
 data class NpmState(
     val load: LoadState,
     /** 面板上正在看的那个项目（null = 一个项目都没有 / 还没读到）。 */
     val selectedProjectId: String? = null,
     val snapshot: NpmPanelSnapshot? = null,
-    /** 上一次操作的失败原文（≠ 读失败：两条账分开）。 */
+    /**
+     * 上一次操作的失败原文（≠ 读失败：两条账分开）。
+     *
+     * **它画在最下面那个日志大框里**（2026-10-17 用户令「删除顶上的报错。不需要它」+
+     * 「报错全部收进底部日志大框」）—— 见 [logLines]。页面上半部分不再出现红字。
+     */
     val opError: String? = null,
     /** 上一次操作的结论回执（现取即清，不缓存）。 */
     val opNotice: String? = null,
@@ -42,16 +53,6 @@ data class NpmState(
      * 在 JVM 单测里断言"失败时不清草稿"这条纪律。
      */
     val installDraft: String = "",
-    /** 勾了 `-D`（写进 `dependencies.devDependencies`）。 */
-    val installDev: Boolean = false,
-    /**
-     * 勾了「离线优先」（`--prefer-offline`）。
-     *
-     * 措辞是**「优先」不是「仅离线」**：这条旗标让 npm 先查缓存、缺了仍会联网。
-     * 真正的"断网也得装上"是另一回事（那要缓存里恰好有全部闭包），界面不该
-     * 用一个词把两件事混成一件。
-     */
-    val installOffline: Boolean = false,
     /** 有安装/卸载命令在途（防连点；与 [maintenance] 同一条理由）。 */
     val installing: Boolean = false,
     /**
@@ -69,39 +70,130 @@ data class NpmState(
      * 看起来像"又跑了一遍"（与 `ConsoleCmdState.nextSeq` 同一条纪律）。
      */
     val installSeq: Long = 0L,
+    /**
+     * 日志大框里的 npm 输出行（这个项目的；**累积**，按 seq 递增）。
+     *
+     * 行状态直接复用控制台那份 [ConsoleCmdLineState]：**着色判读只有一份**
+     * （读宿主给的 kind 与 ok，不按文本猜），日志框与控制台页因此不会"同一行两种颜色"。
+     *
+     * 它是**环的投影**，不是档案：留 [LOG_KEEP] 行，更早的裁掉并如实标注
+     * （见 [consoleTruncated]）—— 全量在「控制台」页与系统日志里，这里要的是
+     * 「刚才那次操作说了什么」。
+     */
+    val consoleLines: List<ConsoleCmdLineState> = emptyList(),
+    /** 日志大框的拉取游标（与 [installSeq] 同一条纪律：只进不退、读失败不清零、换项目归 0）。 */
+    val consoleSeq: Long = 0L,
+    /** 留的行超过上限、更早的已经裁掉（日志框据此说一句"上面这段不是全部"）。 */
+    val consoleTruncated: Boolean = false,
 ) {
-    /** 当前项目的读数（没选 / 读到的快照里没这个项目 → null，界面据此说"没有项目"）。 */
-    val project: NpmProjectSnapshot?
-        get() = snapshot?.projects?.firstOrNull { it.projectId == selectedProjectId }
-
-    val installed: List<NpmRowState> get() = project?.installed.orEmpty().map { NpmRowState.of(it) }
+    /**
+     * 界面怎么说当前作用域（2026-10-17 用户口径：「项目选择改成依赖作用域，然后下拉框加个全局」）。
+     *
+     * 措辞来自 [NpmTargetScope.label]（`""` → 「全局」），**不在界面里另写一份**：
+     * 宿主写给事件/日志的 `projectId` 也是空串，两边对同一个值必须是一种说法。
+     *
+     * 还没读到（[selectedProjectId] 为 null）时给 `"—"` 而不是 `"全局"` —— 那是"还不知道"，
+     * 与"知道，是全局"是两件事。
+     */
+    val scopeLabel: String
+        get() = selectedProjectId?.let { NpmTargetScope.label(it) } ?: "—"
 
     /**
-     * 配额一行（"已用 / 配额"）。
+     * 当前作用域是不是「全局」（2026-10-17 第二批）。
      *
-     * 三态各自说一句：没读到 → null（不画）；量到了 → 真实数字；
-     * 配额为 0（不该发生，但实现方可以传）→ 不显示比例，避免除零画出 NaN%。
+     * 界面拿它换称呼：依赖列表的卡头、「还没有依赖」那句、维护卡的说明都随作用域改口 ——
+     * 缺省作用域改成全局（见 [of]）之后，屏幕上再写死"项目"就是**天天都在说错话**。
+     * 判据只有一处（[NpmTargetScope.isGlobal]），界面不自己比空串。
+     *
+     * 还没读到（[selectedProjectId] 为 null）时是 false：那时屏幕上根本不画依赖列表的内容
+     * （三态各说各的，见 `DependencyListCard`），"是不是全局"没有对象。
      */
-    val quotaLabel: String?
-        get() {
-            val p = project ?: return null
-            val s = p.storage ?: return null
-            return "${NpmRowState.bytes(s.totalBytes)} / ${NpmRowState.bytes(p.quotaBytes)}"
-        }
+    val scopeIsGlobal: Boolean
+        get() = selectedProjectId?.let { NpmTargetScope.isGlobal(it) } == true
 
     /**
-     * npm 缓存一行（§10.9 第 5 条的 `npm-cache` 尺寸栏）。
+     * 当前项目的读数（没选 / 读到的快照里没这个作用域 → null，界面据此说"还没有这个作用域"）。
      *
-     * **文案里点明「全机一份」**：缓存按内容寻址、跨项目共享（§10.2），写成
-     * 「本项目缓存 12MB」是撒谎 —— 用户会以为删掉这个项目就能腾出那 12MB。
-     * 量不到（老宿主没实现这个口）→ null（不画），与 [quotaLabel] 同一条纪律：
-     * 没量到 ≠ 0 字节。
+     * **与 [installed] / [sizeLabel] / [cacheSizeLabel] / [logLines] 一样是"算一次、留着"**，
+     * 不是每次读现算的 `get()`。理由见 [installed]。
      */
-    val cacheLabel: String?
-        get() {
-            val c: NodeModulesStats = project?.cache ?: return null
-            return "npm 缓存（全机一份）：${NpmRowState.bytes(c.totalBytes)}"
+    val project: NpmProjectSnapshot? by lazy(LazyThreadSafetyMode.NONE) {
+        snapshot?.projects?.firstOrNull { it.projectId == selectedProjectId }
+    }
+
+    /**
+     * 依赖清单（界面那一行行）。
+     *
+     * **`by lazy` 而不是 `get()`**（2026-10-18 第十一批之后接着改的这一版）：从前它是个
+     * `get()`，于是**每一次读都重新 `.map` 一遍整份清单**、造一整列新的 [NpmRowState]。
+     * 而依赖列表的每一次组合都要读它，卡头那行还要为了一句条数**再读一次 `.size`**
+     * （`state.installed.size` —— 为了一个长度又映射一整个列表）。包一多，这就是纯白扔。
+     *
+     * 取"算一次"而不是"每次读现算"：一份 `NpmState` 是不可变的（全是 `val`，`copy` 出新的一份），
+     * 这份投影在它的一生里不会变 —— 算一次就够，多算的都是浪费。
+     */
+    val installed: List<NpmRowState> by lazy(LazyThreadSafetyMode.NONE) {
+        project?.installed.orEmpty().map { NpmRowState.of(it) }
+    }
+
+    /**
+     * node_modules 尺寸一行 —— **2026-10-17 起只有尺寸，没有「/ 512MB」**。
+     *
+     * 用户口径「node_modules 取消 512MB 限制」「取消上限设置吧」把项目配额整个摘了
+     * （源头是 `InstallConfig` 的 512MB 硬编码，见 `NpmProjectSnapshot` 的 KDoc）：
+     * 既然没有上限，"已用 / 上限"这个比例就没有对象了，硬画一个只会在屏幕上留一条假的线。
+     *
+     * 两态各自说一句：没读到 / 没量到 → null（**不画**，那个位置写 "0 B" 是在说
+     * "这个项目不占地方"）；量到了 → 真实数字（量到 0 就如实说 0 B）。
+     */
+    val sizeLabel: String? by lazy(LazyThreadSafetyMode.NONE) { project?.storage?.let { NpmRowState.bytes(it.totalBytes) } }
+
+    /**
+     * npm 缓存尺寸（§10.9 第 5 条的 `npm-cache` 尺寸栏）—— **只有数字**。
+     *
+     * 「全机一份」那句搬到了行标题上（缓存按内容寻址、跨项目共享，§10.2 —— 写成
+     * 「本项目缓存 12MB」是撒谎，用户会以为删掉这个项目就能腾出那 12MB）。
+     * 量不到（老宿主没实现这个口）→ null（不画），与 [sizeLabel] 同一条纪律：没量到 ≠ 0 字节。
+     */
+    val cacheSizeLabel: String? by lazy(LazyThreadSafetyMode.NONE) { project?.cache?.let { NpmRowState.bytes(it.totalBytes) } }
+
+    /**
+     * 日志大框里要画的行（**只读的投影**，页面上半部分不再有红字）。
+     *
+     * 次序是**用户 2026-10-17 裁定的「两者都显示」**：本页这次操作的账在前
+     * （读失败 / [opError] / [opNotice]），npm 输出行在后 —— 前者是"谁把这事干的"，
+     * 后者是"它说了什么"。
+     *
+     * 三条刻意：
+     * - **读失败也进这个框**（口径是"页面上半部分不再出现红字"），但措辞保留
+     *   「（下面显示的是上次读到的，可能已过期）」那半句 —— 失败态下屏上还有旧数据，
+     *   不说这句就等于把过期的读数当现在的。
+     * - 裁过就说（[consoleTruncated] 那一行在最前）：让用户以为看到了全部，
+     *   比少显示几行糟得多（与「控制台」页 `gap` 那条同一条纪律）。
+     * - 一条都没有时给一句**怎么做才有**的话，而不是一个空框。
+     */
+    val logLines: List<NpmLogLine> by lazy(LazyThreadSafetyMode.NONE) {
+        buildList {
+            if (consoleTruncated) add(NpmLogLine("更早的输出已裁掉，这里只留最近 $LOG_KEEP 行", StatusTone.MUTED))
+            (load as? LoadState.Failed)?.let {
+                add(NpmLogLine("读取失败：${it.reason}（下面显示的是上次读到的，可能已过期）", StatusTone.PROBLEM))
+            }
+            opError?.let { add(NpmLogLine(it, StatusTone.PROBLEM)) }
+            opNotice?.let { add(NpmLogLine(it, StatusTone.MUTED)) }
+            consoleLines.forEach { add(NpmLogLine(it.timeText + "  " + it.text, it.tone)) }
         }
+    }
+
+    /**
+     * 「清理」（回收缓存）那颗按钮能不能按。
+     *
+     * 判据与三颗维护按钮**同源**（`globalSession` 全局互斥，同时只跑一个安装会话）：
+     * 在途的安装 / 维护 / 回收三者互斥。2026-10-17 这颗按钮从「维护」卡搬到缓存那一行，
+     * 判据顺势从界面里的行内表达式提上来 —— 它是能 JVM 测的一条纯逻辑，留在 Composable
+     * 里就永远只有"看一眼觉得对"。
+     */
+    val canReclaimCache: Boolean
+        get() = !reclaimingCache && maintenance == null && !installing
 
     /** 输入行与旗标是否可提交（没有项目 / 已有动作在跑 / 没读到 → 不可）。 */
     val canInstall: Boolean
@@ -112,25 +204,38 @@ data class NpmState(
         val NOT_LOADED = NpmState(LoadState.NotLoaded)
 
         /**
-         * 读到了：**默认选中第一个项目**（面板总要有个主体）；已有选择且它还在就保持
-         * —— 刷新不该把用户正在看的项目换掉（那是"手一滑跳走了"的经典形态）。
+         * 读到了：**默认选中「全局」**（2026-10-17 第二批，用户口径「依赖作用域，默认为全局」）；
+         * 已有选择且它还在就保持 —— 刷新不该把用户正在看的项目换掉（那是"手一滑跳走了"的经典形态）。
+         *
+         * **缺省换成全局不是随手改的**：这一页最常做的事是"装一个包试试"，而全局那份装在
+         * `files/scripts/node_modules`（见 [NpmTargetScope]），任何项目都够得着；项目那份
+         * 只对那一个项目有效。缺省落在"用得最多、影响面最广"的那一档才对。
+         *
+         * 三档回落，**顺序不能换**：用户上次选的（还在）→ 快照里那条全局 → 第一条项目。
+         * 中间那档不是多余的：测试与非本宿主的快照里可以**没有**全局那条（它是宿主拼上去的），
+         * 那时凭空选一个空串就是选了一个不存在的条目 —— 界面上表现为"作用域那行写着全局，
+         * 下面什么也没有"。最后一档兜住"一个项目都没有"之外的任何残局。
          */
         fun of(snapshot: NpmPanelSnapshot, previous: NpmState = NOT_LOADED) = NpmState(
             load = LoadState.Loaded,
             selectedProjectId = previous.selectedProjectId
                 ?.takeIf { id -> snapshot.projects.any { it.projectId == id } }
+                ?: snapshot.projects.firstOrNull { NpmTargetScope.isGlobal(it.projectId) }?.projectId
                 ?: snapshot.projects.firstOrNull()?.projectId,
             snapshot = snapshot,
-            // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、旗标勾选、
-            // 「在途」与阶段条都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建
-            // 一份就等于每次刷新把用户打到一半的包名和正在跑的进度条一起清空。
+            // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、「在途」与阶段条
+            // 都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建一份就等于每次刷新
+            // 把用户打到一半的包名和正在跑的进度条一起清空。
             // `installed` 那一侧不需要这样：它本来就来自 `snapshot`（宿主才是权威）。
             installDraft = previous.installDraft,
-            installDev = previous.installDev,
-            installOffline = previous.installOffline,
             installing = previous.installing,
             installProgress = previous.installProgress,
             installSeq = previous.installSeq,
+            // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
+            // 就等于把用户刚看到的 npm 输出抹成空的。
+            consoleLines = previous.consoleLines,
+            consoleSeq = previous.consoleSeq,
+            consoleTruncated = previous.consoleTruncated,
         )
 
         /**
@@ -142,9 +247,8 @@ data class NpmState(
          * 对那个游标却不是）—— 包括 `Finished`，于是阶段条会永远停在「进行中」。
          * 归 0 不是"重头开始"，而是"把这个项目还留在环里的那些事件全取回来"。
          *
-         * 归零的**只有项目域的那两样**：草稿与旗标是用户的输入（`axios` 换个项目照样是
-         * 要装的东西），`installing` 记的是全局在途（安装会话是全局互斥的，换个项目看
-         * 不会让它停下来）。
+         * 归零的**只有项目域的那两样**：草稿是用户的输入（`axios` 换个项目照样是要装的东西），
+         * `installing` 记的是全局在途（安装会话是全局互斥的，换个项目看不会让它停下来）。
          */
         fun withProject(previous: NpmState, projectId: String): NpmState =
             if (previous.selectedProjectId == projectId) {
@@ -154,6 +258,12 @@ data class NpmState(
                     selectedProjectId = projectId,
                     installProgress = null,
                     installSeq = 0L,
+                    // 日志那一段与安装事件**同一条理由**（seq 是环内全局单调、drain 才按
+                    // projectId 过滤）：沿用上一个项目的游标会漏掉新项目 seq 更小的行。
+                    // 归 0 = 把这个项目还留在环里的行全取回来。
+                    consoleLines = emptyList(),
+                    consoleSeq = 0L,
+                    consoleTruncated = false,
                 )
             }
 
@@ -163,20 +273,80 @@ data class NpmState(
          */
         fun failed(t: Throwable, previous: NpmState = NOT_LOADED) =
             previous.copy(load = LoadState.of(t))
+
+        /**
+         * 把一批 npm 输出折进日志大框（**纯函数**，可单测）。
+         *
+         * 累积规则与 [ConsoleCmdState.of] 逐字同款（按 seq 去重、只进不退），差在**有上限**：
+         * 日志框是面板上的一格，不是日志查看器 —— 留 [LOG_KEEP] 行、更早的裁掉并把
+         * [consoleTruncated] 置上（裁过就要说，见 [logLines]）。
+         * [ConsoleCmdState] 那边没有上限，因为那一屏**就是**给人看输出的地方。
+         */
+        fun withConsole(
+            previous: NpmState,
+            snapshot: NpmConsoleSnapshot,
+            zone: ZoneId = ZoneId.systemDefault(),
+        ): NpmState {
+            val seen = previous.consoleLines.mapTo(HashSet()) { it.seq }
+            val fresh = snapshot.lines.filter { it.seq !in seen }
+            if (fresh.isEmpty() && snapshot.lastSeq <= previous.consoleSeq) return previous
+            val merged = (previous.consoleLines + fresh.map { ConsoleCmdLineState.of(it, zone) })
+                .sortedBy { it.seq }
+            return previous.copy(
+                consoleLines = merged.takeLast(LOG_KEEP),
+                consoleSeq = maxOf(previous.consoleSeq, snapshot.lastSeq),
+                consoleTruncated = previous.consoleTruncated || merged.size > LOG_KEEP,
+            )
+        }
     }
 }
 
-/** 已装包一行（名字 + 版本；`sizeBytes` 不在这一层 —— `list()` 直读 lockfile，量不到尺寸）。 */
+/** 日志大框最多留多少行（更早的裁掉，并在框里说明 —— 见 [NpmState.consoleTruncated]）。 */
+internal const val LOG_KEEP = 200
+
+/** 日志大框一次拉多少行（与控制台那个缺省页大小同量级：一次现取就够把框填满）。 */
+internal const val LOG_PAGE = 256
+
+/**
+ * 日志大框里的一行。
+ *
+ * 与控制台那份 [ConsoleCmdLineState] 分开：这里只要「一句话 + 一种语气」——
+ * 行来源有两类（本页的操作账、npm 的输出行），合成同一种画法才谈得上"一个框"。
+ */
+data class NpmLogLine(val text: String, val tone: StatusTone)
+
+/**
+ * 已装包一行（名字 + 版本 + **尺寸**）。
+ *
+ * **尺寸是 2026-10-17 才有的**（用户口径：「依赖列表显示一下各个依赖占用的空间大小」）。
+ * 在此之前 `PkgNode.sizeBytes` 恒为 0 —— `list()` 直读 lockfile，而 lockfile 里没有字节数。
+ * 现在由宿主的 `snapshot()` 补上（走一遍 node_modules，见 `InstallCoordinator.packageSizes`）。
+ *
+ * [sizeLabel] 的两态与本页另两处尺寸**同一条纪律**：量到就说数字，**量不到就不画** ——
+ * 宿主给的 `sizeBytes <= 0` 意思是"这个包不在盘上"（lock 里有、目录里没有），
+ * 画成 "0 B" 是在说"这个包不占地方"，那是另一句话。
+ */
+@Immutable
 data class NpmRowState(
     val name: String,
     val version: String,
+    val sizeBytes: Long = 0,
 ) {
+    /**
+     * 人类可读的尺寸（[NpmRowState.bytes] 同款口径）；宿主没量到 → null（界面不画）。
+     *
+     * 是 `val` 不是 `get()`：`bytes()` 走 `String.format`（MB 那一档），每次读都格式化一遍
+     * 是白扔 —— 一行里的尺寸画一次就够。
+     */
+    val sizeLabel: String? = if (sizeBytes > 0) bytes(sizeBytes) else null
+
     companion object {
-        fun of(node: com.autoscript.domain.npm.PkgNode) = NpmRowState(node.name, node.version)
+        fun of(node: com.autoscript.domain.npm.PkgNode) =
+            NpmRowState(node.name, node.version, node.sizeBytes)
 
         /**
          * 字节数的可读形态（二进制档，与系统口径一致）。`< 1KB` 不写成 `0KB`；
-         * 整 MB 不带小数（配额是 512 MB，写成 "512.0 MB" 是把常量伪装成测量值）。
+         * 整 MB 不带小数（写成 "512.0 MB" 是把一个整数伪装成测量值）。
          */
         fun bytes(n: Long): String = when {
             n < 1024 -> "$n B"

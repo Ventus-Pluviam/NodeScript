@@ -46,10 +46,11 @@ class NpmSnapshotTest {
         // 带 postinstall → 同属包内容；与快照验签无关但让归档内容非平凡
         Files.write(nm.resolve("esbuild/package.json"), ("""{"name":"esbuild","scripts":{"postinstall":"node install.js"}}""").toByteArray())
         Files.write(nm.resolve("esbuild/bin.js"), ("console.log(1)\n").toByteArray())
-        // ledger 两份都在：导出须一并带上（§10.5-2 审计可导出）
+        // ledger 那份要在：导出须一并带上（§10.5-2）。
+        // **审计账不在了**（2026-10-17 用户令「去掉审计」）：`install-history.jsonl`
+        // 与它的页面一起下线，导出内容里也不该再有它 —— 由下面那条断言钉住。
         Files.createDirectories(ledgerDir)
         Files.write(ledgerDir.resolve("approve-ledger.jsonl"), ("""{"op":"submit","requestId":"apr-1","projectId":"p1","pkg":"esbuild","versionHash":"h","action":"INSTALL_SCRIPT","at":1}""" + "\n").toByteArray())
-        Files.write(ledgerDir.resolve("install-history.jsonl"), ("""{"op":"install","projectId":"p1","ok":true,"at":2}""" + "\n").toByteArray())
     }
 
     @Test
@@ -57,8 +58,15 @@ class NpmSnapshotTest {
         seedProject()
         val b = snapshot().export("p1", out)
         val m = snapshot().verify("p1", out)
-        // 2 manifest + 2 ledger/lock.sig + 4 node_modules 文件
+        // 2 manifest + ledger/lock.sig + 4 node_modules 文件
         assertTrue(m.entries >= 8, "归档须含 manifest/ledger/node_modules（实为 ${m.entries}）")
+        java.util.zip.ZipFile(out.toFile()).use { z ->
+            val names = z.entries().toList().map { it.name }
+            assertFalse(
+                names.any { it.endsWith("install-history.jsonl") },
+                "审计账已下线（2026-10-17 用户令）：快照不该再带上它，实为 $names",
+            )
+        }
         assertTrue(b.contentBytes > 0)
         assertTrue(b.archiveSha256.length == 64, "sha256 十六进制长度须为 64（实为 ${b.archiveSha256.length}）")
         assertTrue(m.lockSig!!.startsWith("v1 "), "lock.sig 须随包同行（两层验签闭环）")

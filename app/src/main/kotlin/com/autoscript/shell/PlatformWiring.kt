@@ -401,6 +401,22 @@ object PlatformWiring {
 }
 
 /**
+ * 档案里的 runId 高水位（2026-10-14 真机 bug）：已用过的最大 engineRunId，空档回 `0`。
+ *
+ * 顶到顶层而不是 `PlatformWiring` 成员：**时序上**水位必须在引擎建出来之前拿到，而引擎在
+ * 装配期 eager 建（`FixedEnginePool` 构造），那条路径是同步的 —— 本口是全仓唯一能在同步
+ * 装配路径上把这份档案读出来的地方。打开 + 迁移 + 读 + 关都收在 [RunArchiveWiring.highWater]。
+ *
+ * 打不开即抛（与 [intentStore]/[stores] 同一条「无回落」纪律）：拿 0 冒充"没有历史"
+ * 会让新进程重发旧号，正是本条要修的病。
+ *
+ * 为什么不是对象成员：`PlatformWiring` 的函数数已到 `TooManyFunctions` 门（阈值 11），
+ * 顶层函数不进对象计数；同文件里 [ShellExecutor.asShellOpExecutor] 同例。
+ */
+fun runArchiveHighWater(context: Context, nsDir: Path): Long =
+    RunArchiveWiring.highWater(context.applicationContext, nsDir)
+
+/**
  * `ShellExecutor`（`:platform:system` 的 SPI）→ `ShellOpExecutor`（`:domain` 的缝）。
  *
  * 为什么需要这一层转接：`ShellConsoleResult`（`:domain`）与 `ShellResult`

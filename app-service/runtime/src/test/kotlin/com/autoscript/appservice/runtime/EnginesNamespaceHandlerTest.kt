@@ -690,4 +690,63 @@ class EnginesNamespaceHandlerTest {
         val (h, _) = handler()
         assertInstanceOf(BridgeResponse.Ok::class.java, h.handle(enginesReq(1, "exec", execPayload())))
     }
+
+    /**
+     * `stdinIdle`（2026-10-16 用户令「答完自己退」）：脚本侧 `stdin-idle.ts` 判出
+     * "这次执行的 stdin 上没有读者了"之后报上来的那一下 —— handler 把它落成
+     * "关掉**调用方自己**那条执行的写端（发 EOF）"。
+     *
+     * 三条一起钉：**目标恒是自己**（runId 取自认证连接身份，payload 里没有这个字段）、
+     * **缺身份拒绝且不碰引擎**（宿主直调/未认证不许猜它想关谁）、**关不了如实回 false
+     * 而不是错误码**（脚本那边读口已经关了，这不是它的问题；与 `heartbeat` 的
+     * `Ok false` 同一条"如实告知未被采纳"口径）。
+     */
+    @Test
+    fun `stdinIdle 关的是调用方自己那条执行的写端`() = runBlocking {
+        val (h, _, engines) = fullRig()
+        val exec = assertInstanceOf(BridgeResponse.Ok::class.java, h.handle(enginesReq(1, "exec", execPayload())))
+        val runId = (DomainJson.decodeObject(exec.payload!!)["runId"] as DomainJson.Value.N).raw.toLong()
+        try {
+            val resp = withContext(AuthenticatedRunContext(EngineId(0), runId, 1, CapabilityMask.ALL)) {
+                h.handle(enginesReq(2, "stdinIdle", null))
+            }
+            assertEquals(
+                "true",
+                assertInstanceOf(BridgeResponse.Ok::class.java, resp).payload,
+                "在途 → 关成功，如实回 true",
+            )
+            assertEquals(1, engines.single().closeStdinCalls, "目标恒是自己：runId 来自连接身份，不是 payload")
+
+            engines.single().closeStdinResult = false
+            val again = withContext(AuthenticatedRunContext(EngineId(0), runId, 1, CapabilityMask.ALL)) {
+                h.handle(enginesReq(3, "stdinIdle", null))
+            }
+            assertEquals(
+                "false",
+                assertInstanceOf(BridgeResponse.Ok::class.java, again).payload,
+                "写端已关 → Ok false（不是 4xx：脚本读口已经关了，这不是它的错）",
+            )
+        } finally {
+            h.handle(enginesReq(4, "stop", """{"runId":$runId}"""))
+        }
+        Unit // 表达式体测试末尾补 Unit：否则 JUnit5 不把它当测试（本仓踩过的假绿）
+    }
+
+    @Test
+    fun `stdinIdle 缺执行身份拒绝且不碰引擎`() = runBlocking {
+        val (h, engines) = handler()
+        val exec = assertInstanceOf(BridgeResponse.Ok::class.java, h.handle(enginesReq(1, "exec", execPayload())))
+        val runId = (DomainJson.decodeObject(exec.payload!!)["runId"] as DomainJson.Value.N).raw.toLong()
+        try {
+            val resp = assertInstanceOf(
+                BridgeResponse.Err::class.java,
+                h.handle(enginesReq(2, "stdinIdle", null)),
+            )
+            assertEquals("ERR_PERMISSION_DENIED", resp.errorCode, "没有执行身份 → 不猜它想关谁的 stdin")
+            assertEquals(0, engines.single().closeStdinCalls, "拒了就不许碰引擎")
+        } finally {
+            h.handle(enginesReq(3, "stop", """{"runId":$runId}"""))
+        }
+        Unit // 同上：表达式体测试末尾补 Unit
+    }
 }

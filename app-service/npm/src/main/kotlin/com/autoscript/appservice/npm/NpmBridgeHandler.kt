@@ -38,7 +38,7 @@ import com.autoscript.domain.json.DomainJson
  * - `audit`：`{offline?}` → `{vulns:[],level,offline}`（P0 诚实空报告；键名是 **vulns**
  *   不是 vulnerabilities——§10.8 文档与 JS facade 的 `AuditReport.vulns` 都读这个键，
  *   回旧键名会让 `report.vulns` 恒 undefined）；
- * - `setRegistry`：`{registry,scope?}` → 无参（scope→npmrc `<scope>:registry`，§10.2 三层注册表配置；经 :main 可配列表 + 审计）；
+ * - `setRegistry`：`{registry,scope?}` → 无参（scope→npmrc `<scope>:registry`，§10.2 三层注册表配置；经 :main 可配列表 + 记一条操作事实）；
  * - `importOfflineBundle`/`importTarball`：`{uri}`/`{path}`；
  * - `events`：`{sinceSeq?,batch?}` → `{first,last,events:[{seq,type,…}]}`（**拉取式**，§9.1 同形；
  *   见 [com.autoscript.domain.npm.InstallEventBatch]）。`type` ∈ `progress`/`warning`/`finished`——

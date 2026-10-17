@@ -2,6 +2,7 @@ package com.autoscript.ui.state
 
 import com.autoscript.domain.host.ScriptFileRow
 import com.autoscript.domain.host.ScriptFilesSnapshot
+import com.autoscript.domain.scripts.ProjectId
 import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -222,6 +223,44 @@ class ProjectStateTest {
         assertTrue(sub.isEmpty())
     }
 
+    /**
+     * 根层条目（`files/scripts/` 本层，`projectId` = [ProjectId.ROOT]）—— 2026-10-16 用户裁定
+     * 「根层可写」之后才有。`relPath` 就是它自己的名字（没有项目段），故在它们身上
+     * `childrenOf` 的判据（去掉尾随 `/` 之后还有没有斜杠）与项目内的行逐字同形。
+     */
+    private fun rootRow(name: String, isDirectory: Boolean = false, childCount: Int = 0) = ScriptFileRow(
+        projectId = ProjectId.ROOT.value,
+        relPath = if (isDirectory) "$name/" else name,
+        name = name,
+        ext = if (isDirectory) "" else name.substringAfterLast('.', ""),
+        isDirectory = isDirectory,
+        childCount = childCount,
+        sizeBytes = 0L,
+        modifiedMillis = now,
+    )
+
+    /**
+     * 全库根那一层收的是"根层自己那些条目"：项目目录 + **根层建的文件** + 根层建的文件夹
+     * （后者落盘后就是一个项目）。判据只看 `relPath` 的斜杠数，与 `projectId` 无关。
+     */
+    @Test
+    fun `全库根一层收根层文件与根层文件夹`() {
+        val files = listOf(
+            ScriptFileRowUi.of(rootRow("hello.js"), zone),
+            ScriptFileRowUi.of(rootRow("我的脚本", isDirectory = true, childCount = 1), zone),
+            ScriptFileRowUi.of(rowAt("main.js", project = "我的脚本"), zone),
+            ScriptFileRowUi.of(projectRow("demo"), zone),
+        )
+        assertEquals(
+            listOf("hello.js", "我的脚本", "demo"),
+            ProjectState.childrenOf(files, folder = null).map { it.name },
+        )
+        // 根层的文件夹 = 一个项目：进去之后里面的行报的是它的名字，不是空串。
+        assertEquals(listOf("main.js"), ProjectState.childrenOf(files, folder = "我的脚本/").map { it.name })
+        // 退回上一层到根层收口（`"我的脚本/"` 去掉尾随斜杠后没有斜杠 → null）。
+        assertEquals(null, ProjectState.parentFolder("我的脚本/"))
+    }
+
     @Test
     fun `搜索时候选集是整棵树而不是当前一层`() {
         val files = listOf(
@@ -270,6 +309,50 @@ class ProjectStateTest {
         assertEquals("demo", ProjectState.folderTitle(folder = "demo/"))
         assertEquals("lib", ProjectState.folderTitle(folder = "demo/lib/"))
         assertEquals("sub", ProjectState.folderTitle(folder = "demo/lib/sub/"))
+    }
+
+    /**
+     * 批量删除的目标清单（选择模式顶栏那格「删除」；2026-10-17 用户口径「顺带做上」）。
+     *
+     * 两条规矩都在这里钉住：**父子同选只留父**（搜索态的池子是整棵树，先删父再删子会让
+     * 子项那一下撞"条目不存在"假报失败）、**深度降序**。
+     */
+    @Test
+    fun `批量删除的目标 父子同选只留父且深度降序`() {
+        val files = listOf(
+            ScriptFileRowUi.of(rowAt("lib", isDirectory = true, childCount = 2), zone),
+            ScriptFileRowUi.of(rowAt("lib/a.js"), zone),
+            ScriptFileRowUi.of(rowAt("lib/deep/b.js"), zone),
+            ScriptFileRowUi.of(rowAt("main.js"), zone),
+        )
+        val keys = files.map { ProjectState.keyOf(it) }.toSet()
+
+        val targets = deleteTargets(keys, files)
+        // `lib/` 吃掉了它下面的两个（`lib/a.js`、`lib/deep/b.js`），只剩 `lib/` 与 `main.js`。
+        assertEquals(setOf("demo/lib/", "demo/main.js"), targets.map { it.relPath }.toSet())
+        // 深度降序：`demo/lib/`（2 个斜杠）排在 `demo/main.js`（1 个）前面。
+        assertEquals(listOf("demo/lib/", "demo/main.js"), targets.map { it.relPath })
+
+        // 只选了子项：它就是目标（剪枝不该把"选了什么"也一起剪掉）。
+        val onlyChild = setOf(ProjectState.keyOf(files[2]))
+        assertEquals(listOf("demo/lib/deep/b.js"), deleteTargets(onlyChild, files).map { it.relPath })
+        // 没选任何行 → 空（顶栏那格在空选时本来就是禁用的，这里保证不会误删第一行）。
+        assertTrue(deleteTargets(emptySet(), files).isEmpty())
+    }
+
+    /** 前缀判据靠**目录行 relPath 的尾随 `/`**：少了它，`lib` 会误吃掉 `liba.js`。 */
+    @Test
+    fun `批量删除的前缀不吃同名兄弟`() {
+        val files = listOf(
+            ScriptFileRowUi.of(rowAt("lib", isDirectory = true, childCount = 1), zone),
+            ScriptFileRowUi.of(rowAt("liba.js"), zone),
+        )
+        val keys = files.map { ProjectState.keyOf(it) }.toSet()
+        assertEquals(
+            setOf("demo/lib/", "demo/liba.js"),
+            deleteTargets(keys, files).map { it.relPath }.toSet(),
+            "`liba.js` 不是 `lib/` 的后代，两个都得留着",
+        )
     }
 
     @Test

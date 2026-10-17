@@ -1,6 +1,5 @@
 package com.autoscript.ui.screens
 
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -73,7 +72,13 @@ import com.autoscript.domain.host.ScreenRequirement
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
+import com.autoscript.ui.components.CollapseHeader
 import com.autoscript.ui.components.ContextMenu
+import com.autoscript.ui.components.DismissFocusOnWindowBlur
+import com.autoscript.ui.components.RegisterFocusDismiss
+import com.autoscript.ui.components.dismissFocusOnTapOutside
+import com.autoscript.ui.components.rememberFocusDismissState
+import com.autoscript.ui.components.reportFocusBounds
 import com.autoscript.ui.components.CountBadge
 import com.autoscript.ui.components.Glyph
 import com.autoscript.ui.components.GlyphKind
@@ -198,6 +203,9 @@ fun TaskCenterScreen(
     // 搜索词/排序档/两组展开态：本屏私有的现值，不进读口（与项目页 FileSort 同分工）。
     // 排序缺省 = 按时间（TG SharedConfig.sortContactsByName 缺省 false 的同款取向）。
     var query by rememberSaveable { mutableStateOf("") }
+    // 「点输入框外面就收键盘/撤光标」（2026-10-16 用户报"焦点转移后光标还在闪"）：
+    // 一份 state 管本屏那一个搜索框，见 `FocusDismiss` 的 KDoc。
+    val focusDismiss = rememberFocusDismissState()
     var sort by rememberSaveable { mutableStateOf(TaskSort.TIME) }
     // 两组缺省**收起**（批 45 用户口径）：进屏先看见两张干净的卡，展开是用户自己按的。
     var runsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -232,7 +240,13 @@ fun TaskCenterScreen(
     // 而是卡片 Column 的子级 —— boundsInParent 会差一层卡片偏移）。
     var containerOrigin by remember { mutableStateOf(Offset.Zero) }
 
-    Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted)) {
+    // 点搜索框外面就收键盘（容器侧手势见 `FocusDismiss`）—— 挂在根 Column 上，
+    // 列表滚动/行长按照旧（Initial 趟只读不消费）。
+    // 窗口失焦也收键盘（跨窗口那一半：点悬浮窗 = 本窗口失焦，见 `DismissFocusOnWindowBlur`）——
+    // 与下一行的同窗口那条是一对，缺一个就有"点了别处光标还在闪"的方向漏网。
+    RegisterFocusDismiss(focusDismiss)
+    DismissFocusOnWindowBlur(focusDismiss)
+    Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted).dismissFocusOnTapOutside(focusDismiss)) {
         // 顶栏跟页面同灰（批 41 用户拍板）：传 `background` 覆盖 `actionBarDefault`，
         // 栏与列表连成一块灰，不再是"白栏压灰页"。
         ActionBar(
@@ -296,7 +310,7 @@ fun TaskCenterScreen(
                         Card {
                             // 空组照样能收放（批 44 用户拍板）：组头是开关，不是内容指示器 ——
                             // 有没有行是内容自己的事，灰三角/点不动会让两个头长得不一样。
-                            GroupHeader(
+                            CollapseHeader(
                                 title = "运行中的任务",
                                 expanded = runsExpanded,
                                 onClick = { runsExpanded = !runsExpanded },
@@ -333,7 +347,7 @@ fun TaskCenterScreen(
                         Spacer(Modifier.height(12.dp))
                         // 白色圆角卡片二：定时任务。
                         Card {
-                            GroupHeader(
+                            CollapseHeader(
                                 title = "定时任务",
                                 expanded = tasksExpanded,
                                 onClick = { tasksExpanded = !tasksExpanded },
@@ -379,6 +393,7 @@ fun TaskCenterScreen(
             SearchField(
                 query = query,
                 onChange = { query = it },
+                focusDismiss = focusDismiss,
                 modifier = Modifier.align(Alignment.TopCenter),
             )
             ScrollToTopButton(
@@ -523,68 +538,6 @@ private fun Card(content: @Composable () -> Unit) {
         content()
     }
 }
-
-/**
- * 分组头（批 41 按用户口径重做：白底 + 右端三角，TG `CollapseTextCell` 的几何）：
- *
- * - **46dp 白条**（`CollapseTextCell` 的 `onMeasure` 恒 46dp）、文字缩进 21dp、
- *   14sp（`textView.setTextSize(dp(14))`）、正文色（`windowBackgroundWhiteBlackText`）；
- * - **右端三角**（[GlyphKind.CHEVRON]，14dp 同 `arrow_more` 的格）：收起 = 尖朝下
- *   （rotation 0）、展开 = 尖朝上（180°，340ms `EASE_OUT_QUINT` —— 与 TG 的
- *   `collapsedArrow.animate().rotation(…)` 同一条时间线）；
- * - **空组照样有三角、照样能收放**（批 44 用户拍板，推翻批 41 那条）：组头是**开关**
- *   不是内容指示器 —— 拿内容有没有来灰掉三角，同一排的两个头就会长得不一样，而
- *   "点不动"本身还得靠试才知道。空组展开后就是空的（不铺占位句）。
- */
-@Composable
-private fun GroupHeader(
-    title: String,
-    expanded: Boolean,
-    onClick: () -> Unit,
-) {
-    val palette = ThemeColors
-    // 展开因子驱动旋转：0 = 收起（尖朝下）、1 = 展开（尖朝上）。TG 的插值器
-    // EASE_OUT_QUINT = cubic-bezier(.23, 1, .32, 1)，340ms。
-    val expandFraction by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = tween(durationMillis = 340, easing = EaseOutQuint),
-        label = "groupChevron",
-    )
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(46.dp)
-            .background(palette.background)
-            .pressable(
-                role = Role.Button,
-                overlay = palette.pressedOverlay,
-                onClick = onClick,
-            )
-            .padding(start = 21.dp, end = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = title,
-            color = palette.text,
-            style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium),
-        )
-        Spacer(Modifier.weight(1f))
-        Glyph(
-            kind = GlyphKind.CHEVRON,
-            tint = palette.text,
-            size = 14.dp,
-            modifier = Modifier.graphicsLayer {
-                rotationZ = 180f * expandFraction
-            },
-        )
-    }
-}
-
-/**
- * cubic-bezier(.23, 1, .32, 1)（TG `CubicBezierInterpolator.EASE_OUT_QUINT`）：
- * 快出缓收的五次缓出 —— 与 [OvershootEasing] 一样是「TG 的手感」那组常量。
- */
-private val EaseOutQuint = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
 /** 卡片内的空/错位一行（不是 [EmptyHint] 那种大留白居中 —— 卡内行要密）。 */
 @Composable
@@ -870,6 +823,8 @@ private fun TaskAvatar(scriptPath: String, name: String) {
 private fun SearchField(
     query: String,
     onChange: (String) -> Unit,
+    /** 「点外面收键盘」的共享状态（见 `FocusDismiss`）；本屏唯一那个搜索框报给它。 */
+    focusDismiss: com.autoscript.ui.components.FocusDismissState,
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
@@ -907,7 +862,8 @@ private fun SearchField(
                     textStyle = TextStyle(fontSize = 15.sp, color = palette.text),
                     // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色不是一个键。
                     cursorBrush = SolidColor(palette.cursor),
-                    modifier = Modifier.fillMaxWidth(),
+                    // 上报自己的 bounds 与聚焦态：容器据此判"这一下点在框外"（见 `FocusDismiss`）。
+                    modifier = Modifier.fillMaxWidth().reportFocusBounds(focusDismiss),
                 )
             }
             Spacer(Modifier.width(12.dp))

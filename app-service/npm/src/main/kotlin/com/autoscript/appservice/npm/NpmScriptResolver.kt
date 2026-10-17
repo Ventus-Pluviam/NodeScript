@@ -18,7 +18,7 @@ import java.nio.file.Path
  * 两个哈希口径（都带 `sha256:` 前缀，便于人眼分辨，且都与 pkg@version 绑在一起）：
  * - [projectScripts]：**整个 scripts 映射**的规范化摘要（键排序后 `name=body` 逐行）。
  *   刻意不做「逐脚本一个哈希」：`npm run <name>` 读的是这份脚本的当前样貌，
- *   [ScriptOp.versionHash] 带上它让审计能回答「我当时跑的是哪一份」——脚本一改哈希就变。
+ *   [ScriptOp.versionHash] 带上它让日志能回答「我当时跑的是哪一份」——脚本一改哈希就变。
  * - [binTarget]：bin 声明（归属包 pkg@version + bin 名 + 目标相对路径）的摘要。
  *
  * 纯 JS bin 白名单（§10.3 T1「纯 JS bin 白名单」）：判据是**目标文件本身**，不是文件名后缀
@@ -37,7 +37,7 @@ internal object NpmScriptResolver {
         /** 包名（manifest 的 `name`；缺失时退到 projectId —— 那是唯一稳定的项目身份）。 */
         val pkg: String,
         val version: String,
-        /** 整份 scripts 的内容哈希（versionHash：审计记「跑的是哪一份脚本」）。 */
+        /** 整份 scripts 的内容哈希（versionHash：操作事实记「跑的是哪一份脚本」）。 */
         val versionHash: String,
         val scripts: Map<String, String>,
     )
@@ -71,6 +71,39 @@ internal object NpmScriptResolver {
     }
 
     /**
+     * 项目 `package.json` 里**声明**的依赖，拼成可以直接喂给 `npm install` 的包说明符
+     * （2026-10-17，「去重并提升到全局」那条路的取数口）。
+     *
+     * 两段都收（`dependencies` + `devDependencies`）、**顺序固定**（按名字排序）：
+     * - 为什么连 `devDependencies` 一起：提升到全局是为了"别的项目也能用"，而全局那份
+     *   清单里没有"开发/生产"这个区分（npm 只对**当前项目**算 `--omit=dev`）。挑挑拣拣
+     *   反而会让"我明明提升了、另一个项目却找不到"变成一个说不清的现象。
+     * - 为什么排序：同一次提升两次跑出来的命令必须逐字相同（日志能对上、测试能断言）。
+     *
+     * **范围原样带上**（`{"axios": "^1.7.0"}` → `axios@^1.7.0`）：全局那份跟着项目一起走小版本，
+     * 两边不会分家；钉死到某一次 lock 里的具体版本则项目一升级就对不上。没写范围的
+     * （`"axios": ""`）就只给名字。
+     *
+     * manifest 不存在 → `null`（与 [projectScripts] 同款：那是"没有这个项目 / 还没装过"，
+     * 不是"声明了 0 条"）；声明段缺失或为空 → 空表。
+     */
+    fun declaredSpecs(projectRoot: Path): List<String>? {
+        val manifest = manifestOf(projectRoot) ?: return null
+        val out = ArrayList<Pair<String, String>>()
+        for (section in listOf("dependencies", "devDependencies")) {
+            val fields = (manifest[section] as? DomainJson.Value.Obj)?.fields ?: continue
+            for ((name, v) in fields) {
+                if (name.isBlank()) continue
+                val range = (v as? DomainJson.Value.S)?.v?.trim().orEmpty()
+                out += name to range
+            }
+        }
+        return out.distinctBy { it.first }
+            .sortedBy { it.first }
+            .map { (name, range) -> if (range.isEmpty()) name else "$name@$range" }
+    }
+
+    /**
      * `node_modules` 里声明了名为 [bin] 的 bin 的那个包（纯 JS 白名单已过）。
      *
      * 扫描深度 1（`node_modules/<pkg>`）+ 深度 2 的 scope（`node_modules/@scope/<pkg>`），
@@ -79,7 +112,7 @@ internal object NpmScriptResolver {
      * 一条解析路径；从**声明侧**解析则两种布局同形，且「装出来是什么」以 manifest 为准。
      *
      * 多个包声明同名 bin → `ERR_NOT_SUPPORTED` 并点名候选：npm 自己的消歧依赖安装顺序与
-     * hoist 布局，宿主重算不出一个稳定答案，猜一个就是让审计哈希对不上真正的执行目标。
+     * hoist 布局，宿主重算不出一个稳定答案，猜一个就是让记下的哈希对不上真正的执行目标。
      */
     fun binTarget(projectRoot: Path, bin: String): BinTarget? {
         val nodeModules = projectRoot.resolve("node_modules")

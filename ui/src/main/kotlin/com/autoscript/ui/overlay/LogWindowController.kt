@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleLineState
+import java.util.HashSet
 
 /**
  * 执行日志悬浮窗的**控制器**（2026-10-13 用户令；Activity `remember` 一份）。
@@ -109,6 +110,19 @@ class LogWindowController(
     }
 
     /**
+     * 重跑（已结算态第一颗钮；2026-10-15 用户令「执行完变重跑图标」）。
+     *
+     * 只**换到重跑态**，真跑由调用方触发（`MainActivity.windowFirstAction` 走
+     * `runScriptFileOp`，与开窗同一条执行链；会把这个窗切到新归属）。跑起来后轮询的
+     * `bind` 看到同归属新 run 在途，自动换绑到新号（`running` 回 true、图标回暂停）。
+     * startup failure 落在"新窗从没绑上过" → 重跑态恢复：图标回重跑，用户可再点
+     * （不是「点一下重跑失败就永远卡死在暂停位」）。
+     */
+    fun rerun(projectId: String, relPath: String) {
+        state = LogWindowState(projectId = projectId, relPath = relPath, x = lastX, y = lastY)
+    }
+
+    /**
      * 窗内日志行的**事实源**（`consoleState.lines` 的现值；调用方每次拉取后 [updateLines]）。
      *
      * 为什么行数据住控制器而不是"由调用方当参数喂进系统窗内容"（2026-10-14「点执行就闪退」）：
@@ -133,11 +147,35 @@ class LogWindowController(
 
     /**
      * 在途表现值 → 绑定（每次 `reloadConsole` 后调用；现值现取）。
+     *
+     * 结算**不解绑**（用户令「执行完不要自动清理输出」）：绑定 run 跑完离开在途表后
+     * 窗口仍绑在它上面、输出照常可见（详见 `LogWindowState.bind` 的 KDoc）。
+     *
+     * [fallbackRunId] 是快速脚本的兜底补绑（用户令「有时点执行日志不显示在悬浮窗上」）：
+     * 起跑即结算的脚本在途表一次都没见过 → 从行里摘出归属补绑。兜底补位号（结算为
+     * false 的 runId）**不进 [settledRunIds]** —— 那只是"还没在途过"的补位，不是被
+     * 摘走的事实。
      */
-    fun bind(activeRuns: List<ActiveRunState>) {
+    fun bind(activeRuns: List<ActiveRunState>, fallbackRunId: Long? = null) {
         val current = state ?: return
-        state = current.bind(activeRuns)
+        val before = current.boundRunId
+        val next = current.bind(activeRuns, fallbackRunId)
+        state = next
+        // 被在途表摘走的号（结算/被停/崩溃）记进账：之后任何宿主读口按它查都是"不在途"
+        // （走 `RuntimeController` 的都在途表里）—— 暂停按钮据此**静默早退**，不再把
+        // 「已结算」翻译成「该执行不支持暂停」那句给用户看（2026-10-15 用户令）。
+        //
+        // 判据：**仍绑着（boundRunId 没变）但不再 running** —— 结算不解绑，正是这个
+        // 形状：run 离开在途表时绑定保持、running 回 false。反例都不记：
+        // - 换绑（boundRunId 变了）：暂停按钮只作用于**当前**绑定，旧号已不可达，
+        //   记不记都无差别（且串行池下新 run 起跑前旧的必然先让位，见 `LogWindowState.bind`）；
+        // - 兜底补位号（from null → fallback）：那只是"还没在途过"的补位，不是被摘走
+        //   （且它 running 恒 false，暂停钮从画出来起就是置灰的，点不到）。
+        if (before != null && next.boundRunId == before && !next.running) settledRunIds += before
     }
+
+    /** 已结算（离开在途表）的 runId 集；[bind] 维护，只进不退（runId 不重用）。 */
+    private val settledRunIds = HashSet<Long>()
 
     /**
      * 清空日志（**只推水位，不删文件**）：`watermarkSeq` 推到当前可见最大 seq ——
@@ -145,8 +183,13 @@ class LogWindowController(
      */
     fun clearLogs(visibleMaxSeq: Long) {
         val current = state ?: return
-        if (visibleMaxSeq > current.watermarkSeq) {
-            state = current.copy(watermarkSeq = visibleMaxSeq)
+        if (visibleMaxSeq > current.watermarkSeq || current.echoes.isNotEmpty()) {
+            // 回显跟着一起清（2026-10-16）：它们是窗里那本流水的一部分 —— 只推水位会留下
+            // 几条"上一轮对话的我说的话"浮在空窗里。水位仍只进不退（`maxOf`）。
+            state = current.copy(
+                watermarkSeq = maxOf(visibleMaxSeq, current.watermarkSeq),
+                echoes = emptyList(),
+            )
         }
     }
 
@@ -159,13 +202,141 @@ class LogWindowController(
     }
 
     /**
+     * 底部输入框拿到/失去焦点 → 系统窗的输入法开关（2026-10-16）。
+     *
+     * 只在走系统窗时往下传：in-app 兜底窗是普通 Compose 树（在 Activity 窗口里），
+     * 输入法本来就能用；往下传等于给一个不需要它的宿主发指令。
+     */
+    fun setImeFocus(on: Boolean) {
+        if (!usingSystemWindow) return
+        systemHost?.setImeFocus(on)
+    }
+
+    /** 底部输入框的草稿变更（每次敲键一次；草稿住 [LogWindowState.inputDraft]）。 */
+    fun updateInputDraft(text: String) {
+        val current = state ?: return
+        if (current.inputDraft == text) return
+        state = current.copy(inputDraft = text)
+    }
+
+    /**
+     * 把输入框那一行送进脚本进程的 stdin（底部那颗蓝色箭头；2026-10-16 用户令）。
+     *
+     * 四件事按序：
+     * 1. **空行不发**（trim 后为空就早退）：敲一下空格再点箭头不该在脚本那头造出一个
+     *    空行 —— 脚本的 `readline` 会照收，那是用户没表达的输入；
+     * 2. **没绑上/已结算不发**（`boundRunId` null 或不在 [settledRunIds] 之外）：
+     *    与 [togglePause] 同一条"在途才动"的口径，但那一条靠宿主查，这一条本地就能判
+     *    —— 结算不解绑，窗里绑着一个跑完的号是常态；
+     * 3. **成功才清空草稿**：失败（管道已关/壳没装配）留着原文，用户不必重敲；
+     * 4. **失败如实 toast**：不假装送到 —— 与「该执行不支持暂停」那条同一条纪律，
+     *    但**话术不同**：那条说的是能力不支持，这条说的是"这次没送进去"。
+     */
+    suspend fun sendInput() {
+        val current = state ?: return
+        val line = current.inputDraft.trim()
+        if (line.isEmpty()) return
+        val runId = current.boundRunId ?: run {
+            toast("还没有在跑的执行：输入无处可送")
+            return
+        }
+        if (runId in settledRunIds) {
+            toast("这次执行已经结束了：输入无处可送")
+            return
+        }
+        val host = hostSummary() ?: run {
+            toast("宿主摘要未接线（Application 未实现 HostSummary）")
+            return
+        }
+        val ok = try {
+            host.sendInput(runId, line)
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            throw t
+        } catch (t: Exception) {
+            toast("输入发送失败：${t.message ?: t.javaClass.simpleName}")
+            return
+        }
+        if (ok) {
+            // **现读再清**：上面那句 `host.sendInput` 是挂起的，期间轮询那一轮可能已经
+            // 推过新 state（`running`/`paused`/绑定都变）—— 拿挂起前那份 `current` 去
+            // `copy` 会把那一轮的结果抹掉（本仓反复踩过的"捕获值 vs 现读"）。
+            //
+            // 同时**把这一行回显进窗**（2026-10-16 用户报「输入框输进去的数字也没有显示在
+            // 悬浮窗里」）：引擎里脚本的 stdin/stdout 都是管道，`readline` 的 `terminal`
+            // 恒为 false —— "敲什么屏幕上就有什么"那份回显本来是 TTY 驱动做的，脚本侧没有
+            // 等价物（见 `LogWindowState.echoes` 的 KDoc）。窗口就是这里的终端。
+            //
+            // `atSeq` 同样**现读** `lines`：回显要插在"送出这一刻已有的最后一行"之后，
+            // 否则脚本随后的输出会跑到它上面去（因果读反，见 `LogWindowState.rows`）。
+            state = state?.let { cur ->
+                cur.copy(
+                    inputDraft = "",
+                    echoes = cur.echoes + InputEcho(
+                        atSeq = cur.visible(lines).maxOfOrNull { it.seq } ?: cur.watermarkSeq,
+                        text = line,
+                    ),
+                )
+            }
+        } else {
+            toast("输入没送进脚本（它已退出，或这条执行不接受输入）")
+        }
+    }
+
+    /**
+     * **结束脚本**（悬浮窗顶栏「结束脚本」钮；2026-10-16 用户令）。
+     *
+     * 与 [togglePause] 同一条"在途才动"口径：没绑上（`boundRunId` null）或已结算
+     * （[settledRunIds] 里有它）一律**静默早退** —— 那颗钮的可用态按 `state.running` 画，
+     * 而轮询 400ms 一轮，点击可以落在"这一轮还见它在途、这一下已结算"的窗口里。
+     *
+     * **为什么窗口需要这颗钮**（它不是"再给一次停止的机会"那么随意）：脚本卡在 stdin 上
+     * 等输入时，引擎侧那条**自动 EOF** 帮不上忙（自动判据是"stdin 上没有读者了"，
+     * 而正卡着读的脚本读者还在）—— 用户唯一能收场的手段就是停掉它。另外它也是
+     * "脚本进了死循环/卡在网络"这类停止入口（控制台在途块那颗停止钮管的是命令面，
+     * 窗里得有自己的）。
+     *
+     * `stopRun` 的 three-state 如实转述（与控制台 [stopRunOp] 同一口径、同一措辞骨架）：
+     * true = 已请求停止（四步 quiesce 异步走，不赌停没停）；false = 点的时候已不在途
+     * （`AlreadyGone` 的诚实投影，不是失败）；抛 → 原文进 toast。成败都由下一次
+     * `bind` 刷（run 离开在途表 → `running` 回 false、第一颗钮画重跑）。
+     */
+    suspend fun stop() {
+        val current = state ?: return
+        val runId = current.boundRunId ?: return
+        if (runId in settledRunIds) return
+        val host = hostSummary() ?: run {
+            toast("宿主摘要未接线（Application 未实现 HostSummary）")
+            return
+        }
+        try {
+            val stopped = host.stopRun(runId)
+            toast(
+                if (stopped) "已请求结束脚本（停走由引擎完成，成败见日志）"
+                else "这次执行已不在途（已结算或还没开始）",
+            )
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            throw t
+        } catch (t: Exception) {
+            toast("结束脚本失败：${t.message ?: t.javaClass.simpleName}")
+        }
+    }
+
+    /**
      * 暂停/继续（悬浮窗第一颗钮；boundRunId null 时不问宿主 —— 没绑上就没有可停的东西）。
      *
-     * false（冻不住/已结算）→ toast 如实说，不假装成功。
+     * **已结算（[settledRunIds] 里有它）→ 静默早退**：暂停钮的可用态按 `state.running`
+     * 画，但轮询 400ms 一轮，用户点击可以落在"最后一轮还见它在途、这一下已结算"的窗口
+     * 里 —— 按钮此刻仍可点，宿主一查就 false。把那个 false 翻译成「该执行不支持暂停」
+     * 是撒谎（2026-10-15 用户令）：它已经**结束**了，不是"不支持"，结算本来就是暂停的
+     * 终态。静默早退让按钮在这几帧里点了等于没点；下一轮 `running` 回 false、钮置灰，
+     * 没有误导性的话术。
+     *
+     * false（冻不住/已结算，但**还没被在途表摘走**）→ toast 如实说，不假装成功。
      */
     suspend fun togglePause() {
         val current = state ?: return
         val runId = current.boundRunId ?: return
+        if (runId in settledRunIds) return
         val host = hostSummary() ?: run {
             toast("宿主摘要未接线（Application 未实现 HostSummary）")
             return
