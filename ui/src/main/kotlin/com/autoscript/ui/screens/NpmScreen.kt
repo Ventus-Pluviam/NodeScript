@@ -8,7 +8,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,9 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -168,8 +165,13 @@ import com.autoscript.ui.theme.ThemeColors
  *
  * **第八批（2026-10-18，用户口径原文）**：
  * 26. 「撤掉，实现触感反馈」—— 撤掉 [OptionTile] 上那颗「进行中…」文字（TG 这三颗本来就没有
- *     loading 态：`supportsLoading` 为 false，那套扫光只挂在 gift / call / … 上），
- *     补上 TG 那条**长按触感**：`ACTION_UP` 时按住超过 250ms 且手指仍在格内 → `LONG_PRESS`。
+ *     loading 态：`supportsLoading` 为 false，那套扫光只挂在 gift / call / … 上）；
+ *     按口径补了 TG 那条长按触感，~~随后第 27 条又按用户口径整个去掉~~。
+ *
+ * **第九批（2026-10-18，用户口径原文）**：
+ * 27. 「震动？我不需要震动，去掉吧」—— 第 26 条补的那条 `LONG_PRESS` 触感**整个去掉**
+ *     （`OPTION_TILE_HAPTIC_DELAY_MS` 与那段 `PressInteraction` 订阅一并删）：这一页三颗
+ *     按下去就出结果，没有"长按"这层语义，震动只是多余的打扰。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -806,10 +808,10 @@ private fun OptionsCard(
  *
  * `clip` 先于 `background`（同 [PanelCard]）：缩放与圆角要先裁住底色。
  *
- * **长按触感**（`onTouchEvent` 的 `ACTION_UP` 分支）：按住超过 **250ms** 且手指仍在格内，
- * 松手时给一次 `HapticFeedbackConstants.LONG_PRESS`。注意它**不是**在按住的过程中震，
- * 而是在**松手那一刻**按"按了多久"决定震不震 —— 本件照这个口径：从 `PressInteraction.Press`
- * 记下按下时刻，`Release` 时比 250ms，`Cancel`（滑走/取消）不震。
+ * **不做触感**（2026-10-18 用户口径「震动？我不需要震动，去掉吧」）。TG 在 `onTouchEvent` 的
+ * `ACTION_UP` 分支里有一条 `performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)`
+ * （按住超过 250ms 且手指仍在格内时），本件**不实现**：这一页的三颗按下去就出结果，
+ * 没有"长按"这层语义，震动只会是多余的打扰。
  *
  * **没有「进行中」态**：TG 这三颗 `supportsLoading` 是 false（那套横向扫光的 `LoadingDrawable`
  * 只挂在 gift / call / video / join / report / leave / voice / stream / stop 上）。跑起来时
@@ -824,26 +826,8 @@ private fun OptionTile(
     modifier: Modifier = Modifier,
 ) {
     val palette = ThemeColors
-    val haptics = LocalHapticFeedback.current
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
-    LaunchedEffect(source, enabled) {
-        if (!enabled) return@LaunchedEffect
-        var downAt = 0L
-        source.interactions.collect { interaction ->
-            when (interaction) {
-                is PressInteraction.Press -> downAt = System.currentTimeMillis()
-                is PressInteraction.Release -> {
-                    val held = System.currentTimeMillis() - downAt
-                    if (downAt != 0L && held > OPTION_TILE_HAPTIC_DELAY_MS) {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    }
-                    downAt = 0L
-                }
-                is PressInteraction.Cancel -> downAt = 0L
-            }
-        }
-    }
     val pressedT by animateFloatAsState(
         targetValue = if (pressed && enabled) 1f else 0f,
         animationSpec = if (pressed && enabled) {
@@ -937,8 +921,6 @@ private val OPTION_TILE_TEXT_SIZE = 11.sp
 /** 按下末态的缩放（`ButtonBounce.getScale(0.04f)` → 0.96）。 */
 private const val OPTION_TILE_PRESS_SCALE = 0.96f
 
-/** 长按触感的门槛（`ProfileActionsView.onTouchEvent`：`System.currentTimeMillis() - downTime > 250`）。 */
-private const val OPTION_TILE_HAPTIC_DELAY_MS = 250L
 
 /**
  * 已装包一行：名字 + 版本 + 尺寸 + 「重装 ⟳」+ 「卸载」。
