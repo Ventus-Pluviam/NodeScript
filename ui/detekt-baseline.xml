@@ -51,9 +51,11 @@
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow(row: NpmRowState, enabled: Boolean, onRemove: (String) -&gt; Unit)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun LogCard(state: NpmState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceButton( label: String, action: NpmMaintenanceAction, busy: NpmMaintenanceAction?, enabled: Boolean, onClick: (NpmMaintenanceAction) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onReclaimCache: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelRow( label: String, hint: String? = null, trailing: @Composable () -&gt; Unit, onClick: (() -&gt; Unit)? = null, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ProjectPickerCard( projects: List&lt;NpmProjectSnapshot&gt;, selectedId: String?, onSelect: (String) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun StorageCard(state: NpmState, onReclaimCache: () -&gt; Unit)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelCard(content: @Composable () -&gt; Unit)</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun QuotaCard(state: NpmState)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable fun FileListLayer(showOverlays: Boolean)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CapsuleInputField( value: String, onValueChange: (String) -&gt; Unit, placeholder: String, modifier: Modifier = Modifier, leadingGlyph: GlyphKind? = null, focusDismiss: com.autoscript.ui.components.FocusDismissState? = null, )</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateEntryDialogs( creating: ProjectState.CreationKind?, onDismiss: () -&gt; Unit, onConfirm: (name: String, isFolder: Boolean) -&gt; Unit, atRoot: Boolean, )</ID>

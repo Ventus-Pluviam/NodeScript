@@ -1042,33 +1042,31 @@ class InstallCoordinatorTest {
         assertEquals(100L, stats["p1"]!!.totalBytes)
     }
 
+    /**
+     * 可用空间进不了「预检下限 × 1.25」的余量 → 发 `DISK_QUOTA` 黄警，**不拦**。
+     *
+     * **2026-10-17 换锚**：此前这条黄是「node_modules 用掉配额的 80%」，而项目配额那一档
+     * 已按用户口径整个摘掉（「取消 512MB 限制」「取消上限设置吧」）—— 现在唯一还会拒安装的
+     * 资源闸是磁盘预检，故黄警也锚在它上面（600MB 过得了 500MB 的下限，但进不了 625MB 的余量）。
+     */
     @Test
-    fun `配额 80% 黄：Warning(DISK_QUOTA) 不拦安装`() = runBlocking {
-        // 项目已有 node_modules ~ 430MB（> 512MB×80%=409.6MB）——用稀疏文件撑尺寸
-        val nm = layout.nodeModules(ProjectId("big"))
-        Files.createDirectories(nm)
-        val probe = nm.resolve("blob")
-        java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(430L * 1024 * 1024) }
+    fun `磁盘逼近预检下限：Warning(DISK_QUOTA) 不拦安装`() = runBlocking {
         val events = mutableListOf<InstallEvent>()
-        val c = coordinator()
-        val collect = launch { c.progress("big").collect { events += it } }
+        val c = coordinator(free = 600L * 1024 * 1024)
+        val collect = launch { c.progress("warn").collect { events += it } }
         kotlinx.coroutines.delay(50)
-        c.install("big", listOf(PackageSpec("axios")))
+        c.install("warn", listOf(PackageSpec("axios")))
         kotlinx.coroutines.delay(50)
         collect.cancel()
         val warns = events.filterIsInstance<InstallEvent.Warning>()
-        assertTrue(warns.any { it.kind == InstallEvent.Kind.DISK_QUOTA }, "80% 阈值必须发黄（实为 $events）")
+        assertTrue(warns.any { it.kind == InstallEvent.Kind.DISK_QUOTA }, "逼近下限必须发黄（实为 $events）")
         assertTrue(events.any { it is InstallEvent.Finished && it.success }, "黄警不拦：安装仍完成")
     }
 
     @Test
-    fun `配额 100% 拦 ERR_DISK_FULL`() = runBlocking {
-        val nm = layout.nodeModules(ProjectId("full"))
-        Files.createDirectories(nm)
-        val probe = nm.resolve("blob")
-        java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
+    fun `磁盘低于预检下限：拦 ERR_DISK_FULL（配额摘了之后唯一还会拒安装的资源闸）`() = runBlocking {
         val ex = assertThrows(AutojsException::class.java) {
-            runBlocking { coordinator().install("full", listOf(PackageSpec("axios"))) }
+            runBlocking { coordinator(free = 100L * 1024 * 1024).install("full", listOf(PackageSpec("axios"))) }
         }
         assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
     }
@@ -1112,19 +1110,17 @@ class InstallCoordinatorTest {
         assertEquals(false, execFail.success)
         assertEquals("npm 挂了", execFail.detail, "失败原因是原文，不是重编的一句话")
 
-        // ② 磁盘/配额**预检**拒绝（在 handle 存在之前就抛，与 crossCheckRegistry 同一条口径）
-        val nm = layout.nodeModules(ProjectId("full"))
-        Files.createDirectories(nm)
-        java.io.RandomAccessFile(nm.resolve("blob").toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
+        // ② 磁盘**预检**拒绝（在 handle 存在之前就抛，与 crossCheckRegistry 同一条口径）。
+        // 探针注一个小数即可 —— 2026-10-17 配额摘了之后，撑满 node_modules 已不再触发任何拒绝。
         val gateLog = RecordingOpLog()
-        val tight = coordinator(opLog = gateLog)
+        val tight = coordinator(free = 10L * 1024 * 1024, opLog = gateLog)
         assertThrows(AutojsException::class.java) {
             runBlocking { tight.install("full", listOf(PackageSpec("axios"))) }
         }
         val gateFail = gateLog.all().single()
         assertEquals("full", gateFail.projectId)
         assertEquals(false, gateFail.success)
-        assertTrue(gateFail.detail!!.contains("配额"), "预检拒绝也要说清为什么（实为 ${gateFail.detail}）")
+        assertTrue(gateFail.detail!!.contains("磁盘"), "预检拒绝也要说清为什么（实为 ${gateFail.detail}）")
     }
 
     // ═══ 缓存回收（§10.9 第 5 条的动作半边，2026-10-09 批 86） ═══

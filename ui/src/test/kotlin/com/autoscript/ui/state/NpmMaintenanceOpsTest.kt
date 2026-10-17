@@ -33,8 +33,6 @@ class NpmMaintenanceOpsTest {
         installed = emptyList(),
         offlineGap = emptyList(),
         storage = NodeModulesStats(projectId = id, pkgCount = 1, totalBytes = bytes),
-        quotaBytes = 512L * 1024 * 1024,
-        quotaWarnRatio = 0.8,
     )
 
     private fun loaded(vararg projects: NpmProjectSnapshot) =
@@ -122,7 +120,7 @@ class NpmMaintenanceOpsTest {
         // 宿主说 prune 完只剩 1MB：界面必须显示 1MB，而不是沿用操作前的 10MB
         val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 1L * 1024 * 1024))) })
         val next = runNpmMaintenanceOp(host, loaded(project("demo", 10L * 1024 * 1024)), NpmMaintenanceAction.PRUNE)
-        assertEquals("1 MB / 512 MB", next.quotaLabel, "回读的才是现状")
+        assertEquals("1 MB", next.sizeLabel, "回读的才是现状")
     }
 
     // ═══ 缓存回收 ═══
@@ -206,10 +204,10 @@ class NpmMaintenanceOpsTest {
     }
 
     @Test
-    fun `回收后必须回读快照（否则配额条还是旧值，看着像没生效）`() = runBlocking {
+    fun `回收后必须回读快照（否则尺寸那行还是旧值，看着像没生效）`() = runBlocking {
         val host = MaintenanceHost(snapshot = { NpmPanelSnapshot(listOf(project("demo", 2L * 1024 * 1024))) })
         val next = reclaimNpmCacheOp(host, loaded(project("demo", 10L * 1024 * 1024)))
-        assertEquals("2 MB / 512 MB", next.quotaLabel)
+        assertEquals("2 MB", next.sizeLabel)
     }
 
     @Test

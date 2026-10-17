@@ -54,7 +54,9 @@ import java.util.concurrent.atomic.AtomicLong
  *   ERR_NOT_IMPLEMENTED 如实失败」，绝不假装装上了（§1 诚实原则）。
  *
  * 门禁（§10.2）：per-project 互斥锁 + 全局会话互斥 + 磁盘 free≥[minFreeBytes] 预检 +
- * 项目配额（0.8 黄 / 1.0 拦）+ git: 依赖入口即拒（ERR_NOT_SUPPORTED）。
+ * git: 依赖入口即拒（ERR_NOT_SUPPORTED）。**项目配额那一档 2026-10-17 摘除**（用户口径
+ * 「取消 512MB 限制」「取消上限设置吧」）：磁盘预检成了唯一还会拒安装的资源闸，
+ * `FREE_WARN_HEADROOM` 那条黄警改锚在它上面。
  */
 class InstallCoordinator(
     private val services: NpmServices,
@@ -598,8 +600,6 @@ class InstallCoordinator(
                     installed = list(id, depth = 0),
                     offlineGap = offlineGap(id),
                     storage = stats[id],
-                    quotaBytes = config.projectQuotaBytes,
-                    quotaWarnRatio = config.quotaWarnRatio,
                     cache = cache,
                 )
             }
@@ -1150,14 +1150,11 @@ class InstallCoordinator(
             opLog.log(opName(args), projectId, false, why)
             throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
-        val used = nodeModulesBytes(ProjectId(projectId))
-        if (used >= config.projectQuotaBytes) {
-            val why = "项目 node_modules 已达配额 ${config.projectQuotaBytes / 1024 / 1024}MB"
-            opLog.log(opName(args), projectId, false, why)
-            throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
-        }
-        // 80% 黄（§10.2 「项目+全局配额(80%黄·100%拦）」）：不拦，发 Warning 事件
-        val quotaWarned = used >= (config.projectQuotaBytes * config.quotaWarnRatio).toLong()
+        // 黄警（**2026-10-17 起锚在磁盘上**，不再是 node_modules 配额）：可用空间进了预检
+        // 下限的 1.25 倍以内就发一条，**不拦** —— 理由与原那条 80% 黄逐字同款：
+        // 「下一次安装就要被拒了」值得在**被拒之前**说一次。配额那一档已按用户口径整个摘掉
+        // （见 `InstallConfig` 的 KDoc），故 `DISK_QUOTA` 这个事件名留用、判据换锚。
+        val freeWarned = free < (config.minFreeBytes * FREE_WARN_HEADROOM).toLong()
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
         val nonce = UUID.randomUUID().toString()
         val tracked = TrackedOp(handle, nonce)
@@ -1167,13 +1164,14 @@ class InstallCoordinator(
         try {
             withProjectLock(projectId) {
                 globalSession.withLock {
-                    if (quotaWarned) {
+                    if (freeWarned) {
                         emit(
                             InstallEvent.Warning(
                                 projectId = projectId,
                                 handleId = handle.id,
                                 kind = InstallEvent.Kind.DISK_QUOTA,
-                                message = "项目 node_modules 已用 ${used / 1024 / 1024}MB ≥ 配额 80%（${config.projectQuotaBytes / 1024 / 1024}MB）",
+                                message = "磁盘可用 ${free / 1024 / 1024}MB 已逼近预检下限 " +
+                                    "${config.minFreeBytes / 1024 / 1024}MB：再装大包会被拒",
                             ),
                         )
                     }
@@ -1422,6 +1420,14 @@ class InstallCoordinator(
 
 
     companion object {
+        /**
+         * 磁盘黄警的余量倍数（2026-10-17 新增）：可用空间不足 `minFreeBytes × 本值` 就发一条
+         * `DISK_QUOTA` 警告，**不拦**。取 1.25 是给「再装一个包还撑得住、再装几个就撞墙」
+         * 留出一档可行动的距离 —— 与原先那档「配额的 80% 黄」是同一种分寸，只是锚点换成了
+         * 真正会拒人的那道预检（见 [enqueueHeavy]）。
+         */
+        const val FREE_WARN_HEADROOM = 1.25
+
         /** 事件环容量（与 `A11yEventRing.MAX_EVENTS` 同值同纪律）。 */
         const val RING_CAPACITY = 512
 

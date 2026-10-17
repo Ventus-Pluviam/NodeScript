@@ -21,10 +21,17 @@ import java.nio.file.Path
  * 字段与语义一个没动。
  */
 
+/**
+ * 重操作的资源闸。**2026-10-17 起只剩磁盘这一道**：用户口径「node_modules 取消 512MB 限制」
+ * 「取消上限设置吧」把项目 node_modules 的配额整个摘了（`projectQuotaBytes` /
+ * `quotaWarnRatio` 两个字段随之下线），此前它是「80% 黄 · 100% 拦」的那条线。
+ *
+ * [minFreeBytes] 因此成了**唯一**还会拒安装的资源判据：可用空间低于它就是 `ERR_DISK_FULL`
+ * （`InstallCoordinator.enqueueHeavy` 的预检）。`InstallEvent.Kind.DISK_QUOTA` 这个事件名
+ * **留用、判据换锚** —— 它现在说的是「可用空间逼近这道预检下限」，见 `enqueueHeavy`。
+ */
 data class InstallConfig(
     val minFreeBytes: Long = 500L * 1024 * 1024,       // §10.2 磁盘 free≥500MB 预检
-    val projectQuotaBytes: Long = 512L * 1024 * 1024,  // 项目 node_modules 配额（100% 拦）
-    val quotaWarnRatio: Double = 0.8,                  // 80% 黄
 )
 
 /**

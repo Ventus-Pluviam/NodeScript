@@ -42,7 +42,7 @@ class ConsoleCmdOpsTest {
             failSnapshot?.let { throw it }
             return NpmPanelSnapshot(
                 projects = projects.map {
-                    NpmProjectSnapshot(it, emptyList(), emptyList(), null, 512L * 1024 * 1024, 0.8)
+                    NpmProjectSnapshot(it, emptyList(), emptyList(), null)
                 },
                 )
         }

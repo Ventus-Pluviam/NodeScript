@@ -30,14 +30,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.autoscript.ui.components.ActionBar
 import com.autoscript.ui.components.ActionBarAction
+import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.CollapseHeader
 import com.autoscript.ui.components.EmptyHint
+import com.autoscript.ui.components.Glyph
+import com.autoscript.ui.components.GlyphKind
+import com.autoscript.ui.components.MenuAction
 import com.autoscript.ui.components.PillButton
-import com.autoscript.ui.components.Separator
+import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.rememberRefreshAction
@@ -45,6 +50,7 @@ import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.InstallProgressState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.domain.npm.NpmMaintenanceAction
+import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
@@ -57,7 +63,7 @@ import com.autoscript.ui.theme.ThemeColors
  * 页底是**任务中心那块灰**（[ThemeColors.surfaceMuted]），页上每一段都是一张白卡
  * （[PanelCard]）—— 与管理面板（本页的入口）同族，见 [PanelCard] 的说明。
  *
- * **2026-10-17 现场改的五处（用户口径）**：
+ * **2026-10-17 现场改的九处（用户口径）**：
  * 1. 「删除顶上的报错。不需要它」—— 顶栏下面那两组字（读失败 / 操作报错 / 回执）
  *    整段下线，页面上半部分**不再出现红字**；
  * 2. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成
@@ -67,7 +73,16 @@ import com.autoscript.ui.theme.ThemeColors
  * 4. 「背景颜色改成任务中心背景一样的颜色」—— 页底 + 顶栏改 [ThemeColors.surfaceMuted]，
  *    页上的块（原来靠[ThemeColors.fieldBackground]在白页上浮起来）整批翻成白卡；
  * 5. 「依赖列表是弄成一个白色胶囊列表，参考任务中心的列表，点下可以伸展开，默认是收起来的」
- *    —— 卡头换成 [CollapseHeader]（与任务中心同一份几何），初值收起。
+ *    —— 卡头换成 [CollapseHeader]（与任务中心同一份几何），初值收起；
+ * 6. 「把顶栏那个项目切换按钮换成一个列表，列表名字叫项目选择，然后点了用下拉框选取」——
+ *    一排胶囊换成 [ProjectPickerCard]（一行 + `ContextMenu` 下拉）；
+ * 7. 「node_modules 取消 512MB 限制…取消上限设置吧」—— 配额整个摘掉（源头是宿主的
+ *    `InstallConfig` 512MB 硬编码），那一行只剩尺寸；宿主的 `DISK_QUOTA` 黄警改锚在
+ *    磁盘预检上（唯一还会拒安装的资源闸）；
+ * 8. 「npm 缓存…弄成列表，右侧弄成清理的按钮」+「安装（装进当前项目的 node_modules）
+ *    描述改成安装就行」+「依赖列表取消横线分隔」+「没有日志时就直接显示暂无日志」；
+ * 9. 「再加一个全局依赖的功能…优先读取项目依赖」—— **本批未做**，见
+ *    `docs/log/2026-10-17.md` 那条里的"未做"与 `docs/backlog.md`。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -140,26 +155,16 @@ fun NpmScreen(
             Modifier.fillMaxWidth().weight(1f),
             contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
         ) {
-            // 项目选择只在**真的不止一个**项目时出现：一个项目时画一排只有一个格的
-            // 分段控件，是在暗示"还有别的可以选"。
+            // 项目选择（2026-10-17 用户口径：「把顶栏那个项目切换按钮换成一个列表，列表名字叫
+            // 项目选择，然后点了用下拉框选取」）：一排胶囊换成一行 + 下拉菜单。
+            // 一个项目都没有时**不画这张卡** —— 「项目选择 —」是句什么也没说的话。
             val projects = state.snapshot?.projects.orEmpty()
-            if (projects.size > 1) {
+            if (projects.isNotEmpty()) {
                 item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = CARD_MARGIN, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        projects.forEach { p ->
-                            PillButton(
-                                text = p.projectId,
-                                selected = p.projectId == state.selectedProjectId,
-                                onClick = { onSelectProject(p.projectId) },
-                            )
-                        }
-                    }
+                    ProjectPickerCard(projects, state.selectedProjectId, onSelectProject)
                 }
             }
-            item { QuotaCard(state) }
+            item { StorageCard(state, onReclaimCache) }
             item {
                 InstallCard(
                     state = state,
@@ -169,7 +174,7 @@ fun NpmScreen(
                     onSubmit = onSubmitInstall,
                 )
             }
-            item { MaintenanceCard(state, onMaintenance, onReclaimCache) }
+            item { MaintenanceCard(state, onMaintenance) }
             item { DependencyListCard(state, onRemoveInstalled) }
             // 日志大框在**最下面**（用户口径），上面是这一屏的读数与动作。
             item { LogCard(state) }
@@ -202,7 +207,9 @@ private fun InstallCard(
 ) {
     PanelCard {
         Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
-            ToneText("安装（装进当前项目的 node_modules）", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+            // 标题就是「安装」（2026-10-17 用户口径）：「装进当前项目的 node_modules」那句解释
+            // 由上面那行「项目选择」担着 —— 装到哪儿不再需要在这一行里重复一遍。
+            ToneText("安装", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
             Row(
                 Modifier.fillMaxWidth().padding(top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -368,7 +375,7 @@ private fun DependencyListCard(state: NpmState, onRemove: (String) -> Unit) {
         CollapseHeader(
             // 条数只在**读到了**的时候写进卡头：没读到时的 0 不是"没有依赖"，是"还不知道"
             // （`LoadState` 那条纪律：三态各自只能说自己那一句）。
-            title = if (state.load.isLoaded) "已装依赖（${state.installed.size}）" else "已装依赖",
+            title = if (state.load.isLoaded) "项目依赖（${state.installed.size}）" else "项目依赖",
             expanded = expanded,
             onClick = { expanded = !expanded },
         )
@@ -383,9 +390,11 @@ private fun DependencyListCard(state: NpmState, onRemove: (String) -> Unit) {
                 Modifier.fillMaxWidth().heightIn(max = DEP_LIST_MAX_HEIGHT),
                 contentPadding = PaddingValues(vertical = 4.dp),
             ) {
+                // 行间**不画横线**（2026-10-17 用户口径「依赖列表取消横线分隔」）：
+                // 与设置页/管理面板同一条 —— TG 的列表靠行距与左缩进分列，不靠分隔线
+                // （见 `SettingsCard` 的 KDoc）。
                 items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
                     InstalledRow(row, enabled = state.canInstall, onRemove = onRemove)
-                    Separator()
                 }
             }
         }
@@ -423,7 +432,9 @@ private fun LogCard(state: NpmState) {
             modifier = Modifier.padding(start = CARD_PADDING, end = CARD_PADDING, top = 10.dp),
         )
         if (lines.isEmpty()) {
-            EmptyHint("还没有日志：装一次依赖、或到「控制台」敲一条 npm 命令，这里就有它的输出")
+            // 用户口径（2026-10-17）：「没有日志时就直接显示暂无日志。不要弄那么长」。
+            // 原来那句"怎么做才有"的话挪进 [LogCard] 的 KDoc —— 界面上留一句就够。
+            EmptyHint("暂无日志")
             return@PanelCard
         }
         LazyColumn(
@@ -505,47 +516,137 @@ private val CARD_SPACING = 6.dp
 /** 卡片内边距（依赖列表那张卡除外：它的头是通栏的 [CollapseHeader]）。 */
 private val CARD_PADDING = 12.dp
 
+/** 列表行的最小高（TG 设置行是 50dp；本页卡内更密，取 44dp 保住触控高度）。 */
+private val ROW_MIN_HEIGHT = 44.dp
+
 /**
- * 尺寸/配额一行（§10.9.5 的配额条）。
+ * 尺寸读数两行（§10.9.5）：node_modules 与 npm 缓存。
  *
- * 三态各自说一句：没读到 → 不画；量到了 → 数字 + 条；配额为 0 → 只给数字不给比例
- * （除零会画出 NaN%，那比不画更糟）。黄/红两档与宿主侧发 `DISK_QUOTA` 警告、
- * 以及 100% 拦安装的判据**同源**（[com.autoscript.domain.npm.NpmProjectSnapshot]）。
+ * **2026-10-17 两改（同一天的用户口径）**：
+ * - 「node_modules 取消 512MB 限制」—— 那一行**只剩尺寸**，配额条与 80%/100% 两档提示
+ *   整个下线（配额源头是 `InstallConfig` 的 512MB 硬编码，已摘；判据换锚的事见
+ *   `InstallCoordinator.enqueueHeavy` 的 KDoc）；
+ * - 「npm 缓存…弄成列表，右侧弄成清理的按钮」—— 「回收缓存」那颗从「维护」搬到这里，
+ *   与它要腾的那份读数同一行：用户按下去图的就是看那个数字变没变。
+ *
+ * 两行**各自独立判空**：量不到 node_modules 不该把缓存那一行也吞掉（反之亦然）——
+ * 缓存是全局读数，项目目录出问题时它照样是有效的。两行都量不到时整张卡不画。
  */
 @Composable
-private fun QuotaCard(state: NpmState) {
-    val label = state.quotaLabel
-    val snap = state.project
-    // npm 缓存那一行（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）：
-    // **与 node_modules 那行并列画在同一张卡里** —— 两者都是"尺寸读数"，且用户看的就是
-    // 它们之间的关系（node_modules 占了多少 / 缓存里还压着多少）。但两行**各自独立**
-    // 判空：量不到 node_modules 不该把缓存那一行也吞掉（反之亦然）——
-    // 缓存是全局读数，项目目录出问题时它照样是有效的。
-    val cache = state.cacheLabel
-    if (label == null && cache == null) return
+private fun StorageCard(state: NpmState, onReclaimCache: () -> Unit) {
+    val size = state.sizeLabel
+    val cacheSize = state.cacheSizeLabel
+    if (size == null && cacheSize == null) return
     PanelCard {
-        Column(Modifier.fillMaxWidth().padding(CARD_PADDING)) {
-            if (label != null && snap != null) {
-                ToneText("node_modules：$label", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-                when {
-                    snap.quotaFraction == null ->
-                        ToneText("未量到", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
-                    snap.overQuota -> ToneText(
-                        "已达配额上限：新的安装会被拒（用下面的「清理多余包」腾地方）",
-                        StatusTone.PROBLEM,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    snap.quotaWarned -> ToneText(
-                        "已用超过 80%：再装大包可能撞上限",
-                        StatusTone.ATTENTION,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            size?.let {
+                PanelRow(label = "node_modules", trailing = { ToneText(it, StatusTone.MUTED) })
             }
-            // 文案里那句「全机一份」由 [NpmState.cacheLabel] 给（缓存按内容寻址、跨项目共享，
-            // 写成「本项目缓存」会让人以为删掉这个项目就能腾出这些字节）。
-            cache?.let { ToneText(it, StatusTone.MUTED, style = MaterialTheme.typography.bodySmall) }
+            cacheSize?.let {
+                PanelRow(
+                    label = "npm 缓存",
+                    // 缓存按内容寻址、跨项目共享（§10.2）—— 写成「本项目缓存」是撒谎：
+                    // 用户会以为删掉这个项目就能腾出这些字节。
+                    hint = "全机一份，跨项目共享；清理只删没有项目 lock 需要的包（离线重装仍可用）",
+                    trailing = {
+                        ToneText(cacheSize, StatusTone.MUTED)
+                        PillButton(
+                            text = if (state.reclaimingCache) "清理中…" else "清理",
+                            selected = false,
+                            enabled = state.canReclaimCache,
+                            onClick = onReclaimCache,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    },
+                )
+            }
         }
+    }
+}
+
+/**
+ * 卡内一行：左标签（可带一行副说明）+ 行尾槽位，整行可按。
+ *
+ * 不复用设置页那条 `SettingsCellRow`：那是"设置项"的几何（18dp 缩进 / 16sp 标题 /
+ * 最小 50dp / 可选图标块），本页的卡内边距是 12dp，两套缩进叠起来会缩到 30dp 去。
+ * 与 `InstallField` vs `ConsoleScreen.CommandField` 同一条：形状像不等于同一个东西。
+ */
+@Composable
+private fun PanelRow(
+    label: String,
+    hint: String? = null,
+    trailing: @Composable () -> Unit,
+    onClick: (() -> Unit)? = null,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null) Modifier.pressable(role = Role.Button, onClick = onClick)
+                else Modifier,
+            )
+            .heightIn(min = ROW_MIN_HEIGHT)
+            .padding(horizontal = CARD_PADDING, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = ThemeColors.text, style = MaterialTheme.typography.bodyLarge)
+            hint?.let {
+                ToneText(it, StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        trailing()
+    }
+}
+
+/**
+ * 「项目选择」一行 + 下拉（2026-10-17 用户口径：「把顶栏那个项目切换按钮换成一个列表，
+ * 列表名字叫项目选择，然后点了用下拉框选取」）。
+ *
+ * 换掉的是原先那一排胶囊（`PillButton`）：项目多起来时那一排会换行、把页面往下顶，
+ * 而它要回答的其实只有一个问题 —— "现在看的是哪个项目"。
+ *
+ * **只有一个项目时不开下拉**：菜单里只列它自己，等于暗示"还有别的可以选"（原分段控件
+ * 那条 KDoc 的理由保留）。行本身照画 —— 它回答的是"现在看的是哪个项目"，与可选项多少无关。
+ *
+ * 当前那一项在菜单里标「（当前）」：菜单里不打勾的话，下拉一开就分不出自己在哪一项上。
+ */
+@Composable
+private fun ProjectPickerCard(
+    projects: List<NpmProjectSnapshot>,
+    selectedId: String?,
+    onSelect: (String) -> Unit,
+) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    val pickable = projects.size > 1
+    Box {
+        PanelCard {
+            PanelRow(
+                label = "项目选择",
+                trailing = {
+                    ToneText(selectedId ?: "—", StatusTone.MUTED)
+                    if (pickable) {
+                        Glyph(
+                            kind = GlyphKind.CHEVRON,
+                            tint = ThemeColors.textTertiary,
+                            size = 14.dp,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
+                    }
+                },
+                onClick = if (pickable) ({ open = true }) else null,
+            )
+        }
+        ContextMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            actions = projects.map { p ->
+                MenuAction(
+                    label = if (p.projectId == selectedId) "${p.projectId}（当前）" else p.projectId,
+                    onClick = { onSelect(p.projectId) },
+                )
+            },
+        )
     }
 }
 
@@ -568,7 +669,6 @@ private fun QuotaCard(state: NpmState) {
 private fun MaintenanceCard(
     state: NpmState,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
-    onReclaimCache: () -> Unit,
 ) {
     val busy = state.maintenance
     PanelCard {
@@ -590,22 +690,13 @@ private fun MaintenanceCard(
                 MaintenanceButton("依赖去重", NpmMaintenanceAction.DEDUPE, busy, enabled, onMaintenance)
                 MaintenanceButton("按 lock 重装", NpmMaintenanceAction.CI, busy, enabled, onMaintenance)
             }
-            Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                PillButton(
-                    text = if (state.reclaimingCache) "回收中…" else "回收缓存",
-                    selected = false,
-                    enabled = !state.reclaimingCache && busy == null && !state.installing,
-                    onClick = onReclaimCache,
-                )
-            }
-            // 这一句不是装饰：这颗按钮删的是别的项目离线重装要用的东西的**补集**，
-            // 用户有权在按之前知道保留判据是什么。
+            // 「回收缓存」那颗按钮**不在这儿**（2026-10-17 用户口径：缓存那一行「右侧弄成清理
+            // 的按钮」）—— 它搬到了 [StorageCard] 的缓存行里，与它要腾的那份读数同一行：
+            // 用户按下去图的就是看那个数字变没变。
+            // 这一句不是装饰：「按 lock 重装」会先验 lock 签名，签名不对会被拒，
+            // 用户有权在按之前知道门禁是什么。
             ToneText(
-                "回收缓存只删没有任何项目 lock 需要的包（离线重装仍可用）；" +
-                    "「按 lock 重装」会先验 lock 签名，签名不对会被拒。",
+                "「按 lock 重装」会先验 lock 签名，签名不对会被拒。",
                 StatusTone.MUTED,
                 style = MaterialTheme.typography.bodySmall,
             )

@@ -9,6 +9,7 @@ import java.time.ZoneId
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.PkgNode
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -44,14 +45,11 @@ class NpmStateTest {
         id: String,
         installed: List<PkgNode> = emptyList(),
         storage: NodeModulesStats? = stats(0),
-        quotaBytes: Long = 512L * 1024 * 1024,
     ) = NpmProjectSnapshot(
         projectId = id,
         installed = installed,
         offlineGap = emptyList(),
         storage = storage,
-        quotaBytes = quotaBytes,
-        quotaWarnRatio = 0.8,
     )
 
     @Test
@@ -59,7 +57,7 @@ class NpmStateTest {
         assertFalse(NpmState.NOT_LOADED.load.isLoaded)
         assertNull(NpmState.NOT_LOADED.project)
         assertTrue(NpmState.NOT_LOADED.installed.isEmpty())
-        assertNull(NpmState.NOT_LOADED.quotaLabel)
+        assertNull(NpmState.NOT_LOADED.sizeLabel)
 
         val empty = NpmState.of(NpmPanelSnapshot(projects = emptyList()))
         assertTrue(empty.load.isLoaded)
@@ -96,31 +94,49 @@ class NpmStateTest {
     }
 
     @Test
-    fun `尺寸没量到不画成零字节`() {
+    fun `尺寸没量到不画成零字节，且不再有配额分母`() {
         val unmeasured = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = null))))
-        assertNull(unmeasured.quotaLabel, "没量到 → 不画（0 B / 512 MB 是在说这个项目不占地方）")
-        assertNull(unmeasured.project?.quotaFraction)
+        assertNull(unmeasured.sizeLabel, "没量到 → 不画（0 B 是在说这个项目不占地方）")
 
         val zero = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = stats(0)))))
-        assertEquals("0 B / 512 MB", zero.quotaLabel, "量到了、就是 0 字节 → 如实说 0")
-        assertEquals(0f, zero.project?.quotaFraction)
+        assertEquals("0 B", zero.sizeLabel, "量到了、就是 0 字节 → 如实说 0")
+
+        // 2026-10-17：配额摘了之后**那一行里不许再出现任何上限数字**（用户口径
+        // 「取消 512MB 限制」「取消上限设置吧」）—— 这条断言就是防它悄悄回来。
+        val big = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = stats(700L * 1024 * 1024)))))
+        assertEquals("700 MB", big.sizeLabel, "700MB 的 node_modules 只报 700 MB，不带 /512 MB")
+    }
+
+    /**
+     * 「清理」那颗按钮的判据（2026-10-17 从 Composable 里提上来的那条行内表达式）。
+     *
+     * 三者互斥的来源是宿主的 `globalSession`（同时只跑一个安装会话）—— 界面上出现的形态
+     * 是"按下去没反应"，用户读成"卡了"。这一条把判据钉在纯数据上，改判据时会被拦。
+     */
+    @Test
+    fun `清理按钮：安装、维护、回收三者互斥`() {
+        val idle = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+        assertTrue(idle.canReclaimCache, "空闲时可按")
+        assertFalse(idle.copy(installing = true).canReclaimCache, "有安装在跑 → 不可按")
+        assertFalse(
+            idle.copy(maintenance = NpmMaintenanceAction.PRUNE).canReclaimCache,
+            "有维护在跑 → 不可按（同一个全局会话锁）",
+        )
+        assertFalse(idle.copy(reclaimingCache = true).canReclaimCache, "自己正在回收 → 不可按（防连点）")
     }
 
     @Test
-    fun `配额两档与宿主拦安装的判据同源`() {
-        val quota = 1000L
-        val under = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = stats(799), quotaBytes = quota))))
-        assertFalse(under.project!!.overQuota)
-        assertFalse(under.project!!.quotaWarned)
-
-        val warned = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = stats(800), quotaBytes = quota))))
-        assertFalse(warned.project!!.overQuota)
-        assertTrue(warned.project!!.quotaWarned, "恰好 80% 即预警（与宿主 >= 同口径）")
-        assertEquals(0.8f, warned.project!!.quotaFraction)
-
-        val over = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = stats(1000), quotaBytes = quota))))
-        assertTrue(over.project!!.overQuota, "恰好 100% 即拦（与宿主 >= 同口径）")
-        assertEquals(1f, over.project!!.quotaFraction, "比例封顶 1，超配额不画出 >100% 的条")
+    fun `缓存尺寸只报数字，全机一份那句在行标题上`() {
+        val p = NpmProjectSnapshot(
+            projectId = "demo",
+            installed = emptyList(),
+            offlineGap = emptyList(),
+            storage = stats(0),
+            cache = NodeModulesStats(projectId = "demo", pkgCount = 1, totalBytes = 3L * 1024 * 1024),
+        )
+        val s = NpmState.of(NpmPanelSnapshot(listOf(p)))
+        assertEquals("3 MB", s.cacheSizeLabel, "数字归数字；「全机一份」由界面那行标题说")
+        assertNull(NpmState.of(NpmPanelSnapshot(listOf(project("demo")))).cacheSizeLabel, "量不到 → 不画")
     }
 
     @Test
@@ -223,8 +239,6 @@ class NpmStateTest {
             installed = emptyList(),
             offlineGap = listOf(MissingPkg("esbuild", "0.21.5", 9_000_000)),
             storage = stats(0),
-            quotaBytes = 1000,
-            quotaWarnRatio = 0.8,
         )
         val state = NpmState.of(NpmPanelSnapshot(listOf(withGap)))
         assertEquals(listOf("esbuild"), state.project!!.offlineGap.map { it.name })

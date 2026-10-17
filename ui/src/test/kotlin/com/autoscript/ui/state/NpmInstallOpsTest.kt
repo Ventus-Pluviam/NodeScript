@@ -33,8 +33,6 @@ class NpmInstallOpsTest {
         installed = emptyList(),
         offlineGap = emptyList(),
         storage = NodeModulesStats(projectId = id, pkgCount = 1, totalBytes = 1024L),
-        quotaBytes = 512L * 1024 * 1024,
-        quotaWarnRatio = 0.8,
     )
 
     private fun loaded(vararg projects: NpmProjectSnapshot) =
@@ -299,23 +297,19 @@ class NpmInstallOpsTest {
         assertTrue(loaded(project("demo")).canInstall)
     }
 
-    /** 缓存一栏的文案（§10.9 第 5 条的 `npm-cache` 尺寸）：量不到不画，且点明全机一份。 */
+    /** 缓存尺寸（§10.9 第 5 条的 `npm-cache` 尺寸栏）：量不到不画；量到了只给数字。 */
     @Test
-    fun `缓存栏：量不到不画；量到了点明"全机一份"`() {
-        assertNull(loaded(project("demo")).cacheLabel, "老宿主没这个口 → 不画，不显示 0 字节")
+    fun `缓存栏：量不到不画；量到了只给数字`() {
+        assertNull(loaded(project("demo")).cacheSizeLabel, "老宿主没这个口 → 不画，不显示 0 字节")
 
         val withCache = NpmProjectSnapshot(
             projectId = "demo",
             installed = emptyList(),
             offlineGap = emptyList(),
             storage = NodeModulesStats("demo", 1, 1024L),
-            quotaBytes = 512L * 1024 * 1024,
-            quotaWarnRatio = 0.8,
             cache = NodeModulesStats("", 0, 12L * 1024 * 1024),
         )
-        val label = loaded(withCache).cacheLabel!!
-        assertTrue(label.contains("全机一份"), "缓存跨项目共享，写成「本项目缓存」是撒谎")
-        assertTrue(label.contains("12 MB"))
+        assertEquals("12 MB", loaded(withCache).cacheSizeLabel, "数字归数字；「全机一份」由行标题说")
     }
 
     /** 这条替身必须覆盖新口 —— 否则用例会在误用替身时拿到假绿。 */

@@ -13,8 +13,8 @@ import java.time.ZoneId
  *
  * 与 [TaskLogState]/[ConsoleState] 同一条纪律，另加这一屏特有的两条：
  *
- * - **尺寸没量到 ≠ 尺寸是 0**：[NpmProjectSnapshot.quotaFraction] 为 null 时
- *   进度条画成"未量到"，不画 0% —— 0% 是在说"这个项目不占地方"（见 [quotaLabel]）。
+ * - **尺寸没量到 ≠ 尺寸是 0**：量不到时那一行**不画**，不画成 "0 B" ——
+ *   0 B 是在说"这个项目不占地方"（见 [sizeLabel]）。
  *
  * 操作面（安装/维护/缓存回收）与读取分开记账：操作失败**不清依赖清单**（清单没变），
  * 与项目页 `opError` 同一条纪律。
@@ -99,31 +99,27 @@ data class NpmState(
     val installed: List<NpmRowState> get() = project?.installed.orEmpty().map { NpmRowState.of(it) }
 
     /**
-     * 配额一行（"已用 / 配额"）。
+     * node_modules 尺寸一行 —— **2026-10-17 起只有尺寸，没有「/ 512MB」**。
      *
-     * 三态各自说一句：没读到 → null（不画）；量到了 → 真实数字；
-     * 配额为 0（不该发生，但实现方可以传）→ 不显示比例，避免除零画出 NaN%。
+     * 用户口径「node_modules 取消 512MB 限制」「取消上限设置吧」把项目配额整个摘了
+     * （源头是 `InstallConfig` 的 512MB 硬编码，见 `NpmProjectSnapshot` 的 KDoc）：
+     * 既然没有上限，"已用 / 上限"这个比例就没有对象了，硬画一个只会在屏幕上留一条假的线。
+     *
+     * 两态各自说一句：没读到 / 没量到 → null（**不画**，那个位置写 "0 B" 是在说
+     * "这个项目不占地方"）；量到了 → 真实数字（量到 0 就如实说 0 B）。
      */
-    val quotaLabel: String?
-        get() {
-            val p = project ?: return null
-            val s = p.storage ?: return null
-            return "${NpmRowState.bytes(s.totalBytes)} / ${NpmRowState.bytes(p.quotaBytes)}"
-        }
+    val sizeLabel: String?
+        get() = project?.storage?.let { NpmRowState.bytes(it.totalBytes) }
 
     /**
-     * npm 缓存一行（§10.9 第 5 条的 `npm-cache` 尺寸栏）。
+     * npm 缓存尺寸（§10.9 第 5 条的 `npm-cache` 尺寸栏）—— **只有数字**。
      *
-     * **文案里点明「全机一份」**：缓存按内容寻址、跨项目共享（§10.2），写成
-     * 「本项目缓存 12MB」是撒谎 —— 用户会以为删掉这个项目就能腾出那 12MB。
-     * 量不到（老宿主没实现这个口）→ null（不画），与 [quotaLabel] 同一条纪律：
-     * 没量到 ≠ 0 字节。
+     * 「全机一份」那句搬到了行标题上（缓存按内容寻址、跨项目共享，§10.2 —— 写成
+     * 「本项目缓存 12MB」是撒谎，用户会以为删掉这个项目就能腾出那 12MB）。
+     * 量不到（老宿主没实现这个口）→ null（不画），与 [sizeLabel] 同一条纪律：没量到 ≠ 0 字节。
      */
-    val cacheLabel: String?
-        get() {
-            val c: NodeModulesStats = project?.cache ?: return null
-            return "npm 缓存（全机一份）：${NpmRowState.bytes(c.totalBytes)}"
-        }
+    val cacheSizeLabel: String?
+        get() = project?.cache?.let { NpmRowState.bytes(it.totalBytes) }
 
     /**
      * 日志大框里要画的行（**只读的投影**，页面上半部分不再有红字）。
@@ -150,6 +146,17 @@ data class NpmState(
             opNotice?.let { add(NpmLogLine(it, StatusTone.MUTED)) }
             consoleLines.forEach { add(NpmLogLine(it.timeText + "  " + it.text, it.tone)) }
         }
+
+    /**
+     * 「清理」（回收缓存）那颗按钮能不能按。
+     *
+     * 判据与三颗维护按钮**同源**（`globalSession` 全局互斥，同时只跑一个安装会话）：
+     * 在途的安装 / 维护 / 回收三者互斥。2026-10-17 这颗按钮从「维护」卡搬到缓存那一行，
+     * 判据顺势从界面里的行内表达式提上来 —— 它是能 JVM 测的一条纯逻辑，留在 Composable
+     * 里就永远只有"看一眼觉得对"。
+     */
+    val canReclaimCache: Boolean
+        get() = !reclaimingCache && maintenance == null && !installing
 
     /** 输入行与旗标是否可提交（没有项目 / 已有动作在跑 / 没读到 → 不可）。 */
     val canInstall: Boolean

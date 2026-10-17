@@ -566,27 +566,16 @@ data class NpmPanelSnapshot(
  *   两个数字来自不同时刻，而用户看的就是它们之间的关系。
  *   **它不是本项目的**：缓存按内容寻址、跨项目共享（§10.2），故这里给的是同一份全局读数，
  *   呈现层也照这个口径写文案（写「本项目的缓存」是撒谎）。
- * @property quotaBytes / [quotaWarnRatio] 配额口径（来自 `InstallConfig`，**呈现层不自己写死
- *   512MB** —— 判据只有一处，写第二份就会与真拦人的那份漂移）。**只对 [storage] 成立**：
- *   今天没有缓存配额（§10.9 第 5 条写的是「配额条」一处，拦的是 node_modules）。
+ * **2026-10-17 起本项目 DTO 里没有配额**（用户口径「取消 512MB 限制」「取消上限设置吧」）：
+ * 此前这里带 `quotaBytes` / `quotaWarnRatio` 两个字段与 `overQuota` / `quotaWarned` /
+ * `quotaFraction` 三个派生量，源头是 `InstallConfig` 里那份 512MB 硬编码。现在**唯一还会
+ * 拒安装的资源闸是设备磁盘**（`InstallConfig.minFreeBytes` 那道预检），故这份读数只说
+ * 「占了多少」，不说「离上限还有多远」—— 后者已无对象。
  */
 data class NpmProjectSnapshot(
     val projectId: String,
     val installed: List<PkgNode>,
     val offlineGap: List<MissingPkg>,
     val storage: NodeModulesStats?,
-    val quotaBytes: Long,
-    val quotaWarnRatio: Double,
     val cache: NodeModulesStats? = null,
-) {
-    /** 已用 ≥ 配额（与 `InstallCoordinator` 那道 100% 拦的判据同源）。 */
-    val overQuota: Boolean get() = (storage?.totalBytes ?: 0L) >= quotaBytes
-
-    /** 已用 ≥ 80% 黄线（与发 `DISK_QUOTA` 警告的那道判据同源）。 */
-    val quotaWarned: Boolean
-        get() = (storage?.totalBytes ?: 0L) >= (quotaBytes * quotaWarnRatio).toLong()
-
-    /** 已用 / 配额，**只在量到尺寸时**有值（没量到画成 0% 就是在说「这个项目不占地方」）。 */
-    val quotaFraction: Float?
-        get() = storage?.let { (it.totalBytes.toDouble() / quotaBytes.toDouble()).toFloat().coerceIn(0f, 1f) }
-}
+)
