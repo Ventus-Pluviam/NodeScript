@@ -203,7 +203,23 @@ fun Modifier.pressableLongPress(
  * 手搓一个 `IndicationNodeFactory` 只会把这段几何重写一遍，而重写的那份一旦和
  * `pressable` 的实现细节（挂载期订阅、`equals/hashCode`）漂开，就又是一种"按下没反应"。
  *
- * @param color 水波色；缺省 [ThemeColors.pressedOverlay]，与 [pressable] 同源
+ * ## `color` 这条参数只出 **RGB**，alpha 由 M3 自己换（2026-10-17 反编译 aar 核实）
+ *
+ * 链子是 `DelegatingThemeAwareRippleNode.createRippleModifierNode`（`material3`）→
+ * `RippleHostView.setRippleProperties` → `UnprojectedRipple.setColor(color, alpha)` →
+ * `calculateRippleColor(color, alpha)`；末一步是 `color.copy(alpha = …)`，**掩码只盖
+ * RGB**（`Color.copy` 的 default-mask 14 = 红/绿/蓝三档，alpha 不取缺省）。传进来的
+ * alpha 就此丢掉，换上去的是 `RippleAlpha.pressedAlpha`（`AndroidRippleNode` 两处都读它；
+ * 缺省 `RippleDefaults.rippleAlpha` = `RippleAlpha(dragged 0.16, focused 0.1, hovered 0.08,
+ * pressed 0.1)` → **0.1**）。API < 28 上 `calculateRippleColor` 先 ×2 再 clamp 到 1，
+ * 老机器是 0.2。
+ *
+ * 所以传 [ThemeColors.menuSelector] 得的是**它的墨色 + 10%**：浅色主题 10% 黑、深色主题
+ * 10% 白 —— 与 TG `dialogButtonSelector` 的 6% / 9.8% 同量级，不是"照抄 TG 那个 alpha"。
+ * 真要照 TG 的强度调，得给 `LocalRippleConfiguration` 递一个自己的 `RippleAlpha`，
+ * 本函数不替调用方做主。
+ *
+ * @param color 水波的**墨色**；缺省 [ThemeColors.pressedOverlay]，与 [pressable] 同源
  *   （TG 两档选择器色不同，但要区分时**显式传**，不在这里猜）。
  */
 @Composable

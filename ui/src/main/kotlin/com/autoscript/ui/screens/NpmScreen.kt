@@ -801,6 +801,8 @@ private fun OptionRow(
             .pressableRipple(
                 enabled = enabled,
                 role = Role.Button,
+                // 借的是 menuSelector 的**墨色**：M3 会把 alpha 换成 pressedAlpha(0.1)，
+                // 见 pressableRipple 的 KDoc（浅色 10% 黑 ≈ TG 那档 6%）。
                 color = palette.menuSelector,
                 onClick = onClick,
             )
