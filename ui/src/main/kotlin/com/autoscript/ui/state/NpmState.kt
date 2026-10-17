@@ -5,6 +5,8 @@ import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NodeModulesStats
+import com.autoscript.domain.npm.NpmConsoleSnapshot
+import java.time.ZoneId
 
 /**
  * 依赖管理页呈现态（纯数据，Compose 之外可 JVM 测）。
@@ -25,7 +27,8 @@ data class NpmState(
     /**
      * 上一次操作的失败原文（≠ 读失败：两条账分开）。
      *
-     * 画不画它取决于 [progressFailureShown]：阶段条收尾已经说了这次失败时，界面上就只说一次。
+     * **它画在最下面那个日志大框里**（2026-10-17 用户令「删除顶上的报错。不需要它」+
+     * 「报错全部收进底部日志大框」）—— 见 [logLines]。页面上半部分不再出现红字。
      */
     val opError: String? = null,
     /** 上一次操作的结论回执（现取即清，不缓存）。 */
@@ -73,6 +76,21 @@ data class NpmState(
      * 看起来像"又跑了一遍"（与 `ConsoleCmdState.nextSeq` 同一条纪律）。
      */
     val installSeq: Long = 0L,
+    /**
+     * 日志大框里的 npm 输出行（这个项目的；**累积**，按 seq 递增）。
+     *
+     * 行状态直接复用控制台那份 [ConsoleCmdLineState]：**着色判读只有一份**
+     * （读宿主给的 kind 与 ok，不按文本猜），日志框与控制台页因此不会"同一行两种颜色"。
+     *
+     * 它是**环的投影**，不是档案：留 [LOG_KEEP] 行，更早的裁掉并如实标注
+     * （见 [consoleTruncated]）—— 全量在「控制台」页与系统日志里，这里要的是
+     * 「刚才那次操作说了什么」。
+     */
+    val consoleLines: List<ConsoleCmdLineState> = emptyList(),
+    /** 日志大框的拉取游标（与 [installSeq] 同一条纪律：只进不退、读失败不清零、换项目归 0）。 */
+    val consoleSeq: Long = 0L,
+    /** 留的行超过上限、更早的已经裁掉（日志框据此说一句"上面这段不是全部"）。 */
+    val consoleTruncated: Boolean = false,
 ) {
     /** 当前项目的读数（没选 / 读到的快照里没这个项目 → null，界面据此说"没有项目"）。 */
     val project: NpmProjectSnapshot?
@@ -108,22 +126,30 @@ data class NpmState(
         }
 
     /**
-     * 阶段条收尾那行是不是**已经在说这次失败**了（[InstallProgressRow] 画的
-     * `失败：<原文>`）。
+     * 日志大框里要画的行（**只读的投影**，页面上半部分不再有红字）。
      *
-     * 2026-10-17 用户令：「取消上面位置的报错，留下面就行」—— 提交安装/卸载失败时，
-     * 顶上那条 [opError] 与阶段条收尾那行是**同一句话**（两个都来自宿主那次失败），
-     * 屏幕上同一句报错说两遍、一上一下。
+     * 次序是**用户 2026-10-17 裁定的「两者都显示」**：本页这次操作的账在前
+     * （读失败 / [opError] / [opNotice]），npm 输出行在后 —— 前者是"谁把这事干的"，
+     * 后者是"它说了什么"。
      *
-     * 判据里那句 `detail` 非空是必须的：阶段条在拿不到原文时画的是「失败：（无详情）」——
-     * 那时若把顶上那条按下去，用户就**看不到失败的原因**了。宁可重复，不可失语。
-     * 于是这条属性的含义精确地是「下面那行**有话**，且说的就是这次失败」。
-     *
-     * 注意它不管**别处没有它**的失败：校验拒绝（还没提交、没有阶段条）、维护/回收失败
-     * （不进安装会话）都只有 [opError] 这一个落点，顶上那条照画。
+     * 三条刻意：
+     * - **读失败也进这个框**（口径是"页面上半部分不再出现红字"），但措辞保留
+     *   「（下面显示的是上次读到的，可能已过期）」那半句 —— 失败态下屏上还有旧数据，
+     *   不说这句就等于把过期的读数当现在的。
+     * - 裁过就说（[consoleTruncated] 那一行在最前）：让用户以为看到了全部，
+     *   比少显示几行糟得多（与「控制台」页 `gap` 那条同一条纪律）。
+     * - 一条都没有时给一句**怎么做才有**的话，而不是一个空框。
      */
-    val progressFailureShown: Boolean
-        get() = installProgress?.let { it.done && !it.ok && !it.detail.isNullOrBlank() } == true
+    val logLines: List<NpmLogLine>
+        get() = buildList {
+            if (consoleTruncated) add(NpmLogLine("更早的输出已裁掉，这里只留最近 $LOG_KEEP 行", StatusTone.MUTED))
+            (load as? LoadState.Failed)?.let {
+                add(NpmLogLine("读取失败：${it.reason}（下面显示的是上次读到的，可能已过期）", StatusTone.PROBLEM))
+            }
+            opError?.let { add(NpmLogLine(it, StatusTone.PROBLEM)) }
+            opNotice?.let { add(NpmLogLine(it, StatusTone.MUTED)) }
+            consoleLines.forEach { add(NpmLogLine(it.timeText + "  " + it.text, it.tone)) }
+        }
 
     /** 输入行与旗标是否可提交（没有项目 / 已有动作在跑 / 没读到 → 不可）。 */
     val canInstall: Boolean
@@ -153,6 +179,11 @@ data class NpmState(
             installing = previous.installing,
             installProgress = previous.installProgress,
             installSeq = previous.installSeq,
+            // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
+            // 就等于把用户刚看到的 npm 输出抹成空的。
+            consoleLines = previous.consoleLines,
+            consoleSeq = previous.consoleSeq,
+            consoleTruncated = previous.consoleTruncated,
         )
 
         /**
@@ -176,6 +207,12 @@ data class NpmState(
                     selectedProjectId = projectId,
                     installProgress = null,
                     installSeq = 0L,
+                    // 日志那一段与安装事件**同一条理由**（seq 是环内全局单调、drain 才按
+                    // projectId 过滤）：沿用上一个项目的游标会漏掉新项目 seq 更小的行。
+                    // 归 0 = 把这个项目还留在环里的行全取回来。
+                    consoleLines = emptyList(),
+                    consoleSeq = 0L,
+                    consoleTruncated = false,
                 )
             }
 
@@ -185,8 +222,47 @@ data class NpmState(
          */
         fun failed(t: Throwable, previous: NpmState = NOT_LOADED) =
             previous.copy(load = LoadState.of(t))
+
+        /**
+         * 把一批 npm 输出折进日志大框（**纯函数**，可单测）。
+         *
+         * 累积规则与 [ConsoleCmdState.of] 逐字同款（按 seq 去重、只进不退），差在**有上限**：
+         * 日志框是面板上的一格，不是日志查看器 —— 留 [LOG_KEEP] 行、更早的裁掉并把
+         * [consoleTruncated] 置上（裁过就要说，见 [logLines]）。
+         * [ConsoleCmdState] 那边没有上限，因为那一屏**就是**给人看输出的地方。
+         */
+        fun withConsole(
+            previous: NpmState,
+            snapshot: NpmConsoleSnapshot,
+            zone: ZoneId = ZoneId.systemDefault(),
+        ): NpmState {
+            val seen = previous.consoleLines.mapTo(HashSet()) { it.seq }
+            val fresh = snapshot.lines.filter { it.seq !in seen }
+            if (fresh.isEmpty() && snapshot.lastSeq <= previous.consoleSeq) return previous
+            val merged = (previous.consoleLines + fresh.map { ConsoleCmdLineState.of(it, zone) })
+                .sortedBy { it.seq }
+            return previous.copy(
+                consoleLines = merged.takeLast(LOG_KEEP),
+                consoleSeq = maxOf(previous.consoleSeq, snapshot.lastSeq),
+                consoleTruncated = previous.consoleTruncated || merged.size > LOG_KEEP,
+            )
+        }
     }
 }
+
+/** 日志大框最多留多少行（更早的裁掉，并在框里说明 —— 见 [NpmState.consoleTruncated]）。 */
+internal const val LOG_KEEP = 200
+
+/** 日志大框一次拉多少行（与控制台那个缺省页大小同量级：一次现取就够把框填满）。 */
+internal const val LOG_PAGE = 256
+
+/**
+ * 日志大框里的一行。
+ *
+ * 与控制台那份 [ConsoleCmdLineState] 分开：这里只要「一句话 + 一种语气」——
+ * 行来源有两类（本页的操作账、npm 的输出行），合成同一种画法才谈得上"一个框"。
+ */
+data class NpmLogLine(val text: String, val tone: StatusTone)
 
 /** 已装包一行（名字 + 版本；`sizeBytes` 不在这一层 —— `list()` 直读 lockfile，量不到尺寸）。 */
 data class NpmRowState(

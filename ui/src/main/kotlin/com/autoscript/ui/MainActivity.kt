@@ -101,6 +101,7 @@ import com.autoscript.ui.state.pollConsoleWhileRunning
 import com.autoscript.ui.state.removeInstalled
 import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
+import com.autoscript.ui.state.loadNpmSnapshot
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
 import com.autoscript.ui.state.stopConsoleCmd
@@ -1121,7 +1122,10 @@ class MainActivity : ComponentActivity() {
                 // 快照与**安装进度**同一次现取（§10.9 第 1 条，2026-10-09 批 87）：
                 // `:ui` 没有常驻轮询循环，宿主又是入队即返回的，故「刷新」这颗按钮
                 // 同时是阶段条的续拉入口 —— 分两次现取会让两个数字来自不同时刻。
-                val refreshed = NpmState.of(host.npmSnapshot(), previous)
+                // 走 [loadNpmSnapshot] 而不是裸调 `NpmState.of(host.npmSnapshot(), …)`：
+                // 底部那个日志大框与快照是**同一趟现取**（2026-10-17），两条各拉一次
+                // 就会一个说"装完了"、另一个还没输出完。
+                val refreshed = loadNpmSnapshot(host, previous)
                 if (refreshed.selectedProjectId != null) {
                     pollInstallEvents(host, refreshed, refreshed.selectedProjectId)
                 } else {

@@ -109,18 +109,44 @@ internal fun reclaimNotice(r: NpmCacheReclaimReport): String = buildString {
 }
 
 /**
- * 现取一轮依赖面板读数（[loadNpmMaintenanceOp] 用）。
+ * 现取一轮依赖面板读数 + 日志大框那一段（[loadNpmMaintenanceOp] 用）。
  *
  * **为什么复制 `reloadNpm` 那段而不是让 `:ui` 去够 `MainActivity` 的私有方法**：
  * 那段逻辑住在 Activity 里（它要写 `mutableStateOf` 字段），而本文件是顶层函数、
  * 拿不到那个字段。抽成这个纯函数后两边读的是同一份三落点口径 —— 复制的那份只做
  * 「调用读口 + 算下一份状态」，失败语义仍在 [NpmState.failed] 里（唯一一份）。
+ *
+ * **日志那一段跟着一起现取**（2026-10-17 用户令「最下面弄个显示日志的大框」）：
+ * 凡是"刷新一下这一屏"的路径（进页面 / 点刷新 / 安装轮询的每一跳 / 维护与回收之后）
+ * 都走这里 —— 于是装依赖时那个框是**活的**：npm 说什么、什么时候说的，跟着进度条一起走。
  */
 internal suspend fun loadNpmSnapshot(host: HostSummary, previous: NpmState): NpmState = try {
-    NpmState.of(host.npmSnapshot(), previous)
+    loadNpmLog(host, NpmState.of(host.npmSnapshot(), previous))
 } catch (e: CancellationException) {
     throw e
 } catch (t: Exception) {
     // 操作已经成功了，只是回读失败：保留旧清单 + 把失败如实挂上（与 reloadNpm 同）。
     NpmState.failed(t, previous)
+}
+
+/**
+ * 拉一段这个项目的 npm 输出进日志大框。
+ *
+ * 三条纪律（与控制台页 [loadConsoleCmd] 那份累积同源，各写各的一条）：
+ * - **失败不动已有的行与游标**：一次瞬时失败把用户刚看到的输出抹掉，比报错更糟；
+ *   游标清零下次还会把环里最旧那批重放一遍。
+ * - **读不到日志 ≠ 这次操作失败**：它不进 [NpmState.opError] —— 那是两条账
+ *   （输出是装饰性的读数，成败在事件流与清单里）。
+ * - **没有选中的项目就没有日志可拉**（不是失败）：如实返回原状态。
+ */
+private suspend fun loadNpmLog(host: HostSummary, state: NpmState): NpmState {
+    val projectId = state.selectedProjectId ?: return state
+    return try {
+        NpmState.withConsole(state, host.consoleOutput(projectId, state.consoleSeq, LOG_PAGE))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // 异常对象刻意不接（`_`）：这句里没有它的位置 —— 接了只是为了 detekt 闭嘴。
+        state
+    }
 }

@@ -43,14 +43,16 @@
     <ID>FunctionNaming:Menus.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ActionBottomSheet( title: String, onDismiss: () -&gt; Unit, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
     <ID>FunctionNaming:Motion.kt$fun OvershootEasing(tension: Float): Easing</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable fun NpmScreen( state: NpmState, onRefresh: suspend () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onReclaimCache: () -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onToggleDev: (Boolean) -&gt; Unit, onToggleOffline: (Boolean) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun DependencyListCard(state: NpmState, onRemove: (String) -&gt; Unit)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallCard( state: NpmState, onDraft: (String) -&gt; Unit, onToggleDev: (Boolean) -&gt; Unit, onToggleOffline: (Boolean) -&gt; Unit, onSubmit: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallField( value: String, onChange: (String) -&gt; Unit, enabled: Boolean, onSubmit: () -&gt; Unit, modifier: Modifier, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallProgressRow(p: InstallProgressState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow(row: NpmRowState, enabled: Boolean, onRemove: (String) -&gt; Unit)</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun LogCard(state: NpmState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceButton( label: String, action: NpmMaintenanceAction, busy: NpmMaintenanceAction?, enabled: Boolean, onClick: (NpmMaintenanceAction) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun MaintenanceCard( state: NpmState, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onReclaimCache: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelCard(content: @Composable () -&gt; Unit)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun QuotaCard(state: NpmState)</ID>
-    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun SectionTitle(text: String)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable fun FileListLayer(showOverlays: Boolean)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CapsuleInputField( value: String, onValueChange: (String) -&gt; Unit, placeholder: String, modifier: Modifier = Modifier, leadingGlyph: GlyphKind? = null, focusDismiss: com.autoscript.ui.components.FocusDismissState? = null, )</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable private fun CreateEntryDialogs( creating: ProjectState.CreationKind?, onDismiss: () -&gt; Unit, onConfirm: (name: String, isFolder: Boolean) -&gt; Unit, atRoot: Boolean, )</ID>

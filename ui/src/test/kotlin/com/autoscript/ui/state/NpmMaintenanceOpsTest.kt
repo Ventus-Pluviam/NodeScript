@@ -7,6 +7,10 @@ import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NodeModulesStats
+import com.autoscript.domain.npm.NpmConsoleLine
+import com.autoscript.domain.npm.NpmConsoleLineKind
+import com.autoscript.domain.npm.NpmConsoleSnapshot
+import com.autoscript.domain.npm.SequencedConsoleLine
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -159,6 +163,46 @@ class NpmMaintenanceOpsTest {
         assertTrue(next.opError!!.contains("Permission denied"))
         assertNull(next.opNotice)
         assertFalse(next.reclaimingCache)
+    }
+
+    // ═══ 日志大框那一段的取数（2026-10-17 用户令：最下面弄个显示日志的大框） ═══
+
+    @Test
+    fun `现取读数时顺带把 npm 输出拉进日志框`() = runBlocking {
+        // 宿主缺省那份（`consoleOutput`）在真装配里是有内容的，这里给一段假的：
+        // 断言的是**接线**（读口 → `NpmState.withConsole`），不是环本身的行为。
+        val host = object : FakeHost() {
+            override suspend fun npmSnapshot(): NpmPanelSnapshot = NpmPanelSnapshot(listOf(project("demo")))
+
+            override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot =
+                NpmConsoleSnapshot(
+                    firstSeq = 1,
+                    lastSeq = 2,
+                    lines = listOf(
+                        SequencedConsoleLine(1, NpmConsoleLine(NpmConsoleLineKind.ECHO, "$ npm install axios", 0L)),
+                        SequencedConsoleLine(2, NpmConsoleLine(NpmConsoleLineKind.RESULT, "退出码 0", 0L, ok = true)),
+                    ),
+                    running = false,
+                )
+        }
+        val state = loadNpmSnapshot(host, NpmState.NOT_LOADED)
+        assertEquals(2, state.consoleLines.size, "快照与日志必须是同一趟现取（两条各拉一次会互相矛盾）")
+        assertEquals("$ npm install axios", state.consoleLines.first().text)
+        assertEquals(listOf("退出码 0"), state.consoleLines.drop(1).map { it.text })
+    }
+
+    @Test
+    fun `日志读失败不算这次操作失败（两条账分开）`() = runBlocking {
+        // 这份替身**只**给快照，`consoleOutput` 走 FakeHost 的"未提供"（抛）——
+        // 日志是装饰性的读数：它读不到，清单照样要画出来，也不该在页面上报一句错。
+        val host = object : FakeHost() {
+            override suspend fun npmSnapshot(): NpmPanelSnapshot = NpmPanelSnapshot(listOf(project("demo")))
+        }
+        val state = loadNpmSnapshot(host, NpmState.NOT_LOADED)
+        assertTrue(state.load.isLoaded, "清单读到了就是读到了，不被日志那半拖下水")
+        assertEquals("demo", state.selectedProjectId)
+        assertNull(state.opError, "日志读不到不许冒充成操作失败")
+        assertTrue(state.consoleLines.isEmpty())
     }
 
     @Test

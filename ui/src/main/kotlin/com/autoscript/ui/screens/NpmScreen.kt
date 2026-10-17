@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -19,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -32,7 +35,6 @@ import com.autoscript.ui.components.Separator
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.components.rememberRefreshAction
-import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.InstallProgressState
 import com.autoscript.ui.state.NpmState
@@ -43,7 +45,16 @@ import com.autoscript.ui.theme.ThemeColors
 /**
  * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
- * 分段：**已装依赖**（`npm ls` 直读 lockfile 的权威清单 + 尺寸/配额）。
+ * 分段（自上而下）：项目选择（多项目时）· 尺寸/配额 · 安装 · 维护 ·
+ * **依赖列表**（卡片，卡内自滚）· **日志大框**（最下面）。
+ *
+ * **2026-10-17 现场改的三处（用户口径）**：
+ * 1. 「删除顶上的报错。不需要它」—— 顶栏下面那两组字（读失败 / 操作报错 / 回执）
+ *    整段下线，页面上半部分**不再出现红字**；
+ * 2. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成
+ *    [DependencyListCard]（灰底胶囊卡 + 高度自限 + 卡内自滚）；
+ * 3. 「最下面弄个显示日志的大框。灰色背景，胶囊框」—— [LogCard]，内容按当场裁定
+ *    「两者都显示」= 先本页这次操作的账、后 npm 输出（组装在 [NpmState.logLines]）。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -103,28 +114,9 @@ fun NpmScreen(
                 ActionBarAction("刷新", refresh::trigger)
             },
         )
-        // 读失败带原文（与日志管理页同一条：失败是**一句带原文的话**，不是一个空列表）。
-        (state.load as? LoadState.Failed)?.let { failed ->
-            ToneText(
-                text = "读取失败：${failed.reason}",
-                tone = StatusTone.PROBLEM,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-        }
-        // 「同一句失败只说一次」（2026-10-17 用户令「取消上面位置的报错，留下面就行」）：
-        // 提交安装/卸载失败时，这条与安装卡里阶段条收尾那行「失败：<原文>」是同一句话
-        // （两个都来自宿主那次失败），别再一上一下说两遍。留**下面**那条 —— 它挨着
-        // "这次操作"的上下文（输入行、阶段条）。判据在 [NpmState.progressFailureShown]：
-        // 下面那行拿不到原文（画的是「（无详情）」）时这条照画，宁可重复不可失语；
-        // 校验拒绝与维护/回收失败也照画 —— 它们没有阶段条，这是唯一的落点。
-        if (!state.progressFailureShown) {
-            state.opError?.let {
-                ToneText(it, StatusTone.PROBLEM, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-            }
-        }
-        state.opNotice?.let {
-            ToneText(it, StatusTone.MUTED, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        }
+        // 顶栏下面**不再有任何报错/回执**（2026-10-17 用户令：「删除顶上的报错。不需要它」
+        // + 裁定「报错全部收进底部日志大框」）：读失败、[NpmState.opError]、[NpmState.opNotice]
+        // 三样统统画在最下面那个日志大框里（[LogCard]）—— 页面上半部分只放读数与动作。
         LazyColumn(
             Modifier.fillMaxWidth().weight(1f),
             contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
@@ -159,14 +151,9 @@ fun NpmScreen(
                 )
             }
             item { MaintenanceCard(state, onMaintenance, onReclaimCache) }
-            item { SectionTitle("已装依赖（${state.installed.size}）") }
-            if (state.load.isLoaded && state.installed.isEmpty()) {
-                item { EmptyHint("读到了，这个项目还没有依赖（先装点什么）") }
-            }
-            items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
-                InstalledRow(row, enabled = state.canInstall, onRemove = onRemoveInstalled)
-                Separator()
-            }
+            item { DependencyListCard(state, onRemoveInstalled) }
+            // 日志大框在**最下面**（用户口径），上面是这一屏的读数与动作。
+            item { LogCard(state) }
         }
     }
 }
@@ -329,15 +316,118 @@ private fun InstallProgressRow(p: InstallProgressState) {
     }
 }
 
+/**
+ * 「依赖列表」：已装依赖收进一张**灰底胶囊卡**，列表在卡片**内部**自己滚
+ * （2026-10-17 用户令：「弄个依赖列表，把已装依赖收进去」）。
+ *
+ * **为什么内部滚动**：依赖装到几十上百个时，直接铺在页面里会把下面那个日志大框挤到
+ * 屏幕外 —— 而"装到一半看清单变没变 + 看 npm 说了什么"正是这一屏最常同时看的两件事。
+ * 高度自限（[DEP_LIST_MAX_HEIGHT]）且**内容少时不吃满**（`heightIn(max=)` 是上限不是
+ * 固定高）：三个依赖的项目不该看到一张空荡荡的大卡。
+ *
+ * 行键仍是 `name@version`，但**它的唯一性现在由宿主读口保证** —— `list()` 按
+ * `(name, version)` 归一出"包清单"（lock v3 的键是安装位置，同一个包同版本会在不同
+ * 父级各落一份，2026-10-17 的那次闪退就是键重复）。守卫在
+ * `InstallCoordinatorTest`「list 同一包同版本落两个位置 → 归一成一条」。
+ */
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = ThemeColors.textTertiary,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-    )
+private fun DependencyListCard(state: NpmState, onRemove: (String) -> Unit) {
+    PanelCard {
+        ToneText(
+            "依赖列表（${state.installed.size}）",
+            StatusTone.MUTED,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (state.load.isLoaded && state.installed.isEmpty()) {
+            EmptyHint("读到了，这个项目还没有依赖（先装点什么）")
+            return@PanelCard
+        }
+        LazyColumn(
+            Modifier.fillMaxWidth().heightIn(max = DEP_LIST_MAX_HEIGHT),
+            contentPadding = PaddingValues(vertical = 4.dp),
+        ) {
+            items(state.installed, key = { "${it.name}@${it.version}" }) { row ->
+                InstalledRow(row, enabled = state.canInstall, onRemove = onRemove)
+                Separator()
+            }
+        }
+    }
 }
+
+/**
+ * 日志大框（2026-10-17 用户令：「最下面弄个显示日志的大框。灰色背景，胶囊框」）。
+ *
+ * 内容按用户当场裁定「两者都显示」= 先本页这次操作的账（读失败 / 报错 / 回执），
+ * 后 npm 的输出行 —— 组装在 [NpmState.logLines] 里（纯数据，JVM 可测），这里只画。
+ *
+ * **跟着滚到底**（与「控制台」页同一条）：装依赖时这个框是活的（每一跳刷新都会带回
+ * 新行），不贴底的话用户看到的是几秒前那几行，得自己一直往下滑。
+ * 用户往上翻看旧行时会被新行拽回底部 —— 这是"跟随"的代价，与那边一致，不做"只在贴底时
+ * 跟随"的额外判据（那要读滚动位置，多一份状态就多一处能漂）。
+ *
+ * 空框说一句**怎么做才有**（不是"暂无日志"那种什么都不说的空壳）。
+ */
+@Composable
+private fun LogCard(state: NpmState) {
+    val lines = state.logLines
+    // 贴底用的是**「控制台」页那一套**（`LazyListState` + `animateScrollToItem(lastIndex)`）：
+    // 与 `ScrollState.maxValue` 不同，它在内容刚变、还没测量完的那一帧也不会滚到 0
+    // —— 那个 0 的表现是"新行来了但框不跟"，而这一条正是本框存在的意义。
+    val listState = rememberLazyListState()
+    LaunchedEffect(lines.size) {
+        if (lines.isNotEmpty()) listState.animateScrollToItem(lines.lastIndex)
+    }
+    PanelCard {
+        ToneText("日志", StatusTone.MUTED, style = MaterialTheme.typography.bodySmall)
+        if (lines.isEmpty()) {
+            EmptyHint("还没有日志：装一次依赖、或到「控制台」敲一条 npm 命令，这里就有它的输出")
+            return@PanelCard
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxWidth().heightIn(max = LOG_MAX_HEIGHT),
+            contentPadding = PaddingValues(top = 4.dp),
+        ) {
+            // 不给 key：这一列是"流水"，同一句话出现两次是常事（报错尤其），
+            // 而键重复在本仓已经有过一次闪退（见 [DependencyListCard] 的 KDoc）。
+            items(lines) { line ->
+                ToneText(
+                    text = line.text,
+                    tone = line.tone,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                )
+            }
+        }
+    }
+}
+
+/** 灰底胶囊卡外壳（依赖列表与日志大框共用一种皮；[PANEL_CORNER] 是那颗"胶囊"的圆角）。 */
+@Composable
+private fun PanelCard(content: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .background(ThemeColors.fieldBackground, RoundedCornerShape(PANEL_CORNER))
+            .padding(PANEL_PADDING),
+    ) {
+        content()
+    }
+}
+
+/** 依赖列表的高度上限（约 8 行）：再多就在卡内滚，别把下面的日志大框挤出屏幕。 */
+private val DEP_LIST_MAX_HEIGHT = 300.dp
+
+/** 日志大框的高度上限（约 6~7 行）。 */
+private val LOG_MAX_HEIGHT = 200.dp
+
+/** 两张卡的圆角（用户口径「胶囊框」；比页面里 10dp 的输入框更圆，但不做成真正的
+ *  半圆端 —— 那样四角会把长行切掉）。 */
+private val PANEL_CORNER = 18.dp
+
+/** 卡片内边距（角越圆，内容越不能贴边）。 */
+private val PANEL_PADDING = 12.dp
 
 /**
  * 尺寸/配额一行（§10.9.5 的配额条）。

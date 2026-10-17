@@ -1,6 +1,11 @@
 package com.autoscript.ui.state
 
 import com.autoscript.domain.npm.InstallEvent
+import com.autoscript.domain.npm.NpmConsoleLine
+import com.autoscript.domain.npm.NpmConsoleLineKind
+import com.autoscript.domain.npm.NpmConsoleSnapshot
+import com.autoscript.domain.npm.SequencedConsoleLine
+import java.time.ZoneId
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmProjectSnapshot
@@ -21,6 +26,19 @@ import org.junit.jupiter.api.Test
 class NpmStateTest {
 
     private fun stats(bytes: Long) = NodeModulesStats(projectId = "demo", pkgCount = 1, totalBytes = bytes)
+
+    /** 假的控制台输出快照（行号从小到大排，`lastSeq` 是读口给的下一次游标）。 */
+    private fun consoleSnapshot(seq: Long, lines: List<Pair<String, NpmConsoleLineKind>>) = NpmConsoleSnapshot(
+        firstSeq = 1,
+        lastSeq = seq,
+        lines = lines.mapIndexed { i, (text, kind) ->
+            SequencedConsoleLine(
+                seq = seq - lines.size + i + 1,
+                line = NpmConsoleLine(kind = kind, text = text, atMillis = 0L),
+            )
+        },
+        running = false,
+    )
 
     private fun project(
         id: String,
@@ -115,6 +133,83 @@ class NpmStateTest {
         assertEquals(listOf("esbuild" to "0.21.5", "@babel/core" to "7.24.0"), state.installed.map { it.name to it.version })
     }
 
+    /**
+     * 日志大框那一段：本页操作的账在前、npm 输出在后（用户 2026-10-17 裁定「两者都显示」），
+     * 且**裁过要说**。
+     */
+    @Test
+    fun `日志框先操作账后 npm 输出，且累积不重复`() {
+        val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+        val withLog = NpmState.withConsole(
+            base.copy(opError = "npm 退出码 1: E404", opNotice = "已提交 npm install"),
+            consoleSnapshot(
+                seq = 2,
+                lines = listOf("npm install axios" to NpmConsoleLineKind.ECHO, "ok" to NpmConsoleLineKind.OUTPUT),
+            ),
+            // 时区**注入**（不读系统默认）：断言里那个 `00:00:00` 才是个定值，而不是"跑在哪个时区就变一次"。
+            zone = ZoneId.of("UTC"),
+        )
+        assertEquals(
+            listOf(
+                "npm 退出码 1: E404",
+                "已提交 npm install",
+                "00:00:00  npm install axios",
+                "00:00:00  ok",
+            ),
+            withLog.logLines.map { it.text },
+            "两条操作账要排在 npm 输出**前面**",
+        )
+        assertEquals(
+            listOf(StatusTone.PROBLEM, StatusTone.MUTED, StatusTone.MUTED, StatusTone.NEUTRAL),
+            withLog.logLines.map { it.tone },
+        )
+
+        // 同一批再折一遍：seq 去重，不重复入列、游标不倒退。
+        val same = NpmState.withConsole(withLog, consoleSnapshot(2, listOf("ok" to NpmConsoleLineKind.OUTPUT)))
+        assertEquals(4, same.logLines.size, "同一个 seq 读两遍不许变成两行")
+        assertEquals(2L, same.consoleSeq)
+    }
+
+    @Test
+    fun `日志框读失败也进框且说清是旧数据`() {
+        val failed = NpmState.failed(
+            IllegalStateException("宿主未接线"),
+            NpmState.of(NpmPanelSnapshot(listOf(project("demo")))),
+        )
+        val first = failed.logLines.first()
+        assertEquals(StatusTone.PROBLEM, first.tone)
+        assertTrue(first.text.startsWith("读取失败：宿主未接线"), "失败要带原文：${first.text}")
+        assertTrue(first.text.contains("上次读到的"), "失败态下屏上还有旧清单，不说这句就是把过期读数当现在的")
+    }
+
+    @Test
+    fun `日志框超过上限就裁掉并如实标注`() {
+        val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+        val many = (1..(LOG_KEEP + 10)).map { "line-$it" to NpmConsoleLineKind.OUTPUT }
+        val state = NpmState.withConsole(base, consoleSnapshot(seq = many.size.toLong(), lines = many))
+        assertEquals(LOG_KEEP, state.consoleLines.size, "留最近 $LOG_KEEP 行")
+        assertTrue(state.consoleTruncated, "裁过就要置位：框里那句「更早的输出已裁掉」靠它")
+        assertEquals("line-11", state.consoleLines.first().text, "裁的是**最早**的那些，不是最新的")
+        assertEquals("line-${many.size}", state.consoleLines.last().text, "最新的那行必须在（裁的是最早的那些）")
+        assertTrue(state.logLines.first().text.contains("更早的输出已裁掉"), "裁过的说明排在最前")
+    }
+
+    @Test
+    fun `换项目清日志与游标，刷新不清`() {
+        val a = NpmState.withConsole(
+            NpmState.of(NpmPanelSnapshot(listOf(project("alpha"), project("beta")))),
+            consoleSnapshot(seq = 1, lines = listOf("alpha 的输出" to NpmConsoleLineKind.OUTPUT)),
+        )
+        // 刷新（同一项目）**不许**把已经拉到的日志抹掉。
+        val refreshed = NpmState.of(NpmPanelSnapshot(listOf(project("alpha"), project("beta"))), a)
+        assertEquals(1, refreshed.consoleLines.size)
+        // 换项目：行与游标一起归零（seq 是环内全局单调，沿用旧游标会漏掉新项目 seq 更小的行）。
+        val b = NpmState.withProject(a, "beta")
+        assertTrue(b.consoleLines.isEmpty())
+        assertEquals(0L, b.consoleSeq)
+        assertFalse(b.consoleTruncated)
+    }
+
     @Test
     fun `离线缺口与尺寸格式化不四舍五入撒谎`() {
         assertEquals("0 B", NpmRowState.bytes(0))
@@ -135,41 +230,4 @@ class NpmStateTest {
         assertEquals(listOf("esbuild"), state.project!!.offlineGap.map { it.name })
     }
 
-    /**
-     * 「同一句失败只说一次」的判据（2026-10-17 用户令「取消上面位置的报错，留下面就行」）。
-     *
-     * 三档缺一不可：下面那行**说了**这次失败 → 顶上那条让位；下面那行只是「（无详情）」→
-     * 顶上那条照画（否则用户看不到失败原因）；还在跑 → 顶上那条照画（那说的是另一件事）。
-     */
-    @Test
-    fun `阶段条收尾说了这次失败时顶上那条才让位`() {
-        val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
-
-        val running = base.copy(
-            opError = "npm 退出码 1: E404 Not Found",
-            installProgress = InstallProgressState(InstallEvent.Phase.DOWNLOAD),
-        )
-        assertFalse(running.progressFailureShown, "还在跑：阶段条没在说失败，顶上那条不许被吞")
-
-        val failedWithDetail = running.copy(
-            installProgress = InstallProgressState(
-                phase = InstallEvent.Phase.DONE,
-                done = true,
-                ok = false,
-                detail = "npm 退出码 1: E404 Not Found",
-            ),
-        )
-        assertTrue(failedWithDetail.progressFailureShown, "下面那行已经把这次失败连原文都说了")
-
-        val failedWithoutDetail = running.copy(
-            installProgress = InstallProgressState(phase = InstallEvent.Phase.DONE, done = true, ok = false),
-        )
-        assertFalse(failedWithoutDetail.progressFailureShown, "下面画的是「（无详情）」—— 顶上那条是唯一有原文的地方")
-        assertFalse(
-            running.copy(installProgress = InstallProgressState(phase = InstallEvent.Phase.DONE, done = true, ok = true))
-                .progressFailureShown,
-            "成功收尾不是失败：这句判据不许把成功也当成「已经说过了」",
-        )
-        assertFalse(base.progressFailureShown, "没有阶段条（校验拒绝 / 维护 / 回收）时，顶上那条是唯一落点")
-    }
 }
