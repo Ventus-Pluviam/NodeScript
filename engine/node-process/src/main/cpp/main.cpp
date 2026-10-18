@@ -31,6 +31,18 @@
 //  3) dlsym node::Start（§7.8 符号表实证 mangled 名 _ZN4node5StartEiPPc，即契约）
 //     → node::Start 单 isolate，argv = node -e BOOTSTRAP -- <script> [args...]
 //     （BOOTSTRAP 预载 addon + setSocketFd + require 真脚本；无 addon 时直接跑 script）；
+//     桥装上之后、require 真脚本之前顺带 `installConsoleBridge()`（§7.3/§12.1，
+//     2026-10-15 用户令「js 的语法都要和原来的调用方式一样」）：把全局 console 的
+//     log/info/warn/error/debug 五档**加上直写 stdout 的 dir/dirxml** 接到桥上，
+//     脚本写裸 `console.log(...)` 与 `auto.console.log(...)` 落到同一条数据面 ——
+//     否则裸 console.log 写的是子进程 stdout，而排水线程对它读即弃（§8.3，防反压），
+//     输出在悬浮窗/控制台一处都看不见。**唯一仍看不见的是流对象直写**
+//     （`process.stdout.write`）：入口不在 console 对象上，本包装碰不到（范围见 §12.1）。
+//     暂停（§8.4 的 SIGSTOP 一路）另有前置：Kotlin 侧 `SpawnedProcess.pid` 必须拿得到 ——
+//     而设备 libcore 的 `java.lang.Process` **没有 `pid()` 方法**（android-36 的
+//     api-versions.xml 实查），pid 只以**私有字段**形式住在**子类** `java.lang.UNIXProcess`
+//     上（Android 13 core-oj.jar 反编译实证）。故取 pid 靠反射，且反射必须**从运行时类
+//     起步往上走**（2026-10-15 方向订正：原实现从 `Process::class.java` 起步，够不着子类）。
 //  4) Start 返回即收宿主退出码（四步 quiesce 由脚本侧/看门狗驱动，禁直接 kill §5 推论 A）；
 //     ppid 探活/心跳/pid 上送属 Kotlin 侧 spawn 契约（§8.4），本文件不越界。
 //
@@ -90,6 +102,40 @@ constexpr const char kNodeStartSymbol[] = "_ZN4node5StartEiPPc";
 //     addon 缺位同纪律）。这层查"内容能不能 attach"。
 // 故 kBootstrap 仍保留 require($DIST/bootstrap.js).attachNative({addon}) 的 try/catch ——
 // preflight 拦不住"路径在但内容坏"，那是这一层的事。
+//
+// **全局 console → 桥**（§7.3 数据面；2026-10-15 用户令「js 的语法都要和原来的调用方式
+// 一样」）：桥装上之后、require 真脚本之前调 `installConsoleBridge()`，脚本写裸
+// `console.log(...)` 与 `auto.console.log(...)` 落到同一条数据面 —— 否则裸 console.log
+// 写的是子进程 stdout，而排水线程对它读即弃（§8.3，防反压），输出在悬浮窗/控制台
+// 一处都看不见（设备实测 2026-10-15：裸 console.log 版脚本窗口显示「没有输出」、
+// 日志文件 0 字节）。**三道守卫，缺一不装** —— 装了而桥没活着，脚本的 log/info/debug
+// 会从"进 stdout（今天被排空丢弃）"变成"进一条投不出去的数据面"，而且**静默**：
+//   · dist env 在位（没落位时整条 facade 都不在，包装体 require 不到）；
+//   · `runtimeBridge.installed` 为真（attachNative 抛过错的半接线形态 —— 上面那个
+//     catch 已经点名过，这里不再装作桥活着）；
+//   · 包装体自带 `Symbol.for` 幂等标记（重复装才是真会翻车的形态）。
+// 这一条失败只打一行 stderr、**脚本照跑**：最坏退化成"裸 console.log 看不见"的今天
+// 形态，与 addon/dist 缺位同一条选择纪律（选填件不杀执行）。
+//
+// **stdin 空闲 → 宿主发 EOF**（2026-10-16 用户令「答完自己退」）：
+// 同一段装配里再调 `installStdinIdleWatch()`。脚本 `rl.close()` 之后进程不结束 ——
+// 本地实测挂住的是 **stdin 管道句柄**而不是 readline（`rl.close()` / `stdin.pause()`
+// 两种写法都挂）；标准出路是引擎关掉**写端**发真 EOF：脚本收到 `process.stdin 'end'`
+// → readline `'close'` → 进程 408ms、code 0 干净退出（脚本能自己感知流结束）。
+// 观察面只往 `process.stdin` 挂一个 `'pause'` 监听 —— **不换 readline 模块、不 unref**
+// （上一版 unref 补丁同日被推翻：它让脚本看不见 `end`，还得换全局 `createInterface`）；
+// 判据 = `data`/`readable` 监听器归零（`'pause'` 只当闹钟），报一次即止（EOF 不可逆）。
+// 三道守卫与上面两条**逐条相同**（dist 在位 / `runtimeBridge.installed` / 包装体自带
+// `Symbol.for` 幂等标记），失败也同样是"只打一行 stderr、脚本照跑"—— 最坏退化成
+// "答完一直显示在跑"的今天形态。
+//
+// **readline 提示语 → 桥**（§7.3；2026-10-16 用户报「悬浮窗不会显示请输入这三个字」）：
+// 同一段装配里再调 `installReadlineShim()`。脚本 `readline.createInterface({input})`
+// **没给 output** 时，`rl.question('请输入：')` 的提示语写进虚空（`terminal:false` 下
+// output 缺位就是没人收）；而 readline 包的那一层在**脚本没给 output** 时补一个假 output
+// （`EventEmitter` + `write`，显式非 TTY），把写进去的文本送同一条 console 数据面。
+// 三道守卫与上一条**逐条相同**（dist 在位 / `runtimeBridge.installed` / 包装体自带
+// `Symbol.for` 幂等标记），失败也同样是"只打一行 stderr、脚本照跑"。
 constexpr const char kBootstrap[] =
     "const a=require(process.env.AUTOSCRIPT_BRIDGE_ADDON);"
     "if(process.env.AUTOSCRIPT_SOCK_FD)a.setSocketFd(+process.env.AUTOSCRIPT_SOCK_FD);"
@@ -99,6 +145,18 @@ constexpr const char kBootstrap[] =
     "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
     "if(d)require(d+\"/bootstrap.js\").attachNative({addon:a})"
     "}catch(e){console.error('bridge-dist attachNative 未接上: '+(e&&e.message||e))}"
+    "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
+    "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
+    "require(d+\"/console-bridge.js\").installConsoleBridge()"
+    "}catch(e){console.error('console 未接到桥上（裸 console.log 不出现在悬浮窗）: '+(e&&e.message||e))}"
+    "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
+    "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
+    "require(d+\"/readline-bridge.js\").installReadlineShim()"
+    "}catch(e){console.error('readline 未接到桥上（rl.question 的提示语不出现在悬浮窗）: '+(e&&e.message||e))}"
+    "try{const d=process.env.AUTOSCRIPT_BRIDGE_DIST;"
+    "if(d&&require(d+\"/runtime.js\").runtimeBridge.installed)"
+    "require(d+\"/stdin-idle.js\").installStdinIdleWatch()"
+    "}catch(e){console.error('stdin 空闲观察未装上（脚本答完仍显示在跑）: '+(e&&e.message||e))}"
     "require(process.argv[1]);";
 
 // 连 :main 的 unix socket；成功返回 fd，失败 -1（errno 保留给调用方打印）。
@@ -292,6 +350,12 @@ int main(int argc, char** argv) {
       return kExitDist;
     }
   }
+  // 参数序契约：node 选项（堆上限等）必须落在 **`-e BOOTSTRAP --` 之前**。
+  // node 的 argv 解析先吃选项、遇 `--` 收手，`--` 之后全是位置参数（脚本路径 +
+  // 脚本自己的参数）；脚本经 kBootstrap 的 `require(process.argv[1])` 取脚本路径，
+  // 拼错 = 选项被当成脚本名（设备实测 `MODULE_NOT_FOUND: Cannot find module
+  // '--max-old-space-size=192'`，退出码 1，引擎判 CRASHED）。位置参数自 `--` 起
+  // 原样透传（不含选项），顺序与个数都不变。
   std::vector<char*> node_argv;
   node_argv.push_back(argv[0]);  // argv[0] = 可执行名（node 惯例）
   static char flag_e[] = "-e";
@@ -302,8 +366,20 @@ int main(int argc, char** argv) {
     node_argv.push_back(flag_e);
     node_argv.push_back(bootstrap);
   }
+  // 两段过：先收选项（`-` 开头，落在 `--` 之前 = node 认它是选项），再原样透传
+  // 位置参数（脚本 + 脚本自己的参数，`--` 之后 = node 不碰）。脚本路径是绝对路径，
+  // 不会以 `-` 开头；脚本自己的参数即便以 `-` 开头也在 `--` 之后，照旧安全。
+  int first_positional = argc;   // 第一个位置参数的下标；== argc = 一个都没有
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i][0] == '-') {
+      node_argv.push_back(argv[i]);
+    } else {
+      first_positional = i;
+      break;
+    }
+  }
   node_argv.push_back(dd);
-  for (int i = 1; i < argc; ++i) node_argv.push_back(argv[i]);
+  for (int i = first_positional; i < argc; ++i) node_argv.push_back(argv[i]);
 
   int rc = node_start(static_cast<int>(node_argv.size()), node_argv.data());
   if (sock_fd >= 0) close(sock_fd);

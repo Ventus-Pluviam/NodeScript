@@ -77,8 +77,29 @@ class ScriptPathsScriptFileTest {
         assertThrows(IllegalArgumentException::class.java) {
             ScriptPaths.scriptFile(filesDir, ProjectId("p.1"), RelPath("main.js"))
         }
+        // 样本自 2026-10-16 起从 `p 1`（含空格，现在合法了）换成 `p\\1`（反斜杠仍非法）。
         assertThrows(IllegalArgumentException::class.java) {
-            ScriptPaths.scriptFile(filesDir, ProjectId("p 1"), RelPath("main.js"))
+            ScriptPaths.scriptFile(filesDir, ProjectId("p\\1"), RelPath("main.js"))
+        }
+    }
+
+    /**
+     * 根层（[ProjectId.ROOT]）：条目落在 `files/scripts/` **本层**。
+     *
+     * **这条恒等式就是"引擎侧零改动"的证据**：`NodeProcessEngine` 拿 `run.projectId` 现构造
+     * [ProjectId] 去拼 **cwd** 与**脚本绝对路径**，根层的空串让这两处天然落到
+     * `files/scripts/` 与 `files/scripts/<名字>` —— 引擎里一行分支都不用加
+     * （`Path.resolve("")` 恒等自身）。判据这边只剩"防越界那一道照旧"。
+     */
+    @Test
+    fun `根层哨兵把条目落在 files_scripts 本层`(@TempDir filesDir: Path) {
+        assertEquals(ScriptPaths.projectsRoot(filesDir), ScriptPaths.projectRoot(filesDir, ProjectId.ROOT))
+        assertEquals(
+            filesDir.resolve("scripts/x.js"),
+            ScriptPaths.scriptFile(filesDir, ProjectId.ROOT, RelPath("x.js")),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            ScriptPaths.scriptFile(filesDir, ProjectId.ROOT, RelPath("../escape.js"))
         }
     }
 }

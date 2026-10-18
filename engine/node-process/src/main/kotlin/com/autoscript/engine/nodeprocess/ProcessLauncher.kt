@@ -54,6 +54,41 @@ interface SpawnedProcess {
     /** 解冻 [pauseExecution] 冻住的进程（SIGCONT）。缺省同样 false。 */
     fun resumeExecution(): Boolean = false
 
+    /**
+     * 往子进程 **stdin 写一行**（2026-10-16 用户令：悬浮窗底部输入框 → 脚本的
+     * `process.stdin`）。自动补一个 `\n` —— 调用方的语义是"送一行"，行边界只在这里定。
+     *
+     * **为什么走 OS 管道而不是桥**：脚本读输入的原生写法就是 `process.stdin`
+     * （`readline`/`on('data')` 都建在它上面），宿主替它另开一条面等于让脚本改写法。
+     * 管道本来就在（`ProcessBuilder` 缺省 `Redirect.PIPE`），此前没人写过而已 ——
+     * 宿主侧零新协议、脚本侧零改动，与裸 `console.log` 那次同一条判据。
+     *
+     * 返回 false 的三种情形都**不抛**：没有活着的进程（实现方自判）/ 管道已随进程
+     * 退出关闭（写抛 IOException）/ 实现方不支持（缺省实现）。调用方（UI）按 false
+     * 如实报，不假装送到。
+     *
+     * 缺省 false：替身进程没有 stdin，与 [pauseExecution] 同一条"替身零改动"纪律。
+     */
+    fun writeStdin(line: String): Boolean = false
+
+    /**
+     * **关掉子进程 stdin 的写端**（发 EOF；2026-10-16 用户令「答完自己退」）。
+     *
+     * 语义就是终端的 Ctrl-D：管道读端（脚本的 `process.stdin`）收到流结束 ——
+     * `readline` 随之发 `'close'`、脚本里 `process.stdin.on('end')` 也照常触发，
+     * 于是"读完了"这件事按**标准流语义**到达脚本，进程自己退干净（本地实测：
+     * 引擎关写端后脚本 408ms、code 0 退出）。这是"脚本答完一个问题就不结束"那条
+     * 病症的正路 —— 上一版让脚本自己 `process.stdin.unref()`（提交 `91929b1d`，同日
+     * revert）既让脚本看不见 `'end'`，又要换全局 `readline.createInterface`。
+     *
+     * **不可逆**：关掉的写端打不开，之后 `writeStdin` 一律 false。所以调用方必须
+     * 有"确实没人再读了"的判据（JS 侧 `stdin-idle.ts` 的监听器计数，报一次即止）。
+     *
+     * 返回 false 的三种情形都**不抛**：没有活着的进程 / 写端已关（重复调用、进程已退）/
+     * 实现方不支持（缺省实现）。缺省 false：与 [writeStdin] 同一条"替身零改动"纪律。
+     */
+    fun closeStdin(): Boolean = false
+
     /** 等待退出，[timeoutMillis] 内退出回 true，超时回 false（不抛）。 */
     fun waitFor(timeoutMillis: Long): Boolean
 
@@ -90,32 +125,42 @@ private val jdkProcessPidMethod: java.lang.reflect.Method? = try {
 }
 
 /**
- * 私有字段 `pid` 的反射句柄（2026-10-11 批 97，外审 M5 的**第二级阶梯**）。
+ * 私有字段 `pid` 的反射查找（2026-10-11 批 97，外审 M5 的**第二级阶梯**；
+ * 2026-10-15 方向订正 —— 见下）。
  *
- * 为什么加这一级：`pid()` 方法在 Android 上只有 API 33+ 才有（`api-versions.xml` 实查），
- * 而 minSdk 26 —— 于是 Android 8–12 上 [SpawnedProcess.pid] 恒 null，看门狗走 noPid 清单，
- * **且 [com.autoscript.bridge.RunIdentityRegistry] 的防劫持检查整段被跳过**（`peerPid != null
- * && spawn.pid != null` 两条件）。Android 13 libcore 的 `ProcessImpl` 有 `pid` 这个字段 ——
- * 与批 95 的 `ProcOps.pidOf` 同一手法、同一理由（那处是为了杀树，这里是为了身份绑定）；
- * 批 105 起那处住 `:platform:process`（两份副本合并），本模块这份**仍留** ——
- * `:platform:*` 是引擎的下层，引擎不得反向依赖它（§6 + 本模块 ArchitectureTest 黑名单），
- * 一份纯反射阶梯的拷贝比那条越界依赖便宜。
+ * 为什么加这一级：`pid()` 方法**不在 Android 平台 API 表里**（`api-versions.xml` 实查，
+ * android-36 的 `java/lang/Process` 仍只有 destroy/isAlive/waitFor 那几个），minSdk 26 ——
+ * 于是设备上 tier 1 恒缺席，[SpawnedProcess.pid] 会恒 null：看门狗走 noPid 清单、
+ * **[com.autoscript.bridge.RunIdentityRegistry] 的防劫持检查整段被跳过**
+ * （`peerPid != null && spawn.pid != null` 两条件），**悬浮窗「暂停」也恒回 false**
+ * （`pauseExecution` 第一句就是 `val target = pid ?: return false`）。
+ *
+ * **方向订正（2026-10-15，设备实测）**：原实现从 `Process::class.java` 起步、每轮
+ * `cls.superclass` 往上走 —— 而 `getDeclaredField` **只看该类自己声明的成员**，
+ * 于是这条循环走的是 `Process → Object`，**永远够不着子类**。设备 libcore 的真实形状是
+ * 字段声明在**子类**上（Android 13 `core-oj.jar` 反编译实证：`java.lang.UNIXProcess`
+ * 有 `private final int pid`，而 `java.lang.Process` 一个字段都没有；
+ * 桌面 JDK 同形 —— `java.lang.ProcessImpl.pid`），所以这条阶梯**从来没生效过**。
+ * 与批 95 的 `ProcOps.pidOf` 同一手法（那处从**运行时类** `process.javaClass` 起步，
+ * 方向本来就是对的）—— 批 105 起那处住 `:platform:process`（两份副本合并），
+ * 本模块这份**仍留**：`:platform:*` 是引擎的下层，引擎不得反向依赖它
+ * （§6 + 本模块 ArchitectureTest 黑名单），一份纯反射阶梯的拷贝比那条越界依赖便宜。
+ *
+ * **为什么不缓存成类级 val**：字段住**运行时类**上，而运行时类是每次 spawn 才知道的
+ * （且同一 JVM 里可能不止一种）—— 这里按调用查，代价是每个进程一次 `getDeclaredField`。
  *
  * **桌面 JDK 上这一级是死代码**：模块系统拒 `setAccessible`，但那时 tier 1 已经成了。
  */
-private val jdkProcessPidField: java.lang.reflect.Field? = run {
-    var cls: Class<*>? = Process::class.java
+private fun pidFieldOf(process: Process): java.lang.reflect.Field? {
+    var cls: Class<*>? = process.javaClass
     while (cls != null && cls != Any::class.java) {
         val found = runCatching {
             cls!!.getDeclaredField("pid").apply { isAccessible = true }
         }.getOrNull()
-        if (found != null) {
-            found
-        } else {
-            cls = cls.superclass
-        }
+        if (found != null) return found
+        cls = cls.superclass
     }
-    null
+    return null
 }
 
 /**
@@ -228,6 +273,54 @@ class ProcessBuilderLauncher : ProcessLauncher {
         /** `kill -CONT <pid>`（与 [pauseExecution] 对偶）。 */
         override fun resumeExecution(): Boolean = signal("-CONT")
 
+        /**
+         * 写一行进子进程 stdin（utf-8 + `\n` + flush）。
+         *
+         * 三个坑各有一句交代：
+         * - **必须 flush**：`Process.getOutputStream()` 是带缓冲的包装流，不 flush 就
+         *   攒在 8KiB 缓冲里 —— 脚本那头永远等不到这一行（"点了没反应"的经典形态）；
+         * - **写失败吞成 false**：进程已退出时管道写端关闭，写会抛 `IOException`
+         *   （或触发 SIGPIPE 被 JVM 折成 IOException）—— 那是"这次执行没了"的正常终点，
+         *   不是宿主故障，如实回 false 让 UI 说话；
+         * - **可能阻塞**：管道写满（脚本一直不读且已灌满 64KiB）时 `write` 会阻塞到读端
+         *   腾地方。调用链是挂起的（`NodeProcessEngine.sendInput` 走 `Dispatchers.IO`），
+         *   阻塞的是 IO 线程而不是主线程；这里不做超时/丢弃 —— 丢用户敲的那行比慢更坏。
+         */
+        override fun writeStdin(line: String): Boolean {
+            if (!process.isAlive) return false
+            return try {
+                val out = process.outputStream
+                out.write((line + "\n").toByteArray(StandardCharsets.UTF_8))
+                out.flush()
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        /**
+         * 关掉 stdin 写端发 EOF（见接口那处的 KDoc）。
+         *
+         * **先 flush 再关**：`close()` 自己会冲缓冲，但显式 flush 把"上一行还在缓冲里"
+         * 和"流结束"两件事的先后写在明处 —— 用户敲的最后一行不许被 EOF 追尾丢掉。
+         *
+         * **进程没了 / 已经关过 → false 不抛**：与 [writeStdin] 同一条口径
+         * （`IOException`、"Stream closed"都是"这次执行没了"的正常终点）。
+         * `close()` 是幂等的（重复关不抛），但这里仍以 `isAlive` 与异常兜底 ——
+         * 调用方拿 false 时不该以为"EOF 送到了"。
+         */
+        override fun closeStdin(): Boolean {
+            if (!process.isAlive) return false
+            return try {
+                val out = process.outputStream
+                out.flush()
+                out.close()
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
         private fun signal(flag: String): Boolean {
             val target = pid ?: return false
             return try {
@@ -309,6 +402,8 @@ private class StderrTail(
  * 与 `:platform:process` 的 `ProcOps.pidOf`（批 105 的合并落点）同一手法、同一理由，
  * 仍抄一份在本地：**两处抽不出共享模块** —— 引擎在 `:platform` 之上，反向依赖即破 §6 依赖
  * 方向（本模块 ArchitectureTest 把 `com.autoscript.platform..` 钉在黑名单里）。
+ * **两份的方向都对**（都从运行时类起步）；引擎这份 2026-10-15 才改对，`ProcOps` 那份一直是对的
+ * —— 这正说明"手法同款、代码两份"的真实代价：**一处抄漏一行，另一处不会红**。
  *
  * @return null = 运行时两个 tier 都探不到（诚实 noPid，**绝不给 0/自身**）。
  */
@@ -317,7 +412,7 @@ internal fun pidOf(process: Process): Int? {
         val viaMethod = runCatching { (m.invoke(process) as? Number)?.toLong() }.getOrNull()
         if (viaMethod != null && viaMethod > 0) return viaMethod.toInt()
     }
-    jdkProcessPidField?.let { f ->
+    pidFieldOf(process)?.let { f ->
         val viaField = runCatching { (f.get(process) as? Number)?.toLong() }.getOrNull()
         if (viaField != null && viaField > 0) return viaField.toInt()
     }

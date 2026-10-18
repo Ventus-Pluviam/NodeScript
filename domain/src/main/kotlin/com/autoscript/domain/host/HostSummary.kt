@@ -7,7 +7,6 @@ import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.NpmPanelSnapshot
-import com.autoscript.domain.npm.InstallHistoryEntry
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmRegistrySnapshot
@@ -120,6 +119,19 @@ interface HostSummary {
     suspend fun resumeRun(runId: Long): Boolean
 
     /**
+     * 往一次**在途**执行的脚本进程 stdin 送一行（悬浮窗底部输入框那颗蓝色箭头；
+     * 2026-10-16 用户令）。
+     *
+     * 走的是 OS 管道（引擎 spawn 时本来就 `Redirect.PIPE`），脚本侧用 `process.stdin`
+     * 照常读 —— **不是桥调用**，脚本零改动。行尾由实现补（调用方给的是"用户敲的那一行"）。
+     *
+     * @return true = 已写进管道；false = 它不在途（已结算/从未存在）或管道已随进程关闭。
+     * 缺省实现回 false：**未接线的替身零改动即可编译**，且不静默 —— UI 按 false 如实报
+     * （与 [pauseRun] 的 false 同一条"不假装"纪律）。
+     */
+    suspend fun sendInput(runId: Long, line: String): Boolean = false
+
+    /**
      * 本机有没有弹**系统级**悬浮窗的资格（执行日志悬浮窗的宿主二选一；2026-10-13 用户令）。
      *
      * 同步、便宜：就是 `Settings.canDrawOverlays` 那一句（`:ui` 不碰 `Settings`，
@@ -194,17 +206,70 @@ interface HostSummary {
     suspend fun scriptFiles(): ScriptFilesSnapshot
 
     /**
-     * 新建文件/文件夹（项目页 FAB 展开的两个动作；落盘 = `files/scripts/<projectId>/<name>`）。
+     * 新建文件/文件夹（项目页 FAB 展开的两个动作；落盘 =
+     * `files/scripts/<projectId>/<dirRelPath>/<name>`，[dirRelPath] 为空时就是项目根）。
      *
-     * 挂起：写盘（IO）。失败**抛**（名字非法/撞名/项目不存在 —— 原文给 UI）；
+     * 挂起：写盘（IO）。失败**抛**（名字非法/撞名/项目或文件夹不存在 —— 原文给 UI）；
      * **不覆盖已存在**（静默覆盖会把用户脚本换成空文件）。
      *
      * @param projectId 目标项目（`files/scripts/` 下第一级目录名）。
      * @param name 单段名字（用户输入的是名字不是路径；含 `/`/`..` 拒绝 ——
-     *   要进子文件夹先建子文件夹）。
+     *   落进哪一层由 [dirRelPath] 说，不由名字里的斜杠说）。
      * @param isFolder true = 建文件夹，false = 建空文件。
+     * @param dirRelPath **目标文件夹**的 `files/scripts/` 之下相对路径（与 [readScriptFile]
+     *   的 relPath 同一个形态：[ScriptFileRow.relPath]，首段就是 [projectId]，尾随 `/` 可有可无）；
+     *   `null`/空 = 项目根。**2026-10-16 用户口径**：项目页 FAB 落点从"项目根"改成"**当前进入的
+     *   那一层**"（用户在哪一层按的新建，就建在哪一层）—— 呈现层把当前目录原样传下来，
+     *   不再由它 `substringBefore('/')` 只取项目名。
+     *   实现方必须**防越界**（`..` 之类）并校验首段与 [projectId] 一致，且目标目录**必须已存在**
+     *   （不会顺路把中间层建出来：那是"建了个名字打错的层级"，不是新建条目）。
      */
-    suspend fun createEntry(projectId: String, name: String, isFolder: Boolean)
+    suspend fun createEntry(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String? = null,
+    )
+
+    /**
+     * 删一个条目（文件列表的菜单「删除」／多选批量删除；2026-10-17 用户口径）。
+     *
+     * **文件夹递归整棵**：非空文件夹删不掉的话，菜单里那格在"能看见却删不动"的形态上
+     * 等于没做（TG 文件页删文件夹也是连内容一起）。
+     *
+     * 挂起：写盘（IO）。失败**抛**（原文给 UI）：
+     * - 条目不存在（**抛而不是静默成功**：静默成功会把"删错了对象"和"删掉了"画成同一件事）；
+     * - [relPath] 越界 / 首段与 [projectId] 对不上（判据与 [readScriptFile] 同源）；
+     * - 落盘失败（权限、占用）。
+     *
+     * **根层的文件夹就是项目本身**（`files/scripts/<名字>/`，见 [ProjectId.ROOT]）——
+     * 删它就是连同其中全部文件删掉一整个项目。用户 2026-10-17 裁定**允许**（不是禁止），
+     * 故本口不为此设闸；实现方仍必须挡住"删 `files/scripts/` 本身"（那是整个项目库）。
+     *
+     * **不检查在途执行**：引擎已把脚本读进内存，删文件不会打断本次执行，下一次投递才会
+     * 得到 `ERR_FILE_NOT_FOUND`（如实记账，不在这里补一层"正在运行就不许删"）。
+     *
+     * @param projectId 所属项目（[ProjectId.ROOT] 的空串 = 根层那一条）。
+     * @param relPath 同 [readScriptFile]（`files/scripts/` 之下的相对路径，首段 = 项目名）；
+     *   目录行以 `/` 结尾（[ScriptFileRow.relPath] 的形态），实现方按"尾随斜杠可有可无"收。
+     */
+    suspend fun deleteEntry(projectId: String, relPath: String)
+
+    /**
+     * 条目（**文件或文件夹**）的绝对路径 —— 文件列表菜单的「复制绝对路径」（2026-10-17 用户口径）。
+     *
+     * 为什么这条要经宿主：绝对路径 = `files/scripts/` 的落点 + relPath，而**只有宿主知道
+     * `filesDir`**（`:ui` 拿不到，也不该拿到 —— 它连 `files/scripts` 这个约定都不该知道）。
+     *
+     * **不查存在性**：与 [com.autoscript.domain.scripts.ScriptPaths.scriptFile] 同一条分工
+     * —— 约定只回答"应该在哪"，查存在性是调用方的事。于是刚被删掉的行照样复制得出它曾有的
+     * 路径（用户要的往往正是"我删之前那个文件在哪"）。
+     *
+     * 失败**抛**：越界 / 首段与 [projectId] 对不上（判据与 [readScriptFile] 同源）。
+     *
+     * @param relPath 同 [readScriptFile]。
+     */
+    suspend fun absolutePathOf(projectId: String, relPath: String): String
 
     /**
      * 读一个脚本文件的文本内容（项目页**点文件进编辑**；TG 文件页点开文档的对应位）。
@@ -428,28 +493,9 @@ interface HostSummary {
         )
 
     /**
-     * 安装审计史读数（§10.5-2；管理面板 → 依赖管理 → 审计页）。
-     *
-     * 与依赖面板/镜像源/控制台同一条分工：**宿主自己的界面读口，不经桥**。
-     *
-     * **无参**（与 [npmSnapshot] 里的待审队列同一取舍）：全量 + 呈现层筛 —— 按项目筛会让
-     * 「全局变更」（registry 改动，`projectId` 是空串）从任何一次筛选里掉出去。
-     *
-     * 读失败**抛**（与 [npmSnapshot]/[console] 同）：空表是「读成功且真的一条都没有」的样子，
-     * 会把「宿主读不到审计」画成「你没做过任何操作」—— 而审计页上那句话是安全相关的。
-     *
-     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
-     */
-    suspend fun npmHistory(): List<InstallHistoryEntry> =
-        throw com.autoscript.domain.core.AutojsException(
-            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
-            "审计史读口未接线：本宿主没有接上 npm 审计入口",
-        )
-
-    /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条「包大小管理页」的 cache clean 按钮）。
      *
-     * 与依赖面板/镜像源/审计同一条分工：**宿主自己的界面入口，不经桥** ——
+     * 与依赖面板/镜像源同一条分工：**宿主自己的界面入口，不经桥** ——
      * 桥面是脚本侧的面，而这个按钮改的是**磁盘占用**，只有人在界面上按得下去。
      *
      * 语义不是 `npm cache clean`：删的是「没有任何项目 lock 需要的那些」，见
@@ -493,6 +539,27 @@ interface HostSummary {
         )
 
     /**
+     * 把一个项目声明的依赖**提升到全局作用域**（2026-10-17 用户口径：依赖去重之后
+     * 「把依赖自动放进全局作用域中」）。
+     *
+     * 与 [runNpmMaintenance] 是**两条口**而不是给那个枚举加一个动作：这条的产物落在
+     * **另一个作用域**上（`files/scripts/node_modules`），而维护那三颗按钮动的都是
+     * "当前作用域这一棵"。合成一个动作名会让"这颗按钮动的是谁"在枚举上读不出来。
+     *
+     * 语义与三条刻意（取声明而不是闭包、带范围而不是版本、固定全局）见
+     * [com.autoscript.domain.npm.PackageManagerFacade.promoteToGlobal]。
+     *
+     * 项目没有 `package.json` / 没声明任何依赖时**抛**（不返回空句柄冒充成功）。
+     *
+     * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
+     */
+    suspend fun promoteNpmToGlobal(projectId: String): com.autoscript.domain.npm.InstallHandle =
+        throw com.autoscript.domain.core.AutojsException(
+            com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
+            "提升到全局未接线：本宿主没有接上 npm 安装会话入口",
+        )
+
+    /**
      * 控制台输出读数（seq 游标拉取，与 [console] 同口径）。
      *
      * [NpmConsoleSnapshot.running] 由实现按**句柄账**判定（不是「有没有新行」）：
@@ -510,7 +577,9 @@ interface HostSummary {
      * 还能翻回上次敲的那条"要靠落盘。历史由宿主在命令派发时记下
      * （`InstallCoordinator.runConsoleCommand`），本口只读。
      *
-     * **按项目分开**（与 [npmHistory] 的无参全量刻意相反，理由见门面同口的 KDoc）。
+     * **按项目分开**：控制台是"命令跑在某个项目上"的面，历史跟着同一个作用域走
+     * —— 在 A 项目敲的 `npm install axios` 翻到 B 项目去点，落的是 B 的
+     * `node_modules`，而按钮上那行字一模一样。
      *
      * 缺省实现回空表（未接线 = 没有历史可补，如实）。
      */

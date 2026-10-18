@@ -87,6 +87,38 @@ class ProcOpsTest {
         assertTrue(ops().descendantsOf(999L).isEmpty(), "不存在的根回空集而不是抛")
     }
 
+    /**
+     * **方向门**（2026-10-15，与 `:engine:node-process` 的 `ProcessLauncherPidTest` 同批）：
+     * `pid` 字段住**运行时类**上（设备 libcore 是 `java.lang.UNIXProcess.pid`，
+     * 桌面 JDK 是 `java.lang.ProcessImpl.pid`），而 `getDeclaredField` 只看该类自己声明的成员
+     * —— 所以阶梯必须**从 `process.javaClass` 起步**。本实现一直是这么写的，
+     * 但引擎那份副本抄成了从 `Process::class.java` 起步（够不着子类），
+     * 代价是设备上 pid 恒 null、暂停恒失败 —— 那处已同批修正。
+     * 本用例把那处踩过的坑在这里钉住：形状**照设备抄**（字段声明在自己身上），不照实现抄。
+     *
+     * `@Suppress("UnusedPrivateProperty")`：这个字段的**唯一读者是反射**
+     * （`pidOf` 按名字 `getDeclaredField("pid")`），静态分析看不见那条路。
+     */
+    @Suppress("UnusedPrivateProperty")
+    private class PidBearingProcess(private val pid: Int) : Process() {
+        override fun getOutputStream() = java.io.ByteArrayOutputStream()
+        override fun getInputStream() = java.io.ByteArrayInputStream(ByteArray(0))
+        override fun getErrorStream() = java.io.ByteArrayInputStream(ByteArray(0))
+        override fun waitFor() = 0
+        override fun exitValue() = 0
+        override fun destroy() = Unit
+        override fun destroyForcibly(): Process = this
+        override fun isAlive() = false
+    }
+
+    @Test
+    fun `pid 字段住运行时类上——阶梯从运行时类起步，必须取到（方向门）`() {
+        assertEquals(
+            4242L, ops().pidOf(PidBearingProcess(4242)),
+            "pid 住子类上：从 Process::class.java 起步的写法在这里回 null（引擎那份副本踩过）",
+        )
+    }
+
     @Test
     fun `pid 取不到时后代为空集（降级为只杀主进程，不炸收尸）`() {
         val fake = object : Process() {

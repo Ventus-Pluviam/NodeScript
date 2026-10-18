@@ -118,6 +118,21 @@ abstract class RunArchiveContract {
         Unit
     }
 
+    /**
+     * 高水位（2026-10-14 真机 bug 的契约面）：`maxEngineRunId()` = 已落过的**最大 id**，
+     * 空档回 `0`。它是引擎侧分配器跨进程的避让依据 —— 三个实现给出不同的数，
+     * 就是"换存储引擎那天新进程重发旧号"。
+     */
+    @Test
+    fun `高水位是已落过的最大 engineRunId 空档回零`() = kotlinx.coroutines.runBlocking {
+        val archive = open()
+        assertEquals(0L, archive.maxEngineRunId(), "空档案 = 从没跑过 → 0（不是 null、不抛）")
+        archive.put(run(7, RunState.SUCCEEDED), EngineRunLink(1, 7))
+        archive.put(run(3, RunState.RUNNING), null)
+        assertEquals(7L, archive.maxEngineRunId(), "取最大 id，不是行数、不是最近写的那条")
+        Unit
+    }
+
     @Test
     fun `同一 runNonce 可有多条记录（重投不是 bug）`() = kotlinx.coroutines.runBlocking {
         // 档案**不是**幂等锚点（锚点在意图日志侧）：重投 → 两次执行 → 两条记录。
@@ -170,6 +185,17 @@ abstract class RunArchivePersistenceContract : RunArchiveContract() {
         assertEquals(RunState.SUCCEEDED, second.record(1)!!.state, "拒绝的写入不得留痕")
         Unit
     }
+    /**
+     * 高水位必须**跨实例**成立 —— 这正是它存在的理由（新进程读的是上一进程留下的档案）。
+     * 与 `重开新实例仍读得回` 同一条：只由持久实现继承。
+     */
+    @Test
+    fun `重开后高水位不倒退`() = kotlinx.coroutines.runBlocking {
+        open().put(run(42, RunState.CRASHED), EngineRunLink(5, 42))
+        assertEquals(42L, open().maxEngineRunId(), "新进程必须读到上一进程用过的最大号")
+        Unit
+    }
+
     @Test
     fun `特殊字符与诊断字段往返`() = kotlinx.coroutines.runBlocking {
         val archive = open()

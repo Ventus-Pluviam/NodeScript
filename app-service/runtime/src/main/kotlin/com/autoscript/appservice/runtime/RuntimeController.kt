@@ -168,6 +168,52 @@ class RuntimeController(
     }
 
     /**
+     * 往一次**在途**执行的脚本进程 stdin 送一行（悬浮窗底部输入框 → 脚本的
+     * `process.stdin`；2026-10-16 用户令；`HostSummary.sendInput` 的落点）。
+     *
+     * 与 [pauseRun] 同一条"在途表精确命中"口径：不在途（已结算/从未存在）→ false，
+     * 不去猜它是谁 —— 窗里的 `boundRunId` 结算后仍留着（结算不解绑），那时用户
+     * 敲进输入框的一行没有去处，如实回 false 比写进一个已死的管道好。
+     *
+     * **暂停中也照送**：SIGSTOP 冻住的是 CPU，管道的**内核缓冲**照常收字节，
+     * 脚本解冻后 `read` 就能拿到 —— 用户"暂停时先把要输的先敲好"是合理用法，
+     * 这里不额外拦（拦了反而要在 UI 上解释"为什么暂停时输入框是灰的"）。
+     */
+    suspend fun sendInput(runId: Long, line: String): Boolean {
+        val handle = guard.withLock { active[runId] } ?: return false
+        return try {
+            handle.slot.engine.sendInput(line)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 关掉一次**在途**执行的 stdin 写端（发 EOF；2026-10-16 用户令「答完自己退」；
+     * `EnginesNamespaceHandler` 的 `stdinIdle` 落点）。
+     *
+     * 与 [sendInput] 同一条"在途表精确命中"口径：不在途（已结算/从未存在）→ false ——
+     * 脚本自己报上来的 runId 走的是**认证连接身份**（不是 payload），所以这里命中的
+     * 一定是调用方**自己**那条；引擎外/替身 run 拿不到写端，也如实回 false。
+     *
+     * **幂等但不重放**：写端只能关一次，第二次（或进程已退）由引擎回 false ——
+     * 调用方（`stdinIdle`）把它当成"没有可关的了"，不回错误码（脚本那边已经
+     * 关掉读口了，这不是它的问题，也不该让它的桥调用失败）。
+     */
+    suspend fun closeStdin(runId: Long): Boolean {
+        val handle = guard.withLock { active[runId] } ?: return false
+        return try {
+            handle.slot.engine.closeStdin()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
      * 急停代次（[killAll]/[forceStopAll] 推进；读写都在 [guard] 临界区内）。
      *
      * 为什么要它：本类是池的**唯一**调用方，而池侧「排队等证」与「execute 启动中」两个窗口

@@ -41,7 +41,7 @@ object WireMethods {
         ),
         "engines" to setOf(
             "channel", "channelClose", "channelDrain", "channelEmit", "exec", "heartbeat",
-            "poolStats", "status", "stop",
+            "poolStats", "status", "stdinIdle", "stop",
         ),
         "floatingWindow" to setOf(
             "close", "create",

@@ -1,5 +1,527 @@
 # 流水切片（按日期）
 
+## 最新追记（2026-10-18 第十二批：去掉依赖清单链路上说得清的白扔）
+
+- [2026-10-18 · 依赖页第十二批（派生属性算一次 + `@Immutable` + item 类型分开 + 行内胶囊不带动画）](2026-10-18.md) 一条目（最新）：
+  用户口径「**滑动起来还是很卡啊，首页的文件列表就不卡。好好优化啊**」。**本机测不了帧率**
+  （禁 Gradle / 禁设备 / 禁 adb 截图读屏），故本批是**逐条指名道姓地去掉浪费**，不是"测出来修好了"。
+  **一**：`NpmState` 的 `installed` / `logLines` / `sizeLabel` / `cacheSizeLabel` / `project` 从
+  `get()` 改成 `by lazy(NONE)` —— 从前**每读一次就重算一遍**（`installed` 每次读都 `.map` 整份
+  清单，卡头那句条数还要为了一句长度再映射一整个列表；`logLines` 每行重拼字符串；尺寸每次跑
+  `String.format`）。**二**：`@Immutable` 加在 `NpmState` / `NpmRowState` 上 —— 不加则在编译器
+  眼里不稳定，`NpmScreen` 与每个收 `state` 的子件**一律不可跳过**。**三**：六种 item 形状的
+  `contentType` 从全 `null` 改成各报各的（作用域卡与日志卡也分开）。**四**：行内三处文字限一行 +
+  省略号。**五**：三个圆角 `Shape` 提成文件级常量。**六**：`PillButton` 新增尾参
+  `animated: Boolean = true`，依赖行传 `false` —— 那颗「卸载」的选中态写死 `false`，
+  两颗 `animateColorAsState`（`Animatable`+协程+`SideEffect`）**一辈子不会真跑一帧**，
+  纯跟着每一行滚进视野现造。**七**：原地订正第十一批「只有一个可滚动容器」说过头 ——
+  日志框那层 `LazyColumn` 还在。**八**：解释不了"为什么首页不卡"（首页只有几条、依赖清单可能
+  几百条），两个待测数：依赖条目量级、控制台/日志管理页是否也卡（三个子页共用
+  `ManagementTransition` 那两层全屏 `graphicsLayer`，首页在 pager 里没有）。
+  本批**没动**那两层 —— 逐字复刻 TG 的手势动画，凭猜改风险大于收益。
+  :ui 编译 + detekt（0 smells，baseline 补 `PillButton` 的 `animated`）+ 31 个 :ui 测试类全绿。
+
+## 最新追记（2026-10-18 第十一批：合并成一组 + 三颗动作钉页底 + 撤掉卡内滚动）
+
+- [2026-10-18 · 依赖页第十一批（合并分组 + 动作钉页底 + 撤卡内滚动）](2026-10-18.md) 一条目（最新）：
+  用户口径「**安装依赖和依赖列表合并成一个列表分组**」「**三个按键放在低栏最下面的位置**」
+  「**依赖列表滑动还是很卡**」。**一**：两组并成**一张卡**（`dependenciesGroup` + `cardSlice`）——
+  安装行一段、卡头一段、每颗依赖各一段。「默认收起」照旧。**二**：三颗维护动作从列表里搬出来
+  变成钉在页底的 `OptionsBar`，让位（`TabBarBottomClearance`）随之下移；第十批那条「日志在
+  滚动内容最下面」一个字没改。**三**：卡里那层 `LazyColumn`（高度上限 300dp）**撤掉** ——
+  此前这一屏有**两层竖向滚动**，拖动要在两层之间交接，现在~~只有一个可滚动容器~~ **订正（第十二批）**：撤掉的是**依赖列表**那一层，页底日志框里那个 `LazyColumn` 还在（第十批有意留的）；
+  `DEP_LIST_MAX_HEIGHT` 常量同批删除，`cardSlice` 中间段不挂 `clip` 图层。
+  **四**：修的是结构，帧率本机测不了，不把「改成了标准结构」讲成「已经不卡了」。
+
+## 最新追记（2026-10-18 第十批：日志挪到最下面 + 查「滑动只有 60 帧」）
+
+- [2026-10-18 · 依赖页第十批（日志挪底部 + 帧率排查）](2026-10-18.md) 一条目（最新）：
+  用户口径「**把日志放到最下面吧**。还有就是**依赖列表滑动起来帧率怎么只有60**」。
+  **一**：`LogCard` 从"依赖列表与三颗动作之间"移到**整页最后一段**（新顺序：作用域与尺寸 →
+  安装 → 依赖列表 → 三个维护动作 → 日志）；第六批第 22 条「选项放在最下面」在本条被改写，
+  两版口径都原地留着。**二**：全仓 grep `preferredRefreshRate` / `setFrameRate` /
+  `preferredDisplayModeId` / `Choreographer` / `withFrameNanos` / `refreshRate` —— **一条都没有**，
+  本仓没有任何一处设置帧率，"只有 60"不是某一行代码写出来的（面板档位/平台出帧投票更可能），
+  这一条本机证实不了。**三**：能落地的那半 —— `Glyph` 的绘制 lambda 每帧重跑，原来的
+  `Path().apply { … }` **每画一笔新建一个 Skia 原生对象**（可见字形 × 每帧），已改成
+  `remember` 在本节点上的 `GlyphScratch` 池子（`Path` 复用 + `Stroke` 按 `(u, weight)` 缓存），
+  80 处 `path(...)` 调用点一处没改、几何逐条等价。**这不是 60 帧的答案**，是这条链路上唯一
+  说得清的一处浪费。
+
+## 最新追记（2026-10-18 第九批：触感去掉）
+
+- [2026-10-18 · 依赖页第九批（触感去掉）](2026-10-18.md) 一条目（最新）：
+  用户口径「**震动？我不需要震动，去掉吧**」。第八批按「实现触感反馈」补的那条 `LONG_PRESS`
+  **整个去掉**（`OPTION_TILE_HAPTIC_DELAY_MS`、那段 `PressInteraction` 订阅、三个 import 一并删）。
+  第八批那条是照 TG `ProfileActionsView.onTouchEvent` 的 `ACTION_UP` 分支搬的，但 TG 那是
+  "长按有别的语义"的资料页动作行，本页三颗按下去就出结果、**没有长按这层语义** ——
+  **源码有这条不等于本应用要这条，口径以用户为准**。缩放回弹与"没有「进行中…」"照旧不动。
+
+## 最新追记（2026-10-18 第八批：撤掉「进行中…」文字 + 补上 TG 的长按触感）
+
+- [2026-10-18 · 依赖页第八批（撤「进行中…」+ 长按触感）](2026-10-18.md) 一条目（最新）：
+  用户口径「**撤掉，实现触感反馈**」。
+  **一**：那颗「进行中…」是我自己加的（不是 TG 的），按口径撤掉 —— `OptionTile` 的 `running`
+  参数、三个调用点的 `busy == …`、`OptionsCard` 的 `val busy` 一并删。状态没消失：
+  `canInstall` / `canReclaimCache` 在会话期间本来就是 false，三颗一起变灰就是状态；
+  TG 这三颗 `supportsLoading` 也是 false（扫光只挂在 gift / call / video / … 上）。
+  **二**：触感照 `ProfileActionsView.onTouchEvent` 的 `ACTION_UP` 分支 —— **松手那一刻**按
+  "按了多久"决定震不震（`> 250ms` 且手指仍在格内 → `LONG_PRESS`），不是按住中震；
+  走 `MutableInteractionSource`（与缩放共用同一个 source），`Cancel` 不震。
+  **三**：:ui 编译、:ui detekt（69 文件 / 0 smells，baseline 精确签名文本去掉 `running`）、
+  31 个 :ui 测试类全绿。
+
+## 最新追记（2026-10-18 第七批：三个动作格的几何**改成照 TG 源码**（`ProfileActionsView`），按压从水波换成 `ButtonBounce` 缩放回弹）
+
+- [2026-10-18 · 依赖页第七批（照 TG 源码取值 + 缩放回弹）](2026-10-18.md) 一条目（最新）：
+  用户口径「**你去看tg源码啊，/tmp/tg**」「**你对着图做干嘛**」。
+  **一**：版式（三张等宽白卡、图标在上文字在下）照旧，**推翻的是取值来源** —— 昨天那版是拿截图
+  当尺子量的（定标卡高 88dp → 88/20/32/16sp），现在取
+  `org/telegram/ui/Components/ProfileActionsView.java` 的源码原值：`ProfileActionsView(context, dp(74))`
+  − `ypadding(12)` − `top(8)` = **54dp** 高、`getRoundRadius()` = **16dp**、`drawableSize = dp(24)`、
+  `new Text(cs, 11, bold)` = **11sp 粗体**、`betweenPadding = xpadding/2f` = **7dp**。
+  参考图就是 `MODE_MY_PROFILE` 的三颗（`KEY_SET_PHOTO`/`KEY_EDIT_INFO`/`KEY_SETTINGS`）——
+  查到源码后截图与源码自洽，差的是**定标错了**。
+  **二**：按压换掉 —— TG 这一行走 `ButtonBounce`，不是水波：按下 60ms /
+  `cubic-bezier(0.25,0.1,0.25,1)` 缩到 **0.96**，松手 350ms / `OvershootInterpolator(5f)` 过冲回弹；
+  `Modifier.pressableRipple` **整件删除**（唯一调用方就是这三格）。
+  **三**：两处刻意不照源码 —— 左右 12dp（本页 `CARD_MARGIN`，源码 14dp）、竖向 6dp（本页
+  `CARD_SPACING`，源码 `top 8` + `ypadding 12`）；文字用 11sp 而非 `dp(11)`，默认字体缩放下逐像素相同。
+  **四**：:ui 编译、:ui detekt（69 文件 / 0 smells）、31 个 :ui 测试类全绿。
+
+## 最新追记（2026-10-17 第六批：**「清理未声明依赖」改名「清理依赖」** / 页底三个动作**重新做成三张等宽白卡** / **卡底那句说明下线**）
+
+- [2026-10-17 · 依赖页第六批（改名 + 三张等宽白卡）](2026-10-17.md) 一条目（最新）：
+  用户口径「**清理未声明依赖改名啊，改成清理依赖**」「**样式是图片中这样，3个按键。重新做**」
+  「**不要加多余的描述啊**」。
+  **一**：改名 —— 本日第 15 条那次改口（「清理多余包」→「清理未声明依赖」）**撤销**，回到短名
+  「清理依赖」；`prune` 删的是 lockfile 里没声明的那些，这层意思不进界面，留在 KDoc。
+  **二**：第五批那版（一张 `PanelCard` + 三行 TG 子菜单式选项 + 卡底一句按作用域变措辞的小字）
+  **整条推翻**，换成 `OptionTile`：三张**等宽白卡**横排、**图标在上文字在下**、整格是一个按钮；
+  那句小字**整段下线**。几何不照抄 TG 子菜单项了，**从用户给的参考图上量**（定标卡高 88dp，
+  其余按图上像素比例换算：圆角 20dp、图标 32dp、图标文字缝 8dp；**只有间距没照搬** —— 图上 ≈ 15dp
+  取 12dp，与 `CARD_SPACING` 撑出的卡间缝同宽）。
+  **三**：底色取 `ThemeColors.surface` 而**不是**本页其他卡的 `background` —— 浅色下两者同值
+  （都是白，与参考图逐像素一致），深色下 `background` 与页底 `surfaceMuted` **同值 #161E27**，
+  那三格会整块消失、只剩图标文字飘着；纯按钮格糊掉就是"没有按钮"。
+  **四**：`pressableRipple` / 禁用判据两条同源 / 「进行中…」/ 三个字形复用，接线一字未动。
+  **五**：`FunctionNaming` baseline 按精确签名文本 `OptionRow` → `OptionTile`（新末尾参数 `modifier`）；
+  :ui 编译、:ui detekt（69 文件 / 0 smells）、31 个 :ui 测试类全绿。
+
+## 最新追记（2026-10-17 第五批：**全局为什么没有 node_modules** / 输入框收短右对齐 / **作用域缺省改全局**并入尺寸卡 / **维护卡下线 → 页底三个 TG 式选项**）
+
+- [2026-10-17 · 依赖页第五批（作用域缺省改全局 + 页底三个 TG 式选项）](2026-10-17.md) 一条目（最新）：
+  用户口径「**全局为什么没有显示node_modules**」「**安装依赖的输入框长度短一点（右对齐），样式抄一下
+  首页的搜索框**」「**依赖作用域，默认为全局，放进和node_modules和npm缓存同一个列表分组**」
+  「**去除维护列表，清理依赖，依赖去重，清理缓存弄成3个选项。这3个样式参考tg的，tg源码在/tmp/tg，
+  点击动效也参考tg的。选项放在最下面**」。
+  **一**：第一条是**问句不是改法** —— 查出来是两档作用域口径不一致：全局那条在
+  `files/scripts/node_modules` 没建时给 `storage = null`（界面按"没量到就不画"整行藏掉），
+  项目那条**永远画**（0 B 也画）。修在宿主侧一行（`globalSnapshot` 不再给 null），界面一字未动。
+  **二**：安装输入框与首页搜索框、新建对话框**合成一份** `CapsuleInputField`（从 `ProjectScreen`
+  搬进 `components/Inputs.kt`，末尾补 `enabled`/`onSubmit` 两个参数），改成定宽 168dp ——
+  "右对齐"是标签自己的 `weight(1f)` 算出来的，不是写死的 `Spacer`（窄屏上会自动让位）。
+  **三**：作用域缺省改**全局**，回落三档（上次选的 → 快照里的全局 → 第一条项目，中间那档挡的是
+  "快照里没有全局那条时凭空选一个空串"）；作用域与两行尺寸并成一张 `ScopeCard`，依赖列表的卡头与
+  空态措辞跟着作用域改口。**四**：维护卡整张下线 → 页底三个 **TG 子菜单式选项**
+  （`ActionBarMenuSubItem` 的 48dp/18dp/24dp 图标 + 16sp），点击动效换成 TG 那条
+  `RippleDrawable`（新 `Modifier.pressableRipple`，走 M3 的 `ripple(bounded = true)`；
+  `pressable` 仍是全仓缺省）；「清理缓存」**重新有了入口**（第 11 条记的代价条款撤销）。
+  **五**：四处变异全部当场变红；三模块 detekt 干净（baseline 外科式改 8 行）。
+
+## 最新追记（2026-10-17 第四批：**去掉两颗旗标** / 清理改名「清理未声明依赖」 / **去重并提升到全局** / 按 lock 重装下线 / **每行重装 ⟳ + 尺寸**）
+
+- [2026-10-17 · 依赖页第四批（去重并提升到全局 + 每行重装与尺寸）](2026-10-17.md) 一条目（最新）：
+  用户口径「**去掉开发依赖，和离线优先。默认开启离线优先。**」「**清理多余包名字改成清理未声明
+  依赖**」「**依赖去重执行后让它把依赖自动放进全局作用域中**」「**去除按lock重装。**」
+  「**在依赖列表里，加一个重装的图标按钮，依赖列表显示一下各个依赖占用的空间大小。**」；
+  追问两条当场由用户裁定（「去重后再装一份到全局」/「每一行一个（和「卸载」并排）」）。
+  **一**：两颗旗标整行下线 —— 「离线优先」是把 `--prefer-offline` 变成**写死的缺省**（不是删能力），
+  `-D` 是**语义**下线（这一屏回答"跑起来要什么"）；**代价**：装 devDependencies 只剩控制台。
+  **二**：「清理多余包」→「清理未声明依赖」（只改文案，判据一字未动）。**三**：`:domain` 新读口
+  `PackageManagerFacade.promoteToGlobal`（取**声明的**依赖、带范围、目标固定全局；两种"没有"
+  两句话；走的是与控制台**逐字相同**的重操作路），`HostSummary` 同步，冻结清单 +1（**被
+  `PackageManagerFacadeContractTest` 当场抓到**）。**四**：「依赖去重」自己一条
+  `runDedupeAndPromoteOp`（两件事、两个作用域），**两段成败分开说**：前段失败不做后段、
+  后段失败两个都给（否则用户以为整颗按钮没干活、再点一次、去重被重跑）、作用域已是全局时
+  跳过并**明说跳过**。**五**：「按 lock 重装」整颗下线（`NpmMaintenanceAction.CI` 在本页没有
+  入口了，宿主与单测都还在）。**六**：每行一颗**画出来的** ⟳（新字形 `GlyphKind.REFRESH`，
+  触控 36+4+4 = 44 = 行最小高）+ 每行尺寸（`packageSizesOf` 走一遍 node_modules、按顶层包
+  分摊；量不到**不画**那一格）；顺手把"量目录"整块挪出 `InstallCoordinator`
+  （新文件 `NodeModulesSizing.kt`）—— 那个类体贴着 detekt `LargeClass` 的线
+  （改动前 796），本批新代码让它到 853，**先挪到 794、不抬阈值**。
+  验：三模块 main+test 零 error + **真跑**（`:domain` 全量、npm `InstallCoordinatorTest`
+  **113**、`:ui` **30 类 342 例全绿**）+ detekt 三模块零 findings（`:ui` baseline 外科式 7 行，
+  npm baseline **零改动**）+ **对拍 9 条逐条真红**（第 ⑦ 条第一次是绿的，遂补断言）。
+  **没验**：真机观感与"真往全局装一次"（归设备自测）；`:app` 那层 override 归 CI 构建。
+## 最新追记（2026-10-17 第三批：**依赖作用域 + 全局依赖落地** / 缓存行去字去按钮 / 安装行改「安装依赖 [__] 执行」）
+
+- [2026-10-17 · 依赖页第三批（依赖作用域 + 全局依赖）](2026-10-17.md) 一条目（最新）：
+  用户口径「**项目选择改成依赖作用域，然后下拉框加个全局**」「**去除 npm 缓存下面的字，去掉
+  右边的清理按钮。**」「**安装这个小字标题去掉，改成输入框左侧，叫安装依赖，右边的安装按钮
+  改成蓝色执行按钮**」。**一**：全局依赖落地 —— 落点 `files/scripts/node_modules`、
+  编码 `ProjectId.ROOT`（空串），新增 `:domain` 的 `NpmTargetScope`；因为 Node 逐级向上找
+  `node_modules`，用户要的「项目依赖优先」**一行代码都不用写**；多出来的只有两处真问题
+  （项目枚举排掉 `node_modules` / 回收保留集算上全局那份 lock）；`rejectProjectId` 放行空串
+  （只放"非空"，防逃逸未动）。**二**：缓存那行只剩「名字 + 数字」，**代价是「回收缓存」在本页
+  没有入口了**（宿主与 ops 都还在、也还测着）。**三**：安装行改「安装依赖 [输入框] 执行」，
+  执行按钮走动作蓝。**四**：「维护」卡标题跟着作用域改（原文说"当前项目"已不成立）。
+  验：三模块真跑（`:domain` 31 例 / npm `InstallCoordinatorTest` **107** / `:ui` 状态层 **115**），
+  detekt 零 findings，**三次对拍逐次真红**（2/2/2 条）；**没验**真机观感与"真往全局装一次"。
+## 最新追记（2026-10-17：依赖页第二批——项目选择下拉 / 尺寸与缓存成列表 / **取消 512MB 配额** / 文案与横线；**全局依赖未做**）
+
+- [2026-10-17 · 依赖页第二批现场改动 + 全局依赖未做](2026-10-17.md) 一条目（最新）：
+  用户口径原文「**把顶栏那个项目切换按钮换成一个列表，列表名字叫项目选择，然后点了用下拉框选取**」
+  「**node_modules 取消 512mb 限制，弄成列表…**」「**npm 缓存…也弄成列表，但是右侧弄成清理的按钮**」
+  「**安装（装进当前项目的 node_modules）描述改成安装就行**」「**日志没有日志时就直接显示暂无日志。不要弄那么长**」
+  「**还有依赖列表取消横线分隔**」；追问配额范围时改口：「**取消上限设置吧。再加一个全局依赖的功能。
+  项目依赖和全局依赖如果有重复的，则优先读取项目依赖，**」。
+  **一**：一排胶囊换成 `ProjectPickerCard`（一行 + `ContextMenu` 下拉，当前项标「（当前）」，
+  单项目不开下拉）。**二**：新增卡内行 `PanelRow`，`QuotaCard`→`StorageCard`；「回收缓存」从维护卡
+  搬到缓存那一行、文案改「清理」，判据提成 `NpmState.canReclaimCache`（新加 JVM 用例）。
+  **三**：**配额跨三模块摘除**（`InstallConfig` 两字段 / `InstallCoordinator` 的 100% 拦与 80% 黄 /
+  `NpmProjectSnapshot` 两字段三派生量 / `:ui` 的 `quotaLabel`→`sizeLabel`）；
+  `DISK_QUOTA` 事件名**留用、判据换锚**到磁盘预检的 1.25 倍余量（配额摘了之后它是唯一还会拒安装的闸）。
+  **代价**：node_modules 从此没有上限，只剩"可用空间 < 500MB"那一道。**四**：三处文案/样式
+  （安装标题、日志空态「暂无日志」、依赖列表去横线）。**未做**：全局依赖（契约级改动，
+  落 [`backlog.md`](../backlog.md)；「项目依赖优先」那条**不用写代码** —— Node 逐级向上找
+  `node_modules`，项目目录天然更近）。验：三模块 main+test 全量编译零 error、npm 31 类真跑
+  （`InstallCoordinatorTest` 101 全过，四类环境红逐字未变）、`:ui` 状态层 7 类 112 例全绿、
+  detekt 三模块零 findings（`:ui` baseline 外科式 4 行）；**没验**真机观感（归设备自测）。
+
+## 最新追记（2026-10-17：依赖页改底色=任务中心那块灰 + 依赖列表改白卡折叠头（默认收起））
+
+- [2026-10-17 · 依赖页改底色 + 依赖列表白卡折叠头](2026-10-17.md) 一条目（最新）：
+  用户口径原文「**依赖管理页面的背景颜色改成任务中心背景一样的颜色，依赖列表是弄成一个白色胶囊列表，
+  参考任务中心的列表，点下可以伸展开，默认是收起来的**」。
+  **一**：页底 `background` → `surfaceMuted`，顶栏**同时**传同一个色（缺省是"与屏底同色"，
+  不传就留"白栏压灰页"那道缝）；深色下两值同色 ⇒ **只动浅色档**。
+  **二**：页上的块整批翻白 —— 这是改动一的**连带**（原灰块 #F4F4F4 压新页底 #F1F1F3 只差 3/255，
+  输入框/进度格/胶囊会整批消失），"白页上的灰块"与"灰页上的白卡"恰好对调；卡底取 `background`
+  而非 `surface`（`fieldBackground` 的配方是"叠 `background`"，取 surface 是同一个错换到深色档）。
+  **三**：卡头换成 `CollapseHeader`（**从任务中心的私有 `GroupHeader` 提出来的共享件**，46dp/21dp/
+  14sp/340ms 三角翻转逐字保留；提出时**去掉了自身的底**，改由所在卡片透出），初值收起；
+  条数与空态都按 `LoadState` 三态各说一句。**本批无新增 JVM 可测面**（折叠态是 Compose 局部的）。
+  **本机验**：把 `:ui` 的 **Compose 编译面补齐**（compose AAR + compose 编译器插件 + `android.jar`
+  拼 kotlinc，main+test 两源集都编过），真跑状态层 5 类 **89 例全绿**，detekt（main+test）零 findings，
+  baseline 外科式 3 行；**没验**真机观感（归设备自测）。
+
+## 最新追记（2026-10-17：依赖页三处现场改动——顶上报错下线 / 依赖列表卡片 / 底部日志大框）
+
+- [2026-10-17 · 依赖页三处现场改动](2026-10-17.md) 一条目（最新）：
+  用户口径原文「**删除顶上的报错。不需要它。**」「**弄个依赖列表，把已装依赖收进去。**」
+  「**最下面弄个显示日志的大框。灰色背景，胶囊框。**」裁定：日志框**两者都显示**、列表要**卡片 + 内滚**。
+  **一**：读失败 / `opError` / `opNotice` 整段搬进底部日志框（**页面上半部分不要红字**）——
+  上一条刚写的 `progressFailureShown` 判据随之删除，§91 决策三在决策记录里**原地划掉**（旧口径留痕）。
+  **二**：已装依赖收成 `DependencyListCard`（灰底 18dp 圆角 + `heightIn(max=300.dp)` + 卡内自滚），
+  行键唯一性由宿主读口的归一保证。**三**：新增 `LogCard` = 读失败 → 报错 → 回执 → npm 输出
+  （着色复用控制台那份 `ConsoleCmdLineState.tone`），取数走既有读口 `consoleOutput` 并与快照
+  **并进同一趟现取**，日志读失败不算操作失败；留最近 200 行、裁过在框里说。
+  回归闸 `NpmStateTest` +4 / `NpmMaintenanceOpsTest` +2，**拆三处对拍 → 3 条红**；
+  本机真跑 `:ui` 状态层 3 类 48 例全绿 + detekt 零 findings（baseline 外科式 4 行）；
+  Compose 那一屏与真机观感**归 CI 构建 + 设备自测**。
+
+## 最新追记（2026-10-17：依赖装多了「查看时闪退」——`list` 归一 + 读口落 IO；顶上那条报错与阶段条重复）
+
+- [2026-10-17 · 依赖装多了「查看时闪退」+ 同一句报错说两遍](2026-10-17.md) 一条目（最新）：
+  用户口径原文「**取消上面位置的报错，留下面就行**」「**依赖装多了，查看的时候容易闪退**」。
+  **崩** = 已装清单是从 lockfile v3 的 `packages` **逐键**读出来的平铺闭包，而 lock v3 的键是
+  **安装位置**不是包的身份（peer 冲突时同一个 包@版本 会在不同父级各落一份），依赖页又用
+  `items(key = "name@version")` 铺它 —— **键重复 Compose 当场抛**（`Key "…" was already used`），
+  装得越多越容易撞上；药 = `list()` 按 `(name, version)` 归一（`offlineGap` 不归一，缺口判据是 integrity）。
+  **卡** = `snapshot()` 一趟是「全项目遍历 + 每项目两份 lock 解析 + 每棵 node_modules 全树算尺寸 +
+  缓存遍历」，而进页面/刷新/安装期间每 400ms 的续拉都是**主线程**直接 await（suspend 不搬线程）；
+  药 = `list`/`offlineGap`/`storage`/`snapshot`/`reclaimCache` 与 `nodeModulesBytes`、控制台轻操作取数
+  **整趟落 `Dispatchers.IO`**（本文件既有写法 `crossCheckRegistry`/`cacheStorage`，本批补漏）。
+  **重复报错** = 顶上 `opError` 与阶段条收尾那行是同一句话；药 = 新增 `NpmState.progressFailureShown`
+  （收尾 + 失败 + **`detail` 非空**），顶上有条件让位 —— 「宁可重复，不可失语」。
+  回归闸 `InstallCoordinatorTest` +3 / `NpmStateTest` +1，**两条对拍都做了**（换回 HEAD 版 → 3 条全红；
+  判据钉成 false → 红）。本机真跑：npm 31 类（`InstallCoordinatorTest` 101 全过）、`NpmStateTest` 8、
+  detekt 两模块零 findings（baseline 零改动）；**Compose 面与真机归设备自测**。
+
+## 最新追记（2026-10-17：CI 红修——门面方法面冻结清单没跟着 `history()` 下线（本机「没跑的套件不是绿的套件」））
+
+- [2026-10-17 · CI 红修：门面方法面冻结清单](2026-10-17.md) 一条目（最新）：
+  `:domain:test` 217 例 1 红 —— `PackageManagerFacadeContractTest > 门面方法面冻结`：
+  上一条把 `PackageManagerFacade.history()` 摘了，而那份**冻结方法清单**里 `"history"` 那一行没跟着删。
+  **这正是那条门存在的意义**：读口下线是**契约面变更**，必须被一句话记下来。药 = 删那一行。
+  **教训**：本机这次只跑 npm 模块 31 类 + 两个新测试类，`:domain` **只编了 main** —— 那条用例住在
+  domain 的 **test** 源集，从没被执行过；把「编译过了」当成「这一层验过了」= 把没跑的套件当绿的套件
+  （「本机绿 ≠ 门禁有效」的第三变体）。补跑 `:domain` 28 类全绿。
+
+## 最新追记（2026-10-17：去掉审计改打系统日志（`OpLogSink` 缝 + `OpName`）+ 系统日志跨重启（`HostLogStore` + `ConsoleCollector.restored`））
+
+- [2026-10-17 · 去掉审计改打系统日志 + 系统日志跨重启](2026-10-17.md) 一条目（最新）：
+  用户口径原文「**去除审计这个东西，把这个日志输出到系统日志中**」+「**系统日志不要每次进 app 都清除**」；
+  追问裁定：去的是**依赖管理页顶栏那颗「审计」进的子页**，且背后那份只追加的落盘账
+  `files/.ns/install-history.jsonl` **一并去掉、改打系统日志**。
+  **药 = 形状之变：从「一本自己的文件」到「一条去向」** —— `:app-service:npm` 新增 `OpLogSink`
+  （`fun interface`）+ `OpName`（自 `:domain` 的 `InstallHistoryOp` 搬来、删掉 `install_script`），
+  写侧只交**事实**（op / projectId / 成败 / 明细），去哪儿由装配层定（生产 = `:app` 的
+  `OpLogHostSink` → `HostLog`：logcat + 日志管理页「系统日志」段 runId=0）；`:domain` 少 1 读口 + 2 DTO，
+  `:ui` 少一屏与顶栏那颗按钮。**三点刻意**：失败也记（执行体失败 / 门禁预检拒绝 / 交叉校验不一致 /
+  降信任四条路都留痕）、op 名**不再翻中文**（那张对照表随页面下线；字面量是可检索词，逐字钉在
+  `OpLogSinkTest`）、**时间戳不进缝**（时刻由去向侧盖，与 logcat 同源 —— 写侧再给一个就是两个时刻）。
+  **第二条口径（跨重启）**：系统日志此前只在内存（有界 2000 环）；新增 `:app` 的 `HostLogStore`
+  （`.ns/host-log.jsonl`，只追加无 retention）。接线是**一个收集器、两条去向**，按 `runId` 分道
+  （0 → host-log，否则 → 既有 `ScriptLogStore`；两边守卫**对偶**）；回放走 `ConsoleCollector` 新增的
+  `restored` —— **构造期预置进环、不回调 lineSink**（回调了就是每次启动把盘上那批再抄一遍）、
+  **seq 重新分配**（seq 是本次进程的游标空间），回读**只读尾部 1 MiB**。
+  **代价如实记**：文件随宿主事件一直长（伤磁盘，不伤启动耗时）。**未动**：`npm audit`/`AuditReport`
+  （那是包的安全审计，同名不同物）。**回归闸**：`OpLogSinkTest` 2 + `HostLogStoreTest` 6 +
+  `ConsoleCollectorTest` +2 + `NpmSnapshotTest` 一条反向断言（导出的 zip 里不许再有 `install-history.jsonl`），
+  **已对拍两条**（去掉 `restored` 预置 → CC 两例红；去掉 `HostLogStore` 的 runId 守卫 → 对应例红）。
+
+## 最新追记（2026-10-17：项目缺 `package.json` 时自动补一份最小骨架；设备实测——装依赖报「getFileStore」；装依赖抛 `NetworkOnMainThreadException`）
+
+- [2026-10-17 · 项目缺 `package.json` 时自动补一份最小骨架](2026-10-17.md) 一条目（最新）：
+  用户报「项目 demo 缺 package.json（…），无法执行 npm install」+ 口径原文「**应该让它缺的时候自动创建呀**」
+  （决策第 89 项）。**为什么会走到这一步**：`package.json` 此前只有**模板部署**才长得出，而 2026-10-16
+  用户裁定「根层可写」后**首页根层建文件夹 = 建项目**造出来的是**空目录** —— 两条各自都对的口径合起来
+  = "自己建的项目装不了依赖"，拦路点就是 `HostNodeExecutor.prepareWorkDir` 那句 `require`。
+  **药**：缺清单照 `ProjectManifest.minimal` 造一份、**只落 workDir**、跑完由既有 `harvest` 写回项目根
+  （与 npm 自己重写 manifest 同一条落盘路径），**失败的操作不在项目里留文件**；返回值 `Unit → Boolean`
+  让调用方在**终态摘要**（→ `InstallEvent.Finished.detail` → 控制台 RESULT 行）如实说一句 ——
+  **刻意不走 `OutputSink`**（那条缝一碰 `runHeavy` 的 `streamed` 就为真，npm 的输出尾部会被当成
+  "已报过流"而不再补）。**三条判据**：① **不写 `main`**（`ProjectIndex` 缺 `main` 会退到
+  `main.js`/`index.js` ⇒ 这份清单对入口判断零影响）；② **`name` 洗成 npm 认的形态**（项目号判据放宽后
+  中文/大写/空格/`@` 都合法，而 npm 只认小写 URL-safe，不洗即 `EINVALIDPACKAGENAME`；
+  **代价如实记**：中文项目号拿到不含信息量的名字，但它在此处只有展示意义、数据仍在项目号上）；
+  ③ **`private: true`** 挡住误发布。**未动**：`npm run` 那条「无 lifecycle 脚本可跑」照旧。
+  **回归闸** `ProjectManifestTest` 5 例 + `HostNodeExecutorSeedTest` 4 例，**已对拍**（退回旧 `require`
+  即红 3 例，报的正是用户那句）。
+
+## 最新追记（2026-10-17：设备实测——装依赖报「getFileStore」（磁盘探针在 Android 上那格没实现）；装依赖抛 `NetworkOnMainThreadException`（交叉校验取 packument 落在主线程上））
+
+- [2026-10-17 · 设备实测：装依赖报「getFileStore」](2026-10-17.md) 一条目（最新）：
+  用户报（原文）「报错，getfilestore」，紧接上一条 `NetworkOnMainThreadException` 而来 ——
+  那条修的是交叉校验，**磁盘探针正是它后面那一步**，所以修完前一步这条立刻暴露。
+  **病**：`NpmShellKit.defaultFreeSpaceProbe` 用的 `Files.getFileStore(p).usableSpace` ——
+  Android 的 `java.nio.file` 只实现了 NIO2 的一半，`FileSystemProvider.getFileStore`
+  **正是没实现的那一格**，调它抛 `UnsupportedOperationException("getFileStore")`；那句 message
+  会被 `:ui` 的 `opError = t.message ?: t.javaClass.simpleName` **原样显示**（屏幕上就那四个字，
+  没有半个字指向"磁盘"）。原有 `catch (java.io.IOException)` 拦不住（UOE 是 RuntimeException）。
+  后果不是"读不到磁盘"而是**装依赖整条路走不通**（探针在 `enqueueHeavy` 每次重操作入口都跑）。
+  **本机与 CI 都复现不了**（宿主 getFileStore 好得很）⇒ 又一类只能设备实测发现的错。
+  **药**：读法收到 `FreeSpace` 一处，改用 `java.io.File.usableSpace`（Android 侧 statvfs(2)
+  实现，`java.io` 不属于「NIO2 那一半」），**先判存在** —— 不存在的路径 `usableSpace` 回 0，
+  拿 0 比预检下限就是一句假的 ERR_DISK_FULL（本机实测 `new File(不存在).getUsableSpace() == 0`）。
+  **回归闸** `FreeSpaceTest` 4 例，**已对拍**（去掉存在性判断即红）；**如实记一条测不到的**：
+  「Android 那格没实现」在 JVM 上钉不住，单测只守得住新读法。验：模块 26 个测试类真跑
+  （FreeSpaceTest 4 / InstallCoordinatorTest 99 全过）、detekt 零 findings、全仓 `getFileStore`
+  代码里零命中。
+
+## 最新追记（2026-10-17：设备实测——装依赖抛 `NetworkOnMainThreadException`（交叉校验取 packument 落在主线程上））
+
+- [2026-10-17 · 设备实测：装依赖抛 `NetworkOnMainThreadException`](2026-10-17.md) 一条目（最新）：
+  用户报（原文）「安装依赖报错，networkonmainthreadexception」，报源是上一版真机包的用户自测。
+  **病**：`InstallCoordinator.crossCheckRegistry`（§10.5-1 多镜像交叉校验）调
+  `NpmRegistryVerifier.verify` → `HttpRegistrySource.packument` —— **同步阻塞**的 `HttpURLConnection`
+  （每包两趟 packument，5s + 8s 超时）。整条链确实是 suspend 的，**但 suspend 只给「可挂起」的许可、
+  不搬线程** —— 界面那条协程是 `rememberCoroutineScope()`（Main），于是取 packument 落在主线程上，
+  Android 当场抛，**一个包都还没发出去**（交叉校验摆在 `enqueueHeavy` 之前，是"先校验再排队"的刻意次序）。
+  **本机与 CI 都抓不到**：JVM 没有那道守门人（它是 Android runtime 的），单测里也没有任何"谁在哪个线程
+  上跑"的断言 ⇒ 这一类只能设备实测发现。**药**：`verify` 包进 `withContext(Dispatchers.IO)` ——
+  **本文件既有写法**（`cacheStorage`/`HostNodeExecutor`/`NpmScriptExecutor` 早就这么做），这条只是漏了；
+  全仓 main 扫过，`HttpRegistrySource` 是唯一网络调用点，一处即够。**回归闸**：新用例在假校验缝里记
+  `Thread.currentThread()`、断言它 ≠ 调用方线程 —— **已对拍**（去掉那行 `withContext` 后该用例红，
+  `expected: not same but was: <Thread[main,5,main]>`；加回来 99 例全绿）。验：模块 main+test 全量编译
+  零 error、`InstallCoordinatorTest` 99 例全过、detekt main+test 零 findings；`NpmSpawnGate*`/`T1Bridge*`
+  四类本机红是环境（缺 shim/asset 树与 noden），**拿 HEAD 版对拍红数逐字相同**（4/2/6/6）。
+  另说清（**不是 bug 是设计**）：交叉校验排在 `enqueueHeavy` 之前且要联网 ⇒ 按了安装到 npm 真开始之前
+  最长等 (5s+8s)×2×包数，用户看到的是"按了没反应"。
+
+## 最新追记（2026-10-17：CI 红修——`onAbsolutePath` 返回类型写成 `Unit`（本机把真错误滤掉了）；文件列表菜单三项 + 多选批量删除）
+
+- [2026-10-17 · CI 红修：`onAbsolutePath` 的返回类型](2026-10-17.md) 一条目（最新）：
+  `:ui:compileDebugKotlin` 红 —— 呈现层接缝 `onAbsolutePath` 写成了 `suspend (String, String) -> Unit`
+  （`onDelete` 是 Unit，抄顺手了），而 `copy.copy("已复制绝对路径", onAbsolutePath(...))` 要的是被复制
+  的**那条路径**；`MainActivity` 的 lambda 返回 String 而 Kotlin 允许往 Unit 上强转 ⇒ 只有真正取值
+  那一处炸（JVM 单测 + Android 构建两个 job 同一条红，engine-native 随之失败；**这次不是测试红**，
+  本机跑过的 92 例全绿）。药：类型改回 `-> String` + 按签名原文匹配的两条 detekt baseline 重生成。
+  **最值钱的一课**：本机没有 Android SDK/Compose，这两个文件只能"带已编好的 state 类空编一遍看有没有
+  真错误"，而上轮用的是**过窄的黑名单过滤**（`expecting|unresolved reference: <新符号>`）——
+  `Argument type mismatch` 这类**两边类型都解析得到**的错误一条都没进过滤表，**编译器报了、我没看**；
+  改成白名单式过滤（只滤 cascading 的 unresolved/infer）后立刻浮出，并与改动前的同一份文件对拍过。
+
+## 最新追记（2026-10-17：文件列表菜单改三项（复制相对/绝对路径 + 删除）+ 多选批量删除）
+
+- [2026-10-17 · 文件列表菜单三项 + 多选批量删除](2026-10-17.md) 一条目（最新）：
+  用户口径「取消进入文件夹这个选项。复制路径改成复制相对路径，复制绝对路径2个，再加个删除」；
+  追问两条当场裁定 —— 根层文件夹（= 一个项目）可删「**允许，不用加弹窗**」、多选批量删「**顺带做上**」。
+  **宿主补两个口**（此前一个删除口都没有）：`HostSummary.deleteEntry`（文件夹**递归整棵**、不存在抛）
+  + `HostSummary.absolutePathOf`（**不查存在性**，与 `ScriptPaths.scriptFile` 同一条分工），
+  两个都写成**抽象成员**（全仓只有 `AppShellApplication`/`FakeHost` 两个实现者 ⇒ 没接线是编译期红）；
+  落点仍全在 `ScriptFileOps` 共用的 `resolveInProject`（越界/归属/根层单段判据同源），`delete` 多两道闸
+  （目标须存在；不许是 `files/scripts/` 本身）。**菜单三项**：「复制相对路径」（原「复制路径」改名，
+  值不动）/「复制绝对路径」（宿主现取 + 失败原文）/"删除"（红字、**点了即删、不弹确认框**）；
+  「进入文件夹」**删掉**（点目录行本身就是进一层，与主手势重复）。**选择模式顶栏**加一格「删除」
+  （在「选择全部」右侧），删完**退出选择模式**；批量目标由新纯函数 `deleteTargets` 算 ——
+  **剪掉被另一个选中项包含的后代** + **深度降序**（搜索态池子是整棵树，父子同选时先删父会让子项
+  假报失败），前缀判据靠目录行 relPath 的**尾随 `/`**（否则 `lib` 会吃掉 `liba.js`）；它住**文件顶层**
+  而不是 `ProjectState.Companion`（操作语义 vs 读取语义，且那个 companion 已贴 detekt `TooManyFunctions`
+  上限 —— 同批 `ScriptFileOps` 也把 `requireName`/`requireProjectName` 合成一个）。
+  **代价如实记**：无确认框 ⇒ 不可撤销、**无回收站**（本仓第一个不可撤销的破坏性动作）；
+  根层文件夹可删 = 可删整个项目；不检查在途执行；编辑器开着被删文件时保存得既有的「文件不存在（不新建）」。
+  验：`:domain` 全量编译零 error + **JUnit launcher 真跑 92 例全绿**（domain 44 / app 32 / ui 16，
+  含新增 8）+ detekt 三模块零 findings（`:ui` baseline 外科式改 2 行 —— `ProjectScreen` 签名多两个参数）。
+
+## 最新追记（2026-10-16：CI 红修——`ProjectStoreTest` 样本表跟着判据放宽走；首页可写（根层建文件/建文件夹 + 项目号判据放宽）；项目页新建落当前层 + 弹窗白底/胶囊输入框；CI 红修（E2E 取件夹具换线性扫描）；引擎关 stdin 写端发 EOF + 顶栏「结束脚本」；readline 提示语与输入回显 + 子页触摸穿透；崩溃病因进悬浮窗 + 跨窗口收键盘 + 兜底补位号归属过滤 + 标题分隔线 + 底部输入行）
+
+- [2026-10-16 · CI 红修：`ProjectStoreTest` 的非法 id 样本表](2026-10-16.md) 一条目（最新）：
+  `:app-service:script-repo` 的 `非法 id 一律拒绝` 红（`assertThrows` 一条异常没收到；JVM 单测 job 随之红，
+  detekt 那步 fail-fast 没跑 ⇒ detekt 本轮在 CI 上还没被门禁验过）。该表是判据的**镜像**，而本轮两处判据
+  都动了 —— `PROJECT_ID` 放宽成「排除分隔符与点」（`"has space"` / `" a"` 不再非法）、空串从「构造不出来」
+  变成**根层哨兵**（该表钉的 `rootFor` 恰好是**读口**：`rootFor(ROOT)` 就是库根本身，本来就该通过；
+  闸在写侧 `create`/`delete`）。同批 `:domain` 三张表已同步，**漏了这张**（它不在我改过的那三个模块的
+  测试清单里）。药：样本表只留字符集判据仍拒的那几个 + **新增 `根层哨兵不建不删`**（`rootFor(ROOT) == 库根`
+  这条恒等式、两个写口都拒、被拒的 `delete` 一个文件都没删）。验：本机 JUnit launcher 真跑 5 例全绿
+  （`FAILED=0 SUCCEEDED=5`）+ `:domain` 全量重编译零 error。**教训**：判据放宽是**全局**改动，下次按
+  判据符号（`isValidProjectId`/`rejectProjectId`/`ProjectId(`）全仓扫，不按「我改过的目录」扫。
+
+- [2026-10-16 · 首页可写：根层建文件/建文件夹 + 项目号判据放宽](2026-10-16.md) 一条目：
+  用户裁定 **「根层可写（打通三条判据）」**（报源：实测「我在首页创建的，怎么进了 demo 里面」——
+  根层此前不可写，`targetProject` 留着 `files.firstOrNull()?.projectId ?: "demo"` 的顶替兜底），
+  并裁定根层**文件夹名允许中文**。**编码 = 空 `projectId`（`ProjectId.ROOT`）**：`Path.resolve("")`
+  恒等自身 ⇒ `projectRoot(filesDir, ROOT) == files/scripts/`、`scriptFile(..., ROOT, RelPath("x.js")) ==
+  files/scripts/x.js`，**引擎侧一行不用改**；危险面就地设闸（`FsProjectStore.create/delete` 拒绝空串 ——
+  `rootFor(ROOT)` 就是库根，否则 `delete` 删掉整个项目库）。三条判据各改一处：列（`ScriptFilesRead` 的
+  `projectId` 改成 `nameCount == 1 → ROOT`）/ 读写（`ScriptFileOps.resolveInProject` 根层分支换成
+  "必须正好一层"，防越界那道闸一字不动）/ 跑（`projectInternalOrNull` 根层回 relPath 自身且必须单段）。
+  **项目号判据 `[A-Za-z0-9_-]+` → `[^/\\p{Cntrl}.]+`**（放宽的只是字符集，批 84 的"拒 `.`"不动；
+  不能只放宽根层 —— 根层文件夹落盘就是项目目录，两套判据会造出"建得出、里面文件打不开"）；
+  根层建文件夹 = 建项目（名字要过 `isValidProjectId`、不许叫 `node_modules`），顺带堵"建了但看不见"
+  （不以点开头、UTF-8 ≤ 255 字节），**文件名不受项目名那两条限制**。前端：根层 FAB/对话框说「新建项目」、
+  日志面三处与**悬浮窗标题**不再渲染成 `//x.js`。验：本机 JUnit launcher 真跑 **118 例全绿**
+  （domain 44 / app 26 / ui 48，含新增 16）、detekt 四模块零 findings（`:ui` baseline 外科式改 2 行）、
+  文档链接门 786 条过。
+
+- [2026-10-16 · 新建落当前层 + 弹窗白底/胶囊输入框](2026-10-16.md) 一条目：
+  用户四条口径：**① 新建落在"你按 FAB 的那一层"**（旧口径只取项目名，进了 `demo/lib/` 也落 `demo/`）
+  —— 合约加末位参数 `HostSummary.createEntry(projectId, name, isFolder, dirRelPath = null)`，
+  呈现层把 `currentFolder` 原样传下去、中间三层都不解释路径，裁决全在 `ScriptFileOps.resolveName`
+  （非空时复用 `resolveInProject` 的越界/归属判据，多一条「这一层得真在」，**不用
+  `createDirectories` 顺路建中间层**：错字会静默变成一串目录）；**② 弹窗白底**
+  （`containerColor = sheetBackground`，M3 缺省的 `surfaceContainerHigh` 在本仓 ColorScheme 里
+  没映射、落回偏紫的基线灰）；**③ 删掉「将创建在项目「x」下」**那行（落点改了之后要么多余
+  要么说错）与只为它存在的 `targetProject` 参数；**④ 输入框 = 搜索框那颗胶囊** —— 抽出
+  `CapsuleInputField` **共用同一份版式**（灰底/圆角 20dp/高 40dp/15sp；放大镜走 `leadingGlyph`、
+  聚焦上报走 `focusDismiss`，对话框不报——它是模态）。验：`:domain` 全量编译零 error/warning、
+  `ScriptFileOpsTest` 用 JUnit launcher 真跑 15 例全过（含新增 4 例）、detekt 六模块零 findings
+  （`:ui` baseline 外科式 3 改 1 增）、文档链接门。
+
+- [2026-10-16 · CI 红修：抽 kBootstrap 的正则打穿 JVM 栈](2026-10-16.md) 一条目：
+  CI run `38902403070` 红在 `:app:testDebugUnitTest` —— `BridgeDistPackagingEntryTest` 那条
+  「dist env 缺席」炸 `StackOverflowError`，栈里一千多层**全是** `java.util.regex.Pattern$Loop`。
+  病在**共用夹具** `E2EFixtures.extractBootstrap` 那串嵌套量词正则：JVM 引擎按字符递归，栈深随
+  字面量块线性涨 —— 引导块 1132 字符时**冷调用**还抽得动，今天加了第 4 段装配涨到 1233 字符
+  就越线。**"三例只红一例"坐实**：同一线程里**第 1 次（冷、解释执行）炸、第 2/3 次（热、
+  `Pattern$Loop` 已 JIT、帧小得多）过**（先吃 300 层栈仍过、1200 层又炸）⇒ 一整个 `:app` 测试
+  JVM 里只有第一个调用它的用例红。药 = 换**线性扫描**（定位声明 → 跳 `=` → 逐个收字面量；
+  转义解码拆去独立函数；形态变了 `check` 报错不静默抽错）。验了四条：与旧正则输出**逐字等价**
+  对拍（512MB 栈线程跑基准 `old=1233 new=1233 equal=true`）、改后文件编过（kotlin-compiler-embeddable
+  2.0.21，零 error/warning）、反射调真 class 抽真 main.cpp 四段 `install*` 全还原、**三条用例的
+  语义在宿主 node 上照原样复跑全对**。仓库里同形正则只此一处。
+
+- [2026-10-16 · 引擎关写端发 EOF + 顶栏「结束脚本」](2026-10-16.md) 一条目：
+  **用户裁定**（对上一版 `unref` 补丁的评审）：四条排序 ① 引擎关 stdin 写端发真 EOF（最干净、
+  正路）② 宿主显式结束 ③ 专用 `ask()` API ④ 进程内 `unref`（排最后）；用户定 ① **+自动退**，
+  另在顶栏加一颗「结束脚本」。**① 为什么是正路**（本机实测）：关写端 → 脚本收 `stdin 'end'`
+  → readline `'close'` → **408ms、code 0 干净退出**，且脚本**能自己感知**流结束（`unref` 给不了）；
+  **代价**：EOF 到得早（问题还挂着）→ 那个 `question` 回调永不触发（一次性、不可逆，所以"什么时候发"
+  必须有判据）。**② 照字面做不到**：`rl.close()`/`unref()` 都在脚本进程内，宿主手里没有 rl ——
+  它只有「关管道写端」或「杀进程」两条路（超时 `destroyForcibly` 不做默认：长活脚本会被误杀）。
+  **药**：脚本侧只报事实（`stdin-idle.ts`：`'pause'` 当闹钟 + `data`/`readable` 监听器计数当判据，
+  报一次 `engines.stdinIdle`，`setImmediate` 延后一拍以免误判"同 tick 关一个立刻开下一个"；
+  **不碰 readline 模块、不 unref**）→ 引擎侧五层关写端（`engines.stdinIdle` 目标恒是自己 →
+  `RuntimeController.closeStdin` → `ScriptEngine.closeStdin` → `NodeProcessEngine` →
+  `SpawnedProcess.closeStdin`；能力位 `NONE`）→ 顶栏「结束脚本」（`HostSummary.stopRun`，
+  在途才可点；兜「正卡在 stdin 读」与死循环那两类）。上一版那条（`91929b1d`）**同日 revert
+  （`1e402701`）**，原条目原地标 `~~作废~~`。守卫 8 条（含闭环：报上来 → 宿主关写端 → 脚本收
+  `end`+`close` 并 code 0 退出）。
+
+- [2026-10-16 · readline 提示语/回显 与 触摸穿透](2026-10-16.md) 一条目（最新）：
+  ① **readline 的提示语走桥**：`createInterface({input})` 没给 output 时 `rl.question('请输入：')`
+  的提示语写进虚空（`terminal:false` 下 output 缺位；给了 `process.stdout` 也进排水管道）—— 药 =
+  引导期包 `createInterface`，脚本没给 output 时补一个假 output 把提示语送 console 数据面
+  （给了 output 的一概不碰；只包 `readline` 与 `readline/promises` 两条工厂）；
+  ② **窗口侧回显**：`terminal:false` 下 readline 从不回显用户敲的行（那是 TTY 驱动的事）——
+  `LogWindowState.echoes` + `rows` 按 `atSeq` 归并进行流（不缀末尾，否则因果读反）；
+  ③ **子页空白处不再穿透到底下面板**：病在 `hitTestChild`（子页空白无 pointerInput 节点 →
+  `hasHit()` false → 继续试下面的兄弟，同坐标恰是「依赖管理」入口行）—— 药 = `Modifier.claimPointerHits`
+  挂在子页那层根上（**不消费事件**，只占位；下层 `consume()` 的上一版会连子页自己的点击一起废掉，
+  错法留证在 KDoc）。
+
+
+- [2026-10-16 · 三条用户报](2026-10-16.md) 三条目（最新一条）：
+  ① **崩溃病因进悬浮窗**：脚本抛错的 `stderrTail` 此前只进档案 `crashSummary`（要翻任务日志
+  详情才读得到），窗里画的是「本次执行没有输出」—— 药 = `ControllerRunDispatcher.crashLine`
+  缝按 error 档写一行、**归属仍是这次 runId**（窗/控制台/日志管理三处同时可见）；
+  ② **跨窗口收键盘**：`dismissFocusOnTapOutside` 只看得到自己那棵组合，而悬浮窗是另一个窗口、
+  另一份 `FocusManager` —— 药 = `FocusDismissRegistry` 两档 + `DismissFocusOnWindowBlur`，
+  **只清对方不清自己**（清自己会打断正在进行的输入）；
+  ③ **兜底补位号加归属过滤**：此前取全库最新非引擎外行，窗刚开会被补到上一次别的脚本的输出上
+  （用户读作「它跑了上一次那个脚本」）—— 药 = 按 projectId + 项目内 relPath 全等从落盘索引挑。
+
+- [2026-10-16 · 分隔线与焦点收键盘](2026-10-16.md) 两条目：
+  ① 悬浮窗标题下加分隔线（画在头部**块内底缘** —— 三块同色，悬在 8dp 缝里会像飘着）；
+  ② 「点输入框外面收键盘」修掉用户报的"焦点转移后光标还在闪"：**病在焦点没转移**
+  —— Compose 的 `clickable` 触屏模式下不请求焦点（`focusableInNonTouchMode`），
+  点列表行不会让搜索框失焦，敲字还落进搜索框。药 = `FocusDismiss.kt`（输入框报
+  bounds + 容器在 Initial 趟读按下点、框外就 `clearFocus()`），项目页/任务中心/
+  悬浮窗三处接上。
+
+- [2026-10-16 · 悬浮窗输入行](2026-10-16.md) 一条目：
+  ① **胶囊框换白**（用户令，问询确认「窗底保持白+描边，胶囊也白」）：`WindowBlockSurface`
+  从 `surfaceMuted` 换成 `surface`，整张卡片一个白面 + 一圈 1dp 淡灰描边（三轮配色的
+  取舍逐条记在 `WindowSurface` KDoc）。
+  ② **底部输入框 + 蓝色箭头 → 脚本的 `process.stdin`**：五层全走 OS 管道
+  （`writeStdin` → `ScriptEngine.sendInput` → `RuntimeController.sendInput` →
+  `HostSummary.sendInput` → 控制器），脚本侧零改动；系统窗那颗全程 `FLAG_NOT_FOCUSABLE`
+  的窗在输入框拿到焦点时才摘掉它（否则打不出字）。
+
+## 最新追记（2026-10-15：「脚本执行完不要自动清理输出」+ 脚本输出详情闪退修法）
+
+- [2026-10-15 · 统一页](2026-10-15.md) 两条目：
+  ① 悬浮窗**结算不解绑**（用户令「脚本执行完不要自动清理输出」）：`LogWindowState.bind`
+  在 run 离开在途表时把 `boundRunId` 置 null —— 执行一结算窗口立刻切回「本次执行未开始」
+  空态，刚跑完的日志在眼前被自动清掉。药 = 结算保留绑定（只有从开窗起一次都没绑上过才落
+  空态）+ `running` 标记（标题缀「· 已结束」、暂停钮禁用、无输出时指路落盘全文）。
+  ② 脚本输出详情点一行就闪退：`LoadState`/行列表不是 saveable 白名单类型，`rememberSaveable`
+  **首帧即抛**；改 `remember`（详情是屏内局部现值）。
+
+## 最新追记（2026-10-14：「终态记录不可改写」—— engineRunId 跨进程复用）
+
+- [2026-10-14 · 「终态记录不可改写」](2026-10-14.md)：
+  用户报 toast「执行失败：终态记录不可改写」。engineRunId 是跨进程持久身份，而分配器是
+  进程内计数器 —— App 重启后第一次执行重发上一进程用掉的号，档案 `put` 撞「终态不可改写」
+  响亮失败。设备实测：`run_archive` 2 行 vs 意图日志 6 行，`script-logs/index.jsonl` 里
+  `{"run":1}` 三次。药 = `RunArchive.maxEngineRunId()`（高水位）+ 装配期把水位经引擎构造
+  配置 `NodeEngineConfig.runIdHighWater` 喂下去（构造即站在历史之后）→ 引擎 `init` 把
+  分配器顶到水位之后。三实现各补一句，契约/引擎/装配三条回归门。
+
+## 最新追记（2026-10-14：点执行零输出第二层 —— main.cpp 把堆上限拼进了 `--` 之后）
+
+- [2026-10-14 · 点执行零输出（第二层根因）](2026-10-14.md)：
+  第一层（`.so` 路径串位）修好后真机复跑仍零输出。logcat 原文
+  `Cannot find module '--max-old-space-size=192'` —— 批 107 的堆上限走 argv 注入，
+  而 `main.cpp` 把整个位置参数段排在 `--` 之后，node 遇 `--` 收手把标志当成脚本名。
+  桌面真 spawn 测试只对拍「有标志比没标志小一个数量级」且走系统 `node`，
+  **不覆盖 main.cpp 的拼 argv** —— 又一处 CI 全绿设备红。药 = 两段拼 argv：
+  选项插在 `-e BOOTSTRAP` 与 `--` 之间，位置参数仍自 `--` 起透传。
+  边界：C++ 本机禁编，未交叉编译/真机复验，红绿等 CI。
+
+## 最新追记（2026-10-14：点执行零输出 —— 引擎三件 .so 读错目录）
+
+- [2026-10-14 · 点执行零输出根因（nsDir/nativeLibDir 串位）](2026-10-14.md)：
+  批 109（typed ids）的 `.autojs` → `.ns` 批量改名把引擎三处 `.so` 路径
+  （`hostBinary`/`libnodePath`/`npmNodeBin`）的接收者从 `nativeLibDir` 逐字符替换成了
+  `nsDir`（`files/.ns`）—— 两个都是 `Path`，Kotlin 不报错，设备上全量
+  `ERR_FILE_NOT_FOUND`，点执行零输出 + 悬浮窗空态。`design-decisions` §77.3 记的就是
+  这种「改名的碰撞」。JVM 侧全绿因走假引擎/系统 node。药 = 三处改回
+  `nativeLibDir.resolve(…)` + 新门 `AppShellEnginePathsTest`（读源现推 val 名、钉
+  「三处接收者 = nativeLibraryDir 派生且 ≠ files/.ns 派生」，已拿 e338000 源验会红）。
+
 ## 最新追记（2026-10-14：固定开发签名密钥）
 
 - [2026-10-14 · 固定开发签名密钥](2026-10-14.md)：
@@ -10,7 +532,7 @@
   共用，`.gitignore` 对这一个路径开例外。**开发密钥非发行密钥**（公开仓人人可取，仅开发期
   互相覆盖用）。与 `SECURITY.md`「密钥库绝不提交」那句的冲突留给维护者补口径。
 
-## 最新追记（2026-10-14：「点执行就闪退」四层收口）
+## 最新追记（2026-10-14：「点执行就闪退」四层收口（2）
 
 - [2026-10-14 · 点执行闪退修法](2026-10-14.md)：
   离屏 `ComposeView.setContent` 跑的是组合，组合期一抛就从 `LaunchedEffect` 冒到进程
@@ -34,7 +556,7 @@
   迹象（2026-10-06 编辑器那条链踩过同一个坑）。转换收在
   `ScriptPaths.projectInternalOrNull`，削不出当场拒。
 
-## 最新追记（2026-10-13：执行日志悬浮窗 + 按执行持久化 + 暂停执行，用户令）
+## 最新追记（2026-10-13：执行日志悬浮窗 + 按执行持久化 + 暂停执行，用户令（2）
 
 - [2026-10-13 · 悬浮窗 + 落盘 + 暂停链](2026-10-13.md)：
   系统级悬浮窗（切 App 也能看）+ `<runId>.log`/`index.jsonl` 落盘（只记脚本行）+

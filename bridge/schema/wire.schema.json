@@ -82,6 +82,7 @@
         "heartbeat",
         "poolStats",
         "status",
+        "stdinIdle",
         "stop"
       ]
     },

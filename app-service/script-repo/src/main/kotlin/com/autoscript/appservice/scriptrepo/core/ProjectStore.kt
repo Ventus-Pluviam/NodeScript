@@ -51,16 +51,32 @@ class FsProjectStore(override val base: Path) : ProjectStore {
     override fun exists(id: ProjectId): Boolean = Files.isDirectory(rootFor(id))
 
     override fun create(id: ProjectId): Path {
+        require(id.value.isNotEmpty()) { NOT_A_PROJECT }
         val root = rootFor(id)
         Files.createDirectories(root)
         return root
     }
 
     override fun delete(id: ProjectId) {
+        require(id.value.isNotEmpty()) { NOT_A_PROJECT }
         val root = rootFor(id)
         if (!Files.isDirectory(root)) return
         Files.walk(root).use { s ->
             s.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
         }
+    }
+
+    private companion object {
+        /**
+         * 闸在**写侧两个口**上（2026-10-16）：[ProjectId.ROOT]（根层哨兵，空串）自本轮起
+         * 构造得出来，而 `rootFor(ROOT)` 就是 `base` 本身 —— `create` 是"建一个已经存在的
+         * 根"（无害但没意义），`delete` 则是**把整个项目库连根删掉**。
+         * 根层不是项目，没有"删根层"这个动作；把闸设在这里，而不是把哨兵从值类里禁掉
+         * （引擎侧与寻址侧正要靠它走同一套路径拼接）。
+         *
+         * [listIds]/[exists]/[rootFor] 不设闸：它们是**读**，`exists(ROOT)` 问的是
+         * "根存不存在"，答案本身没错。
+         */
+        const val NOT_A_PROJECT = "根层不是项目：不能建/删 files/scripts 本身"
     }
 }

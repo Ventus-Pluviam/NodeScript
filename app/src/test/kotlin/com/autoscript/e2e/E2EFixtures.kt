@@ -47,30 +47,77 @@ internal fun readBridgeDist(): Map<String, ByteArray> {
  *
  * 从**源文件**抽而不是复制第二份：源改了测试跟着走 —— 引导串是 §12.4 交付轨的
  * 单一事实源，抄一份到测试里就是把"接线断了"变成"两边一起断，测不出来"。
- * C 字符串字面量拼接 + 转义还原（不能用「到第一个 `;`」—— JS 语句的分号就在字面量里面）。
+ *
+ * **逐字扫描，不用正则**（2026-10-16 CI 红换的）：原实现是
+ * `Regex("""constexpr const char kBootstrap\[\]\s*=\s*((?:"(?:[^"\\]|\\.)*"\s*)+)""")`
+ * —— 嵌套量词让 JVM 正则引擎**按字符递归**，栈深随字面量块长度线性涨。块长到 1.1KB
+ * （2026-10-16 加了第 4 段引导装配，块涨到 1.2KB+）当场 `StackOverflowError`：CI 上
+ * `BridgeDistPackagingEntryTest` 三条用例全炸、栈里一千多层全是 `Pattern$Loop`。
+ * 调大测试栈不是修法 —— 每加一段引导就重来一次。这里换成正则等价的**线性扫描**：
+ * 定位声明 → 跳 `=` → 逐个收字面量（`\x` 两字符原样进 raw，交给下游解码）→
+ * 下一个非空白不是 `"` 就收工。形态变了（改名/改写法）给可检索的 error，不静默抽错。
  */
 internal fun extractBootstrap(mainCpp: String): String {
-    val block = Regex("""constexpr const char kBootstrap\[\]\s*=\s*((?:"(?:[^"\\]|\\.)*"\s*)+)""")
-        .find(mainCpp)?.groupValues?.get(1)
-        ?: error("main.cpp 里找不到 kBootstrap 定义（改名了？本测锚的就是这个符号）")
-    val parts = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"").findAll(block).map { it.groupValues[1] }.toList()
+    val decl = "constexpr const char kBootstrap[]"
+    val declAt = mainCpp.indexOf(decl)
+    check(declAt >= 0) { "main.cpp 里找不到 kBootstrap 定义（改名了？本测锚的就是这个符号）" }
+    var i = skipWhitespace(mainCpp, declAt + decl.length)
+    check(mainCpp.getOrNull(i) == '=') { "kBootstrap 声明后面不是 `=`（写法变了？）" }
+    i = skipWhitespace(mainCpp, i + 1)
+    val parts = mutableListOf<String>()
+    while (mainCpp.getOrNull(i) == '"') {
+        val raw = StringBuilder()
+        i = skipWhitespace(mainCpp, scanLiteral(mainCpp, i, raw))
+        parts += raw.toString()
+    }
     assertTrue(parts.isNotEmpty(), "kBootstrap 应由字符串字面量拼成")
-    return parts.joinToString("") { raw ->
-        buildString {
-            var i = 0
-            while (i < raw.length) {
-                val c = raw[i]
-                if (c == '\\' && i + 1 < raw.length) {
-                    when (raw[i + 1]) {
-                        'n' -> append('\n'); 't' -> append('\t'); 'r' -> append('\r')
-                        '"' -> append('"'); '\\' -> append('\\'); '\'' -> append('\'')
-                        else -> { append('\\'); append(raw[i + 1]) }
-                    }
-                    i += 2
-                } else {
-                    append(c); i++
-                }
+    return parts.joinToString("") { decodeCEscapes(it) }
+}
+
+/** [from] 起跳空白，返回第一个非空白下标（到末尾就是 `length`）。 */
+private fun skipWhitespace(src: String, from: Int): Int {
+    var i = from
+    while (i < src.length && src[i].isWhitespace()) i++
+    return i
+}
+
+/**
+ * 从 [start]（必须是开引号）扫到闭引号，把字面量原文追加进 [into]，返回闭引号的后一位。
+ *
+ * 转义**不解**（`\x` 两字符原样进 raw）—— 解码归 [decodeCEscapes]，两件事分开才看得清
+ * "抽"与"还原"各自的边界。没闭合的引号 / 末尾孤零零一个 `\` 都当场报错（抽错了要响）。
+ */
+private fun scanLiteral(src: String, start: Int, into: StringBuilder): Int {
+    var i = start + 1
+    while (i < src.length && src[i] != '"') {
+        val c = src[i]
+        if (c != '\\') {
+            into.append(c)
+            i++
+            continue
+        }
+        check(i + 1 < src.length) { "kBootstrap 的字面量末尾有没配对的 `\\`（抽不了）" }
+        into.append(c).append(src[i + 1])
+        i += 2
+    }
+    check(i < src.length) { "kBootstrap 的字面量没闭合（引号没配对）" }
+    return i + 1
+}
+
+/** C 字符串转义还原（`\n`/`\t`/`\r`/`\"`/`\\`/`\'`；其余原样保留反斜杠）。 */
+private fun decodeCEscapes(raw: String): String = buildString {
+    var i = 0
+    while (i < raw.length) {
+        val c = raw[i]
+        if (c == '\\' && i + 1 < raw.length) {
+            when (raw[i + 1]) {
+                'n' -> append('\n'); 't' -> append('\t'); 'r' -> append('\r')
+                '"' -> append('"'); '\\' -> append('\\'); '\'' -> append('\'')
+                else -> { append('\\'); append(raw[i + 1]) }
             }
+            i += 2
+        } else {
+            append(c); i++
         }
     }
 }

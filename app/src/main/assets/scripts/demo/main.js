@@ -9,11 +9,17 @@
  * 告终，而引擎、facade、桥、平台面四层到底通没通，从界面上看不出来。
  * 本文件只演示**读**（不写文件、不改系统状态），跑坏了也不会留下痕迹。
  *
- * **输出为什么走 `auto.console.*` 而不是裸 `console.log`**：引擎的排水线程对子进程
- * stdout/stderr **读即弃**（`ProcessLauncher`：「诊断面尚未接 SPI」），裸打印在设备上
- * 落不到任何地方 —— 控制台屏读的是桥上 `console` namespace（§7.3 数据面 → ConsoleCollector）。
- * 每条都 `await`：数据面是 fire-and-forget（失败即丢），不 await 就可能"脚本已退出、
- * 行还在队列里"。代价是每条一个来回，示例脚本不在乎。
+ * **输出为什么写 `await auto.console.*`**：数据面（桥上 `console` namespace，§7.3 →
+ * ConsoleCollector）是 fire-and-forget，**不 await 就可能"脚本已退出、行还在队列里"**
+ * —— 而本脚本结尾立刻 `process.exit(0)`。`await` 只是"投递完成"，不是"用户看完了"。
+ * 代价是每条一个来回，示例脚本不在乎。
+ *
+ * 裸 `console.log` **同样能出到控制台**（2026-10-15 起 kBootstrap 装了全局 console 包装，
+ * 见 `installConsoleBridge`）—— 它走的是同一条数据面，只是**返回 undefined、await 不到**，
+ * 在"打完就 exit"的脚本里可能丢尾行。本示例因此保留 `auto.console.*`：它给得出那个
+ * Promise。（`console.dir`/`table` 之类**也接上了同一条桥**，一样看得见；仍看不见的只有
+ * 流对象直写 `process.stdout.write` —— 那条通道引擎**读即弃**，且它的入口不在 console
+ * 对象上，收编要给流 API 造一份假的背压契约，本仓不做。）
  *
  * 约定（§12.1）：CJS 具名解构 `const { auto } = require('auto')`；脚本自行
  * `process.exit` 结束进程（引擎按退出码结算，别让进程挂着）。
@@ -41,7 +47,10 @@ main().then(
     // 失败路径两条都试，因为**桥断了 `auto.console` 也发不出去**（fire-and-forget 吞掉，
     // 这正是失败原因之一）。裸 stderr 写用同步 API：`process.exit` 不 flush 异步管道写，
     // 本例在开发机上实测被截断过（成功路径那 5 行只出来 3 行）。
-    // 真机上的可见信号仍是退出码（≠0 → 任务中心记 CRASHED）—— stderr 同样被排水线程丢弃。
+    // 真机上的可见信号：退出码（≠0 → 任务中心记 CRASHED）+ stderr 另被引擎收进有界尾
+    // 摘要（`RunRecord.crashSummary`，§8.3）。**那份摘要自 2026-10-16 起也进控制台**
+    // （`ControllerRunDispatcher.crashLine` 按 error 档写一行、归属仍是这次 runId）——
+    // 于是本行这句 stderr 在悬浮窗/控制台/日志管理三处都看得见，不再只是"落盘可查"。
     try {
       auto.console.error(msg);
     } catch (_) {

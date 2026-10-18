@@ -38,9 +38,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,7 +57,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -70,6 +67,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.scripts.ScriptRunnability
 import com.autoscript.ui.ManagementTransition
 import com.autoscript.ui.components.ActionBar
@@ -78,8 +76,13 @@ import com.autoscript.ui.components.ActionBottomSheet
 import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.BAR_MORE_DOTS_WEIGHT
 import com.autoscript.ui.components.BarMoreDotsSize
+import com.autoscript.ui.components.CapsuleInputField
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.centerInRoot
+import com.autoscript.ui.components.DismissFocusOnWindowBlur
+import com.autoscript.ui.components.RegisterFocusDismiss
+import com.autoscript.ui.components.dismissFocusOnTapOutside
+import com.autoscript.ui.components.rememberFocusDismissState
 import com.autoscript.ui.components.EaseOutQuint
 import com.autoscript.ui.components.OvershootEasing
 import com.autoscript.ui.components.rememberPressIndication
@@ -102,6 +105,7 @@ import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.pressableLongPress
 import com.autoscript.ui.components.rememberCopyAction
 import com.autoscript.ui.components.rememberLongPressFeedback
+import com.autoscript.ui.state.deleteTargets
 import com.autoscript.ui.state.FileSort
 import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.opToastMessage
@@ -151,8 +155,13 @@ fun ProjectScreen(
      * 而"当下是明是暗"这个事实在 `MainActivity` 里已经有了（`themeMode.isDark()`）。
      */
     themeSwitchLabel: String,
-    /** 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。 */
-    onCreate: (projectId: String, name: String, isFolder: Boolean) -> Unit,
+    /**
+     * 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。
+     *
+     * [dirRelPath] = **用户按下 FAB 时所在的那一层**（2026-10-16 用户口径「在当前进入的
+     * 文件夹中新建」）——本屏把当前目录原样交出去，不在这一层拼路径。
+     */
+    onCreate: (projectId: String, name: String, isFolder: Boolean, dirRelPath: String?) -> Unit,
     /** 读一个脚本文件的文本（**点文件**进编辑面时调；失败原文抛，本屏如实显示）。 */
     onReadFile: suspend (projectId: String, relPath: String) -> String,
     /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */
@@ -167,6 +176,26 @@ fun ProjectScreen(
     /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */
     onSortChange: (FileSort, Boolean) -> Unit,
     /**
+     * 条目（文件或文件夹）的绝对路径（菜单「复制绝对路径」；2026-10-17 用户口径）。
+     *
+     * **挂起**：绝对路径 = `files/scripts/` 的落点 + relPath，而落点只有宿主知道
+     * （本屏拿不到 `filesDir`，也不该拿到 —— 它连 `files/scripts` 这个约定都不该知道）。
+     * 失败原文抛，本屏把原因说出来（不静默复制一条空串）。
+     */
+    onAbsolutePath: suspend (projectId: String, relPath: String) -> String,
+    /**
+     * 删除条目（菜单「删除」与选择模式顶栏那一格；2026-10-17 用户口径）。
+     *
+     * **一条回调两条路**：菜单传只有一个元素的清单，多选传 [com.autoscript.ui.state.deleteTargets]
+     * 剪好的那一份（父子同选只留父、深度降序）。
+     *
+     * **正常返回 ≠ 已全删**：宿主逐条删、聚合成败，回执（`opNotice`/`opError`）由外壳写；
+     * 本屏只管把行送出去 —— 删完必须重读列表，那是外壳的事。
+     *
+     * **不弹确认框**（用户口径原文「不用加弹窗」）：点了即删，不可撤销。
+     */
+    onDelete: suspend (rows: List<ScriptFileRowUi>) -> Unit,
+    /**
      * 本页是否是 pager 当前停稳的那一页。pager 预组合邻页（`beyondViewportPageCount = 1`），
      * 本屏的返回键拦截若不看它，用户在任务页按返回会被邻页的项目屏吞掉（去退一层目录）。
      */
@@ -176,6 +205,9 @@ fun ProjectScreen(
     // 搜索词/当前目录/多选集合都是本屏私有的现值：过滤、下钻、选中都是**呈现**
     // （TG 文件页"仅应用于此文件夹"），不是读取 —— 不进读口。
     var query by rememberSaveable { mutableStateOf("") }
+    // 「点输入框外面就收键盘/撤光标」（2026-10-16 用户报"焦点转移后光标还在闪"）：
+    // 一份 state 管本屏那一个搜索框，见 `FocusDismiss` 的 KDoc。
+    val focusDismiss = rememberFocusDismissState()
     // 当前目录 = relPath 的**全路径前缀**（含项目名，如 "demo/"、"demo/lib/"）；
     // null = 全库根。目录行的 relPath 本身就是合格的前缀，进层就是直接赋值。
     var currentFolder by rememberSaveable { mutableStateOf<String?>(null) }
@@ -334,11 +366,17 @@ fun ProjectScreen(
         }
     }
 
-    // 新建落在**当前所在项目**（文件树按项目分目录，全库根不可写）—— 有文件取第一行的
-    // 项目，没文件回缺省目录名（首装用户先建项目文件夹）。
-    val targetProject = currentFolder?.substringBefore('/')
-        ?: state.files.firstOrNull()?.projectId
-        ?: "demo"
+    // 新建落在**当前所在那一层**：进了目录就是那一层（`currentFolder` 本身就是合格的
+    // relPath 前缀），还在全库根时落 `files/scripts/` 本层本身（[ProjectId.ROOT]）。
+    //
+    // **2026-10-16 用户裁定「根层可写」**：此前这里有一串兜底
+    // （`state.files.firstOrNull()?.projectId ?: "demo"`）—— 全库根被当成"没有项目可写"，
+    // 于是拿第一个项目顶替，首装没有项目时还回落到缺省名 `demo`。用户实测读到的正是
+    // 「我在首页创建的，怎么进了 demo 里面」。根层现在**真能放东西**：文件落
+    // `files/scripts/<名字>`、文件夹就是一个新项目，所以不需要任何顶替。
+    val targetProject = currentFolder?.substringBefore('/') ?: ProjectId.ROOT.value
+    // 根层（没有项目段）时 FAB 那颗"新建文件夹"的语义就是"建项目"，文案跟着改（见 CreateFab）。
+    val atRootLayer = targetProject.isEmpty()
 
     // 创建对话框是本屏私有的现值（state.creating 记的是"操作面开着"这一事实，
     // 对话框里的输入框内容不值得进状态类 —— 关掉即丢）。
@@ -375,10 +413,29 @@ fun ProjectScreen(
                         onBack = { selected = emptySet() },
                         backGlyph = "✕",
                         actions = {
-                            ActionBarAction(
-                                text = if (allSelected) "取消全选" else "选择全部",
-                                onClick = { selected = ProjectState.toggleSelectAll(selected, visible) },
-                            )
+                            // 两格：全选开关 + **删除**（2026-10-17 用户口径「顺带做上」）。
+                            // 删除**排在后面**（右端）：破坏性动作不放在拇指先够到的位置上。
+                            // 删完**退出选择模式** —— 行没了，选中集里不能留幽灵键
+                            // （留着的话顶栏还写"已选 N 项"，而列表里一行都没选上）。
+                            // 目标清单在**这里**算一次、同一次组合里既驱动禁用态又被点击用掉：
+                            // 「取消全选」之后选中集可以是空的（选择模式还在），那时这格若仍可点，
+                            // 用户按下去只会什么都不发生 —— 破坏性动作的哑火比灰着更难懂。
+                            val targets = deleteTargets(selected, state.files)
+                            Row {
+                                ActionBarAction(
+                                    text = if (allSelected) "取消全选" else "选择全部",
+                                    onClick = { selected = ProjectState.toggleSelectAll(selected, visible) },
+                                )
+                                ActionBarAction(
+                                    text = "删除",
+                                    tone = StatusTone.PROBLEM,
+                                    enabled = targets.isNotEmpty(),
+                                    onClick = {
+                                        selected = emptySet()
+                                        scope.launch { onDelete(targets) }
+                                    },
+                                )
+                            }
                         },
                     )
                 } else {
@@ -415,6 +472,7 @@ fun ProjectScreen(
                 SearchField(
                     query = query,
                     onChange = { query = it },
+                    focusDismiss = focusDismiss,
                 )
                 Box(Modifier.weight(1f)) {
                     // **列表全程都画**，编辑面盖住时也不省 —— 进出动画期间底下这份就是
@@ -486,47 +544,73 @@ fun ProjectScreen(
                             onCreateFolder = { creatingKind = ProjectState.CreationKind.FOLDER },
                             modifier = Modifier.align(Alignment.BottomEnd)
                                 .padding(end = 20.dp, bottom = TabBarBottomClearance(extra = 8.dp)),
+                            atRoot = atRootLayer,
                         )
                     }
                 }
             }
         // 一行的操作面板（TG 底部操作面板：长按/点文件行弹出，动作是大触控目标的整行）。
-        // **只放今天真能做的**：复制路径（本屏自己就能做）+ 进文件夹（目录行才有）。
-        // 运行/重命名/删除要宿主侧读口（`HostSummary` 目前只有 `createEntry`），
-        // 没有的口不摆成按钮 —— 摆了就是点了没反应。
+        // **2026-10-17 用户口径**：三项 —— 复制相对路径 / 复制绝对路径 / 删除。
+        // 「进入文件夹」那一项**删掉了**：点目录行本身就是进一层（见 `onClick` 的
+        // `file.isDirectory -> enterFolder(...)`），菜单项与主手势重复了一件事。
+        // 删除是**红色**（`StatusTone.PROBLEM`，TG 的删除项就是 `text_RedRegular`），
+        // 且**没有确认框**（用户口径「不用加弹窗」）—— 点了即删，不可撤销。
         if (showOverlays) sheetTarget?.let { target ->
             ActionBottomSheet(
                 title = target.name,
                 onDismiss = { sheetTarget = null },
             ) {
                 ActionBottomSheetItem(
-                    label = "复制路径",
+                    label = "复制相对路径",
                     onClick = {
-                        copy.copy("已复制路径", target.relPath)
+                        copy.copy("已复制相对路径", target.relPath)
                         sheetTarget = null
                     },
                 )
-                if (target.isDirectory) {
-                    ActionBottomSheetItem(
-                        label = "进入文件夹",
-                        onClick = {
-                            query = ""
-                            sheetTarget = null
-                            enterFolder(target.relPath)
-                        },
-                    )
-                }
+                ActionBottomSheetItem(
+                    label = "复制绝对路径",
+                    onClick = {
+                        sheetTarget = null
+                        // 绝对路径只有宿主知道（本屏拿不到 `filesDir`，也不该拿到）——
+                        // 现取一次；取不到就把原文说出来，不静默复制一条空的。
+                        scope.launch {
+                            try {
+                                copy.copy("已复制绝对路径", onAbsolutePath(target.projectId, target.relPath))
+                            } catch (t: kotlinx.coroutines.CancellationException) {
+                                throw t
+                            } catch (t: IllegalArgumentException) {
+                                // 宿主那只口的失败面就是这两类（与 `runFile` 那份 catch 同型）：
+                                // 路径判据拒收是 IAE、宿主未装配是 ISE（`error(...)`）。
+                                // **不收一个泛 Exception**：那是一条 detekt 违规，而这里真要的
+                                // 是"把这两类原文说出来"，不是"什么都吞"。
+                                toast?.show("复制失败：${t.message ?: t.javaClass.simpleName}")
+                            } catch (t: IllegalStateException) {
+                                toast?.show("复制失败：${t.message ?: t.javaClass.simpleName}")
+                            }
+                        }
+                    },
+                )
+                ActionBottomSheetItem(
+                    label = "删除",
+                    tone = StatusTone.PROBLEM,
+                    onClick = {
+                        sheetTarget = null
+                        scope.launch { onDelete(listOf(target)) }
+                    },
+                )
             }
     }
         // 创建对话框在屏幕级（不在 Box 里 —— 它盖全屏，不该被列表的裁剪裁到）。
         if (showOverlays) CreateEntryDialogs(
             creating = creatingKind,
-            targetProject = targetProject,
             onDismiss = { creatingKind = null },
             onConfirm = { name, isFolder ->
                 creatingKind = null
-                onCreate(targetProject, name, isFolder)
+                // 当前目录原样传下去（`currentFolder` = "demo/lib/" 这种 relPath 前缀）——
+                // 还在全库根（null）时落项目根，与旧口径一致。
+                onCreate(targetProject, name, isFolder, currentFolder)
             },
+            atRoot = atRootLayer,
         )
     }
 
@@ -534,12 +618,17 @@ fun ProjectScreen(
     // `ManagementTransition` 逐值对着 `ActionBarLayout`）。返回键整条归它 —— 它把
     // 非手势返回键与预测式手势合流（TG 是一个 `OnBackAnimationCallback` 管四态，
     // `LaunchActivity:738-818`），所以**不能再挂 `BackHandler`**（LIFO 会吃掉手势）。
+    // 窗口失焦也收键盘（跨窗口那一半：点悬浮窗 = 本窗口失焦，见 `DismissFocusOnWindowBlur`）——
+    // 与下面同窗口那条是一对，缺一个就有"点了别处光标还在闪"的方向漏网。
+    RegisterFocusDismiss(focusDismiss)
+    DismissFocusOnWindowBlur(focusDismiss)
     ManagementTransition(
         page = editing,
         active = active,
         onAnimatingChanged = { editorAnimating = it },
         onBackRequest = ::requestEditorClose,
-        modifier = modifier,
+        // 点搜索框外面就收键盘（含点在编辑面上那一下）—— 容器侧手势见 `FocusDismiss`。
+        modifier = modifier.dismissFocusOnTapOutside(focusDismiss),
         // 显式写 `content =`：尾随 lambda 只能绑到**签名里最后一个**形参，而这里最后
         // 一个是 `modifier`（不是函数类型）—— 写尾随 lambda 会被判成「实参过多」。
         content = { page ->
@@ -663,48 +752,29 @@ private fun ProjectMenu(
  * （[GlyphKind.SEARCH_FIELD]，`outline_search_1_24` 实测几何 —— 批 43 换掉旧的 SEARCH）、
  * 提示词 15sp 半透明、输入文字 15sp（`editText.setTextSize(15)`）。
  *
- * 不用 M3 `TextField`：它自带的 56dp 最小高与大内边距塞不进 40dp 的行高里
- * （批 25 实机：hint 文字被上下裁掉一截），而这页搜索框用不上它的 label/indicator
- * 那套装饰 —— 直接 `BasicTextField` + 自己摆 `Row`，内边距就是版式要的那几个 dp。
+ * 框本身的版式在 [CapsuleInputField]（2026-10-16 起与新建对话框共用同一份 —— 那一份
+ * 就是这里原先逐值写死的那几个数；2026-10-17 它搬到 `components/Inputs.kt`，多了第三个
+ * 使用点：依赖管理页的「安装依赖」输入框，那一处还多要 `enabled` / `onSubmit` 两个参数）；
+ * 本函数只剩"搜索框这一处"的两件事：槽位内边距、放大镜、以及把聚焦态报给「点外面收键盘」那套。
  */
 @Composable
 private fun SearchField(
     query: String,
     onChange: (String) -> Unit,
+    /** 「点外面收键盘」的共享状态（见 `FocusDismiss`）；本屏唯一那个搜索框报给它。 */
+    focusDismiss: com.autoscript.ui.components.FocusDismissState,
 ) {
-    val palette = ThemeColors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .height(40.dp)
-            .background(palette.fieldBackground, RoundedCornerShape(20.dp)),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Spacer(Modifier.width(12.dp))
-        Glyph(kind = GlyphKind.SEARCH_FIELD, tint = palette.text.copy(alpha = 0.6f))
-        Spacer(Modifier.width(12.dp))
-        Box(Modifier.weight(1f)) {
-            if (query.isEmpty()) {
-                Text(
-                    text = "搜索文件",
-                    color = palette.text.copy(alpha = 0.5f),
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                )
-            }
-            BasicTextField(
-                value = query,
-                onValueChange = onChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.text),
-                // 光标色是 `groupcreate_cursor`（[ThemeColors.cursor]），与强调色**不是一个键**。
-                cursorBrush = SolidColor(palette.cursor),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-    }
+    CapsuleInputField(
+        value = query,
+        onValueChange = onChange,
+        placeholder = "搜索文件",
+        // 槽位内边距（水平 12 / 垂直 6）是**这一处**的（52dp 槽位里坐一个 40dp 的框），
+        // 版式本身在 [CapsuleInputField]。
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        leadingGlyph = GlyphKind.SEARCH_FIELD,
+        // 上报自己的 bounds 与聚焦态：容器据此判"这一下点在框外"（见 `FocusDismiss`）。
+        focusDismiss = focusDismiss,
+    )
 }
 
 /**
@@ -970,6 +1040,7 @@ private fun CreateFab(
     onCreateFile: () -> Unit,
     onCreateFolder: () -> Unit,
     modifier: Modifier = Modifier,
+    atRoot: Boolean,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val rotation by animateFloatAsState(
@@ -1008,7 +1079,9 @@ private fun CreateFab(
     Column(modifier, horizontalAlignment = Alignment.End) {
         // 子项自下而上展开（TG：子按钮浮在主按钮上方，逐颗滑出）。
         AnimatedVisibility(visible = expanded, enter = subEnter, exit = subExit) {
-            FabSubItem(label = "新建文件夹", glyph = GlyphKind.FOLDER, onClick = {
+            // 根层建的文件夹就是一个新项目（`files/scripts/<名字>/`），说"新建文件夹"
+            // 名不符实 —— 用户要的是"在这儿放一个能进去、能放脚本的东西"，那东西叫项目。
+            FabSubItem(label = if (atRoot) "新建项目" else "新建文件夹", glyph = GlyphKind.FOLDER, onClick = {
                 expanded = false
                 onCreateFolder()
             })
@@ -1129,14 +1202,26 @@ private fun FabSubStrokeTop(): Color =
 
 /**
  * 新建文件/文件夹对话框（TG 的 Alert 命名框分寸：标题点破建什么、输入框占位"名称"）。
+ *
+ * **2026-10-16 用户口径三条**：
+ * - **白底**（[Colors.sheetBackground]，TG 的 `dialogBackground`）。M3 的缺省底色是
+ *   `surfaceContainerHigh`，而本仓 `ColorScheme` 只映射了 primary/background/surface/error
+ *   （见 `Theme.kt`）—— 那个键落回 M3 基线色（浅色下偏紫的灰），与页面不成一族；
+ * - **标题下面不再有"将创建在项目「x」下"那一行**：落点改成"就在你按 FAB 的那一层"之后，
+ *   这句话要么与用户看到的一致（那就不用说）、要么说错（当前目录是子层时），两种都不该留；
+ * - **输入框与搜索框同一个胶囊灰底样式**（[CapsuleInputField] —— 共用同一份版式，
+ *   不是照着抄一份）。
+ *
  * 名字合法性在宿主侧裁决（`ScriptFileOps`），这里不预校验 —— 错误原文走 opError 行。
+ * 根层的文件夹名多两条判据（它就是一个项目：不能含 `.`、不能叫 `node_modules`），
+ * 同样由宿主侧当场拒并给原文 —— 界面不写第二套判据（2026-10-16）。
  */
 @Composable
 private fun CreateEntryDialogs(
     creating: ProjectState.CreationKind?,
-    targetProject: String,
     onDismiss: () -> Unit,
     onConfirm: (name: String, isFolder: Boolean) -> Unit,
+    atRoot: Boolean,
 ) {
     var name by remember { mutableStateOf("") }
     // creating 为 null 时对话框不在组合里，name 随 remember 的 key 重置。
@@ -1144,27 +1229,20 @@ private fun CreateEntryDialogs(
     if (creating == null) return
     val title = when (creating) {
         ProjectState.CreationKind.FILE -> "新建文件"
-        ProjectState.CreationKind.FOLDER -> "新建文件夹"
+        // 根层的文件夹落盘后就是一个项目目录（与 FAB 那颗子钮同一句话术）。
+        ProjectState.CreationKind.FOLDER -> if (atRoot) "新建项目" else "新建文件夹"
     }
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = ThemeColors.sheetBackground,
         title = { Text(title) },
         text = {
-            Column {
-                Text(
-                    text = "将创建在项目「$targetProject」下",
-                    color = ThemeColors.textTertiary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    placeholder = { Text("名称") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            CapsuleInputField(
+                value = name,
+                onValueChange = { name = it },
+                placeholder = "名称",
+                modifier = Modifier.fillMaxWidth(),
+            )
         },
         confirmButton = {
             TextButton(

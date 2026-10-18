@@ -106,6 +106,13 @@ data class NodeEngineConfig(
      * 那一项的缺省与现状逐位相同（一份没配过的配置不该改变任何行为）。
      */
     val uvThreadPoolSize: () -> Int? = { null },
+    /**
+     * **runId 分配器的初始水位**（2026-10-14 真机 bug）：装配期可把分配器直接建在档案
+     * 高水位之后。取值形态与 `RunArchive.maxEngineRunId()` 同源（"已用过的最大号"），
+     * 本类保证**下一个发出的号严格大于它** —— 两处取"下界"而不是"起点"会让调用点各差
+     * 一次一，那正是这类缝最容易错的地方。缺省 `0` = 从 1 数（单测/离线路径行为不变）。
+     */
+    val runIdHighWater: Long = 0,
     /** 四步 quiesce 的排空窗口（§8.3）：`stop()` SIGTERM 后等这么久，未退则 TimedOut 交池 kill 兜底。 */
     val stopGraceMillis: Long = 3_000,
 )
@@ -139,6 +146,13 @@ data class NodeEngineConfig(
  * **runId 全局唯一**：文件级计数器跨全部实例递增 —— `RuntimeController.active` 以 runId 为键，
  * 池内多槽实例各自从 1 数会在在途表互相覆盖（与 `FakeEngine` 的共享序列同一语义）。
  *
+ * **跨进程纪律（2026-10-14 真机 bug）**：这个计数器是**进程内**的 —— App 每次重启都从 1
+ * 重新数。档案却是持久的（上一进程的终态行还在库里），于是新进程第一次执行会把上一进程
+ * 用掉的 engineRunId 再发一遍，`SqliteRunArchive.put` 撞「终态记录不可改写」响亮失败。
+ * 装配期必须把档案高水位喂进 [NodeEngineConfig.runIdHighWater]（`RunArchive.maxEngineRunId`）——
+ * 缺了这一步的形态：设备上 `run_archive` 只有 2 行而意图日志 6 行，`script-logs/index.jsonl`
+ * 里 `{"run":1}` 出现三次，新进程第一次执行报 `终态记录不可改写: engineRunId=1 state=CRASHED`。
+ *
  * @param launcher spawn 缝：单测注入假实现断言 argv/env/cwd，集成测试换 [ProcessBuilderLauncher] 真起进程。
  */
 class NodeProcessEngine(
@@ -147,6 +161,12 @@ class NodeProcessEngine(
     private val launcher: ProcessLauncher = ProcessBuilderLauncher(),
     private val identityIssuer: RunIdentityIssuer? = null,
 ) : ScriptEngine {
+
+    init {
+        // 构造即顶水位（2026-10-14）：配置里带了历史高水位的话，本实例一存在就已经
+        // 站在历史之后 —— 不依赖装配层"记得在建完之后、第一次 execute 之前调一次"。
+        raiseFloor(config.runIdHighWater)
+    }
 
     /** 回调始终捕获本次执行，旧尾帧/旧清理不得按槽位找到新 run 的身份。 */
     private class Execution(val process: SpawnedProcess, val lease: RunIdentityLease?) {
@@ -172,9 +192,11 @@ class NodeProcessEngine(
     /**
      * 拼 spawn 命令行：**堆上限标志位插在脚本路径之前**。
      *
-     * 位置是契约不是排版：`main.cpp` 的 node_argv 形如
-     * `{node, [-- -e BOOTSTRAP --], script, args...}`，标志位落在 script 之后会被当成脚本的
-     * 第一个位置参数（§7.8 的 argv 契约）。没配堆上限时**一个标记都不加** ——
+     * 位置是契约不是排版：`main.cpp` 按 node argv 规则**两段拼**（2026-10-14 修）——
+     * `node_argv = {argv[0], [选项…], [-e BOOTSTRAP --], script, args...}`，选项落在
+     * `--` **之前**（node 先吃选项、遇 `--` 收手）；标志位若排在 `--` 之后会被当成脚本的
+     * 第一个位置参数（设备实测 `Cannot find module '--max-old-space-size=192'`，
+     * 退出码 1，引擎判 CRASHED）。没配堆上限时**一个标记都不加** ——
      * 那不是「上限 0」而是完全交给 Node 的默认。
      */
     private fun spawnCommand(scriptAbs: Path, args: List<String>): List<String> {
@@ -336,6 +358,38 @@ class NodeProcessEngine(
     }
 
     /**
+     * 往这次执行的脚本进程 stdin 送一行（2026-10-16 用户令；SPI [ScriptEngine.sendInput]
+     * 的真实现）。
+     *
+     * 与 [pause]/[resume] 同一条"当前执行体"口径：没有在跑的执行 → false。
+     * 管道写本身可能阻塞（脚本不读且缓冲满），故落在 `Dispatchers.IO` —— 与
+     * [stop]/[kill] 同一条纪律，不让它占住调用方的线程。
+     *
+     * **不检查 `stopRequested`**：正在收尸的执行写 stdin 只会拿到 false（管道已关），
+     * 多一个判据就多一处会漂的状态；真实判据是"管道还在不在"，那由写本身回答。
+     */
+    override suspend fun sendInput(line: String): Boolean = withContext(Dispatchers.IO) {
+        val current = execution ?: return@withContext false
+        current.process.writeStdin(line)
+    }
+
+    /**
+     * 关掉这次执行的 stdin 写端发 EOF（2026-10-16 用户令「答完自己退」；SPI
+     * [ScriptEngine.closeStdin] 的真实现）。宿主侧那条链的终点：脚本答完最后一个问题、
+     * 关掉 readline 之后，`stdin-idle.ts` 报上来的"没有读者了"在这里落成真 EOF。
+     *
+     * 与 [sendInput] 同一条"当前执行体"口径（没有在跑的执行 → false），也同一条
+     * `Dispatchers.IO` 纪律：关流可能等内核缓冲落地，不该占调用方的线程。
+     *
+     * **不检查 `stopRequested`**：正在收尸的执行关 stdin 只会拿到 false（进程没了/管道已关），
+     * 与 [sendInput] 同 —— 真实判据是"管道还在不在"，那由关流本身回答。
+     */
+    override suspend fun closeStdin(): Boolean = withContext(Dispatchers.IO) {
+        val current = execution ?: return@withContext false
+        current.process.closeStdin()
+    }
+
+    /**
      * 四步 quiesce 的「请求退出」步（§8.3）：SIGTERM → [NodeEngineConfig.stopGraceMillis] 内退净
      * 回 [StopResult.Clean]；超时回 [StopResult.TimedOut]（partial=true = 尚有残留），
      * 池侧 `PoolSlot.quiesce` 据此 kill 兜底。从未启动/已退净 → 如实 Clean（无事可停）。
@@ -459,5 +513,12 @@ class NodeProcessEngine(
 
         /** 跨全部引擎实例的 runId 序列（见类 KDoc「runId 全局唯一」）。 */
         private val nodeEngineRunIds = AtomicLong(1)
+
+        /** 把共享序列顶到 `usedThrough` 之后（返回下一个待发号；`<=0` 只读现值）。 */
+        private fun raiseFloor(usedThrough: Long): Long {
+            if (usedThrough <= 0) return nodeEngineRunIds.get()
+            val next = if (usedThrough == Long.MAX_VALUE) Long.MAX_VALUE else usedThrough + 1
+            return nodeEngineRunIds.updateAndGet { cur -> if (cur >= next) cur else next }
+        }
     }
 }

@@ -2,6 +2,7 @@ package com.autoscript.shell
 
 import com.autoscript.domain.host.ScriptFileRow
 import com.autoscript.domain.host.ScriptFilesSnapshot
+import com.autoscript.domain.scripts.ProjectId
 import com.autoscript.domain.scripts.ScriptPaths
 import java.nio.file.Files
 import java.nio.file.Path
@@ -31,6 +32,12 @@ import kotlin.io.path.name
  * 文件夹与文件混排（TG 文件页目录在前的读法靠呈现层排），`childCount` 数它的直接子项
  * （`Files.list` 现数；目录的"大小"就是它，TG 文件夹行也不显示字节数）。
  * 目录行 `relPath` 以 `/` 结尾：呈现层不用再对一遍 `isDirectory`。
+ *
+ * **`projectId` 的根层编码（2026-10-16 用户口径「根层可写」）**：`files/scripts/` 本层那些
+ * 条目（`files/scripts/x.js`、`files/scripts/新项目/`）**没有项目段**，报 [ProjectId.ROOT]（空串）；
+ * 二层及以下照旧报首段目录名。此前一律取 `root.relativize(path).first()` —— 根层的文件于是
+ * 被报成"项目 `x.js`"，点开必得一句「项目不存在: x.js」（列得出、打不开的那一半）。
+ * 判据就是 `nameCount`：一层 = 根层，两层及以上 = 首段是项目名。
  */
 object ScriptFilesRead {
 
@@ -48,14 +55,18 @@ object ScriptFilesRead {
         Files.walk(root).use { stream ->
             val rows = stream
                 .filter { path -> path != root }
-                .filter { path -> !root.relativize(path).any { segment -> segment.toString() == "node_modules" } }
+                .filter { path ->
+                    !root.relativize(path).any { segment -> segment.toString() == ScriptPaths.NODE_MODULES_DIR }
+                }
                 .filter { !it.isNoise() }
                 .map { path ->
                     val attrs = Files.readAttributes(path, BasicFileAttributes::class.java)
-                    val rel = root.relativize(path).joinToString("/")
+                    val relative = root.relativize(path)
+                    val rel = relative.joinToString("/")
                     val isDir = attrs.isDirectory
                     ScriptFileRow(
-                        projectId = root.relativize(path).first().toString(),
+                        // 根层条目没有项目段（见类 KDoc）；`nameCount` 只算一次，别在两处各 relativize 一遍。
+                        projectId = if (relative.nameCount == 1) ProjectId.ROOT.value else relative.first().toString(),
                         // 目录行以 / 结尾（契约约定：呈现层靠它区分，不再对一遍 isDirectory）。
                         relPath = if (isDir) "$rel/" else rel,
                         name = path.name,

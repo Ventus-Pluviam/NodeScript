@@ -5,6 +5,7 @@ import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.npm.NpmRegistryKeys
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.InstallEvent
 import com.autoscript.domain.npm.InstallFlags
@@ -12,7 +13,6 @@ import com.autoscript.domain.host.ShellConsoleResult
 import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.npm.InstallHandle
-import com.autoscript.domain.npm.InstallHistoryOp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +26,7 @@ import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -52,6 +53,32 @@ class InstallCoordinatorTest {
     private val staging get() = InstallStaging(layout)
 
     /** 假执行体：在暂存目录写包内容，模拟 reify 产物。 */
+    /**
+     * 记录型去向缝（原 `InstallHistory` 的替身；2026-10-17 用户令「去掉审计、改打系统日志」
+     * 之后这本"账"不再存在，事实只交给注入进去的缝，故替身就是这条缝本身）。
+     *
+     * **刻意不带时间戳**：时刻由去向侧盖（生产是 `HostLog` 自己取
+     * `System.currentTimeMillis()`，与 logcat 同源）—— 替身多记一个字段，等于替生产
+     * 决定了它并没有的东西。
+     */
+    private class RecordingOpLog : OpLogSink {
+        data class Entry(
+            val op: String,
+            val projectId: String,
+            val success: Boolean,
+            val detail: String?,
+        )
+
+        private val entries = mutableListOf<Entry>()
+
+        override fun log(op: String, projectId: String, success: Boolean, detail: String?) {
+            synchronized(entries) { entries += Entry(op, projectId, success, detail) }
+        }
+
+        /** 按写入序（最新在最后）—— 与去向侧拿到的顺序同一个。 */
+        fun all(): List<Entry> = synchronized(entries) { entries.toList() }
+    }
+
     private class FakeExecutor(
         val block: suspend (HeavyOp) -> Unit = {},
     ) : HeavyOpExecutor {
@@ -87,7 +114,7 @@ class InstallCoordinatorTest {
             }
         }
 
-    private fun newHistory() = InstallHistory(dir.resolve(".ns"))
+    private fun newOpLog() = RecordingOpLog()
 
     /** 造一个 bundle zip：entries = (path, bytes)。 */
     private fun bundleZip(vararg entries: Pair<String, ByteArray>): Path {
@@ -121,7 +148,7 @@ class InstallCoordinatorTest {
         executor: HeavyOpExecutor = FakeExecutor(),
         free: Long = 10L * 1024 * 1024 * 1024,
         cache: CacheIndex = CacheIndex { false },
-        history: InstallHistory? = newHistory(),
+        opLog: OpLogSink = newOpLog(),
         lockSigner: LockSigner? = null,
         snapshots: NpmSnapshot? = null,
         bundleImporter: NpmOfflineBundleImporter? = null,
@@ -146,7 +173,7 @@ class InstallCoordinatorTest {
             layout = layout,
             journal = journal,
             staging = staging,
-            history = history,
+            opLog = opLog,
             lockSigner = lockSigner,
             snapshots = snapshots,
             cacheIndex = cache,
@@ -393,7 +420,7 @@ class InstallCoordinatorTest {
         assertEquals(1, peak.get(), "同一项目出现并行安装：per-project 锁没生效")
     }
 
-    // ═══ 审计史（§10.2 install-history） ═══
+    // ═══ 操作事实的去向（§10.2；原「审计史」，2026-10-17 改打系统日志） ═══
 
     @Test
     fun `带 install 脚本的包装完发 SCRIPTS_SKIPPED 显式警告（禁止静默）`() = runBlocking {
@@ -436,39 +463,39 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `成功安装入史：op 名取 npm 子命令`() = runBlocking {
+    fun `成功安装留痕：op 名取 npm 子命令`() = runBlocking {
         val exec = FakeExecutor { op ->
             Files.write(op.stageDir.resolve("axios.js"), ("console.log(1)").toByteArray())
         }
-        val h = newHistory()
-        coordinator(executor = exec, history = h).install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        val h = newOpLog()
+        coordinator(executor = exec, opLog = h).install("p1", listOf(PackageSpec("axios", "1.7.0")))
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.INSTALL, e.op)
+        assertEquals(OpName.INSTALL, e.op)
         assertEquals("p1", e.projectId)
-        assertTrue(e.success, "成功安装必须如实入史")
+        assertTrue(e.success, "成功安装必须如实交给去向")
     }
 
     @Test
-    fun `失败安装也入史（审计不能只答成功面）`() = runBlocking {
-        val h = newHistory()
+    fun `失败安装也留痕（去向不能只答成功面）`() = runBlocking {
+        val h = newOpLog()
         val exec = FakeExecutor { throw RuntimeException("registry 502") }
         assertThrows(RuntimeException::class.java) {
-            runBlocking { coordinator(executor = exec, history = h).install("p1", listOf(PackageSpec("axios"))) }
+            runBlocking { coordinator(executor = exec, opLog = h).install("p1", listOf(PackageSpec("axios"))) }
         }
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.INSTALL, e.op)
-        assertTrue(!e.success, "失败也要入史")
+        assertEquals(OpName.INSTALL, e.op)
+        assertTrue(!e.success, "失败也要留痕")
         assertTrue(e.detail?.contains("registry 502") == true, "失败明细必须带得上：${e.detail}")
     }
 
     @Test
     fun `tarball 导入归并为 import op（路径只进 detail）`() = runBlocking {
-        val h = newHistory()
+        val h = newOpLog()
         val exec = FakeExecutor { /* 假执行 */ }
-        coordinator(executor = exec, history = h)
+        coordinator(executor = exec, opLog = h)
             .importTarball("p1", "/sdcard/Download/pkg.tgz")
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.IMPORT, e.op, "导入统一归 import（用户路径不是 op 名）")
+        assertEquals(OpName.IMPORT, e.op, "导入统一归 import（用户路径不是 op 名）")
         assertTrue(e.success)
     }
 
@@ -483,11 +510,11 @@ class InstallCoordinatorTest {
     fun `bundle 导入：合入缓存后按 lock 离线重建（导入 != 安装）`() = runBlocking {
         val payload = "bundle-tarball".toByteArray()
         val zip = bundleZip("_cacache/content-v2/sha512/" + segments(payload) to payload)
-        val h = newHistory()
+        val h = newOpLog()
         val exec = FakeExecutor { }
         val c = coordinator(
             executor = exec,
-            history = h,
+            opLog = h,
             bundleImporter = NpmOfflineBundleImporter,
         )
         c.importOfflineBundle("p1", zip.toString())
@@ -497,26 +524,26 @@ class InstallCoordinatorTest {
         assertTrue(Files.isRegularFile(cacheDir.resolve("_cacache/content-v2/sha512/" + segments(payload))))
         // 2) 随后走正规事务链：ci --offline（不是「解压即算装上」）
         assertEquals(listOf("ci", "--offline"), exec.calls.single().args)
-        // 3) 成败都入史：合入与重建各一条 import/ci
+        // 3) 成败都留痕：合入与重建各一条 import/ci
         assertEquals(
-            listOf(InstallHistory.Op.IMPORT, "ci"),
+            listOf(OpName.IMPORT, "ci"),
             h.all().map { it.op },
         )
         assertTrue(h.all().all { it.success })
     }
 
     @Test
-    fun `bundle 导入：有条目被拒则如实入史（不静默整包导入）`() = runBlocking {
+    fun `bundle 导入：有条目被拒则如实留痕（不静默整包导入）`() = runBlocking {
         val honest = "honest".toByteArray()
         val zip = bundleZip(
             ("_cacache/content-v2/sha512/" + segments(honest)) to honest,
             "../escape.bin" to "pwned".toByteArray(),
         )
-        val h = newHistory()
-        val c = coordinator(executor = FakeExecutor { }, history = h, bundleImporter = NpmOfflineBundleImporter)
+        val h = newOpLog()
+        val c = coordinator(executor = FakeExecutor { }, opLog = h, bundleImporter = NpmOfflineBundleImporter)
         c.importOfflineBundle("p1", zip.toString())
         val failed = h.all().first { !it.success }
-        assertEquals(InstallHistory.Op.IMPORT, failed.op)
+        assertEquals(OpName.IMPORT, failed.op)
         assertTrue(failed.detail!!.contains("被拒"), "拒收必须点名：${failed.detail}")
     }
 
@@ -545,23 +572,23 @@ class InstallCoordinatorTest {
         }
         assertTrue(Files.size(zip) > 512L * 1024 * 1024, "前提：包真的超顶")
 
-        val h = newHistory()
-        val c = coordinator(executor = FakeExecutor { }, history = h, bundleImporter = NpmOfflineBundleImporter)
+        val h = newOpLog()
+        val c = coordinator(executor = FakeExecutor { }, opLog = h, bundleImporter = NpmOfflineBundleImporter)
         val e = assertThrows(AutojsException::class.java) {
             runBlocking { c.importOfflineBundle("p1", zip.toString()) }
         }
         assertEquals(ErrorCode.ERR_INVALID_PARAM, e.error, "超限是**参数**问题（去重选文件），不是找不到文件")
         assertTrue(e.message!!.contains("超过上限"), "原文（含实际字节数与上限）要保留给用户：${e.message}")
         val failed = h.all().single { !it.success }
-        assertEquals(InstallHistory.Op.IMPORT, failed.op, "超限也要留痕")
+        assertEquals(OpName.IMPORT, failed.op, "超限也要留痕")
     }
 
     @Test
-    fun `registry 变更入史（可审计）`() = runBlocking {
-        val h = newHistory()
-        coordinator(history = h).config("p1", com.autoscript.domain.npm.NpmConfigKey.REGISTRY, "https://registry.npmjs.org")
+    fun `registry 变更留痕`() = runBlocking {
+        val h = newOpLog()
+        coordinator(opLog = h).config("p1", com.autoscript.domain.npm.NpmConfigKey.REGISTRY, "https://registry.npmjs.org")
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.REGISTRY, e.op)
+        assertEquals(OpName.REGISTRY, e.op)
         assertTrue(e.detail?.contains("registry=https://registry.npmjs.org") == true, "明细须含键值：${e.detail}")
     }
 
@@ -576,9 +603,9 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `设全局镜像源后读回且入史`() = runBlocking {
-        val h = newHistory()
-        val c = coordinator(history = h, globalConfig = NpmGlobalConfig(dir))
+    fun `设全局镜像源后读回且留痕`() = runBlocking {
+        val h = newOpLog()
+        val c = coordinator(opLog = h, globalConfig = NpmGlobalConfig(dir))
         c.setGlobalRegistry("  https://registry.npmmirror.com/  ")
         assertEquals(
             "https://registry.npmmirror.com/",
@@ -587,7 +614,7 @@ class InstallCoordinatorTest {
         )
         assertTrue(c.globalRegistry().customized)
         val e = h.all().single()
-        assertEquals(InstallHistory.Op.REGISTRY, e.op)
+        assertEquals(OpName.REGISTRY, e.op)
         assertEquals("", e.projectId, "全局变更没有项目维度——空串是刻意的，不是漏填")
     }
 
@@ -697,7 +724,7 @@ class InstallCoordinatorTest {
         assertEquals(listOf("run", "build", "--", "--watch"), op.npmArgs, "少了 -- 的话 --watch 会被 npm 自己吃掉")
         assertEquals("p1|build", op.subject, "执行体要能复述「我跑的是哪一份」")
         assertEquals("build", op.what)
-        assertTrue(op.versionHash.startsWith("sha256:"), "内容哈希要随 op 走（审计要能回答「批的那份还在不在」）")
+        assertTrue(op.versionHash.startsWith("sha256:"), "内容哈希要随 op 走（日志要能回答「批的那份还在不在」）")
     }
 
     @Test
@@ -929,6 +956,76 @@ class InstallCoordinatorTest {
     }
 
     @Test
+    fun `list 同一包同版本落两个位置 → 归一成一条（重复的键会让依赖页当场崩）`() = runBlocking {
+        // lock v3 的键是**安装位置**，不是包的身份 —— peer 冲突的典型形态：根上 c@2，
+        // a 与 b 各嵌一份 c@1（`node_modules/a/node_modules/c` 与 `node_modules/b/node_modules/c`
+        // 是同名同版的两份）。依赖管理页用 `items(key = "<name>@<version>")` 铺这份清单，
+        // 键重复时 Compose **当场抛**（`Key "c@1.0.0" was already used`）——
+        // 2026-10-17 设备实测的「依赖装多了，查看的时候容易闪退」。
+        writeLock(
+            "p1",
+            """{"lockfileVersion":3,"packages":{"":{"dependencies":{"a":"1.0.0"}},
+                "node_modules/a":{"version":"1.0.0"},
+                "node_modules/b":{"version":"1.0.0"},
+                "node_modules/c":{"version":"2.0.0"},
+                "node_modules/a/node_modules/c":{"version":"1.0.0"},
+                "node_modules/b/node_modules/c":{"version":"1.0.0"}}}""",
+        )
+        val list = coordinator().list("p1", 0)
+        assertEquals(
+            listOf("a", "b", "c", "c"),
+            list.map { it.name },
+            "5 个安装位置 / 4 个不同的 包@版本：c@1.0.0 的两份落点归一成一条",
+        )
+        assertEquals(
+            list.size,
+            list.distinctBy { "${it.name}@${it.version}" }.size,
+            "同名同版不许出现两次 —— 它就是 Compose 那个 key，重复即崩",
+        )
+    }
+
+    // ═══ 读口不许把阻塞落在调用线程上（2026-10-17 设备实测「依赖装多了查看时闪退」） ═══
+
+    @Test
+    fun `快照读取不落在调用线程上（依赖装多了 = 主线程上一趟全树遍历）`() = runBlocking {
+        // 「调用线程」在这里冒充「主线程」：进依赖管理页 / 点刷新 / 安装期间每 400ms 一次
+        // 的续拉，都是 MainActivity 的 `rememberCoroutineScope()`（= Main）直接 await
+        // `host.npmSnapshot()` 的。这一趟要遍历全部项目目录、逐项目解析两份 lock、
+        // 逐棵 node_modules 全树算尺寸、再遍历一遍缓存目录 —— suspend 只给"可挂起"的许可，
+        // **不搬线程**，所以不包 IO 的话它整趟落在主线程上：Android 上就是 ANR。
+        // 本机 JVM 没有 ANR 那道守门人，这条断言是它在单测里的替身。
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0","integrity":"sha512-x"}}}""")
+        val caller = Thread.currentThread()
+        val walked = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+        val looked = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+        val c = coordinator(
+            // 尺寸那一趟进 [InstallCoordinator.nodeModulesBytes] 的第一件事就是读时钟。
+            now = { walked.add(Thread.currentThread()); 1_000L },
+            // 缺口那一趟逐条查缓存。
+            cache = CacheIndex { looked.add(Thread.currentThread()); false },
+        )
+        c.snapshot()
+        assertTrue(walked.isNotEmpty(), "node_modules 尺寸那一趟必须真被走到 —— 没走到的话这条断言是在自欺")
+        assertTrue(looked.isNotEmpty(), "缓存查命中那一趟必须真被走到")
+        assertTrue(
+            walked.none { it === caller },
+            "目录遍历落在调用方线程上了：Android 上就是主线程 ANR（用户看到的是「一查看就闪退」）",
+        )
+        assertTrue(looked.none { it === caller }, "缓存遍历落在调用方线程上了")
+    }
+
+    @Test
+    fun `offlineGap 也不落在调用线程上（同一条主线程纪律）`() = runBlocking {
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0","integrity":"sha512-x"}}}""")
+        val caller = Thread.currentThread()
+        val looked = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+        val c = coordinator(cache = CacheIndex { looked.add(Thread.currentThread()); false })
+        c.offlineGap("p1")
+        assertTrue(looked.isNotEmpty(), "缓存查命中那一趟必须真被走到")
+        assertTrue(looked.none { it === caller }, "读这份 lock + 查缓存落在调用方线程上了")
+    }
+
+    @Test
     fun `offlineGap = lock 闭包减去缓存命中`() = runBlocking {
         writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/a":{"version":"1.0.0","integrity":"sha512-hit"},"node_modules/b":{"version":"2.0.0","integrity":"sha512-miss"},"node_modules/c":{"version":"3.0.0"}}}""")
         val c = coordinator(cache = CacheIndex { it == "sha512-hit" })
@@ -946,93 +1043,85 @@ class InstallCoordinatorTest {
         assertEquals(100L, stats["p1"]!!.totalBytes)
     }
 
+    /**
+     * 可用空间进不了「预检下限 × 1.25」的余量 → 发 `DISK_QUOTA` 黄警，**不拦**。
+     *
+     * **2026-10-17 换锚**：此前这条黄是「node_modules 用掉配额的 80%」，而项目配额那一档
+     * 已按用户口径整个摘掉（「取消 512MB 限制」「取消上限设置吧」）—— 现在唯一还会拒安装的
+     * 资源闸是磁盘预检，故黄警也锚在它上面（600MB 过得了 500MB 的下限，但进不了 625MB 的余量）。
+     */
     @Test
-    fun `配额 80% 黄：Warning(DISK_QUOTA) 不拦安装`() = runBlocking {
-        // 项目已有 node_modules ~ 430MB（> 512MB×80%=409.6MB）——用稀疏文件撑尺寸
-        val nm = layout.nodeModules(ProjectId("big"))
-        Files.createDirectories(nm)
-        val probe = nm.resolve("blob")
-        java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(430L * 1024 * 1024) }
+    fun `磁盘逼近预检下限：Warning(DISK_QUOTA) 不拦安装`() = runBlocking {
         val events = mutableListOf<InstallEvent>()
-        val c = coordinator()
-        val collect = launch { c.progress("big").collect { events += it } }
+        val c = coordinator(free = 600L * 1024 * 1024)
+        val collect = launch { c.progress("warn").collect { events += it } }
         kotlinx.coroutines.delay(50)
-        c.install("big", listOf(PackageSpec("axios")))
+        c.install("warn", listOf(PackageSpec("axios")))
         kotlinx.coroutines.delay(50)
         collect.cancel()
         val warns = events.filterIsInstance<InstallEvent.Warning>()
-        assertTrue(warns.any { it.kind == InstallEvent.Kind.DISK_QUOTA }, "80% 阈值必须发黄（实为 $events）")
+        assertTrue(warns.any { it.kind == InstallEvent.Kind.DISK_QUOTA }, "逼近下限必须发黄（实为 $events）")
         assertTrue(events.any { it is InstallEvent.Finished && it.success }, "黄警不拦：安装仍完成")
     }
 
     @Test
-    fun `配额 100% 拦 ERR_DISK_FULL`() = runBlocking {
-        val nm = layout.nodeModules(ProjectId("full"))
-        Files.createDirectories(nm)
-        val probe = nm.resolve("blob")
-        java.io.RandomAccessFile(probe.toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
+    fun `磁盘低于预检下限：拦 ERR_DISK_FULL（配额摘了之后唯一还会拒安装的资源闸）`() = runBlocking {
         val ex = assertThrows(AutojsException::class.java) {
-            runBlocking { coordinator().install("full", listOf(PackageSpec("axios"))) }
+            runBlocking { coordinator(free = 100L * 1024 * 1024).install("full", listOf(PackageSpec("axios"))) }
         }
         assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
     }
 
-    // ═══ 审计史读口（§10.5-2；2026-10-09 批 85） ═══
+    // ═══ 操作事实的去向（原「审计史」；2026-10-17 改打系统日志，§10.5-2） ═══
 
     @Test
-    fun `审计史按写入序返回全部项目，全局变更不因筛项目而掉出去`() = runBlocking {
+    fun `操作事实按写入序交给去向，全局变更的 projectId 是空串`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
         writeManifest("p2", """{"name":"p2","version":"1.0.0"}""")
-        val c = coordinator(globalConfig = NpmGlobalConfig(dir))
+        val h = newOpLog()
+        val c = coordinator(opLog = h, globalConfig = NpmGlobalConfig(dir))
         c.install("p1", listOf(PackageSpec("axios")))
         c.setGlobalRegistry("https://mirror.example.com/")
         c.install("p2", listOf(PackageSpec("dayjs")))
 
-        val all = c.history()
+        val all = h.all()
         assertEquals(
             listOf("install", "registry", "install"),
             all.map { it.op },
-            "按写入序（最新在最后）；registry 那条的 projectId 是空串（全局变更），" +
-                "读口无参正是为了让它不掉出去",
+            "按写入序（最新在最后）；registry 那条的 projectId 是空串（全局变更）—— " +
+                "去向侧（HostLog/系统日志）读作「全局」，写侧不另造哨兵值",
         )
         assertEquals(listOf("p1", "", "p2"), all.map { it.projectId })
-        assertEquals(true, all[1].success, "全局镜像源变更如实入史（§10.5-2）")
-        assertTrue(all.all { it.atMillis > 0L }, "每条都要有时间戳（审计要能排序）")
+        assertEquals(true, all[1].success, "全局镜像源变更如实记一条（§10.5-2）")
+        // 时间戳**不在这里断言**：事实不含时刻，时刻由去向侧盖（生产 = HostLog 自己取）。
+        // 原来那句 `all { it.atMillis > 0L }` 随审计账一起下线，判据搬去 HostLog 那侧。
     }
 
     @Test
-    fun `失败也入史：执行体失败与门禁拒绝两条路都留痕`() = runBlocking {
+    fun `失败也留痕：执行体失败与门禁拒绝两条路都交给去向`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0"}""")
         // ① 执行体自己失败（runHeavy 的 catch 分支）
-        val boomHistory = InstallHistory(dir.resolve(".ns-boom"))
-        val boom = coordinator(executor = FakeExecutor { error("npm 挂了") }, history = boomHistory)
+        val boomLog = RecordingOpLog()
+        val boom = coordinator(executor = FakeExecutor { error("npm 挂了") }, opLog = boomLog)
         assertThrows(IllegalStateException::class.java) {
             runBlocking { boom.install("p1", listOf(PackageSpec("axios"))) }
         }
-        val execFail = boomHistory.all().single()
+        val execFail = boomLog.all().single()
         assertEquals("install", execFail.op)
         assertEquals(false, execFail.success)
         assertEquals("npm 挂了", execFail.detail, "失败原因是原文，不是重编的一句话")
 
-        // ② 磁盘/配额**预检**拒绝（在 handle 存在之前就抛，与 crossCheckRegistry 同一条口径）
-        val nm = layout.nodeModules(ProjectId("full"))
-        Files.createDirectories(nm)
-        java.io.RandomAccessFile(nm.resolve("blob").toFile(), "rw").use { it.setLength(600L * 1024 * 1024) }
-        val gateHistory = InstallHistory(dir.resolve(".ns-gate"))
-        val tight = coordinator(history = gateHistory)
+        // ② 磁盘**预检**拒绝（在 handle 存在之前就抛，与 crossCheckRegistry 同一条口径）。
+        // 探针注一个小数即可 —— 2026-10-17 配额摘了之后，撑满 node_modules 已不再触发任何拒绝。
+        val gateLog = RecordingOpLog()
+        val tight = coordinator(free = 10L * 1024 * 1024, opLog = gateLog)
         assertThrows(AutojsException::class.java) {
             runBlocking { tight.install("full", listOf(PackageSpec("axios"))) }
         }
-        val gateFail = gateHistory.all().single()
+        val gateFail = gateLog.all().single()
         assertEquals("full", gateFail.projectId)
         assertEquals(false, gateFail.success)
-        assertTrue(gateFail.detail!!.contains("配额"), "预检拒绝也要说清为什么（实为 ${gateFail.detail}）")
-    }
-
-    @Test
-    fun `未注入 history 时审计史读口回空表（不是抛）`() = runBlocking {
-        val c = coordinator(history = null)
-        assertTrue(c.history().isEmpty(), "history 在构造里可空（测试替身不注入）：写侧静默，读侧如实回空")
+        assertTrue(gateFail.detail!!.contains("磁盘"), "预检拒绝也要说清为什么（实为 ${gateFail.detail}）")
     }
 
     // ═══ 缓存回收（§10.9 第 5 条的动作半边，2026-10-09 批 86） ═══
@@ -1102,35 +1191,35 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `lock 读不出来的项目如实入史点名（它的依赖没被保护）`() = runBlocking {
+    fun `lock 读不出来的项目如实留痕点名（它的依赖没被保护）`() = runBlocking {
         val orphan = seedCacheContent("orphan")
         // 半截 JSON：LockfileReader 不抛（手写解析尽力而为），故这里用「目录冒充 lockfile」
         // 制造真正的读失败 —— 用例要证明的是「读不到时不许当它不存在」。
         val bad = Files.createDirectories(layout.lockfile(ProjectId("p2")))
         assertTrue(Files.isDirectory(bad))
-        val h = newHistory()
+        val h = newOpLog()
 
-        val r = coordinator(history = h).reclaimCache()
+        val r = coordinator(opLog = h).reclaimCache()
 
         assertEquals(1, r.removedEntries)
         assertFalse(Files.exists(cacheContentFile(orphan)))
-        val e = h.all().single { it.op == InstallHistoryOp.CACHE_RECLAIM }
+        val e = h.all().single { it.op == OpName.CACHE_RECLAIM }
         assertTrue(e.success)
         assertTrue(e.detail!!.contains("p2"), "读不到 lock 的项目必须点名：${e.detail}")
         assertTrue(e.detail!!.contains("未被保护"), "且要说清后果：${e.detail}")
     }
 
     @Test
-    fun `回收入史：op 名 cache_reclaim 且明细带删与留两侧数字`() = runBlocking {
+    fun `回收留痕：op 名 cache_reclaim 且明细带删与留两侧数字`() = runBlocking {
         val kept = seedCacheContent("kept")
         seedCacheContent("gone")
         seedProjectLock("p1", "a" to kept)
-        val h = newHistory()
+        val h = newOpLog()
 
-        val r = coordinator(history = h).reclaimCache()
+        val r = coordinator(opLog = h).reclaimCache()
 
         val e = h.all().single()
-        assertEquals(InstallHistoryOp.CACHE_RECLAIM, e.op, "不许叫 cache_clean：那不是 npm 的 cache clean")
+        assertEquals(OpName.CACHE_RECLAIM, e.op, "不许叫 cache_clean：那不是 npm 的 cache clean")
         assertTrue(e.success)
         assertTrue(e.detail!!.contains("removed=1"), "删了多少要能回看：${e.detail}")
         assertTrue(e.detail!!.contains("保留 1 条"), "留了多少也要：${e.detail}")
@@ -1147,8 +1236,8 @@ class InstallCoordinatorTest {
         Files.write(bucket, ("\n" + "0".repeat(40) + "\t" + json).toByteArray())
         Files.delete(cacheContentFile(gone))   // 制造悬空：content 没了，index 行还在
 
-        val h = newHistory()
-        val r = coordinator(history = h).reclaimCache()
+        val h = newOpLog()
+        val r = coordinator(opLog = h).reclaimCache()
 
         assertTrue(r.indexRebuilt, "悬空引用必须被修掉")
         assertFalse(Files.exists(bucket), "全悬空的桶不留空壳")
@@ -1162,6 +1251,122 @@ class InstallCoordinatorTest {
         assertEquals(0, r.keptEntries)
         assertEquals(0, r.keepCount)
         assertFalse(r.indexRebuilt)
+    }
+
+    // ═══ 全局作用域（2026-10-17「项目选择改成依赖作用域，下拉框加个全局」） ═══
+
+    /**
+     * 全局依赖的家就是 `files/scripts/node_modules` —— 它的名字**过得了项目号判据**
+     * （没有点、没有分隔符），不排掉的话依赖面板会凭空多出一个叫 `node_modules` 的"项目"，
+     * 还自带一棵自己的 node_modules 尺寸。用户看到一个自己从没建过的项目。
+     */
+    @Test
+    fun `项目根下的 node_modules 不算项目（那是全局依赖的家）`() = runBlocking {
+        val pkg = Files.createDirectories(layout.globalNodeModules.resolve("left-pad"))
+        Files.write(pkg.resolve("index.js"), ByteArray(4096))
+        seedProjectLock("p1")
+        // 安装暂存目录同名同族（`InstallJournal.stagePath`），安装进行中它会短暂出现在项目根下。
+        Files.createDirectories(layout.projectsRoot.resolve("node_modules.part-abc123"))
+
+        val ids = coordinator().storage().keys
+
+        assertTrue("node_modules" !in ids, "全局那棵不是项目：$ids")
+        assertTrue("node_modules.part-abc123" !in ids, "暂存目录也不是项目：$ids")
+        assertEquals(setOf("p1"), ids, "只该剩真项目")
+    }
+
+    /**
+     * 作用域下拉里**永远有「全局」这一项**（哪怕一次都没装过）—— 没有它，用户就无从
+     * "往全局装第一包"。
+     *
+     * **`storage` 恒非 null**（2026-10-17 第二批改的口径）：用户看到的现象是"全局作用域下
+     * 没有 node_modules 那一行"。原因是全局那条走了"没量到就不画"，而**项目**那条永远
+     * 不会 —— `storage()` 给每个项目都构造一份读数，目录不存在时 `totalBytes` 就是 0，
+     * 界面照样画一行「node_modules 0 B」。同一个物理事实在两档作用域上画出两种界面。
+     * 现在两档同口径，这条断言钉的就是它：**没建也要给 0 字节，不给 null**。
+     */
+    @Test
+    fun `快照最后一条永远是全局作用域，没装过时尺寸是 0 而不是不画`() = runBlocking {
+        seedProjectLock("p1")
+
+        val snap = coordinator().snapshot()
+
+        assertEquals(
+            listOf("p1", NpmTargetScope.GLOBAL),
+            snap.projects.map { it.projectId },
+            "全局排最后：缺省由呈现层挑（见 NpmState.of），这里只保证它一定在清单里",
+        )
+        val global = snap.projects.last()
+        assertEquals(0L, global.storage!!.totalBytes, "没建就是 0 字节 —— 与项目那条同口径")
+        assertEquals(0, global.storage!!.pkgCount, "没装过就没有包")
+        assertTrue(global.installed.isEmpty(), "没装过就是没装过")
+        // 同一个物理事实在两档作用域上必须是同一个样子：项目那条也照画。
+        assertEquals(0L, snap.projects.first().storage!!.totalBytes)
+    }
+
+    @Test
+    fun `全局装了之后快照里那条带上尺寸与清单`() = runBlocking {
+        val pkg = Files.createDirectories(layout.globalNodeModules.resolve("axios"))
+        Files.write(pkg.resolve("index.js"), ByteArray(2048))
+        seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
+
+        val global = coordinator().snapshot().projects.single { it.projectId == NpmTargetScope.GLOBAL }
+
+        assertEquals(2048L, global.storage!!.totalBytes, "量的是 files/scripts/node_modules")
+        assertEquals(1, global.storage!!.pkgCount, "包数读的是全局那份 lock")
+        assertEquals(listOf("axios"), global.installed.map { it.name })
+    }
+
+    /**
+     * **最容易漏的一处**：全局那份 lock 是项目根下的一个**文件**，而按目录扫的循环只看得见
+     * 目录 —— 漏掉它，凡是"只被全局依赖用着"的包都会被当成没人要的删掉，全局那份离线重装
+     * 当场失效，而用户点这一下时完全看不出自己刚把什么删了。
+     */
+    @Test
+    fun `回收也保全局 lock 需要的包（它在项目根下，目录扫描看不见它）`() = runBlocking {
+        val g = seedCacheContent("global-pkg")
+        val orphan = seedCacheContent("orphan")
+        seedProjectLock(NpmTargetScope.GLOBAL, "g" to g)
+
+        val r = coordinator().reclaimCache()
+
+        assertTrue(Files.isRegularFile(cacheContentFile(g)), "全局 lock 需要的必须留着")
+        assertFalse(Files.exists(cacheContentFile(orphan)), "没有 lock 引用的才删")
+        assertEquals(1, r.removedEntries)
+        assertEquals(1, r.keepCount)
+    }
+
+    @Test
+    fun `全局 lock 读不出来时点名「全局」而不是留个空名字`() = runBlocking {
+        // 目录冒充 lockfile —— 与上面那条项目版同一手法：`LockfileReader` 对半截 JSON 是
+        // 尽力而为不抛，只有这种才真的读失败。
+        Files.createDirectories(layout.globalLockfile)
+        val h = newOpLog()
+
+        coordinator(opLog = h).reclaimCache()
+
+        val detail = h.all().single { it.op == OpName.CACHE_RECLAIM }.detail!!
+        assertTrue(detail.contains("全局"), "点名要说人话，不能留一个空串：$detail")
+        assertTrue(detail.contains("未被保护"), "且要说清后果：$detail")
+    }
+
+    /**
+     * 全局在宿主侧落到 `files/scripts/` 那一棵 —— **与项目走的是同一套寻址**，
+     * 不是另开一条分支（这正是"用根层哨兵编码全局"换来的东西）。
+     */
+    @Test
+    fun `全局作用域读的是 files-scripts 那棵的 lock，与项目不串`() = runBlocking {
+        seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
+        seedProjectLock("p1", "left-pad" to null)
+        val c = coordinator()
+
+        assertEquals(listOf("axios"), c.list("", 0).map { it.name }, "全局那份 lock 落在 files/scripts/ 下")
+        assertEquals(listOf("left-pad"), c.list("p1", 0).map { it.name }, "项目那份落在 files/scripts/p1/ 下")
+        assertEquals(
+            layout.projectsRoot.resolve("node_modules"),
+            layout.globalNodeModules,
+            "全局的 node_modules 就在项目根本层 —— Node 逐级向上找时它才在项目的祖先链上",
+        )
     }
 
     // ═══ 快照导出（§10.9.4 高信任通道） ═══
@@ -1185,17 +1390,17 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `导出落地且入史（成败都审计）`() = runBlocking {
+    fun `导出落地且留痕（成败都记）`() = runBlocking {
         val exec = harvesting("axios" to "1.7.0")
-        val h = newHistory()
+        val h = newOpLog()
         val out = dir.resolve("out/snap.zip")
-        val c = coordinator(executor = exec, history = h, snapshots = snapshots())
+        val c = coordinator(executor = exec, opLog = h, snapshots = snapshots())
         c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
         val ref = c.exportSnapshot("p1", out.toString())
         assertTrue(Files.isRegularFile(out), "快照必须真的落盘（不是只返回一个 Ref）")
         assertTrue(ref.sha256.length == 64, "SnapshotRef 须带内容摘要，供导入侧比对")
-        val e = h.all().single { it.op == InstallHistory.Op.EXPORT }
-        assertTrue(e.success, "导出成功须入史")
+        val e = h.all().single { it.op == OpName.EXPORT }
+        assertTrue(e.success, "导出成功须留痕")
     }
 
     @Test
@@ -1279,6 +1484,29 @@ class InstallCoordinatorTest {
     }
 
     @Test
+    fun `取 packument 不落在调用线程上（Android 主线程禁用网络，2026-10-17 设备实测）`() = runBlocking {
+        // 「调用线程」在这里冒充「主线程」：界面（`rememberCoroutineScope()` = Main）与控制台
+        // 都是拿自己那条协程**直接 await 整条 install 链**的，所以「verify 跑在调用方线程上」
+        // 就等价于「取 packument 落在主线程上」—— 而 Android 上那就是
+        // NetworkOnMainThreadException（设备实测：装依赖当场报，一个包都还没发出去）。
+        // 本机 JVM 没有那道守门人，这条断言是它在单测里的替身。
+        val caller = Thread.currentThread()
+        val seen = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val v = RegistryVerifier { name, _, _ ->
+            seen.set(Thread.currentThread())
+            NpmRegistryVerifier.Verdict.Agreed(name, "1.7.0", I, "https://x.tgz", false)
+        }
+        val c = coordinator(executor = FakeExecutor(), registryVerifier = v)
+        c.install("p1", listOf(PackageSpec("axios", "1.7.0")))
+        assertNotNull(seen.get(), "校验缝必须真被调到 —— 没调到的话这条断言是在自欺")
+        assertNotSame(
+            caller,
+            seen.get(),
+            "取 packument 落在调用方线程上了：Android 上就是 NetworkOnMainThreadException",
+        )
+    }
+
+    @Test
     fun `两镜像声明不一致 → ERR_REGISTRY_UNAVAILABLE，安装会话压根不起`() = runBlocking {
         val v = FakeVerifier(
             mapOf(
@@ -1291,8 +1519,8 @@ class InstallCoordinatorTest {
             ),
         )
         val exec = FakeExecutor()
-        val h = newHistory()
-        val c = coordinator(executor = exec, history = h, registryVerifier = v)
+        val h = newOpLog()
+        val c = coordinator(executor = exec, opLog = h, registryVerifier = v)
         val ex = assertThrows(AutojsException::class.java) {
             runBlocking { c.install("p1", listOf(PackageSpec("evil", "1.0.0"))) }
         }
@@ -1302,7 +1530,7 @@ class InstallCoordinatorTest {
         assertTrue(exec.calls.isEmpty(), "被拒的安装不进会话（否则 journal 会像成功一样推进）")
         assertTrue(journal.all().isEmpty(), "未进会话即无事务，也谈不上残骸")
         val e = h.all().single()
-        assertTrue(!e.success, "拒也要入史——审计要能回答「用户看到成功了吗」")
+        assertTrue(!e.success, "拒也要留痕——日志要能回答「用户看到成功了吗」")
         assertTrue(e.detail!!.contains("交叉校验不一致"))
     }
 
@@ -1316,7 +1544,7 @@ class InstallCoordinatorTest {
                 "axios" to NpmRegistryVerifier.Verdict.Agreed("axios", "1.7.0", I, "https://x.tgz", true),
             ),
         )
-        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val c = coordinator(executor = FakeExecutor(), opLog = newOpLog(), registryVerifier = v)
         val ex = assertThrows(AutojsException::class.java) {
             runBlocking { c.install("p1", listOf(PackageSpec("evil"), PackageSpec("axios"))) }
         }
@@ -1325,10 +1553,10 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `没验成 → TRUST_DOWNGRADED 告警且入史，但不拦安装（禁止静默）`() = runBlocking {
+    fun `没验成 → TRUST_DOWNGRADED 告警且留痕，但不拦安装（禁止静默）`() = runBlocking {
         val v = FakeVerifier(mapOf("axios" to NpmRegistryVerifier.Verdict.Unverifiable("axios", "第二意见未返回该版本（不可达或尚未同步），无法交叉校验")))
-        val h = newHistory()
-        val c = coordinator(executor = FakeExecutor(), history = h, registryVerifier = v)
+        val h = newOpLog()
+        val c = coordinator(executor = FakeExecutor(), opLog = h, registryVerifier = v)
         val events = mutableListOf<InstallEvent>()
         val collect = launch { c.progress("p1").collect { events += it } }
         kotlinx.coroutines.delay(50)
@@ -1342,7 +1570,7 @@ class InstallCoordinatorTest {
         assertTrue(w.single().message.contains("来源未校验"), "说清降的是什么级")
         assertTrue(events.any { it is InstallEvent.Finished && it.success }, "没验成不拦：装仍完成")
         val marked = h.all().first { it.detail?.contains("来源未校验") == true }
-        assertEquals(InstallHistory.Op.INSTALL, marked.op)
+        assertEquals(OpName.INSTALL, marked.op)
         assertTrue(marked.success, "「来源未校验」与「安装成功」是两件事，都要如实记")
     }
 
@@ -1354,7 +1582,7 @@ class InstallCoordinatorTest {
                 "b" to NpmRegistryVerifier.Verdict.Unverifiable("b", "无 integrity 锚点"),
             ),
         )
-        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val c = coordinator(executor = FakeExecutor(), opLog = newOpLog(), registryVerifier = v)
         val events = mutableListOf<InstallEvent>()
         val collect = launch { c.progress("p1").collect { events += it } }
         kotlinx.coroutines.delay(50)
@@ -1403,7 +1631,7 @@ class InstallCoordinatorTest {
     @Test
     fun `真校验器接上装路径：两镜像一致即放行（端到端零网络）`() = runBlocking {
         val v = agreeingSource("sha512-" + "a".repeat(24))
-        val c = coordinator(executor = FakeExecutor(), history = newHistory(), registryVerifier = v)
+        val c = coordinator(executor = FakeExecutor(), opLog = newOpLog(), registryVerifier = v)
         val events = mutableListOf<InstallEvent>()
         val collect = launch { c.progress("p1").collect { events += it } }
         kotlinx.coroutines.delay(50)
@@ -1836,6 +2064,175 @@ class InstallCoordinatorTest {
     fun `缓存不存在时读数是 0 字节而不是 null`() = runBlocking {
         val c = coordinator(cache = CacacheIndex(cacheDir()))
         assertEquals(0L, c.cacheStorage().totalBytes)
+    }
+
+    // ═══ 声明的依赖 → 提升到全局（2026-10-17「依赖去重执行后让它把依赖自动放进全局作用域中」） ═══
+
+    /**
+     * 取的是**声明的**依赖（`dependencies` + `devDependencies`），不是 lock 的闭包。
+     *
+     * 三条一起断，因为它们是同一个决定的三个面：
+     * - **闭包太大**：lock 的 500 个包全提到全局，等于每次点这颗按钮都把整棵树抄一遍；
+     * - **范围而不是锁定版本**：`axios@^1.7.0` 让全局那份跟着项目一起走小版本，
+     *   写死 `1.7.0` 反而会与项目里那棵树分家；
+     * - **同名只算一次、按名字排序**：否则两个段里都写了的包会被拼进 argv 两遍
+     *   （npm 会报重复），而顺序不定则每次提升的 argv 都不一样 —— 没法对拍。
+     */
+    @Test
+    fun `声明的依赖：两个段都要、带范围、排序、同名只算一次`() {
+        val root = Files.createDirectories(layout.projectRoot(ProjectId("p1")))
+        Files.write(
+            root.resolve("package.json"),
+            (
+                """{"name":"p1","version":"1.0.0",""" +
+                    """"dependencies":{"esbuild":"^0.21.5","axios":"^1.7.0","left-pad":""},""" +
+                    """"devDependencies":{"jest":"~29.0.0","axios":"^1.7.0"}}"""
+                ).toByteArray(),
+        )
+
+        assertEquals(
+            listOf("axios@^1.7.0", "esbuild@^0.21.5", "jest@~29.0.0", "left-pad"),
+            NpmScriptResolver.declaredSpecs(root),
+        )
+    }
+
+    @Test
+    fun `声明的依赖：没有清单是 null，有清单但没声明是空清单`() {
+        val root = Files.createDirectories(layout.projectRoot(ProjectId("p1")))
+        assertNull(NpmScriptResolver.declaredSpecs(root), "没清单 = 无从知道要提升什么")
+
+        Files.write(root.resolve("package.json"), """{"name":"p1","version":"1.0.0"}""".toByteArray())
+        assertEquals(
+            emptyList<String>(),
+            NpmScriptResolver.declaredSpecs(root),
+            "有清单、只是没声明依赖 —— 与「没有清单」是两件事（上游两句话也不同）",
+        )
+    }
+
+    /**
+     * 提升走的是**与控制台逐字相同的那条重操作路**（门禁强度不取决于用户是从哪个界面
+     * 按下去的），且落点是 `files/scripts/` 那一棵 —— 项目里那些包靠 Node 向上查找自动优先，
+     * 所以不需要任何 NODE_PATH 之类的额外机制（见 `NpmTargetScope` 的 KDoc）。
+     */
+    @Test
+    fun `提升到全局：装到 files_scripts 那一棵，回显记在全局那份控制台里`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0"}}""")
+        val exec = FakeExecutor()
+        val c = coordinator(executor = exec)
+
+        c.promoteToGlobal("p1")
+
+        val op = exec.calls.single()
+        assertEquals(NpmTargetScope.GLOBAL, op.projectId, "目标固定是全局作用域")
+        assertEquals(listOf("install", "axios@^1.7.0", "--prefer-offline"), op.args)
+        assertEquals(layout.projectsRoot, op.projectRoot, "落点是 files/scripts/ 本身")
+
+        val lines = c.consoleOutput(NpmTargetScope.GLOBAL, 0, 16).lines
+        assertTrue(
+            lines.any { it.line.text.contains("axios@^1.7.0") },
+            "这次安装真跑在全局，账就得记在全局那份上：${lines.map { it.line.text }}",
+        )
+    }
+
+    @Test
+    fun `提升到全局：没清单、没声明各是一句话，且都不排队`() = runBlocking {
+        val exec = FakeExecutor()
+        val c = coordinator(executor = exec)
+        Files.createDirectories(layout.projectRoot(ProjectId("p1")))
+
+        val noManifest = assertThrows(AutojsException::class.java) {
+            runBlocking { c.promoteToGlobal("p1") }
+        }
+        assertEquals(ErrorCode.ERR_FILE_NOT_FOUND, noManifest.error)
+        assertTrue(noManifest.message!!.contains("package.json"), "要说清缺的是哪份东西")
+
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{}}""")
+        val empty = assertThrows(AutojsException::class.java) {
+            runBlocking { c.promoteToGlobal("p1") }
+        }
+        assertEquals(ErrorCode.ERR_NOT_FOUND, empty.error)
+        assertTrue(empty.message!!.contains("dependencies"), "空声明与没清单不是一回事：${empty.message}")
+
+        assertTrue(exec.calls.isEmpty(), "两次都不该排队")
+    }
+
+    // ═══ 每行尺寸（2026-10-17「依赖列表显示一下各个依赖占用的空间大小」） ═══
+
+    /**
+     * 字节按**顶层那一段**分摊 —— 判据见 `InstallCoordinator.topLevelPkgOf`。
+     *
+     * 这里刻意把三类容易算错的都摆上：
+     * - **scoped 包**取前两段（`@babel/core`），只取第一段的话 `@babel` 会变成一个包名；
+     * - **`.bin` 那堆 shim 与 `.package-lock.json`** 不算在任何包头上：那是 npm 的记账；
+     * - **嵌套的**（`esbuild/node_modules/tiny`）算在 `esbuild` 头上 —— 它是 esbuild 装进来的；
+     * - lock 里有、盘上没有的包给 **0**（不是省略）：界面据此**不画**那一格，
+     *   而"没量到"与"这个包不占地方"在屏幕上必须是两句话。
+     */
+    @Test
+    fun `每行尺寸：按顶层包分摊字节，记账文件不算在任何包头上`() = runBlocking {
+        val nm = Files.createDirectories(layout.nodeModules(ProjectId("p1")))
+        val esbuild = Files.createDirectories(nm.resolve("esbuild"))
+        Files.write(esbuild.resolve("bin"), ByteArray(1000))
+        Files.write(esbuild.resolve("README"), ByteArray(24))
+        Files.write(Files.createDirectories(nm.resolve("@babel/core")).resolve("index.js"), ByteArray(500))
+        Files.write(Files.createDirectories(nm.resolve(".bin")).resolve("esbuild"), ByteArray(64))
+        // 散在 node_modules 根下的文件（nameCount = 1）与 scope 目录下的散文件（nameCount = 2）
+        // —— 都构不成一个包，两个都不许出现在结果里。
+        Files.write(nm.resolve(".package-lock.json"), ByteArray(2048))
+        Files.write(nm.resolve("README.md"), ByteArray(16))
+        Files.write(Files.createDirectories(nm.resolve("@babel")).resolve("README.md"), ByteArray(8))
+        Files.write(
+            Files.createDirectories(nm.resolve("esbuild/node_modules/tiny")).resolve("index.js"),
+            ByteArray(10),
+        )
+        seedProjectLock("p1", "esbuild" to null, "@babel/core" to null, "not-on-disk" to null)
+
+        val p1 = coordinator().snapshot().projects.single { it.projectId == "p1" }
+
+        assertEquals(
+            mapOf("esbuild" to 1034L, "@babel/core" to 500L, "not-on-disk" to 0L),
+            p1.installed.associate { it.name to it.sizeBytes },
+            "esbuild = 1000 + 24 + 10（嵌套的算它的）；.bin 那 64 字节不落在任何包上",
+        )
+
+        // 判据本身单独再断一次（**不是**重复上面那条）：上面那半个断言只看得见 lock 里有名字的包，
+        // 于是"把 `.bin` 也算成一个包"这种错它**发现不了**（多出来的键根本进不了那张表）。
+        // 这里断的是分摊结果的原样，`packageSizesOf` 是 internal，测试看得见。
+        val raw = packageSizesOf(nm, System.currentTimeMillis())
+        assertEquals(
+            setOf("esbuild", "@babel/core"),
+            raw.keys,
+            "记账文件（.bin/、.package-lock.json）与散文件都不成包：$raw",
+        )
+        assertEquals(1034L, raw["esbuild"])
+        assertEquals(500L, raw["@babel/core"])
+    }
+
+    /**
+     * 与 [InstallCoordinator.storage] 同一条 TTL 纪律：这一趟是**全量遍历**，
+     * 每次都走一遍盘的话，依赖列表每刷新一次就要在几十万个文件上爬一遍。
+     *
+     * 代价如实记：盘上变了而时钟没走 → 回的是缓存里的旧值（陈旧上界 = TTL）。
+     */
+    @Test
+    fun `每行尺寸走缓存：TTL 内不重算，过期才重测`() = runBlocking {
+        var clock = 1_000_000L
+        val c = coordinator(now = { clock })
+        val nm = Files.createDirectories(layout.nodeModules(ProjectId("p1")))
+        val pkg = Files.createDirectories(nm.resolve("esbuild"))
+        Files.write(pkg.resolve("index.js"), ByteArray(1000))
+        seedProjectLock("p1", "esbuild" to null)
+
+        // `projects` 里还有一条全局作用域（`snapshot()` 最后那条永远在），故按 id 挑。
+        suspend fun p1() = c.snapshot().projects.single { it.projectId == "p1" }.installed.single().sizeBytes
+
+        assertEquals(1000L, p1())
+
+        Files.write(pkg.resolve("index.js"), ByteArray(4000))
+        assertEquals(1000L, p1(), "TTL 内必须命中缓存，不再遍历")
+
+        clock += InstallCoordinator.SIZE_CACHE_TTL_MILLIS + 1
+        assertEquals(4000L, p1(), "TTL 过期必须重测")
     }
 
     /** 记录式执行体（真引擎未接时它是 T1 的唯一可断言落点）。每次调用清一次记录面。 */

@@ -178,7 +178,9 @@ interface EnginePool {                                // 实现在 :app-service:
 
 **进程边界诊断（`RunRecord.exitCode` / `RunRecord.crashSummary`，backlog B11 落地）**：引擎宿主的排水线程不再对子进程 stderr「读即弃」——
 `ProcessBuilderLauncher` **不做** `redirectErrorStream(true)`（合流会丢失「这是 stderr 写的」的分辨，而病因几乎全在 stderr），
-stdout 那条通道**仍然只排空、不存内容**（它存在的唯一目的是防管道写满反压），stderr 在排空时顺带写入**有界环形尾 buffer**
+stdout 那条通道**仍然只排空、不存内容**（它存在的唯一目的是防管道写满反压；脚本侧的
+裸 `console.log` 因此自 2026-10-15 起改由引导期包装走桥 —— 见 §7.3/§12.1，
+`process.stdout.write` 与五档之外的 console 方法仍落这条排空通道），stderr 在排空时顺带写入**有界环形尾 buffer**
 （字节级、上限 `RunSummary.MAX_DETAIL` = 4096、满了丢最老、取快照时才整体 UTF-8 解码，故跨 read 的多字节字符不会撕裂）。
 摘要经 `ScriptEngine.lastRunSummary(): RunSummary?`（`:domain` 契约，缺省实现回 null）取出，**只在 `status()` 判出「自然退出」时填充**
 （含 exit 0 —— 摘要只是诊断读口，状态归类不看它）；**请求停止（143）与强杀（137）如实不填** —— 那两个退出码是终止手段的产物，不是病因。摘要的落点分两层：

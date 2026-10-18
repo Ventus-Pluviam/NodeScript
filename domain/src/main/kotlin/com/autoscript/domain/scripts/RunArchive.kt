@@ -53,6 +53,30 @@ interface RunArchive {
 
     /** 尚未终态化的记录（启动时核对「档案 RUNNING 但引擎已不在途」的孤儿清理输入）。 */
     suspend fun unfinished(): List<RunRecord>
+
+    /**
+     * 档案里已落过的**最大 engineRunId**（空档回 `0`）。
+     *
+     * **它是引擎侧 runId 分配器的跨进程高水位**，不是又一条读口。engineRunId 由引擎
+     * （`EngineRunReceipt.runId`）分配，而 `:engine:node-process` 的分配器是**进程内**计数器
+     * —— 每次 App 进程重启都从 1 重新数。档案却是持久的：上一进程留下的终态行（比如
+     * `engine_run_id = 1`）还在库里，新进程第一次执行又拿 1 → [put] 撞上「终态记录不可改写」
+     * 当场抛（2026-10-14 真机实测：`终态记录不可改写: engineRunId=1 state=CRASHED`，
+     * 悬浮窗落空态）。
+     *
+     * 所以装配期要用本口把新进程的分配器顶到历史之后 —— 装配根读到本口的值，经引擎自己的
+     * 构造配置（`NodeEngineConfig.runIdHighWater`）喂下去，构造即站在历史之后。
+     * **为什么由档案回答而不是让引擎自己持久化计数器**：档案本来就是 engineRunId 的
+     * 唯一持久事实源（§8.5），再存一份计数器就是第二个真值；两者漂移时没人知道该信谁。
+     *
+     * 语义边界（实现须照此办）：
+     * - **只读**，不改任何行；空档案 / 没有任何记录 → `0`（**不是** null、不是异常：
+     *   "从没跑过"与"读不到"在装配期是同一件事 —— 都不必顶高水位）；
+     * - 取值 = 现有记录的 `id` 最大值（**不是** `sqlite_sequence`、不是行数）——
+     *   日常登记按调用方给的 id 写（见 `RunArchiveSql.insert` 的 KDoc），
+     *   SQLite 的自增序列只在迁移导入那条路上抬，两者不是一回事。
+     */
+    suspend fun maxEngineRunId(): Long
 }
 
 /** 终态判定（§8.2）：终态落地即不可改写、不可复活。 */

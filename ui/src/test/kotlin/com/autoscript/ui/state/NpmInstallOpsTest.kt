@@ -6,6 +6,7 @@ import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.NpmConsoleHandle
 import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.SequencedInstallEvent
 import kotlinx.coroutines.runBlocking
@@ -20,7 +21,8 @@ import org.junit.jupiter.api.Test
  *
  * 断的是「界面会拼出什么、会不会冒充」，不是 npm 的行为：
  *
- * - **拼装**：旗标只拼用户勾了的那两颗，且包名在前（与界面上勾选框的语序一致）；
+ * - **拼装**：包名在前，`--prefer-offline` **写死**（2026-10-17 起不再是可勾的旗标），
+ *   `-D` 再也不拼；
  * - **门禁强度不取决于入口**：面板拼出来的一行走的是与控制台**同一条**宿主口
  *   （`runNpmPanelCommand`），故宿主侧的判据原样生效 —— 界面侧不判第二遍；
  * - **进度是阶段不是百分比**：`InstallEvent.Progress.percent` 全仓从无赋值，
@@ -33,12 +35,18 @@ class NpmInstallOpsTest {
         installed = emptyList(),
         offlineGap = emptyList(),
         storage = NodeModulesStats(projectId = id, pkgCount = 1, totalBytes = 1024L),
-        quotaBytes = 512L * 1024 * 1024,
-        quotaWarnRatio = 0.8,
     )
 
     private fun loaded(vararg projects: NpmProjectSnapshot) =
         NpmState.of(NpmPanelSnapshot(projects.toList()))
+
+    /** 全局作用域那一条（`files/scripts/node_modules`，`projectId` 是空串哨兵）。 */
+    private fun globalProject() = NpmProjectSnapshot(
+        projectId = NpmTargetScope.GLOBAL,
+        installed = emptyList(),
+        offlineGap = emptyList(),
+        storage = null,
+    )
 
     /** 记录被提交的那一行，并可按需失败 / 按需回一批事件。 */
     private class PanelHost(
@@ -46,6 +54,9 @@ class NpmInstallOpsTest {
         private val events: List<InstallEvent> = emptyList(),
     ) : FakeHost() {
         val lines = mutableListOf<String>()
+
+        /** 每一行是发给**哪个作用域**的（全局那条是空串）。 */
+        val targets = mutableListOf<String>()
         var polls = 0
         var lastSince = -1L
 
@@ -53,6 +64,7 @@ class NpmInstallOpsTest {
 
         override suspend fun runNpmPanelCommand(projectId: String, line: String): NpmConsoleHandle {
             lines += line
+            targets += projectId
             fail?.let { throw it }
             return NpmConsoleHandle(handleId = "con-1", projectId = projectId, line = line, enqueuedAtMillis = 1L)
         }
@@ -72,19 +84,22 @@ class NpmInstallOpsTest {
     // ── 拼装（纯函数） ──────────────────────────────────────────────────────
 
     @Test
-    fun `拼装：包名在前，旗标只拼勾了的那两颗`() {
-        assertEquals("npm install axios", buildInstallCommand("axios", dev = false, offline = false))
-        assertEquals("npm install axios -D", buildInstallCommand(" axios ", dev = true, offline = false))
-        assertEquals(
-            "npm install axios@1.7.0 -D --prefer-offline",
-            buildInstallCommand("axios@1.7.0", dev = true, offline = true),
-        )
+    fun `拼装：包名在前，离线优先写死、开发依赖再也不拼`() {
+        assertEquals("npm install axios --prefer-offline", buildInstallCommand("axios"))
+        assertEquals("npm install axios --prefer-offline", buildInstallCommand(" axios "), "两端空白要吃掉")
+        assertEquals("npm install axios@1.7.0 --prefer-offline", buildInstallCommand("axios@1.7.0"))
+
+        // 两条**防回潮**断言（2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」）：
+        // `-D` 与"可关掉的离线优先"都不许再出现在拼装结果里。旗标一整行下线之后，
+        // 这两样一旦回来就是**新增的**行为，而用户要的是"没有开关"。
+        assertFalse(buildInstallCommand("axios")!!.contains("-D"), "开发依赖已下线")
+        assertTrue(buildInstallCommand("axios")!!.endsWith(" --prefer-offline"), "离线优先是写死的缺省")
     }
 
     @Test
     fun `拼装：空输入拼不出东西（返回 null，不拼一个裸的 npm install）`() {
-        assertNull(buildInstallCommand("", dev = true, offline = true))
-        assertNull(buildInstallCommand("   ", dev = false, offline = false))
+        assertNull(buildInstallCommand(""))
+        assertNull(buildInstallCommand("   "))
     }
 
     @Test
@@ -92,20 +107,62 @@ class NpmInstallOpsTest {
         assertEquals("npm uninstall axios", buildRemoveCommand("axios"))
     }
 
+    /**
+     * 重装那一行（2026-10-17 用户口径「在依赖列表里，加一个重装的图标按钮」）。
+     *
+     * 三处刻意都在断言里钉住：
+     * - **锁版本**（`name@version`）：不带版本就是 `npm install <name>`，那会按 `package.json`
+     *   的范围解出**另一个**版本 —— 而用户按 ⟳ 要的是"把这一行这个版本再落一遍盘"；
+     * - **`--no-save`**：不加它，重装一个传递依赖会把它**提升成直接依赖**写进 `package.json`
+     *   （npm 的缺省行为），于是点一下重装就悄悄改了这份清单的声明；
+     * - **不换作用域**：命令落在 `state.selectedProjectId` 上（下面那条用例钉的是这个），
+     *   重装不会把包搬到别处去。
+     */
+    @Test
+    fun `重装：锁版本 + no-save + 离线优先`() {
+        val line = buildReinstallCommand("esbuild", "0.21.5")
+        assertEquals("npm install esbuild@0.21.5 --no-save --prefer-offline", line)
+        assertTrue(line.contains("--no-save"), "不加 --no-save 会把传递依赖提升成直接依赖")
+        // 作用域名里带 @ 的包（scoped）不许被拼成 `@babel/core@7.24.0` 之外的形状 ——
+        // 这里的 `name` 来自宿主读口，它就是 npm 认的那个名字。
+        assertEquals(
+            "npm install @babel/core@7.24.0 --no-save --prefer-offline",
+            buildReinstallCommand("@babel/core", "7.24.0"),
+        )
+    }
+
+    @Test
+    fun `重装：走同一条命令通道，且落在当前作用域上`() = runBlocking {
+        val host = PanelHost()
+        val picked = NpmState.withProject(loaded(project("demo"), globalProject()), NpmTargetScope.GLOBAL)
+        val state = reinstallInstalled(host, picked, "esbuild", "0.21.5")
+        assertEquals(listOf("npm install esbuild@0.21.5 --no-save --prefer-offline"), host.lines)
+        assertEquals(listOf(NpmTargetScope.GLOBAL), host.targets, "重装不换作用域")
+        assertNull(state.opError)
+    }
+
+    @Test
+    fun `重装：没有选中的作用域时不发，且说的是"没选作用域"`() = runBlocking {
+        val host = PanelHost()
+        val state = reinstallInstalled(host, NpmState.NOT_LOADED, "esbuild", "0.21.5")
+        assertTrue(host.lines.isEmpty())
+        assertTrue(state.opError!!.contains("还没有选中的项目"), "实为 ${state.opError}")
+    }
+
     // ── 提交 ────────────────────────────────────────────────────────────────
 
     @Test
     fun `提交：把拼好的那行交给宿主口，成功清草稿、失败留草稿`() = runBlocking {
         val host = PanelHost()
-        val ok = submitInstall(host, loaded(project("demo")).copy(installDraft = "axios", installDev = true))
-        assertEquals(listOf("npm install axios -D"), host.lines)
+        val ok = submitInstall(host, loaded(project("demo")).copy(installDraft = "axios"))
+        assertEquals(listOf("npm install axios --prefer-offline"), host.lines)
         assertEquals("", ok.installDraft, "成功之后草稿要清 —— 那行已经在控制台里回显了")
         assertFalse(ok.installing)
         assertNull(ok.opError)
 
         val boom = PanelHost(fail = IllegalStateException("磁盘可用 100MB < 预检下限 500MB，拒绝安装"))
         val bad = submitInstall(boom, loaded(project("demo")).copy(installDraft = "axios"))
-        assertEquals("npm install axios", boom.lines.single())
+        assertEquals("npm install axios --prefer-offline", boom.lines.single())
         assertEquals("axios", bad.installDraft, "失败要留草稿：用户多半要改一改再敲")
         assertEquals("磁盘可用 100MB < 预检下限 500MB，拒绝安装", bad.opError, "失败原文原样透传")
         assertFalse(bad.installing)
@@ -126,6 +183,27 @@ class NpmInstallOpsTest {
         val state = submitInstall(host, empty)
         assertTrue(host.lines.isEmpty())
         assertTrue(state.opError!!.contains("还没有选中的项目"))
+    }
+
+    /**
+     * 作用域选「全局」时，命令落在空串哨兵上 —— **不是**被当成"没选项目"。
+     *
+     * 这一条钉的是 2026-10-17 那次判据放宽：`NpmConsoleKeys.rejectProjectId("")` 从前
+     * 是拒收的，而全局作用域的编码恰好就是那个空串 —— 放宽之前，界面上选「全局」按下
+     * 执行会拿到一句「项目号不合法（不能为空）」，而用户手里根本没有一个叫这个名字的
+     * 项目可选，他只会以为"全局"这个选项是坏的。
+     */
+    @Test
+    fun `作用域「全局」不被当成「没选项目」：命令带着空串哨兵发出去`() = runBlocking {
+        assertTrue(NpmTargetScope.GLOBAL.isEmpty(), "全局的编码就是那个空串哨兵（前提变了这条要跟着改）")
+        val host = PanelHost()
+        val picked = NpmState.withProject(loaded(project("demo"), globalProject()), NpmTargetScope.GLOBAL)
+
+        val state = submitInstall(host, picked.copy(installDraft = "axios"))
+
+        assertEquals(listOf("npm install axios --prefer-offline"), host.lines, "全局也要发得出去")
+        assertEquals(listOf(NpmTargetScope.GLOBAL), host.targets, "发出去的是空串哨兵，不是被抹成 null")
+        assertNull(state.opError, "不许报「项目号不合法」：${state.opError}")
     }
 
     @Test
@@ -251,16 +329,14 @@ class NpmInstallOpsTest {
             installProgress = InstallProgressState(InstallEvent.Phase.REIFY),
             installSeq = 9L,
             installDraft = "axios",
-            installDev = true,
             installing = true,
         )
         val after = NpmState.withProject(before, "p2")
         assertEquals("p2", after.selectedProjectId)
         assertNull(after.installProgress, "游标归零了却留着旧阶段条，会画出一条不属于这个项目的进度")
         assertEquals(0L, after.installSeq, "seq 是环内全局单调的：沿用旧游标会漏掉 seq 更小的那些事件")
-        assertEquals("axios", after.installDraft, "草稿是用户的输入，换项目不该清掉")
-        assertTrue(after.installDev, "旗标同上")
-        assertTrue(after.installing, "安装会话是全局互斥的，换个项目看不会让它停下来")
+        assertEquals("axios", after.installDraft, "草稿是用户的输入，换作用域不该清掉")
+        assertTrue(after.installing, "安装会话是全局互斥的，换个作用域看不会让它停下来")
 
         // 选中的还是同一个项目 → 原样返回（不把在跑的阶段条平白清掉）。
         assertEquals(before, NpmState.withProject(before, "p1"))
@@ -269,11 +345,9 @@ class NpmInstallOpsTest {
     // ── 现取不抹操作面 ──────────────────────────────────────────────────────
 
     @Test
-    fun `现取：不许把用户的草稿、旗标、进度抹掉`() {
+    fun `现取：不许把用户的草稿与进度抹掉`() {
         val previous = loaded(project("demo")).copy(
             installDraft = "axios",
-            installDev = true,
-            installOffline = true,
             installProgress = InstallProgressState(InstallEvent.Phase.DOWNLOAD),
             installSeq = 3L,
         )
@@ -282,8 +356,6 @@ class NpmInstallOpsTest {
             previous,
         )
         assertEquals("axios", refreshed.installDraft)
-        assertTrue(refreshed.installDev)
-        assertTrue(refreshed.installOffline)
         assertEquals(InstallEvent.Phase.DOWNLOAD, refreshed.installProgress!!.phase)
         assertEquals(3L, refreshed.installSeq)
     }
@@ -299,23 +371,19 @@ class NpmInstallOpsTest {
         assertTrue(loaded(project("demo")).canInstall)
     }
 
-    /** 缓存一栏的文案（§10.9 第 5 条的 `npm-cache` 尺寸）：量不到不画，且点明全机一份。 */
+    /** 缓存尺寸（§10.9 第 5 条的 `npm-cache` 尺寸栏）：量不到不画；量到了只给数字。 */
     @Test
-    fun `缓存栏：量不到不画；量到了点明"全机一份"`() {
-        assertNull(loaded(project("demo")).cacheLabel, "老宿主没这个口 → 不画，不显示 0 字节")
+    fun `缓存栏：量不到不画；量到了只给数字`() {
+        assertNull(loaded(project("demo")).cacheSizeLabel, "老宿主没这个口 → 不画，不显示 0 字节")
 
         val withCache = NpmProjectSnapshot(
             projectId = "demo",
             installed = emptyList(),
             offlineGap = emptyList(),
             storage = NodeModulesStats("demo", 1, 1024L),
-            quotaBytes = 512L * 1024 * 1024,
-            quotaWarnRatio = 0.8,
             cache = NodeModulesStats("", 0, 12L * 1024 * 1024),
         )
-        val label = loaded(withCache).cacheLabel!!
-        assertTrue(label.contains("全机一份"), "缓存跨项目共享，写成「本项目缓存」是撒谎")
-        assertTrue(label.contains("12 MB"))
+        assertEquals("12 MB", loaded(withCache).cacheSizeLabel, "数字归数字；「全机一份」由行标题说")
     }
 
     /** 这条替身必须覆盖新口 —— 否则用例会在误用替身时拿到假绿。 */

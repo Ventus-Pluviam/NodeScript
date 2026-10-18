@@ -29,6 +29,19 @@ import kotlinx.coroutines.CancellationException
 private const val INSTALL_DRAFT_MAX = 200
 
 /**
+ * 面板提交的每一条安装命令都带上的旗标。
+ *
+ * **`--prefer-offline` 从 2026-10-17 起是缺省**（用户口径「去掉开发依赖，和离线优先。
+ * 默认开启离线优先」）：界面上那两颗旗标整排下线，其中「离线优先」不再是一个选项，
+ * 而是**这一屏安装的一贯行为** —— 装上几十个包时先翻本地缓存的收益最明显，而它的代价
+ * （可能拿到略微陈旧的元数据）在"依赖面板"这个场景里没有对象。
+ *
+ * **`-D` 那句提示下线后不再拼**：装什么都记进 `dependencies`（npm 的缺省）。界面不再问
+ * "这算不算开发依赖" —— 那是个多数人答不上来、答错了要重装一遍的问题。
+ */
+private const val INSTALL_FLAGS = " --prefer-offline"
+
+/**
  * 把输入框里的一行 + 两个旗标拼成一条命令（**纯函数**，可单测）。
  *
  * 返回 `null` = 拼不出（空输入）；否则是给 [HostSummary.runNpmPanelCommand] 的原文。
@@ -37,21 +50,40 @@ private const val INSTALL_DRAFT_MAX = 200
  * 而契约不该知道这件事。判据（`parse`/白名单/git 拒收）仍在 `:domain`，
  * 界面拼完仍要过它 —— 于是「面板能拼出来的东西」与「控制台能敲的东西」判据同源。
  *
- * 旗标**追加在包名之后**（`npm install axios -D`）：npm 两种位置都认，
- * 而后置的形态在用户眼里就是「装了 axios，带 -D」，与界面上那颗勾选框的语序一致。
+ * 旗标**追加在包名之后**（`npm install axios --prefer-offline`）：npm 两种位置都认，
+ * 而后置的形态在用户眼里就是「装了 axios，带这些旗标」。
+ *
+ * 2026-10-17 前这里还有 `dev`/`offline` 两个入参（对应界面上那两颗勾选框）—— 两颗都
+ * 下线了，见 [INSTALL_FLAGS] 的说明。
  */
-internal fun buildInstallCommand(draft: String, dev: Boolean, offline: Boolean): String? {
+internal fun buildInstallCommand(draft: String): String? {
     val spec = draft.trim()
     if (spec.isEmpty()) return null
-    return buildString {
-        append("npm install ").append(spec)
-        if (dev) append(" -D")
-        if (offline) append(" --prefer-offline")
-    }
+    return "npm install $spec$INSTALL_FLAGS"
 }
 
 /** 卸载一行的命令（§10.9 第 1 条；包名来自已装清单，不是用户敲的）。 */
 internal fun buildRemoveCommand(name: String): String = "npm uninstall $name"
+
+/**
+ * **重装某一个包**（2026-10-17 用户口径：「在依赖列表里，加一个重装的图标按钮」）。
+ *
+ * `npm install <包名>@<版本> --no-save`，三条各自有理由：
+ * - **带版本**：清单里那个版本就是宿主读 lockfile 读出来的"现在装的应该是哪一个"，
+ *   不带版本会让 npm 去解一次范围、可能装上一个新的；
+ * - **`--no-save`**：这一颗是**修复**动作（这个包坏了/目录缺了），不是"再声明一次依赖"。
+ *   不带它的话 npm 会把这个包写进 `package.json` 的 `dependencies` —— 而清单里绝大多数是
+ *   **传递依赖**，点一下重装就让一个传递依赖变成你亲手声明的直接依赖，这个副作用用户
+ *   在按之前完全看不见；
+ * - **留在这个作用域**：与卸载同一条 —— 清单显示的是哪个作用域，按钮就动哪一棵。
+ *
+ * **已知边界（如实记）**：`--no-save` 只保证**不动 manifest**，不保证目录结构一模一样 ——
+ * npm 会把它放在顶层。原本嵌在 `node_modules/<别的包>/node_modules/` 里的那份，
+ * 重装后就多出一份顶层的。条目本身没变（同名同版本），多占的那点地方由下一次
+ * 「依赖去重」/「清理未声明依赖」收掉。
+ */
+internal fun buildReinstallCommand(name: String, version: String): String =
+    "npm install $name@$version --no-save$INSTALL_FLAGS"
 
 /**
  * 提交安装输入行。
@@ -70,7 +102,7 @@ internal suspend fun submitInstall(host: HostSummary?, state: NpmState): NpmStat
     if (state.installDraft.trim().length > INSTALL_DRAFT_MAX) {
         return state.copy(opError = "输入过长（上限 $INSTALL_DRAFT_MAX 字符）：请只写包名与版本", opNotice = null)
     }
-    val line = buildInstallCommand(state.installDraft, state.installDev, state.installOffline)
+    val line = buildInstallCommand(state.installDraft)
         ?: return state.copy(opError = "先写要装什么（例如 axios 或 axios@1.7.0）", opNotice = null)
     return runPanelCommand(host, state, projectId, line, clearDraft = true)
 }
@@ -85,6 +117,22 @@ internal suspend fun removeInstalled(host: HostSummary?, state: NpmState, name: 
     val projectId = state.selectedProjectId
         ?: return state.copy(opError = "还没有选中的项目：依赖装在那个项目的 node_modules 里", opNotice = null)
     return runPanelCommand(host, state, projectId, buildRemoveCommand(name), clearDraft = false)
+}
+
+/**
+ * 重装清单里的某一个包（那行右边的重装图标）。
+ *
+ * 走的是与安装/卸载**完全同一条**命令通道（[runPanelCommand] → `runNpmPanelCommand`）：
+ * 判据、多镜像交叉校验、磁盘预检、安装会话一样不少 —— 门禁强度不该取决于用户按的是
+ * 哪一颗按钮。
+ *
+ * 失败**不清草稿**（这条本来就不吃草稿），成功也不清：草稿是用户为"安装"那一行准备的，
+ * 与这颗粒按钮无关。
+ */
+internal suspend fun reinstallInstalled(host: HostSummary?, state: NpmState, name: String, version: String): NpmState {
+    val projectId = state.selectedProjectId
+        ?: return state.copy(opError = "还没有选中的项目：依赖装在那个作用域的 node_modules 里", opNotice = null)
+    return runPanelCommand(host, state, projectId, buildReinstallCommand(name, version), clearDraft = false)
 }
 
 /** 两条入口共用的「判 → 发 → 拉」（差别只在草稿清不清、以及发的是哪一行）。 */
@@ -169,7 +217,7 @@ internal suspend fun pollInstallWhileRunning(
  * 拉一次安装事件（阶段进度条的数据源，§10.9 第 1 条）。
  *
  * **为什么只拉一次而不是轮询到终态**：`:ui` 的每个读口都是"进页面/手动刷新时现取一次"
- * （见 `ConsoleCmdState`/`AuditState` 的同款纪律），没有常驻轮询循环 ——
+ * （见 `ConsoleCmdState` 的同款纪律），没有常驻轮询循环 ——
  * 而 `runNpmPanelCommand` 是**入队即返回**的，拉一次拿到的多半只是 `QUEUED`。
  * 这不是缺陷也不是假装：**阶段条显示的是"这一刻宿主报到哪一步"**，
  * 用户点刷新（或重新进页面）会再取一次；等宿主把常驻轮询那件事做了，

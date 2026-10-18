@@ -9,8 +9,6 @@ import com.autoscript.domain.npm.InstallEventBatch
 import com.autoscript.domain.npm.SequencedInstallEvent
 import com.autoscript.domain.npm.InstallFlags
 import com.autoscript.domain.npm.InstallHandle
-import com.autoscript.domain.npm.InstallHistoryEntry
-import com.autoscript.domain.npm.InstallHistoryOp
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.MissingPkg
 import com.autoscript.domain.npm.NodeModulesStats
@@ -26,6 +24,7 @@ import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.npm.NpmRegistrySnapshot
+import com.autoscript.domain.npm.NpmTargetScope
 import com.autoscript.domain.npm.PackageManagerFacade
 import com.autoscript.domain.npm.PackageSpec
 import com.autoscript.domain.npm.PkgNode
@@ -56,7 +55,9 @@ import java.util.concurrent.atomic.AtomicLong
  *   ERR_NOT_IMPLEMENTED 如实失败」，绝不假装装上了（§1 诚实原则）。
  *
  * 门禁（§10.2）：per-project 互斥锁 + 全局会话互斥 + 磁盘 free≥[minFreeBytes] 预检 +
- * 项目配额（0.8 黄 / 1.0 拦）+ git: 依赖入口即拒（ERR_NOT_SUPPORTED）。
+ * git: 依赖入口即拒（ERR_NOT_SUPPORTED）。**项目配额那一档 2026-10-17 摘除**（用户口径
+ * 「取消 512MB 限制」「取消上限设置吧」）：磁盘预检成了唯一还会拒安装的资源闸，
+ * `FREE_WARN_HEADROOM` 那条黄警改锚在它上面。
  */
 class InstallCoordinator(
     private val services: NpmServices,
@@ -95,9 +96,13 @@ class InstallCoordinator(
      * 那会把它推到 detekt `LongParameterList` 的构造阈值线上。
      */
     private val globalConfig: NpmGlobalConfig? = null,
-    freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = {
-        Files.getFileStore(it).usableSpace
-    },
+    /**
+     * 磁盘可用字节探针。缺省走 [FreeSpace]（**不用 `Files.getFileStore`** —— Android 上那格
+     * 没实现，见 [FreeSpace] 的类 KDoc）；**生产永不用这个缺省**：[NpmShellKit.assembleHandler]
+     * 恒传一个带 filesDir 兜底的探针（项目目录可能还不存在），本缺省只服务"裸造一个
+     * InstallCoordinator"的场合（本仓只有测试这么干，而测试全都显式注入固定值）。
+     */
+    freeSpaceProbe: (projectRoot: java.nio.file.Path) -> Long = { FreeSpace.usableBytes(it) },
     now: () -> Long = { System.currentTimeMillis() },
     config: InstallConfig = InstallConfig(),
     /** 真 cacheDir（`<data>/cache/npm-cache`，§10.2；Android 装配层注入）。 */
@@ -120,7 +125,13 @@ class InstallCoordinator(
     private val layout: NpmProjectLayout = services.layout
     private val journal: InstallJournal = services.journal
     private val staging: InstallStaging = services.staging
-    private val history: InstallHistory? = services.history
+    /**
+     * 操作事实的去向（[NpmServices.opLog]）。
+     *
+     * 2026-10-17 用户令「去掉审计、改打系统日志」：这里原先是 `services.history`
+     * （一本落盘账）。现在协调器只把**事实**交出去（[OpLogSink]），去哪儿由装配层定。
+     */
+    private val opLog: OpLogSink = services.opLog
     private val lockSigner: LockSigner? = services.lockSigner
     private val snapshots: NpmSnapshot? = services.snapshots
     private val cacheIndex: CacheIndex = services.cacheIndex
@@ -201,26 +212,17 @@ class InstallCoordinator(
     private val handleSeq = AtomicLong(0)
 
     /**
-     * 项目 node_modules 的已测尺寸（键 = projectId），[SIZE_CACHE_TTL_MILLIS] 内直接复用。
+     * 逐包尺寸（键 = projectId → 包名 → 字节），[SIZE_CACHE_TTL_MILLIS] 内直接复用。
      *
-     * 为什么缓存：配额预检原本**每次安装**都全量 `Files.walk` 一遍 node_modules
-     * （大项目十万级文件、秒级），而它跑在拿全局会话锁**之前** —— 直接顶在
-     * 「点安装 → 有反应」之间；`storage()` 读口同理（能力中心轮询会反复问）。
+     * 2026-10-17 新增（用户口径：「依赖列表显示一下各个依赖占用的空间大小」）。不缓存的话，
+     * 依赖管理页每 400ms 一次的续拉都会把**每个作用域**的 node_modules 整棵再走一遍 ——
+     * 那正是 2026-10-17 那次「依赖装多了，一查看就闪退」的形态（当时的 `snapshot()` 已经在
+     * 落 IO，但那是"不阻塞主线程"，不是"可以无限次重算"）。
      *
-     * 为什么敢缓存：这条配额是**项目的礼貌上限**，不是磁盘满的真防线 —— 真防线是
-     * [freeSpaceProbe]，每次安装都真读文件系统可用空间，不受这里影响。代价是
-     * **最多 [SIZE_CACHE_TTL_MILLIS] 的陈旧**：本进程装完**不失效**（一失效就等于
-     * 每次安装照旧全量遍历，正是要修的东西），脚本自己跑 npm 装的那部分更看不见 ——
-     * 期间可能放行一次把项目顶过配额的安装，表现是 npm 自己报 ENOSPC 或下次预检拦下，
-     * 不会静默写坏数据（尺寸只决定「让不让开始」，不参与任何写路径决策）。
-     *
-     * 条目数 = 见过的项目数（每个一条小记录，随项目数有界，不随安装次数增长）——
-     * 与 [projectLocks] 的逐出不同，这里**不能**用完即摘：摘了就等于每次都重算。
+     * 与 [sizeCache] **分开两张表**而不是合成一张：那张只回答"这个作用域一共多大"，
+     * 这张回答"里面每个包多大"，键的粒度不同；合成一张要么每次多算一半用不上的东西，
+     * 要么让两个读口互相覆盖。两张表各自 TTL 一致、各自有界（随项目数增长）。
      */
-    private val sizeCache = ConcurrentHashMap<ProjectId, MeasuredSize>()
-
-    private data class MeasuredSize(val bytes: Long, val atMillis: Long)
-
     private data class TrackedOp(
         val handle: InstallHandle,
         val nonce: String,
@@ -276,13 +278,24 @@ class InstallCoordinator(
      *
      * [IllegalArgumentException]（包名形态非法）不在这层兜：调用方拿它当 ERR_INVALID_PARAM
      * （§7），与 git: 依赖的入口即拒同一路径。
+     *
+     * **取 packument 必须离开调用线程**（2026-10-17 设备实测的 `NetworkOnMainThreadException`）：
+     * [NpmRegistryVerifier.verify] 是**同步阻塞**的 `HttpURLConnection`（每个包两趟 packument，
+     * 5s + 8s 超时），而这条链从界面/控制台一路 suspend 下来 —— suspend 只给"可挂起"的许可，
+     * **不搬线程**。界面那条协程是 `MainActivity` 的 `rememberCoroutineScope()`（= Main），
+     * 于是取 packument 落在主线程上，Android 当场抛：装依赖一个包都还没发出去就没了。
+     * 包在 `Dispatchers.IO` 上是本文件既有的写法（见 [cacheStorage]），这条只是先前漏了。
      */
     private suspend fun crossCheckRegistry(projectId: String, specs: List<PackageSpec>, args: List<String>) {
         val verifier = registryVerifier ?: return
         val primary = registryOf(projectId)
         val downgraded = ArrayList<String>()
         for (spec in specs) {
-            val verdict = verifier.verify(spec.name, spec.version, primary)
+            // 离开调用线程（理由见 KDoc：主线程禁用网络）。每个包两趟往返都可能阻塞
+            // 十几秒，所以整趟都放 IO 上，不只是"发请求那一行"。
+            val verdict = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                verifier.verify(spec.name, spec.version, primary)
+            }
             when (verdict) {
                 is NpmRegistryVerifier.Verdict.Agreed -> Unit   // 一致即放行（不广播成功）
                 is NpmRegistryVerifier.Verdict.Disagreed -> {
@@ -295,7 +308,7 @@ class InstallCoordinator(
                         if (p != null) append("；首选 ${p.version} ${p.integrity}")
                         if (s != null) append("；第二 ${s.version} ${s.integrity}")
                     }
-                    history?.record(opName(args), projectId, false, "交叉校验不一致: $detail")
+                    opLog.log(opName(args), projectId, false, "交叉校验不一致: $detail")
                     throw AutojsException(ErrorCode.ERR_REGISTRY_UNAVAILABLE, detail)
                 }
                 is NpmRegistryVerifier.Verdict.Unverifiable -> {
@@ -304,7 +317,7 @@ class InstallCoordinator(
                     // 「到底想问的是 latest 还是范围」写进 message，不塞进 pkgs。
                     downgraded += spec.name
                     val asked = "${spec.name}@${spec.version ?: "latest"}"
-                    history?.record(opName(args), projectId, true, "来源未校验: $asked —— ${verdict.reason}")
+                    opLog.log(opName(args), projectId, true, "来源未校验: $asked —— ${verdict.reason}")
                 }
             }
         }
@@ -365,8 +378,8 @@ class InstallCoordinator(
         } catch (e: NpmOfflineBundleImporter.BundleTooLargeException) {
             // **超限是参数问题**（选错了文件 → 去重选），不是「文件不见了」（→ 去查 SAF
             // 副本有没有落地）—— 两者对用户的下一步动作完全不同，所以分错误码。原文
-            // （实际字节数与上限）照原样带给用户；超限同样入史，不留痕等于没发生。
-            history?.record(InstallHistory.Op.IMPORT, projectId, false, e.message ?: "")
+            // （实际字节数与上限）照原样带给用户；超限同样记一条，不留痕等于没发生。
+            opLog.log(OpName.IMPORT, projectId, false, e.message ?: "")
             throw AutojsException(ErrorCode.ERR_INVALID_PARAM, e.message ?: "离线 bundle 超过上限", e)
         } catch (e: IllegalArgumentException) {
             // 其余 IllegalArgumentException = 导入件对「文件不在那儿」的既有口径（§10.2）。
@@ -374,13 +387,13 @@ class InstallCoordinator(
         }
         if (!result.clean) {
             // §10.5-3 禁止静默：有拒收条目必须说，否则用户以为整包都进来了
-            history?.record(
-                InstallHistory.Op.IMPORT, projectId, false,
+            opLog.log(
+                OpName.IMPORT, projectId, false,
                 "bundle 有 ${result.rejected.size} 个条目被拒（路径非法或摘要不符）：${result.rejected.take(3)}",
             )
         }
-        history?.record(
-            InstallHistory.Op.IMPORT, projectId, true,
+        opLog.log(
+            OpName.IMPORT, projectId, true,
             "bundle 合入缓存 imported=${result.imported} skipped=${result.skipped} rejected=${result.rejected.size} bytes=${result.bytes}",
         )
         emit(
@@ -465,15 +478,40 @@ class InstallCoordinator(
 
     // ══════════ 轻操作（Kotlin 直读，零 Node 进程） ══════════
 
-    override suspend fun list(projectId: String, depth: Int): List<PkgNode> {
-        val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
-        return locked.map { PkgNode(name = it.name, version = it.version) }
-    }
+    /**
+     * 已装清单（§10.9.1）：lockfile v3 的 `packages` 段逐键读出来的**平铺闭包**。
+     *
+     * **按 (name, version) 归一**（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：
+     * lock v3 的键是**安装位置**（`node_modules/c`、`node_modules/a/node_modules/c`…），不是包的
+     * 身份 —— 同一个包同一个版本可以在不同父级各落一份（peer 冲突时最常见：根上是 c@2，
+     * a 与 b 各嵌一份 c@1）。不归一的后果不是"多画一行"那么轻：依赖管理页的清单用
+     * `items(key = "<name>@<version>")` 铺，**键重复时 Compose 当场抛**（
+     * `androidx.compose.ui.layout.LayoutNodeSubcompositionsState` 那句
+     * `Key "c@1.0.0" was already used`）——用户看到的就是"依赖装多了，一进这一页就闪退"。
+     * 装得越多，两份同名同版越可能撞上。
+     *
+     * 归一之后这份清单是**包清单**而不是**位置清单**：页面本来不画路径，两行一模一样的字
+     * 配两个「卸载」对用户没有任何信息量（`npm uninstall` 认的也是名字，不是位置）。
+     *
+     * **整趟落 IO**：[LockfileReader.readLocked] 是"读整份 lock 再手写解析"（依赖多时几百 KB），
+     * 而界面那条链（`rememberCoroutineScope()` = Main）是直接 await 它的 —— suspend 只给
+     * "可挂起"的许可，**不搬线程**；安装期间界面还每 400ms 拉一次快照。包 IO 是本文件既有写法
+     * （见 [cacheStorage] 与 [crossCheckRegistry] 的 KDoc）。
+     */
+    override suspend fun list(projectId: String, depth: Int): List<PkgNode> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
+                .distinctBy { it.name to it.version }
+                .map { PkgNode(name = it.name, version = it.version) }
+        }
 
+    /** 离线闭包缺口（读法与 [list] 同一份 lock、同一趟 IO，故一并挪出调用线程）。 */
     override suspend fun offlineGap(projectId: String): List<MissingPkg> =
-        LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
-            .filter { it.integrity == null || !cacheIndex.has(it.integrity) }
-            .map { MissingPkg(it.name, it.version, it.resolvedSize) }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
+                .filter { it.integrity == null || !cacheIndex.has(it.integrity) }
+                .map { MissingPkg(it.name, it.version, it.resolvedSize) }
+        }
 
     override suspend fun config(projectId: String?, key: NpmConfigKey, value: String?, scope: String?) {
         val npmrc = layout.npmrc(
@@ -492,7 +530,7 @@ class InstallCoordinator(
         // 写盘走 NpmrcFile（与全局那份**同一份**实现）：两处各写一份「读全行 → removeIf
         // → 写回」必然漂，而漂的方向是「一处认 `registry = x` 带空格的写法、另一处不认」。
         NpmrcFile.writeKey(npmrc, keyName, value)
-        history?.record(InstallHistory.Op.REGISTRY, projectId, true, "$keyName=$value")
+        opLog.log(OpName.REGISTRY, projectId, true, "$keyName=$value")
     }
 
     /**
@@ -514,9 +552,9 @@ class InstallCoordinator(
      * 原文点名用户输入的那个串 —— 静默收下一个坏地址，后果是此后每次安装都失败，
      * 而用户不知道自己刚才那一步就是病因。
      *
-     * 审计行的 `projectId` 传**空串**，这不是笔误：全局变更没有项目维度，
-     * 而 [InstallHistory.Entry.projectId] 是非空 String。改行格式会动审计契约，
-     * 空串在审计页上正好读作「全局」。
+     * 记给去向的那条的 `projectId` 传**空串**，这不是笔误：全局变更没有项目维度，
+     * 而 [OpLogSink.log] 的 `projectId` 是非空 String。空串由去向侧（`HostLog`）
+     * 读作「全局」—— 判据只有那一条，不在写侧另造一个哨兵值。
      */
     override suspend fun setGlobalRegistry(raw: String?) {
         val cfg = globalConfig ?: throw AutojsException(
@@ -527,7 +565,7 @@ class InstallCoordinator(
         NpmRegistryKeys.reject(trimmed)?.let { throw IllegalArgumentException(it) }
         val value = trimmed.takeIf { it.isNotEmpty() }
         cfg.writeRegistry(value)
-        history?.record(InstallHistory.Op.REGISTRY, "", true, "registry=${value ?: "(恢复出厂)"}")
+        opLog.log(OpName.REGISTRY, "", true, "registry=${value ?: "(恢复出厂)"}")
     }
 
     /**
@@ -536,54 +574,71 @@ class InstallCoordinator(
      * 项目列表 = `storage()` 的键（= 项目根下的目录），**不是** lockfile 的键：
      * 「装了依赖但还没落 lock」的项目也要出现在面板上（它有一棵 node_modules 要管），
      * 而只有 lock 的项目反倒没有可管的东西。两者取并集是过度设计 —— 目录是超集。
+     *
+     * **2026-10-17 起多一条：全局作用域**（用户口径「项目选择改成依赖作用域，然后下拉框加个
+     * 全局」）。它**排在最后**，不是随手：面板缺省选中的是第一条（[NpmState.of]），把它插在
+     * 最前面会把所有人打开这一页的缺省作用域从"第一个项目"悄悄换成"全局"——那是个没人要求过的
+     * 行为变更，而"全局排在项目后面"在语义上也对（先看具体的，再看兜底的）。
+     *
+     * 全局那条**永远在**（哪怕 `files/scripts/node_modules` 还没建）：作用域下拉里得先有这一项，
+     * 用户才谈得上"往全局装"。
+     *
+     * **2026-10-17 第二批：`storage` 不再因为目录不存在而给 `null`。** 用户看到的现象是
+     * 「全局作用域下没有 node_modules 那一行」—— 原因是全局那条走了"没量到就不画"这条档，
+     * 而**项目**那条永远不会：`storage()` 给每个项目都构造一份 `NodeModulesStats`，
+     * 目录不存在时 `totalBytes` 就是 0，界面照样画一行「node_modules 0 B」。
+     * 同一个物理事实（这棵 node_modules 还没建）在两档作用域上画出了两种界面，
+     * 而"缺省作用域"正要改成全局（见 [NpmState.of]）—— 那时这一页一进来就少一行，
+     * 读起来像坏了。现在两档**同口径**：都给 `storage`，没建就是 0 字节。
      */
-    override suspend fun snapshot(): NpmPanelSnapshot {
-        val stats = storage()
-        // 缓存体积**全机一份**，故在循环外量一次（循环里量就是同一个数字抄 N 遍，
-        // 而每遍都是一次全目录遍历 —— 见 cacheStorage 的 KDoc）。
-        val cache = cacheStorage()
-        val projects = stats.keys.sorted().map { id ->
-            NpmProjectSnapshot(
-                projectId = id,
-                installed = list(id, depth = 0),
-                offlineGap = offlineGap(id),
-                storage = stats[id],
-                quotaBytes = config.projectQuotaBytes,
-                quotaWarnRatio = config.quotaWarnRatio,
-                cache = cache,
-            )
+    override suspend fun snapshot(): NpmPanelSnapshot =
+        // 整趟落 IO（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：这一趟是
+        // 「全项目目录遍历 + 每项目两份 lock 解析 + 每棵 node_modules 全树算尺寸 + 缓存目录遍历」，
+        // 全在**同一次调用**里；而进这一页、点刷新、以及安装期间每 400ms 一次的续拉，
+        // 都是主线程那条协程直接 await 它的。依赖装到几十上百个包时，这就是主线程上一次
+        // 几百毫秒的阻塞 —— Android 上表现为 ANR，用户看到的就是"一查看就闪退"。
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val stats = storage()
+            // 缓存体积**全机一份**，故在循环外量一次（循环里量就是同一个数字抄 N 遍，
+            // 而每遍都是一次全目录遍历 —— 见 cacheStorage 的 KDoc）。
+            val cache = cacheStorage()
+            val projects = stats.keys.sorted().map { id ->
+                NpmProjectSnapshot(
+                    projectId = id,
+                    installed = installedWithSizes(id),
+                    offlineGap = offlineGap(id),
+                    storage = stats[id],
+                    cache = cache,
+                )
+            } + globalSnapshot(cache)
+            NpmPanelSnapshot(projects = projects)
         }
-        return NpmPanelSnapshot(projects = projects)
-    }
 
     /**
-     * 安装审计史读数（§10.5-2；`:ui` 审计页，2026-10-09 批 85）。
+     * 全局作用域那一条（[NpmTargetScope.GLOBAL]），**永远返回一条**（见 [snapshot] 的 KDoc）。
      *
-     * **为什么是 `snapshot()` 之外的第二条读口**：两者问的是两件事。`snapshot()` 答
-     * 「此刻装了什么」（当前事实，每次现算）；本口答「过去发生过什么」（历史事实，
-     * 落盘即定）。并进快照会让每次刷依赖面板都重读全部历史，而依赖面板根本不显示它。
-     *
-     * **无参**（与 `snapshot()` 里的待审队列同一取舍）：全量 + 呈现层筛，不按项目问 ——
-     * 按项目筛会让 `Op.REGISTRY` 那条（`projectId` 空串，全局变更）从任何一次筛选里
-     * 掉出去，而它恰恰是审计最该看见的。
-     *
-     * **未注入 history 时回空表**（不抛）：与 [snapshot] 的 `history` 用法一致 ——
-     * `history` 在构造里是可空的（测试替身不注入），审计史的「没有」与「读不到」在这里
-     * 合成一句「一条都没有」。这**不是**撒谎：`history?.record(...)` 在同一条路上写不进去时
-     * 也是静默的（可空注入的既有语义），读侧如实回它写下的那本账。
-     *
-     * 返回**按写入序**（最新在最后）：那是文件里真实的顺序，读口不替呈现层决定怎么排。
+     * 三个字段各自"量不到就是空"，不含糊：
+     * - `storage`：**恒非 null**（2026-10-17 第二批改的口径，理由见 [snapshot] 的 KDoc）——
+     *   `files/scripts/node_modules` 还没建时 `totalBytes` 就是 0，与项目那条同款：
+     *   界面画「node_modules 0 B」，而不是整行消失；
+     * - `installed` / `offlineGap`：读的是全局那份 `package-lock.json`，没装过就是空的
+     *   （"没装过"与"装了 0 个包"在这里是同一件事，故不需要第三态）；
+     * - `cache`：与项目那条同源（缓存全机一份，量一次抄过来）。
      */
-    override suspend fun history(): List<InstallHistoryEntry> =
-        history?.all().orEmpty().map {
-            InstallHistoryEntry(
-                op = it.op,
-                projectId = it.projectId,
-                success = it.success,
-                detail = it.detail,
-                atMillis = it.atMillis,
-            )
-        }
+    private suspend fun globalSnapshot(cache: NodeModulesStats): List<NpmProjectSnapshot> =
+        listOf(
+            NpmProjectSnapshot(
+                projectId = NpmTargetScope.GLOBAL,
+                installed = installedWithSizes(NpmTargetScope.GLOBAL),
+                offlineGap = offlineGap(NpmTargetScope.GLOBAL),
+                storage = NodeModulesStats(
+                    projectId = NpmTargetScope.GLOBAL,
+                    pkgCount = LockfileReader.readLocked(layout.globalLockfile).size,
+                    totalBytes = nodeModulesBytesOf(layout.globalNodeModules, now()),
+                ),
+                cache = cache,
+            ),
+        )
 
     /**
      * 按 lock 闭包回收 npm 缓存（§10.9 第 5 条那颗 cache clean 按钮）。
@@ -600,72 +655,100 @@ class InstallCoordinator(
      * 回收失败（目录被占/权限）抛 [AutojsException] 原文：这个动作的产物是**磁盘上少了
      * 东西**，静默失败会让用户以为清了其实没清（下一次点才发现还是满的）。
      */
-    override suspend fun reclaimCache(): NpmCacheReclaimReport {
-        val cacheDir = resolveCacheDir()
-        val keep = LinkedHashSet<String>()
-        val unreadable = ArrayList<String>()
-        if (Files.isDirectory(layout.projectsRoot)) {
-            Files.list(layout.projectsRoot).use { s ->
-                s.filter { Files.isDirectory(it) }.forEach { proj ->
-                    // 盘上读回的目录名：判不过判据就跳过（与 `storage()` 同款纪律 ——
-                    // 一个别人留下的怪目录不该让「回收缓存」整个失败）。
-                    val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
-                    val lock = layout.lockfile(pid)
-                    // 没 lockfile = 「这个项目还没装过」，正常，不点名；
-                    // lockfile **在**但读不出来（目录冒充、损坏到读不动、半路被删）= 点名：
-                    // 那种项目不是「不需要保护」，是「想保护但保护不了」，用户有权知道。
-                    if (!Files.exists(lock)) return@forEach
-                    val locked = try {
-                        LockfileReader.readLocked(lock)
-                    } catch (e: Exception) {
-                        unreadable += pid.value
-                        return@forEach
-                    }
-                    locked.mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
+    override suspend fun reclaimCache(): NpmCacheReclaimReport =
+        // 落 IO 的理由与 [snapshot] 同族（2026-10-17）：这一趟要遍历全部项目的 lock、
+        // 遍历整个缓存目录并真删文件，而这颗按钮是**主线程那条协程**直接 await 的
+        // （`reclaimNpmCacheOp`）。包一层 `withContext` 是"做阻塞调用的那一层自己声明它是 IO"
+        // 在别处（[cacheStorage]）已有的写法。
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val cacheDir = resolveCacheDir()
+            val keep = LinkedHashSet<String>()
+            val unreadable = ArrayList<String>()
+            // 全局那份 lock 先算进来（2026-10-17，见 [NpmTargetScope]）：全局依赖装在
+            // `files/scripts/node_modules`，而它的 lock 是**项目根下的一个文件**，
+            // 下面那个按目录扫的循环看不见它 —— 漏掉的话，凡是"只被全局依赖用着"的包
+            // 都会被当成没人要的删掉，全局那份离线重装当场失效，而用户在点这一下时
+            // 完全看不出自己刚把什么删了。与 [snapshot] 一样，先看 lock 在不在：
+            // 没装过全局 = 正常，不点名。
+            if (Files.exists(layout.globalLockfile)) {
+                try {
+                    LockfileReader.readLocked(layout.globalLockfile)
+                        .mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
+                } catch (e: Exception) {
+                    // 读不出来 = 「想保护但保护不了」，与项目那个分支同一条：点名。
+                    unreadable += NpmTargetScope.label(NpmTargetScope.GLOBAL)
                 }
             }
+            if (Files.isDirectory(layout.projectsRoot)) {
+                Files.list(layout.projectsRoot).use { s ->
+                    s.filter { Files.isDirectory(it) }.forEach { proj ->
+                        // 盘上读回的目录名：判不过判据、或是保留名（`node_modules` 之类）就跳过
+                        // （与 `storage()` 同款纪律 —— 一个别人留下的怪目录不该让「回收缓存」
+                        // 整个失败）。
+                        val name = proj.fileName.toString()
+                        if (NpmProjectLayout.isReservedDirName(name)) return@forEach
+                        val pid = ProjectId.createOrNull(name) ?: return@forEach
+                        val lock = layout.lockfile(pid)
+                        // 没 lockfile = 「这个项目还没装过」，正常，不点名；
+                        // lockfile **在**但读不出来（目录冒充、损坏到读不动、半路被删）= 点名：
+                        // 那种项目不是「不需要保护」，是「想保护但保护不了」，用户有权知道。
+                        if (!Files.exists(lock)) return@forEach
+                        val locked = try {
+                            LockfileReader.readLocked(lock)
+                        } catch (e: Exception) {
+                            unreadable += pid.value
+                            return@forEach
+                        }
+                        locked.mapNotNullTo(keep) { it.integrity?.takeIf { i -> i.isNotBlank() } }
+                    }
+                }
+            }
+            val report = try {
+                NpmCacheReclaim.reclaim(cacheDir, keep)
+            } catch (e: java.io.IOException) {
+                throw AutojsException(ErrorCode.ERR_IO, "缓存回收失败（${cacheDir}）：${e.message}", e)
+            }
+            // 记一条：与 install/prune 同一条纪律 —— 「清了多少」是用户回看时唯一能对上的凭据。
+            // detail 里带上读不到 lock 的项目名：那些项目的包**没有**被保护，用户有权知道。
+            val why = buildString {
+                append("removed=${report.removedEntries} entries/")
+                append(report.removedBytes / 1024 / 1024).append("MB；保留 ").append(report.keptEntries)
+                append(" 条（lock 闭包 ").append(report.keepCount).append(" 项）")
+                if (report.indexRebuilt) append("；顺带修复了缓存索引里的悬空引用")
+                if (unreadable.isNotEmpty()) append("；以下项目 lock 读不出来，其依赖未被保护：").append(unreadable.sorted())
+            }
+            opLog.log(OpName.CACHE_RECLAIM, "", true, why)
+            NpmCacheReclaimReport(
+                removedEntries = report.removedEntries,
+                removedBytes = report.removedBytes,
+                keptEntries = report.keptEntries,
+                keptBytes = report.keptBytes,
+                keepCount = report.keepCount,
+                indexRebuilt = report.indexRebuilt,
+            )
         }
-        val report = try {
-            NpmCacheReclaim.reclaim(cacheDir, keep)
-        } catch (e: java.io.IOException) {
-            throw AutojsException(ErrorCode.ERR_IO, "缓存回收失败（${cacheDir}）：${e.message}", e)
-        }
-        // 入史：与 install/prune 同一条纪律 —— 「清了多少」是用户回看时唯一能对上的凭据。
-        // detail 里带上读不到 lock 的项目名：那些项目的包**没有**被保护，用户有权知道。
-        val why = buildString {
-            append("removed=${report.removedEntries} entries/")
-            append(report.removedBytes / 1024 / 1024).append("MB；保留 ").append(report.keptEntries)
-            append(" 条（lock 闭包 ").append(report.keepCount).append(" 项）")
-            if (report.indexRebuilt) append("；顺带修复了缓存索引里的悬空引用")
-            if (unreadable.isNotEmpty()) append("；以下项目 lock 读不出来，其依赖未被保护：").append(unreadable.sorted())
-        }
-        history?.record(InstallHistoryOp.CACHE_RECLAIM, "", true, why)
-        return NpmCacheReclaimReport(
-            removedEntries = report.removedEntries,
-            removedBytes = report.removedBytes,
-            keptEntries = report.keptEntries,
-            keptBytes = report.keptBytes,
-            keepCount = report.keepCount,
-            indexRebuilt = report.indexRebuilt,
-        )
-    }
 
-    override suspend fun storage(): Map<String, NodeModulesStats> {
-        if (!Files.isDirectory(layout.projectsRoot)) return emptyMap()
-        val out = LinkedHashMap<String, NodeModulesStats>()
-        Files.list(layout.projectsRoot).use { s ->
-            s.filter { Files.isDirectory(it) }.forEach { proj ->
-                val pid = ProjectId.createOrNull(proj.fileName.toString()) ?: return@forEach
-                val pkgs = LockfileReader.readLocked(layout.lockfile(pid)).size
+    override suspend fun storage(): Map<String, NodeModulesStats> =
+        // 落 IO 的理由与 [snapshot] 同族（2026-10-17）：这一趟逐项目算 node_modules 全树尺寸。
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            // 盘上的项目目录名先收成一个 list：`Files.list` 的 `use` 块里**调不了挂起函数**
+            // （`Stream.forEach` 收的是 Java 的 `Consumer`，不是内联 lambda），而下面那一趟
+            // 尺寸（挂起、自己落 IO）必须按项目逐个走。收名字这一步只是一次目录列举。
+            //
+            // **保留名过滤在 [NpmProjectLayout.projectIds] 里**（2026-10-17）：项目根本层现在
+            // 多了一个 `node_modules`（全局依赖的家，见 [NpmTargetScope]），它过得了项目号判据，
+            // 不排掉就会在这里变成一个叫 node_modules 的"项目"。判据收一处，三个枚举点共用。
+            val ids = layout.projectIds()
+            val out = LinkedHashMap<String, NodeModulesStats>()
+            for (pid in ids) {
                 out[pid.value] = NodeModulesStats(
                     projectId = pid.value,
-                    pkgCount = pkgs,
-                    totalBytes = nodeModulesBytes(pid),
+                    pkgCount = LockfileReader.readLocked(layout.lockfile(pid)).size,
+                    totalBytes = nodeModulesBytesOf(layout.nodeModules(pid), now()),
                 )
             }
+            out
         }
-        return out
-    }
 
     /**
      * npm 缓存体积（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）。
@@ -723,7 +806,7 @@ class InstallCoordinator(
                     // 包说明符由 [NpmConsoleKeys.packageSpecsIn] 从原样透传的 argv 里取
                     // （argv 本身一个字不改，装的东西与手敲 npm 完全一致）。
                     //
-                    // 入史那一栏只给 `listOf(cmd.sub)` 而不是完整 argv：审计表要长期留存，
+                    // 记给去向的 op 段只给 `listOf(cmd.sub)` 而不是完整 argv：系统日志要长期留存，
                     // 而用户手敲的 argv 可能夹着凭据形态的参数（`--//registry/:_authToken=…`、
                     // `--otp`）—— 存原文等于把用户手滑敲进来的东西永久写进盘。真正的 argv
                     // 一个字不改地交给 npm（见下一行的 `listOf(cmd.sub) + cmd.args`）。
@@ -829,20 +912,26 @@ class InstallCoordinator(
             )
             return
         }
-        val text = when (cmd.sub) {
-            "ls", "list" -> {
-                val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
-                if (locked.isEmpty()) "（没有已装的依赖：package-lock.json 不存在或为空）"
-                else locked.sortedBy { it.name }.joinToString("\n") { "${it.name}@${it.version}" }
-            }
-            "audit" -> {
-                val report = audit(projectId, offline = true)
-                if (report.vulnerabilities.isEmpty()) "离线 OSV 库：未发现已知漏洞（offline=${report.offline}）"
-                else report.vulnerabilities.joinToString("\n") {
-                    "${it.severity} ${it.pkgName} ${it.id}"
+        // 取数的两档都落 IO（2026-10-17）：`ls`/`list` 是"读整份 lock 再解析"，`audit` 是
+        // "读整份 lock 再查 OSV 库" —— 控制台那一屏同样是主线程在 await 这条链。
+        // 两行 consoleLine 留在**外面**发：`SeqRing` 本身任意线程可用（见其 KDoc），
+        // 但"取数在 IO、投递回调用线程"让这段的顺序仍然只有一处说了算。
+        val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            when (cmd.sub) {
+                "ls", "list" -> {
+                    val locked = LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
+                    if (locked.isEmpty()) "（没有已装的依赖：package-lock.json 不存在或为空）"
+                    else locked.sortedBy { it.name }.joinToString("\n") { "${it.name}@${it.version}" }
                 }
+                "audit" -> {
+                    val report = audit(projectId, offline = true)
+                    if (report.vulnerabilities.isEmpty()) "离线 OSV 库：未发现已知漏洞（offline=${report.offline}）"
+                    else report.vulnerabilities.joinToString("\n") {
+                        "${it.severity} ${it.pkgName} ${it.id}"
+                    }
+                }
+                else -> "（内部错误：$cmd 不在轻操作白名单里）"
             }
-            else -> "（内部错误：$cmd 不在轻操作白名单里）"
         }
         consoleLine(projectId, NpmConsoleLine(NpmConsoleLineKind.OUTPUT, text, at))
         consoleLine(
@@ -891,7 +980,7 @@ class InstallCoordinator(
         // npm 的分隔符在**参数之前**（`npm run build -- --watch`）：少了它，脚本名后的
         // `--watch` 会被 npm 自己吃掉而不是传给脚本，等于静默丢用户显式给的参数。
         val npmArgs = if (args.isEmpty()) listOf("run", name) else listOf("run", name, "--") + args
-        return runScriptOps(projectId, InstallHistoryOp.RUN_SCRIPT, name, args, s.pkg, s.versionHash, npmArgs)
+        return runScriptOps(projectId, OpName.RUN_SCRIPT, name, args, s.pkg, s.versionHash, npmArgs)
     }
 
     override suspend fun exec(projectId: String, bin: String, args: List<String>): InstallHandle {
@@ -908,7 +997,7 @@ class InstallCoordinator(
         )
         // 同上：`npm exec <args> -- <bin>`，分隔符必须在 bin 名之前，否则 bin 会被当 args 的一员。
         val npmArgs = if (args.isEmpty()) listOf("exec", "--", bin) else listOf("exec") + args + listOf("--", bin)
-        return runScriptOps(projectId, InstallHistoryOp.EXEC, bin, args, b.pkg, b.versionHash, npmArgs)
+        return runScriptOps(projectId, OpName.EXEC, bin, args, b.pkg, b.versionHash, npmArgs)
     }
 
     /**
@@ -921,7 +1010,7 @@ class InstallCoordinator(
      * 人就是用户本人；要拦的是**脚本自己发起**的路径，而桥面根本没有 `runScript`/`exec`
      * 这两个方法（见 [NpmBridgeHandler.methods]），脚本到不了这里。
      *
-     * [versionHash] 仍然带上，但**不再是放行判据**：它随 [ScriptOp] 走到审计条目，
+     * [versionHash] 仍然带上，但**不再是放行判据**：它随 [ScriptOp] 走到操作事实，
      * 让「我当时跑的是哪一份脚本」有据可查（脚本改了哈希就变）。
      *
      * 执行体是 [scriptExecutor] 而不是 [executor]：npm CLI 走重操作通道（事务/staging/落位），
@@ -989,7 +1078,7 @@ class InstallCoordinator(
                             throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "脚本执行已取消（执行体已收尾，结果不采纳）")
                         }
                         tracked.finish()
-                        history?.record(action, projectId, true, summary)
+                        opLog.log(action, projectId, true, summary)
                         emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
                     } catch (e: CancellationException) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
@@ -1000,11 +1089,11 @@ class InstallCoordinator(
                         val firstTerminal = !tracked.done
                         tracked.finish()
                         if (firstTerminal) {
-                            history?.record(action, projectId, false, e.message)
+                            opLog.log(action, projectId, false, e.message)
                             emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
                         } else {
-                            // 终态已发过：只把这次失败入史（审计要看到），不再重复发事件。
-                            history?.record(action, projectId, false, "取消后收尾失败: ${e.message}")
+                            // 终态已发过：只把这次失败记一条（日志里要能看到），不再重复发事件。
+                            opLog.log(action, projectId, false, "取消后收尾失败: ${e.message}")
                         }
                         throw e
                     }
@@ -1049,32 +1138,65 @@ class InstallCoordinator(
         try {
             val built = snapper.export(projectId, tmp)
             snapper.sync(built, uri)
-            history?.record(InstallHistory.Op.EXPORT, projectId, true, "entries=${built.entries} bytes=${built.contentBytes}")
+            opLog.log(OpName.EXPORT, projectId, true, "entries=${built.entries} bytes=${built.contentBytes}")
             return SnapshotRef(
                 uri = uri,
                 sizeBytes = built.sizeBytes,
                 sha256 = built.archiveSha256,
             )
         } catch (e: AutojsException) {
-            history?.record(InstallHistory.Op.EXPORT, projectId, false, e.message)
+            opLog.log(OpName.EXPORT, projectId, false, e.message)
             throw e
         } catch (e: CancellationException) {
             throw e        // 取消不是"快照导出失败"：不记历史、不折成 ERR_IO
         } catch (e: Exception) {
-            history?.record(InstallHistory.Op.EXPORT, projectId, false, e.message)
+            opLog.log(OpName.EXPORT, projectId, false, e.message)
             throw AutojsException(ErrorCode.ERR_IO, "快照导出失败：${e.message}", e)
         } finally {
             Files.deleteIfExists(tmp)
         }
     }
 
-    /** 项目 node_modules 尺寸：缓存优先，过期才真遍历（见 [sizeCache]；只服务配额预检与 [storage]）。 */
-    private fun nodeModulesBytes(projectId: ProjectId): Long {
-        val at = now()
-        sizeCache[projectId]?.let { if (at - it.atMillis < SIZE_CACHE_TTL_MILLIS) return it.bytes }
-        return DirSizer.sizeBytes(layout.nodeModules(projectId)).also {
-            sizeCache[projectId] = MeasuredSize(it, at)
-        }
+    /**
+     * 已装清单，每条带上它**实际占的字节数**（`PkgNode.sizeBytes`，2026-10-17 新增）。
+     *
+     * 两件事分开取，因为它们本来就是两件事：条目来自 [list]（读 lockfile，权威是 manifest），
+     * 尺寸来自 [packageSizes]（走一遍 node_modules，权威是磁盘）。名字对不上的（lock 里有、
+     * 盘上没有）**保留 0** —— 界面据此不画那一段数字，而不是画成 "0 B"：那是"这个包不占地方"，
+     * 与"这个包不在盘上"是两句话。
+     */
+    /**
+     * 已装清单 + 每包尺寸（2026-10-17 用户口径「依赖列表显示一下各个依赖占用的空间大小」）。
+     *
+     * 量尺寸那一段住在 [NpmPackageSizes.kt]（`packageSizesOf`）：那是它自己一个算法
+     * —— 怎么把字节分摊到包头上、TTL 多长 —— 与"快照怎么拼"不是一件事。
+     * 这里只做一件：把量到的数字贴回清单（**量不到 = 0**，界面据此不画那一格，
+     * 见 `NpmRowState.sizeLabel`）。
+     */
+    private suspend fun installedWithSizes(projectId: String): List<PkgNode> {
+        val sizes = packageSizesOf(layout.nodeModules(ProjectId(projectId)), now())
+        return list(projectId, depth = 0).map { it.copy(sizeBytes = sizes[it.name] ?: 0L) }
+    }
+
+    // ══════════ 提升到全局（2026-10-17，「去重并提升到全局」那条路的后半） ══════════
+
+    /**
+     * 把一个项目**声明的**依赖装一份到全局作用域（语义与三条刻意见
+     * [PackageManagerFacade.promoteToGlobal] 的 KDoc）。
+     *
+     * **走的是与控制台逐字相同的那条重操作路**：同一次 [NpmConsoleKeys.packageSpecsIn]
+     * 取包说明符 → 同一次 [crossCheckRegistry] 多镜像交叉校验 → 同一次 [enqueueHeavy]
+     * （磁盘预检 / 项目锁 / 全局会话 / journal 事务）。门禁强度不该取决于用户是敲进来的
+     * 还是按一颗按钮 —— 与 [runConsoleCommand] 里那段注释同一条纪律。
+     *
+     * ECHO 行落在**全局**那份控制台里（`consoleLine(GLOBAL, …)`）：这次安装真跑在全局，
+     * 把回显记到项目那份去，等于在一个作用域的账本上记另一棵树发生的事。
+     */
+    override suspend fun promoteToGlobal(projectId: String): InstallHandle {
+        val plan = promotePlanOf(layout.projectRoot(ProjectId(projectId)), projectId)
+        consoleLine(NpmTargetScope.GLOBAL, echoLine("npm " + plan.args.joinToString(" "), now()))
+        crossCheckRegistry(NpmTargetScope.GLOBAL, NpmConsoleKeys.packageSpecsIn(plan.specs), listOf("install"))
+        return enqueueHeavy(NpmTargetScope.GLOBAL, plan.args)
     }
 
     // ══════════ 编排核心 ══════════
@@ -1092,21 +1214,18 @@ class InstallCoordinator(
         val free = freeSpaceProbe(root)
         if (free < config.minFreeBytes) {
             val why = "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装"
-            // 预检拒绝也入史（2026-10-09 批 85）：审计要能回答「用户当时看到成功了吗」，
-            // 而「被配额/磁盘挡住」正是最该被看见的那类失败 —— 它不留痕的话，用户在审计页
-            // 上看到的是「什么都没发生」，与他屏幕上那句报错对不上。与 `crossCheckRegistry`
+            // 预检拒绝也记一条（2026-10-09 批 85）：日志要能回答「用户当时看到成功了吗」，
+            // 而「被配额/磁盘挡住」正是最该被看见的那类失败 —— 它不留痕的话，用户在系统日志
+            // 里看到的是「什么都没发生」，与他屏幕上那句报错对不上。与 `crossCheckRegistry`
             // 的预检拒绝同一条口径（那条一直在记，这两条是漏的）。
-            history?.record(opName(args), projectId, false, why)
+            opLog.log(opName(args), projectId, false, why)
             throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
-        val used = nodeModulesBytes(ProjectId(projectId))
-        if (used >= config.projectQuotaBytes) {
-            val why = "项目 node_modules 已达配额 ${config.projectQuotaBytes / 1024 / 1024}MB"
-            history?.record(opName(args), projectId, false, why)
-            throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
-        }
-        // 80% 黄（§10.2 「项目+全局配额(80%黄·100%拦）」）：不拦，发 Warning 事件
-        val quotaWarned = used >= (config.projectQuotaBytes * config.quotaWarnRatio).toLong()
+        // 黄警（**2026-10-17 起锚在磁盘上**，不再是 node_modules 配额）：可用空间进了预检
+        // 下限的 1.25 倍以内就发一条，**不拦** —— 理由与原那条 80% 黄逐字同款：
+        // 「下一次安装就要被拒了」值得在**被拒之前**说一次。配额那一档已按用户口径整个摘掉
+        // （见 `InstallConfig` 的 KDoc），故 `DISK_QUOTA` 这个事件名留用、判据换锚。
+        val freeWarned = free < (config.minFreeBytes * FREE_WARN_HEADROOM).toLong()
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
         val nonce = UUID.randomUUID().toString()
         val tracked = TrackedOp(handle, nonce)
@@ -1116,13 +1235,14 @@ class InstallCoordinator(
         try {
             withProjectLock(projectId) {
                 globalSession.withLock {
-                    if (quotaWarned) {
+                    if (freeWarned) {
                         emit(
                             InstallEvent.Warning(
                                 projectId = projectId,
                                 handleId = handle.id,
                                 kind = InstallEvent.Kind.DISK_QUOTA,
-                                message = "项目 node_modules 已用 ${used / 1024 / 1024}MB ≥ 配额 80%（${config.projectQuotaBytes / 1024 / 1024}MB）",
+                                message = "磁盘可用 ${free / 1024 / 1024}MB 已逼近预检下限 " +
+                                    "${config.minFreeBytes / 1024 / 1024}MB：再装大包会被拒",
                             ),
                         )
                     }
@@ -1197,7 +1317,7 @@ class InstallCoordinator(
             try {
                 lockSigner?.sign(projectId, layout.lockfile(ProjectId(projectId)))
             } catch (e: Exception) {
-                history?.record(opName(args), projectId, false, "lock 签名失败: ${e.message}")
+                opLog.log(opName(args), projectId, false, "lock 签名失败: ${e.message}")
                 emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = "lock 签名失败: ${e.message}"))
                 throw AutojsException(
                     ErrorCode.ERR_PERMISSION_DENIED,
@@ -1226,7 +1346,7 @@ class InstallCoordinator(
                     ),
                 )
             }
-            history?.record(opName(args), projectId, true, outcome.summary)
+            opLog.log(opName(args), projectId, true, outcome.summary)
             emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = outcome.summary))
         } catch (e: CancellationException) {
             // 事务与句柄须先收尾，再原样传播调用方取消。
@@ -1236,7 +1356,7 @@ class InstallCoordinator(
             journal.fail(nonce, projectId, stageDir.fileName.toString(), e.message)
             staging.sweep(projectId, setOf(nonce))
             tracked.finish()
-            history?.record(opName(args), projectId, false, e.message)
+            opLog.log(opName(args), projectId, false, e.message)
             emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
             throw e
         }
@@ -1308,13 +1428,13 @@ class InstallCoordinator(
     }
 
     /**
-     * 审计 op 名：取 npm CLI 子命令（install/ci/uninstall/prune/dedupe）；tarball/bundle 导入
-     * 统一归 [InstallHistory.Op.IMPORT]（args 里的路径是用户数据，不入 op 名——明细走 detail）。
+     * 操作名（[OpLogSink.log] 的 op 段）：取 npm CLI 子命令（install/ci/uninstall/prune/dedupe）；tarball/bundle 导入
+     * 统一归 [OpName.IMPORT]（args 里的路径是用户数据，不入 op 名——明细走 detail）。
      */
     private fun opName(args: List<String>): String {
         val sub = args.firstOrNull() ?: "unknown"
         return if (sub == "install" && args.any { it == "--from-bundle" || it.endsWith(".tgz") || it.endsWith(".tar.gz") })
-            InstallHistory.Op.IMPORT
+            OpName.IMPORT
         else sub
     }
 
@@ -1371,6 +1491,14 @@ class InstallCoordinator(
 
 
     companion object {
+        /**
+         * 磁盘黄警的余量倍数（2026-10-17 新增）：可用空间不足 `minFreeBytes × 本值` 就发一条
+         * `DISK_QUOTA` 警告，**不拦**。取 1.25 是给「再装一个包还撑得住、再装几个就撞墙」
+         * 留出一档可行动的距离 —— 与原先那档「配额的 80% 黄」是同一种分寸，只是锚点换成了
+         * 真正会拒人的那道预检（见 [enqueueHeavy]）。
+         */
+        const val FREE_WARN_HEADROOM = 1.25
+
         /** 事件环容量（与 `A11yEventRing.MAX_EVENTS` 同值同纪律）。 */
         const val RING_CAPACITY = 512
 

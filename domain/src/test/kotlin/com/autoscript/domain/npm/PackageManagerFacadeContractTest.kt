@@ -18,6 +18,10 @@ class PackageManagerFacadeContractTest {
             // 重操作
             "install", "ci", "update", "uninstall", "dedupe", "prune",
             "audit", "importOfflineBundle", "importTarball", "cancel",
+            // 提升到全局（2026-10-17「依赖去重执行后让它把依赖自动放进全局作用域中」——
+            // 「去重并提升到全局」那颗按钮的后半。与 install 同族：它就是把**声明的**依赖
+            // 装一份到全局作用域，故走同一条重操作路，不新开一条"搬包"的语义）
+            "promoteToGlobal",
             // 轻操作
             "list", "offlineGap", "config", "storage", "snapshot",
             // 全局镜像源（§10.9 第 8 条；读口 + 写口，界面不经桥）
@@ -39,8 +43,6 @@ class PackageManagerFacadeContractTest {
             "progress", "drainEvents",
             // 快照
             "exportSnapshot",
-            // 审计史（§10.5-2；append-only 历史，与 snapshot() 的"当前事实"是两件事）
-            "history",
             // 缓存回收（§10.9 第 5 条的动作半边；**不是** npm cache clean，见该方法的 KDoc）
             "reclaimCache",
             // npm-cache 体积读数（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）
@@ -96,41 +98,6 @@ class PackageManagerFacadeContractTest {
             NpmConsoleLineKind.entries.map { it.name },
             "呈现层按 kind 着色，宿主侧是唯一判读处 —— 枚举顺序变了要同步 §10.9 第 3 条",
         )
-    }
-
-    @Test
-    fun `审计史条目五字段（形状由落盘格式决定，不由界面想显示什么决定）`() {
-        assertEquals(
-            listOf("op", "projectId", "success", "detail", "atMillis"),
-            InstallHistoryEntry::class.java.declaredFields.map { it.name },
-            "这五个字段就是 install-history.jsonl 的落盘字段：加字段要动落盘格式，" +
-                "而那是审计 —— 改形状等于让历史行与将来行不可比",
-        )
-    }
-
-    @Test
-    fun `审计操作名的取值域是开放的，已知名有一个锚`() {
-        // 未知 op 必须能构造出来（落盘侧刻意不因枚举不全丢事件，读侧不该把不认识的行藏掉）。
-        val unknown = InstallHistoryEntry(op = "future-op", projectId = "p", success = true, atMillis = 0)
-        assertEquals("future-op", unknown.op)
-
-        // 已知名以 :domain 那份为准（`:ui` 审计页按它分组，看不见 :app-service:npm）。
-        assertEquals(
-            listOf("install", "ci", "uninstall", "prune", "dedupe", "registry", "import", "export"),
-            listOf(
-                InstallHistoryOp.INSTALL, InstallHistoryOp.CI, InstallHistoryOp.UNINSTALL,
-                InstallHistoryOp.PRUNE, InstallHistoryOp.DEDUPE, InstallHistoryOp.REGISTRY,
-                InstallHistoryOp.IMPORT, InstallHistoryOp.EXPORT,
-            ),
-            "前八个与 InstallHistory.Op 逐字同值（那边现在是别名）；改了要同步 :ui 的分组",
-        )
-        // 跑出来的取值：opName(args) 直取 argv 首词，T1 两条由 runScript/exec 直接给常量。
-        assertEquals("ls", InstallHistoryOp.LS)
-        assertEquals("audit", InstallHistoryOp.AUDIT)
-        assertEquals("update", InstallHistoryOp.UPDATE)
-        assertEquals("run_script", InstallHistoryOp.RUN_SCRIPT)
-        assertEquals("exec", InstallHistoryOp.EXEC)
-        assertEquals("install_script", InstallHistoryOp.INSTALL_SCRIPT)
     }
 
     @Test

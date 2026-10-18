@@ -1,6 +1,7 @@
 package com.autoscript.domain.npm
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -224,7 +225,10 @@ class NpmConsoleKeysTest {
         assertNull(NpmConsoleKeys.rejectProjectId("my-proj_1-2"))
         // `.` 与 `..` 在名单里是刻意的：`resolve("..")` 正好跳出项目根，
         // 而原正则 `[A-Za-z0-9._-]+` 把它们放行了（批 84 收口）。
-        for (bad in listOf("", ".", "..", "a/b", "a b", "a\\b")) {
+        // 样本自 2026-10-16 起去掉 `a b`（含空格，判据放宽后合法）——「禁的那几样」才是本用例要钉的。
+        // 样本自 2026-10-17 起去掉 `""`：空串是根层哨兵，在依赖面上读作「全局」作用域，
+        // **合法**（见下面那条用例）；它仍在禁名单里就会把这条用例变成"钉一个已经不成立的口径"。
+        for (bad in listOf(".", "..", "a/b", "a.b", "a\\b", "a\nb")) {
             val why = NpmConsoleKeys.rejectProjectId(bad)
             assertNotNull(why, "「$bad」应当被拒")
             assertTrue(bad in why!!, "理由要点名原文：$why")
@@ -234,5 +238,34 @@ class NpmConsoleKeysTest {
             com.autoscript.domain.scripts.ScriptPaths.isValidProjectId("main"),
             NpmConsoleKeys.rejectProjectId("main") == null,
         )
+    }
+
+    /**
+     * 空串在依赖面上是**合法**作用域（2026-10-17 用户口径「下拉框加个全局」）。
+     *
+     * 判据放宽的是"非空"这一条，**不是**防逃逸那一条 —— 后者一字未动（上一条用例钉着）。
+     * 放行空串不会打开任何缝：`projectsRoot.resolve("")` 恒等自身，逃不出项目根。
+     */
+    @Test
+    fun `空串放行：它是全局作用域不是非法项目号`() {
+        assertNull(NpmConsoleKeys.rejectProjectId(NpmTargetScope.GLOBAL), "全局作用域必须过门")
+        assertTrue(NpmTargetScope.GLOBAL.isEmpty(), "全局的编码就是根层哨兵那个空串")
+        assertEquals(
+            com.autoscript.domain.scripts.ProjectId.ROOT.value,
+            NpmTargetScope.GLOBAL,
+            "两处编码必须是同一个值：漂开的话「选全局」会落到一个不存在的目录上",
+        )
+        // 判据放宽之后，话术里那句「不能为空」必须跟着去掉 —— 留着就是话术与判据漂开。
+        val why = NpmConsoleKeys.rejectProjectId("a/b")
+        assertTrue(why!!.contains("不能含 /"), "拒收话术仍是「禁哪几样」的写法：$why")
+        assertFalse(why.contains("不能为空"), "空串已经合法，话术不能再说它非法：$why")
+    }
+
+    @Test
+    fun `作用域在界面上怎么说：空串显示成「全局」，其余就是项目号`() {
+        assertEquals("全局", NpmTargetScope.label(NpmTargetScope.GLOBAL))
+        assertEquals("my-proj", NpmTargetScope.label("my-proj"))
+        assertTrue(NpmTargetScope.isGlobal(NpmTargetScope.GLOBAL))
+        assertFalse(NpmTargetScope.isGlobal("my-proj"))
     }
 }

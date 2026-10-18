@@ -82,7 +82,6 @@ import com.autoscript.ui.components.ToastHost
 import com.autoscript.ui.components.rememberToastAction
 import com.autoscript.ui.screens.ManagementScreen
 import com.autoscript.ui.screens.LogManagementScreen
-import com.autoscript.ui.screens.AuditScreen
 import com.autoscript.ui.screens.NpmScreen
 import com.autoscript.ui.screens.ProjectScreen
 import com.autoscript.ui.screens.RegistryScreen
@@ -94,25 +93,27 @@ import com.autoscript.ui.state.CapabilityCenterState
 import com.autoscript.ui.state.ActiveRunState
 import com.autoscript.ui.state.ConsoleCmdState
 import com.autoscript.ui.state.ConsoleState
-import com.autoscript.ui.state.filterAudit
-import com.autoscript.ui.state.loadAudit
-import com.autoscript.ui.state.reclaimNpmCacheOp
+import com.autoscript.ui.state.scriptOutputLines
 import com.autoscript.ui.state.pollInstallEvents
 import com.autoscript.ui.state.pollInstallWhileRunning
 import com.autoscript.ui.state.pollConsoleWhileRunning
 import com.autoscript.ui.state.removeInstalled
 import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
+import com.autoscript.ui.state.runDedupeAndPromoteOp
+import com.autoscript.ui.state.reclaimNpmCacheOp
+import com.autoscript.ui.state.reinstallInstalled
+import com.autoscript.ui.state.loadNpmSnapshot
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
 import com.autoscript.ui.state.stopConsoleCmd
 import com.autoscript.ui.state.selectConsoleProject
 import com.autoscript.ui.state.HomeState
 import com.autoscript.ui.state.LoadState
-import com.autoscript.ui.state.AuditState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.ui.state.TaskLogState
 import com.autoscript.ui.state.ProjectState
+import com.autoscript.ui.state.ScriptFileRowUi
 import com.autoscript.ui.state.RegistryState
 import com.autoscript.ui.state.RegistrationForm
 import com.autoscript.ui.state.ScriptEnvState
@@ -227,15 +228,6 @@ class MainActivity : ComponentActivity() {
      * 读口不依赖壳装配（限额表住 `filesDir/.ns`），首帧就现读一次。
      */
     private var limitsState: ScriptLimitsState by mutableStateOf(ScriptLimitsState.NOT_LOADED)
-
-    /**
-     * 审计页状态（批 85，§10.5-2）。与 [registryState] 同一条口径：读口不依赖壳装配
-     * （`install-history.jsonl` 住 `filesDir`），首帧就现读一次。
-     *
-     * 与 [npmState] 是**两条读口**（那个答「此刻装了什么」，这个答「过去发生过什么」）——
-     * 不合并的理由见 `PackageManagerFacade.history` 的 KDoc。
-     */
-    private var auditState: AuditState by mutableStateOf(AuditState.NOT_LOADED)
 
     /**
      * 执行日志悬浮窗控制器（2026-10-13；组合外持有，供挂起函数用）。
@@ -450,16 +442,11 @@ class MainActivity : ComponentActivity() {
             // 镜像源管理子页（批 83）：同一层级、同一读法。
             var registryOpen by rememberSaveable { mutableStateOf(false) }
             val closeRegistry = { registryOpen = false }
-            // 审计子页（批 85）：**从依赖管理页内进**（不是管理面板的第五项）——
-            // 它记的就是依赖面那些操作，从面板直进会让人以为它是与依赖并列的另一件事。
-            var auditOpen by rememberSaveable { mutableStateOf(false) }
-            val closeAudit = { auditOpen = false }
             val subPage = when {
                 consoleOpen -> ManagementPage.CONSOLE
                 npmOpen -> ManagementPage.NPM
                 envOpen -> ManagementPage.ENV
                 registryOpen -> ManagementPage.REGISTRY
-                auditOpen -> ManagementPage.AUDIT
                 logManagementOpen -> ManagementPage.LOGS
                 else -> null
             }
@@ -491,12 +478,40 @@ class MainActivity : ComponentActivity() {
             // （窗内现读的 Compose 状态，刷新即普通重组，见 `SystemWindowSync` KDoc）。
             com.autoscript.ui.overlay.SystemWindowSync(
                 controller = logWindow,
-                onPauseToggle = { scope.launch { logWindow.togglePause() } },
+                onFirstAction = { scope.launch { windowFirstAction(logWindow) { toast.show(it) } } },
+                // 底部输入框（2026-10-16）：草稿写状态、送行走控制器（它按"在途/已结算"
+                // 决定发不发、成功才清草稿，见 `LogWindowController.sendInput`）。
+                onInputDraft = { logWindow.updateInputDraft(it) },
+                onSendInput = { scope.launch { logWindow.sendInput() } },
+                onImeFocusChange = { logWindow.setImeFocus(it) },
+                // 顶栏「结束脚本」（2026-10-16 用户令）：与暂停/继续同一条协程域。
+                onStop = { scope.launch { logWindow.stop() } },
             )
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
                 logWindow.updateLines(consoleState.lines)
-                logWindow.bind(consoleState.activeRuns)
+                // 结算不解绑（用户令「脚本执行完不要自动清理输出」）：绑定随在途表
+                // 现取，但同归属 run 跑完离开在途表时**保持**窗口绑在它上面、
+                // 输出照常可见（详见 `LogWindowState.bind`）。
+                //
+                // **快速脚本的兜底补绑**（用户令「有时点执行日志不显示在悬浮窗上」）：
+                // 起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间，在途表
+                // 一次都没见过它 —— 从落盘执行索引里挑**同归属**最近一条 run 补位
+                // （见 `fallbackRunIdFor`；2026-10-16 修：此前取的是全库最新行，
+                // 没有归属过滤，于是窗刚开时会被补到**上一次别的脚本**的输出上，
+                // 用户读到的是「它跑了上一次那个脚本」）。
+                //
+                // **只在窗从没绑上过时查**（`boundRunId == null`）：这条读口要读一次
+                // index.jsonl，绑上之后每轮再读纯属白花。
+                val pending = logWindow.state
+                val fallback = if (pending != null && pending.boundRunId == null) {
+                    runCatching { hostSummary()?.scriptLogIndex() }.getOrNull()?.let { snapshot ->
+                        com.autoscript.ui.overlay.fallbackRunIdFor(pending, snapshot.rows)
+                    }
+                } else {
+                    null
+                }
+                logWindow.bind(consoleState.activeRuns, fallbackRunId = fallback)
             }
             // 系统栏图标的明暗跟**本 App 的主题档位**走，不是跟系统深色开关走：
             // 用户在顶栏把主题切成浅色、而系统还是深色时，状态栏图标必须转深色，
@@ -524,7 +539,11 @@ class MainActivity : ComponentActivity() {
                     // 执行日志悬浮窗（2026-10-13）：控制器 + 行事实源 + 按钮协程域。
                     logWindow = logWindow,
                     logLines = { consoleState.lines },
-                    logScope = scope,
+                    onFirstAction = { scope.launch { windowFirstAction(logWindow) { toast.show(it) } } },
+                    onInputDraft = { logWindow.updateInputDraft(it) },
+                    onSendInput = { scope.launch { logWindow.sendInput() } },
+                    onImeFocusChange = { logWindow.setImeFocus(it) },
+                    onStop = { scope.launch { logWindow.stop() } },
                     modifier = themeSwitch.modifier,
                 ) { shellModifier ->
                         // 页内滚动容器要用的「露出来」口径（光标入视等）：pager 自己换成
@@ -609,7 +628,6 @@ class MainActivity : ComponentActivity() {
                                             ManagementPage.ENV -> closeEnv()
                                             ManagementPage.LOGS -> closeLogManagement()
                                             ManagementPage.REGISTRY -> closeRegistry()
-                                            ManagementPage.AUDIT -> closeAudit()
                                             null -> Unit
                                         }
                                     },
@@ -631,8 +649,6 @@ class MainActivity : ComponentActivity() {
                                                 onCloseNpm = closeNpm,
                                                 onCloseEnv = closeEnv,
                                                 onCloseRegistry = closeRegistry,
-                                                onCloseAudit = closeAudit,
-                                                onOpenAudit = { auditOpen = true },
                                                 onCloseLogManagement = closeLogManagement,
                                                 scope = scope,
                                             )
@@ -690,7 +706,6 @@ class MainActivity : ComponentActivity() {
                         ManagementPage.NPM -> reloadNpm()
                         ManagementPage.ENV -> reloadEnv()
                         ManagementPage.REGISTRY -> reloadRegistry()
-                        ManagementPage.AUDIT -> reloadAudit()
                         ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog(); reloadScriptLogs() }
                         null -> Unit
                     }
@@ -724,8 +739,8 @@ class MainActivity : ComponentActivity() {
                 // 菜单项写**目标模式**（TG 的日夜项同款）：
                 // 冷启缺省跟随系统，此时按"当下是不是深色"定文案。
                 themeSwitchLabel = themeSwitchLabel(dark),
-                onCreate = { projectId, name, isFolder ->
-                    scope.launch { createEntryOp(projectId, name, isFolder) }
+                onCreate = { projectId, name, isFolder, dirRelPath ->
+                    scope.launch { createEntryOp(projectId, name, isFolder, dirRelPath) }
                 },
                 // 点文件进编辑面：读/存都**不在这里落状态** —— 成败归编辑器自己显示
                 // （清单没变），保存成功后才重读一次清单（大小/时刻变了）。
@@ -744,6 +759,12 @@ class MainActivity : ComponentActivity() {
                 onSortChange = { sort, reversed ->
                     projectState = projectState.copy(sort = sort, reversed = reversed, opError = null, opNotice = null)
                 },
+                // 绝对路径只有宿主知道（`files/scripts` 的落点 + relPath）—— 现取一次，
+                // 失败原文由 ProjectScreen 说出来（不静默复制一条空的）。
+                onAbsolutePath = { projectId, relPath -> absolutePathOp(projectId, relPath) },
+                // 删除：菜单传一条、多选传剪好的那一份（`com.autoscript.ui.state.deleteTargets`）。
+                // 成败由 [deleteEntriesOp] 聚合成 opError/opNotice，本屏不写状态。
+                onDelete = { rows -> deleteEntriesOp(rows) },
                 modifier = Modifier,
             )
         }
@@ -768,8 +789,6 @@ class MainActivity : ComponentActivity() {
         onCloseNpm: () -> Unit,
         onCloseEnv: () -> Unit,
         onCloseRegistry: () -> Unit,
-        onCloseAudit: () -> Unit,
-        onOpenAudit: () -> Unit,
         onCloseLogManagement: () -> Unit,
         scope: CoroutineScope,
     ) {
@@ -814,21 +833,21 @@ class MainActivity : ComponentActivity() {
                 onRefresh = { reloadNpm() },
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
-                onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
-                onOpenAudit = onOpenAudit,
                 onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },
-                onToggleDev = { npmState = npmState.copy(installDev = it) },
-                onToggleOffline = { npmState = npmState.copy(installOffline = it) },
                 onSubmitInstall = { scope.launch { npmState = submitInstall(hostSummary(), npmState) } },
                 onRemoveInstalled = { name -> scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) } },
                 onBack = onCloseNpm,
-                modifier = Modifier,
-            )
-            ManagementPage.AUDIT -> AuditScreen(
-                state = auditState,
-                onRefresh = { reloadAudit() },
-                onFilter = { auditState = filterAudit(auditState, it) },
-                onBack = onCloseAudit,
+                // 「依赖去重」那个选项是**两件事**（去重 + 提升到全局），所以它有自己的一条
+                // 入口而不是从 `onMaintenance` 转手 —— 见 `OptionsCard` 的 KDoc。
+                onDedupePromote = { scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) } },
+                onReinstall = { row ->
+                    // 名字与版本都取自这一行（宿主读 lockfile 的结果），不是用户敲的 ——
+                    // 走的是与「卸载」同一条命令通道，门禁强度因此不取决于按的是哪一颗。
+                    scope.launch { npmState = reinstallInstalled(hostSummary(), npmState, row.name, row.version) }
+                },
+                // 「清理缓存」那个选项（2026-10-17 第二批回到页面上）：它**不占安装会话**
+                // （只删几个缓存文件），所以走的是 `reclaimingCache` 那一条独立的状态位。
+                onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
                 modifier = Modifier,
             )
             ManagementPage.ENV -> ScriptEnvScreen(
@@ -872,6 +891,31 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 应用窗口的触摸入口（2026-10-16 用户报「点击软件非悬浮窗界面的时候，悬浮窗输入框还有光标」）。
+     *
+     * **为什么在这一层**：悬浮窗是**另一个窗口**（`TYPE_APPLICATION_OVERLAY`），它收不到
+     * 本窗口的指针事件，而本窗口的 Compose 树也看不到那一边 —— 跨窗口唯一确定的事实是
+     * "用户的手指点在了本窗口里"，那个事实只有 `Activity.dispatchTouchEvent` 说得清。
+     * 这里只做一件事：**通知注册表清掉独立窗口（系统悬浮窗）的焦点**
+     * （`FocusDismissRegistry.clearSeparateWindows`）。**应用侧各面一个不碰** ——
+     * 本窗口的 Compose 树自己看得见这一下点按（`dismissFocusOnTapOutside` 按 bounds 判），
+     * 在这里再清一次会与那次"清 → 重新聚焦"打架（在输入框里点一下放光标时输入法闪一下）。
+     *
+     * 与 `DismissFocusOnWindowBlur`（窗口焦点那一路）**并存不重复**：那条管"整个应用切到
+     * 后台/别的应用"这类窗口焦点变化，这条管"点在应用里、但悬浮窗盖在上面"——
+     * 后者窗口焦点**不变**（悬浮窗带 `FLAG_NOT_FOCUSABLE`，从不抢窗口焦点），
+     * 靠窗口焦点那一路永远收不到。两条合起来才盖全。
+     *
+     * **只通知、不消费**：事件照常往下走（返回 super），列表滚动/点按/长按一字不动。
+     */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        if (ev?.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            com.autoscript.ui.components.FocusDismissRegistry.clearSeparateWindows()
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /**
      * 现问系统（挂起；只写 [capabilityState]，不触发重读）。
      *
      * 三种落点都不撒谎：
@@ -910,13 +954,75 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 取一个条目的绝对路径（项目页菜单「复制绝对路径」）。
+     *
+     * **不写 [projectState]**：读一条路径不改清单，也没有回执可言 —— 与 [readScriptFileOp]
+     * 同一条分工（成败归调用它的那一处显示）。
+     */
+    private suspend fun absolutePathOp(projectId: String, relPath: String): String {
+        val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
+        return host.absolutePathOf(projectId, relPath)
+    }
+
+    /**
+     * 删除条目（项目页菜单「删除」与选择模式顶栏那一格）。
+     *
+     * **逐条删、聚合成败**：一条失败不该把其余的挡住（多选时用户要的是"能删的都删掉"），
+     * 但也不能把部分失败说成成功 —— 所以「已删除 N 项」只数真删掉的，
+     * 失败那条的**原文**照旧给出来（`opToastMessage` 三态里失败排头）。
+     *
+     * 三落点与 [createEntryOp] 同构：未接线 → opError；抛 → opError 原文；成功/部分成功 →
+     * opNotice + 现取一次清单（行没了，不重读就会停在旧快照上）。
+     *
+     * **不弹确认框**（用户口径「不用加弹窗」）：本口被调到就已经是"用户点了删除"。
+     */
+    private suspend fun deleteEntriesOp(rows: List<ScriptFileRowUi>) {
+        if (rows.isEmpty()) return
+        val host = hostSummary()
+        if (host == null) {
+            projectState = projectState.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）")
+            return
+        }
+        var failed = 0
+        var firstError: String? = null
+        for (row in rows) {
+            try {
+                host.deleteEntry(row.projectId, row.relPath)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Exception) {
+                failed++
+                if (firstError == null) firstError = t.message ?: t.javaClass.simpleName
+            }
+        }
+        reloadProjectFiles()
+        val done = rows.size - failed
+        projectState = projectState.copy(
+            opError = firstError?.let { if (failed == 1) it else "$failed 项删除失败：$it" },
+            opNotice = when {
+                done == 0 -> null
+                rows.size == 1 -> "已删除「${rows.first().name}」"
+                else -> "已删除 $done 项"
+            },
+        )
+    }
+
+    /**
      * 新建文件/文件夹（项目页 FAB 操作面）。
      *
-     * 与 [performTaskOp] 同一条纪律的三落点：未接线 → opError；抛（名字非法/撞名）
+     * 与 [performTaskOp] 同一条纪律的三落点：未接线 → opError；抛（名字非法/撞名/层级不在）
      * → opError 原文、**不清清单**；成功 → opNotice 回执 + 现取一次（新条目要出现在
      * 列表里，回执在刷新之后盖上去）。成功时收掉创建对话框（[ProjectState.creating]）。
+     *
+     * [dirRelPath] = 用户按下 FAB 时所在的那一层（2026-10-16 用户口径「在当前进入的文件夹中
+     * 新建」）—— 本层与宿主都不解释它，一路透传到 [ScriptFileOps] 落位。
      */
-    private suspend fun createEntryOp(projectId: String, name: String, isFolder: Boolean) {
+    private suspend fun createEntryOp(
+        projectId: String,
+        name: String,
+        isFolder: Boolean,
+        dirRelPath: String?,
+    ) {
         val host = hostSummary()
         if (host == null) {
             projectState = projectState.copy(
@@ -926,7 +1032,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         try {
-            host.createEntry(projectId, name, isFolder)
+            host.createEntry(projectId, name, isFolder, dirRelPath)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (t: Exception) {
@@ -1006,17 +1112,6 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 现取审计史（挂起；只写 [auditState]）。
-     *
-     * 三落点与 [reloadNpm] 同构：未接线/壳未装配 → 失败态带原因（**不冒充**
-     * 「你没做过任何操作」）；抛错 → 失败态保留已读到的那份；成功 → 全量覆盖
-     * （宿主读数是权威，这份读口本来就是全量历史，不累积）。
-     */
-    private suspend fun reloadAudit() {
-        auditState = loadAudit(hostSummary(), auditState)
-    }
-
-    /**
      * 现取依赖面板读数（挂起；只写 [npmState]）。
      *
      * 三落点不撒谎（与 [reloadTaskLog] 同构）：
@@ -1037,7 +1132,10 @@ class MainActivity : ComponentActivity() {
                 // 快照与**安装进度**同一次现取（§10.9 第 1 条，2026-10-09 批 87）：
                 // `:ui` 没有常驻轮询循环，宿主又是入队即返回的，故「刷新」这颗按钮
                 // 同时是阶段条的续拉入口 —— 分两次现取会让两个数字来自不同时刻。
-                val refreshed = NpmState.of(host.npmSnapshot(), previous)
+                // 走 [loadNpmSnapshot] 而不是裸调 `NpmState.of(host.npmSnapshot(), …)`：
+                // 底部那个日志大框与快照是**同一趟现取**（2026-10-17），两条各拉一次
+                // 就会一个说"装完了"、另一个还没输出完。
+                val refreshed = loadNpmSnapshot(host, previous)
                 if (refreshed.selectedProjectId != null) {
                     pollInstallEvents(host, refreshed, refreshed.selectedProjectId)
                 } else {
@@ -1227,6 +1325,47 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 悬浮窗第一颗钮的动作分派（2026-10-15 用户令「执行完变重跑图标」）。
+     *
+     * 在途 → 暂停/继续（[LogWindowController.togglePause] 按 `state.paused` 自己选）；
+     * 已结算（跑完/被停/崩溃，`state.running == false`）→ **重跑**：同一文件再执行一次。
+     * 内容层只按 `state` 画图标（在途没暂停 = 暂停 / 已暂停 = 继续 / 已结算 = 重跑），
+     * 动作在这一个地方分派 —— 点与长按同一个动作（重跑没有第二种语义）。
+     */
+    private suspend fun windowFirstAction(
+        logWindow: com.autoscript.ui.overlay.LogWindowController,
+        failToast: (String) -> Unit,
+    ) {
+        val state = logWindow.state ?: return
+        if (state.running) {
+            logWindow.togglePause()
+        } else {
+            // 重跑 = **引擎再跑同一文件**（用户选定；不是重放旧日志）。
+            // 窗里的 relPath 是**项目内**形状（`data/test.js`，与开窗/在途表同一口径），
+            // 而 `runScriptFileOp` 收**文件清单**形状（首段 = 项目名，`demo/data/test.js`，
+            // 与 `readScriptFileOp` 同契约）—— 反推首段即 `projectInternalOrNull` 的逆运算
+            // （窗的 relPath 恒为削过前缀的形状，不会双份前缀）。
+            logWindow.rerun(state.projectId, state.relPath)
+            try {
+                // **重跑前先确认窗里那个文件还在**（2026-10-16 用户报「运行的时候会执行上一次
+                // 执行成功的脚本」）：窗绑的是"上一次那条执行的文件"，它可能已被改名/删掉。
+                // 缺文件的真相只有引擎侧那句 `ERR_FILE_NOT_FOUND`（落在意图日志/档案里），
+                // 窗里看到的是"没有任何新输出"—— 读起来正是"它跑了上一次那个脚本"。
+                // 这里先读一次（读口与引擎侧同一条 `ScriptFileOps` 判据），不在就当场说清楚。
+                hostSummary()?.readScriptFile(state.projectId, "${state.projectId}/${state.relPath}")
+                runScriptFileOp(state.projectId, "${state.projectId}/${state.relPath}")
+            } catch (t: kotlinx.coroutines.CancellationException) {
+                throw t
+            } catch (t: Exception) {
+                // 重跑没起来：窗已是新归属的重跑态（还没跑起来过），下一次轮询
+                // `bind` 会把它留在「从没绑上过」→ 图标仍画重跑，用户可再点 ——
+                // 失败原文走 toast，不让用户以为"点了没反应"。
+                failToast(t.message ?: t.javaClass.simpleName)
+            }
+        }
+    }
+
+    /**
      * 立即执行（`USER_CLICK`）：**挂起到执行结算**（排队 10s + 脚本超时/默认 30s，
      * 见 `HostSummary.runTaskNow` KDoc），期间 `opInFlight` 禁用按钮。
      *
@@ -1242,6 +1381,11 @@ class MainActivity : ComponentActivity() {
             // `logWindowRef()` 抛 ISE，而本函数跑在 `scope.launch` 里（组合作用域），
             // 上抛 = 终结进程。开窗是**回执**不是执行的前提 —— 它失败就退成
             // 「没有悬浮窗的那次立即执行」（任务照跑，结局在控制台/任务日志里）。
+            // **立即执行也开窗**（2026-10-16 用户口径：执行了就要看得见输出、收得到输入）——
+            // 此前只有项目页那颗 ▶ 开窗，任务中心「立即执行」跑完没有任何输出面。
+            // 归属形状与开窗那一套同源：`TaskRowState.scriptPath` 是**项目内**路径
+            // （任务登记那条链，与在途表 `ActiveRunRow.scriptPath` 同一口径），
+            // 不必再削首段前缀。
             val window = runCatching { logWindowRef() }.getOrNull()
             window?.open(task.projectId, task.scriptPath)
             performTaskOp { host ->
@@ -1378,7 +1522,7 @@ class MainActivity : ComponentActivity() {
      * `glyph` 是页签条上那个画出来的图标（见 `Glyphs.kt`）。
      */
     /** 管理页在前台的那个子页（面板本身不是子页，用 null 表示）。 */
-    enum class ManagementPage { CONSOLE, NPM, ENV, LOGS, REGISTRY, AUDIT }
+    enum class ManagementPage { CONSOLE, NPM, ENV, LOGS, REGISTRY }
 
     enum class Tab(val short: String, val glyph: GlyphKind) {
         HOME("项目", GlyphKind.HOME),
@@ -1679,8 +1823,15 @@ private fun MainShell(
     logWindow: com.autoscript.ui.overlay.LogWindowController,
     /** 悬浮窗可见行的事实源（consoleState.lines 的呈现态；Activity 字段现读）。 */
     logLines: () -> List<com.autoscript.ui.state.ConsoleLineState>,
-    /** 悬浮窗按钮的协程入口（togglePause 是挂起的；Activity 的 scope）。 */
-    logScope: kotlinx.coroutines.CoroutineScope,
+    /** 悬浮窗第一颗钮的动作（在途 = 暂停/继续，已结算 = 重跑；Activity 的 windowFirstAction）。 */
+    onFirstAction: () -> Unit,
+    /** 悬浮窗底部输入框的草稿变更 / 送行（2026-10-16 用户令）。 */
+    onInputDraft: (String) -> Unit,
+    onSendInput: () -> Unit,
+    /** 输入框焦点变化（系统窗要靠它摘掉 `FLAG_NOT_FOCUSABLE`，否则输入法不起来）。 */
+    onImeFocusChange: (Boolean) -> Unit,
+    /** 悬浮窗顶栏「结束脚本」的动作（2026-10-16 用户令；Activity 的 `logWindow.stop`）。 */
+    onStop: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
 ) {
@@ -1715,11 +1866,15 @@ private fun MainShell(
                     com.autoscript.ui.overlay.LogWindowInAppHost(
                         state = logState,
                         lines = logLines(),
-                        onPauseToggle = { logScope.launch { logWindow.togglePause() } },
+                        onFirstAction = onFirstAction,
                         onClear = { logWindow.clearLogs(it) },
                         onClose = { logWindow.close() },
                         onFullscreenToggle = { logWindow.toggleFullscreen() },
                         onDrag = { dx, dy, w, h -> logWindow.dragInApp(dx, dy, w, h) },
+                        onInputDraft = onInputDraft,
+                        onSendInput = onSendInput,
+                        onImeFocusChange = onImeFocusChange,
+                        onStop = onStop,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

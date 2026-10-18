@@ -91,7 +91,9 @@ class P0LoopbackTest {
     fun `P0 回环：装 axios → 读 UI 树 → 点节点 → 看 console`() = runBlocking {
         assumeTrue(npmCli != null, "宿主机无 npm-cli.js，跳过 P0 回环（与 HostNodeNpmE2ETest 同口径）")
 
-        // 世界先行：项目 package.json（HostNodeExecutor.prepareWorkDir 的前置）+ 假树节点。
+        // 世界先行：项目 package.json + 假树节点。
+        // （清单**不再是** prepareWorkDir 的前置 —— 2026-10-17 起缺了会自己造一份；这里仍写真的一份，
+        //   让回环跑在"用户自己写过清单"这个常见形态上，而不是靠自动补。）
         val projectRoot = ScriptPaths.projectsRoot(files).resolve("p0")
         Files.createDirectories(projectRoot)
         Files.write(projectRoot.resolve("package.json"), """{"name":"p0","version":"0.0.1"}""".toByteArray())

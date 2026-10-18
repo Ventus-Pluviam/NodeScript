@@ -26,8 +26,9 @@ import java.nio.file.StandardOpenOption
  * - **容忍最后半行**：崩溃截断只丢那半行，不连坐完好行（按字节扫 `\n`，不按行 split ——
  *   值里可能有换行，split 会把一行撕成两行）；
  * - **压实**（[compactIfOversize]）：append-only 只增不减，压实把已被覆盖的历史收掉。
- *   本表**可以**无损压实，因为读口要的是现状不是历史；`install-history.jsonl` 那类
- *   审计事实**不可以**，同一手法搬过去就是删审计。
+ *   本表**可以**无损压实，因为读口要的是现状不是历史；`.ns/` 下那些「事实账」
+ *   （`install.journal` / `approve-ledger.jsonl` / 系统日志 `host-log.jsonl`）
+ *   **不可以**，同一手法搬过去就是把日志当缓存删。
  * - **零第三方依赖**：编解码走 `:domain` 的 [DomainJson]（仓内唯一 codec）。
  *
  * 行格式（冻结）：
