@@ -69,7 +69,6 @@ import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
-import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.InstallProgressState
 import com.autoscript.ui.state.NpmState
@@ -209,6 +208,18 @@ import com.autoscript.ui.theme.ThemeColors
  *     和收尾后的结论行（装完/失败与病因）都去掉，结果与过程由日志大框（[LogCard]）一家
  *     承担。阶段条是批 87 要的进度反馈、不是日志，照画；收尾后整段收起。
  *
+ * **第十四批（2026-10-28，用户口径原文）**：
+ * 34. 「右上角刷新改成删除日志框里的日志」—— 顶栏那颗「刷新」换成「清日志」
+ *     （[NpmState.clearLog]）。本屏不再有手动刷新：快照与日志在**切进本页**时现取
+ *     （`ManagementPage.NPM` 的切页签 effect），安装中的阶段续拉由
+ *     `pollInstallWhileRunning` 自己拉到跑完（批 90），两件职责都另有归属。
+ * 35. 「依赖管理界面最上面我想放个包裹/盲盒圆形图标…黑色加粗的选中项目名称…灰色小号的
+ *     当前使用npm镜像源链接（格式样式tg源码里都有）」—— 页头最上面加一张居中三段卡
+ *     （[ScopeHeaderCard]）：圆形底 + 包裹字形 · 黑粗作用域名（17.5sp Bold，TG
+ *     `ProfileActivity` 名字档）· 灰小镜像源链接（13.5sp，TG `actionBarDefaultSubtitle`
+ *     档）。镜像源显示的是**当前生效的那一家**（配置的或出厂官方源），没有"读不到就不画"
+ *     —— npm 进程永远有一个实际在用的源，在用什么就读什么。
+ *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
  * `files/.ns/install-history.jsonl` 一并去掉，本页这些操作（安装 / 卸载 / 镜像源变更…）
@@ -243,7 +254,7 @@ import com.autoscript.ui.theme.ThemeColors
 @Composable
 fun NpmScreen(
     state: NpmState,
-    onRefresh: suspend () -> Unit,
+    onClearLog: () -> Unit,
     onSelectProject: (String) -> Unit,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
     onInstallDraft: (String) -> Unit,
@@ -255,10 +266,10 @@ fun NpmScreen(
     onReclaimCache: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 「刷新」兼作进度续拉（`:ui` 没有常驻轮询循环，见 `pollInstallEvents` 的 KDoc）：
-    // 宿主是入队即返回的，一次现取多半只拿到 `QUEUED`，再点一次就能看到下一步。
-    // 续拉在 `MainActivity.reloadNpm()` 里与快照一起发生 —— 本屏不持有读口。
-    val refresh = rememberRefreshAction { onRefresh() }
+    // 「清日志」只清显示（`NpmState.clearLog`），不需要挂起。
+    // 安装进行中的进度续拉已由 `pollInstallWhileRunning` 接管（提交之后自己拉到跑完，
+    // 见 NpmInstallOps 的 KDoc），那一屏不再需要一颗手动「刷新」。
+    //
     // 页底与**任务中心/管理面板同一块灰**（2026-10-17 用户口径：「背景颜色改成任务中心
     // 背景一样的颜色」）：浅色 #F1F1F3、深色 #161E27（深色下 `surfaceMuted` 与
     // `background` 同值，所以这一改只动浅色档）。顶栏跟着传同一个色 —— 缺省是"与屏底
@@ -270,7 +281,7 @@ fun NpmScreen(
             background = ThemeColors.surfaceMuted,
             onBack = onBack,
             actions = {
-                ActionBarAction("刷新", refresh::trigger)
+                ActionBarAction("清日志", onClearLog)
             },
         )
         // 顶栏下面**不再有任何报错/回执**（2026-10-17 用户令：「删除顶上的报错。不需要它」

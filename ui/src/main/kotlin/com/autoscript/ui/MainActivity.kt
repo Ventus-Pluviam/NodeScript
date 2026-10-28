@@ -830,7 +830,7 @@ class MainActivity : ComponentActivity() {
             )
             ManagementPage.NPM -> NpmScreen(
                 state = npmState,
-                onRefresh = { reloadNpm() },
+                onClearLog = { npmState = NpmState.clearLog(npmState) },
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
                 onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },

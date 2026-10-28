@@ -357,6 +357,32 @@ class NpmStateTest {
     }
 
     @Test
+    fun `清日志腾空日志框但水位不动，之后只来新行`() {
+        val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+        val withLog = NpmState.withConsole(
+            base.copy(opError = "npm 退出码 1: E404"),
+            consoleSnapshot(seq = 2, lines = listOf("npm install axios" to NpmConsoleLineKind.ECHO, "ok" to NpmConsoleLineKind.OUTPUT)),
+        )
+        // 清空：可见行、裁切标注、操作账一并归空；游标是宿主环的水位，**不动**。
+        val cleared = NpmState.clearLog(withLog)
+        assertTrue(cleared.logLines.isEmpty(), "清过之后日志框是空的")
+        assertTrue(cleared.consoleLines.isEmpty())
+        assertFalse(cleared.consoleTruncated)
+        assertNull(cleared.opError)
+        assertNull(cleared.opNotice)
+        assertEquals(2L, cleared.consoleSeq, "水位只进不退：清日志不能把「该从哪条往后拉」归零")
+
+        // 再把同一批旧行折进来：宿主按游标给的若是旧 seq，**照旧去重** ——
+        // 清掉的旧行不会因为清空而"重新变新"。
+        val same = NpmState.withConsole(cleared, consoleSnapshot(2, listOf("ok" to NpmConsoleLineKind.OUTPUT)))
+        assertEquals(0, same.consoleLines.size, "旧 seq 的行已过水位，不许重放")
+        // 游标之后的新行照常进来 —— 清日志不能把后续输出挡在门外。
+        val newer = NpmState.withConsole(cleared, consoleSnapshot(3, listOf("new line" to NpmConsoleLineKind.OUTPUT)))
+        assertEquals(1, newer.consoleLines.size)
+        assertEquals("new line", newer.consoleLines.first().text)
+    }
+
+    @Test
     fun `换项目清日志与游标，刷新不清`() {
         val a = NpmState.withConsole(
             NpmState.of(NpmPanelSnapshot(listOf(project("alpha"), project("beta")))),

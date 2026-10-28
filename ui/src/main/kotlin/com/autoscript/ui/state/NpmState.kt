@@ -298,6 +298,27 @@ data class NpmState(
             previous.copy(load = LoadState.of(t))
 
         /**
+         * 清空日志大框（右上角「清日志」，2026-10-28 第十四批第 34 条，用户口径原文
+         * 「右上角刷新改成删除日志框里的日志」）。
+         *
+         * 清的是**这一段显示**：npm 输出行（[consoleLines]）、裁切标注（[consoleTruncated]）
+         * 与本页两次操作的账（[opError]/[opNotice]）一并归空 —— 用户要的是一个干净的空框，
+         * 留一句旧的失败原文，下一次刷新它又从 [logLines] 里冒回来，等于没清。
+         *
+         * **[consoleSeq] 不动**：那是宿主环的水位（「该从哪条往后拉」），不是内容。
+         * [withConsole] 按它拉**增量**（宿主 `consoleRing.drain(projectId, sinceSeq, maxLines)`
+         * 只给游标之后的行），把游标也归零的话下一次刷新就会把刚清掉的行**重新拉回来** ——
+         * 「清了又回来了」。与悬浮日志窗 `LogWindowController.clearLogs`（推水位只进不退、
+         * 清可见行、回显一起清）同一条语义。
+         */
+        fun clearLog(previous: NpmState): NpmState = previous.copy(
+            consoleLines = emptyList(),
+            consoleTruncated = false,
+            opError = null,
+            opNotice = null,
+        )
+
+        /**
          * 把一批 npm 输出折进日志大框（**纯函数**，可单测）。
          *
          * 累积规则与 [ConsoleCmdState.of] 逐字同款（按 seq 去重、只进不退），差在**有上限**：
