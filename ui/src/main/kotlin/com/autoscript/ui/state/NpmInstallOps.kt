@@ -310,11 +310,22 @@ internal fun foldProgress(current: InstallProgressState?, events: List<InstallEv
 /** 单批拉取上限（与 `ConsoleCmdState` 的页大小同量级：够一次安装的阶段事件）。 */
 internal const val INSTALL_EVENT_PAGE = 64
 
-/** 提交后的回执（**不替用户宣布结果** —— 结果在清单与阶段条里）。 */
+/**
+ * 提交后的回执（**动作已完成的那一句** —— `runPanelCommand` 等到宿主挂起返回才构造它，
+ * `enqueueHeavy` 是协程内联执行，这一行从回执构造那一刻起说的就是结果，不是"刚提交"）。
+ *
+ * 第十七批第 41 条改口：原文案「已提交 npm uninstall：安装会话在跑」是批 90「入队即返回」
+ * 假设时代的措辞 —— 宿主早已同步执行到跑完才回来，回执却还在说"在跑"，用户把"卸载完成"
+ * 读成"刚提交、东西还在装"，正是「卸载没生效」观感的一半来源。改成**动作名 + 对象 + 结果**
+ * 的完成句式：卸载说「已卸载 xx」，安装/重装说「已安装 xx」。对象取命令里的**第一个包名**
+ * （`-` 开头的旗标跳过；重装的 `npm install axios@1.7.9 --no-save` 取到 `axios@1.7.9`）。
+ */
 private fun noticeForPanel(cmd: NpmConsoleCommand): String = when (cmd) {
-    is NpmConsoleCommand.Npm ->
-        if (cmd.sub == "uninstall") "已提交 npm uninstall：安装会话在跑，完成后清单会更新"
-        else "已提交 npm install：安装会话在跑（几十秒量级），完成后清单会更新"
+    is NpmConsoleCommand.Npm -> {
+        val target = cmd.args.firstOrNull { !it.startsWith("-") }
+        if (cmd.sub == "uninstall") "已卸载 ${target ?: "所选包"}：清单已更新"
+        else "已安装 ${target ?: "所选依赖"}：清单已更新"
+    }
     is NpmConsoleCommand.Run ->
         "已提交 npm run ${cmd.script}：结果见上方"
     is NpmConsoleCommand.Exec ->

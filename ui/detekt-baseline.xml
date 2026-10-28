@@ -50,6 +50,7 @@
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun DepsListBox( rows: List&lt;NpmRowState&gt;, enabled: Boolean, onRemove: (String) -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun LogCard(state: NpmState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelRow( label: String, hint: String? = null, trailing: @Composable () -&gt; Unit, onClick: (() -&gt; Unit)? = null, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ConfirmActionDialog( action: ConfirmAction, scope: String, onDismiss: () -&gt; Unit, onConfirm: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ReinstallButton(name: String, enabled: Boolean, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelCard(content: @Composable () -&gt; Unit)</ID>
     <ID>FunctionNaming:ProjectScreen.kt$@Composable fun FileListLayer(showOverlays: Boolean)</ID>

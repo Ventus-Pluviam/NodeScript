@@ -32,8 +32,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -251,6 +253,16 @@ import com.autoscript.ui.theme.ThemeColors
  *     前**先同步置位 —— 阶段条立现（QUEUED 起）、按钮即时置灰（防连点判据生效）、
  *     兜底轮询随即接管挂起期间的每 400ms 续拉（事件 / 快照 / 日志），卸载完成清单
  *     不再等一次性的终态写回。
+ *
+ * **第十七批（2026-10-29，动作可辨别）**：
+ * 41. 卸载/重装两颗按钮并排 8dp、误触无从感知，而卸载回执还在说「已提交…在跑」——
+ *     宿主早已同步执行完（[runPanelCommand] 等到挂起返回才构造回执），把"卸载完成"
+ *     说成"刚提交、还在装"正是「卸载没生效」观感的一半来源。两件一起修：
+ *     - 回执改完成句式，动作名 + 对象 + 结果（「已卸载 axios：清单已更新」/「已安装
+ *       axios@1.7.9：清单已更新」，见 `NpmInstallOps.noticeForPanel`）；
+ *     - 卸载与重装**先弹确认框**（[ConfirmActionDialog]）—— 确认框把动作名与对象在
+ *       发命令之前摆在眼前，点错当场看见，不再去日志框里考古。
+ *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
  * `files/.ns/install-history.jsonl` 一并去掉，本页这些操作（安装 / 卸载 / 镜像源变更…）
@@ -310,6 +322,12 @@ fun NpmScreen(
     // `background` 同值，所以这一改只动浅色档）。顶栏跟着传同一个色 —— 缺省是"与屏底
     // 同色"（见 `ActionBar.background` 的说明），页底换了而这里不传，就会出现
     // "白栏压灰页"那道缝（任务中心批 41 踩过同一个坑）。
+    //
+    // 待确认的卸载/重装（第十七批第 41 条）：点了先弹确认框，确认才发命令。
+    // 放**函数体这一层**而不是 [InstalledRow] 里：行是懒加载的（滚出视野会销毁），
+    // 把待确认动作塞进行的内存 = 滚一下确认框就没了；而声明在 `Column {}` lambda
+    // 内部、引用在 lambda 外面（尾部对话框块）也读不到 —— 它俩同属主函数作用域。
+    var confirm by remember { mutableStateOf<ConfirmAction?>(null) }
     Column(modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
         ActionBar(
             title = "依赖管理",
@@ -363,14 +381,31 @@ fun NpmScreen(
                 onToggle = { depsExpanded = !depsExpanded },
                 onDraft = onInstallDraft,
                 onSubmit = onSubmitInstall,
-                onRemove = onRemoveInstalled,
-                onReinstall = onReinstall,
+                // 卸载与重装**先过确认框**（第十七批第 41 条）：两颗按钮并排 8dp，
+                // 误触无从感知 —— 确认框把「你按的到底是什么」在发命令之前摆在眼前，
+                // 点错重装当卸载的事当场现形。
+                onRemove = { name -> confirm = ConfirmAction.Remove(name) },
+                onReinstall = { row -> confirm = ConfirmAction.Reinstall(row) },
             )
             // 日志大框在**滚动内容的最下面**（第十批第 28 条）。它现在跟在"安装 + 依赖列表"
             // 那一组后面 —— 页底那条固定的动作栏不占列表位置，所以"日志在最后"这条口径
             // 一个字没改，改的只是它上面少了三颗动作。
             item(contentType = SLICE_LOG) { LogCard(state) }
         }
+    }
+    confirm?.let { action ->
+        ConfirmActionDialog(
+            action = action,
+            scope = state.scopeLabel,
+            onDismiss = { confirm = null },
+            onConfirm = {
+                confirm = null
+                when (action) {
+                    is ConfirmAction.Remove -> onRemoveInstalled(action.name)
+                    is ConfirmAction.Reinstall -> onReinstall(action.row)
+                }
+            },
+        )
     }
 }
 
@@ -1363,3 +1398,61 @@ private val REINSTALL_TOUCH = 36.dp
 
 /** 重装那颗 ⟳ 的图标边长。 */
 private val REINSTALL_ICON = 18.dp
+
+/**
+ * 待确认的卸载/重装（第十七批第 41 条）。
+ *
+ * 纯数据不掺 [ConfirmActionDialog] 的画法：确认框读两类各自的字面（动作名、对象），
+ * 文案的拼装在对话框里 —— 要加一行说明改一处。
+ */
+private sealed interface ConfirmAction {
+    /** 卸载（破坏性：node_modules 与锁里这一行一起移除，无回收站）。 */
+    data class Remove(val name: String) : ConfirmAction
+
+    /** 重装（改写盘上树：重新拉取这一行落盘，`package.json` 声明不动 —— `--no-save`）。 */
+    data class Reinstall(val row: NpmRowState) : ConfirmAction
+}
+
+/**
+ * 卸载/重装的确认框（第十七批第 41 条）。
+ *
+ * **为什么卸载也要确认而不仅仅是重装**：这一屏没有别的破坏性动作，卸载是唯一不可逆的
+ * （重装还能再删、删除没有回收站）；而「卸载」与「重装」并排 8dp，误触无从感知 ——
+ * 确认框把动作名与对象在**发命令之前**摆在用户眼前，点错了当场看见，而不是在
+ * 日志框里找「当时到底按的是哪颗」。
+ *
+ * 文案分两类写清（卸载说移除什么、重装说装什么），作用域名 [NpmState.scopeLabel] 一起
+ * 说上 —— 用户对「动了哪一棵 node_modules」要有数。
+ */
+@Composable
+private fun ConfirmActionDialog(
+    action: ConfirmAction,
+    scope: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val (title, text, confirmLabel) = when (action) {
+        is ConfirmAction.Remove -> Triple(
+            "卸载 ${action.name}",
+            "从「$scope」移除 ${action.name}：node_modules 与锁里这一行一起删掉。确定卸载？",
+            "卸载",
+        )
+        is ConfirmAction.Reinstall -> Triple(
+            "重装 ${action.row.name}",
+            "在「$scope」重新拉取 ${action.row.name}@${action.row.version} 落盘" +
+                "（package.json 的声明不动）。确定重装？",
+            "重装",
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("返回") }
+        },
+    )
+}

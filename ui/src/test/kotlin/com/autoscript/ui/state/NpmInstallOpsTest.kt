@@ -149,6 +149,28 @@ class NpmInstallOpsTest {
         assertTrue(state.opError!!.contains("还没有选中的项目"), "实为 ${state.opError}")
     }
 
+    /**
+     * 回执那两句（第十七批第 41 条改口）：
+     *
+     * `runPanelCommand` 等到宿主**挂起返回**才构造回执（enqueueHeavy 协程内联执行，
+     * 跑完才回），文案却说「已提交…在跑」—— 批 90「入队即返回」时代的措辞，把"卸载完成"
+     * 说成"刚提交、还在装"，正是「卸载没生效」观感的一半来源。这里把「动作名 + 对象 +
+     * 结果」钉成完成句式，且**不再出现"在跑"**。
+     */
+    @Test
+    fun `回执：卸载说「已卸载」带包名，安装重装说「已安装」带说明符`() = runBlocking {
+        val host = PanelHost()
+        val removed = removeInstalled(host, loaded(project("demo")), "esbuild")
+        assertEquals("已卸载 esbuild：清单已更新", removed.opNotice)
+        assertFalse(removed.opNotice!!.contains("在跑"), "宿主已同步执行完，回执不能再把完成说成已提交")
+
+        val reinstalled = reinstallInstalled(host, loaded(project("demo")), "axios", "1.7.9")
+        assertEquals("已安装 axios@1.7.9：清单已更新", reinstalled.opNotice, "重装也是安装动作，回执说安装")
+
+        val submitted = submitInstall(host, loaded(project("demo")).copy(installDraft = "esbuild"))
+        assertEquals("已安装 esbuild：清单已更新", submitted.opNotice)
+    }
+
     // ── 提交 ────────────────────────────────────────────────────────────────
 
     @Test
