@@ -249,11 +249,15 @@ import com.autoscript.ui.theme.ThemeColors
  * **控制台**敲 `npm prune` —— 那条路是通的，但「有路可走」不等于「有一键」，
  * 而这个页面的全部意义就是让用户在这一屏把地方腾出来。
  *
- * 读取与刷新由外壳驱动（进入本页/手动刷新）；本屏只画，状态原样来自 [NpmState]。
+ * 读取由外壳驱动（**进入本页**时现取，第十四批第 34 条起不再有手动刷新）；本屏只画，
+ * 状态原样来自 [NpmState]。唯一例外是页头的镜像源链接（[ScopeHeaderCard]）——
+ * 它读的是全局配置（§10.9 第 8 条），由外壳把读好的 `registryLabel` 传进来。
  */
 @Composable
 fun NpmScreen(
     state: NpmState,
+    /** 当前生效的镜像源 URL（全局配置读口 `globalRegistry().effective`，外壳兜底给出厂缺省）。 */
+    registryLabel: String,
     onClearLog: () -> Unit,
     onSelectProject: (String) -> Unit,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
@@ -299,6 +303,11 @@ fun NpmScreen(
             // 动作栏做（它自己带导航栏 inset），列表只留一道卡间缝。
             contentPadding = PaddingValues(bottom = CARD_SPACING),
         ) {
+            // 页头三段卡（第十四批第 35 条）：圆形盲盒图标 · 黑粗作用域名 · 灰小镜像源
+            // 链接，整页最上面一条。它是**展示**：下拉选作用域仍在 [ScopeCard]。
+            item(contentType = SLICE_PROFILE) {
+                ScopeHeaderCard(state.scopeLabel, registryLabel)
+            }
             // 依赖作用域与两行尺寸**同一张卡**（2026-10-17 第二批用户口径：「依赖作用域，
             // 默认为全局，放进和 node_modules 和 npm 缓存同一个列表分组」）。三行回答的是
             // 同一个问题——"这一屏在管哪一棵 node_modules、它有多大"——分成两张卡时那几个
@@ -606,6 +615,7 @@ private fun Modifier.cardSlice(color: Color, first: Boolean, last: Boolean): Mod
  * 这些都是字符串常量，比的是值。
  */
 private const val SLICE_SCOPE = "npm-scope-card"
+private const val SLICE_PROFILE = "npm-profile-header-slice"
 private const val SLICE_LOG = "npm-log-card"
 private const val SLICE_INSTALL = "npm-install-slice"
 private const val SLICE_HEADER = "npm-deps-header-slice"
@@ -724,6 +734,29 @@ private val DEP_LIST_MAX_HEIGHT = 320.dp
 /** 卡片圆角（`SettingsCard` / 任务中心 `Card` 同一档 16dp）。 */
 private val CARD_CORNER = 16.dp
 
+/** 页头圆形图标底的直径（第 35 条；TG 资料头部圆头像在卡片场景的缩小档）。 */
+private val PROFILE_BADGE = 44.dp
+
+/** 页头圆形图标底里的包裹字形尺寸。 */
+private val PROFILE_BADGE_ICON = 26.dp
+
+/** 页头圆形图标底 → 名字的行距。 */
+private val PROFILE_NAME_GAP = 10.dp
+
+/** 名字 → 镜像源链接的行距。 */
+private val PROFILE_SUBTITLE_GAP = 3.dp
+
+/**
+ * 页头名字的黑色（第 35 条）：TG `key_profile_title` 的默认值 #222222。
+ *
+ * 与 [TG_PROFILE_SUBTITLE] 一样是 TG 浅色档的写死观感，不接主题系统 ——
+ * 本仓主题没有这两档，接浅色档的 `textPrimary` 会偏淡、接深色档会偏亮。
+ */
+private val TG_PROFILE_TITLE = Color(0xFF222222)
+
+/** 页头镜像源链接的灰色（第 35 条）：TG `key_actionBarDefaultSubtitle` 默认值 #79817E。 */
+private val TG_PROFILE_SUBTITLE = Color(0xFF79817E)
+
 /**
  * 段的形状：只有整组的第一段与最后一段各圆两道角，中间段四角全平。
  *
@@ -801,6 +834,66 @@ private val INSTALL_FIELD_WIDTH = 168.dp
  * 缓存是全局读数，作用域目录出问题时它照样是有效的。
  * 「依赖作用域」那一行**永远画**（它是这个分组的话题），哪怕一个作用域都还没读到。
  */
+/**
+ * 页头三段卡（2026-10-28 第十四批第 35 条，用户口径原文「最上面我想放个包裹/盲盒
+ * 圆形图标…圆形图标下面是黑色加粗的选中项目名称，项目名称下面是灰色小号的当前使用
+ * npm镜像源链接（格式样式tg源码里都有）」）。
+ *
+ * 三段居中，视觉参数取自 TG `ProfileActivity` 的资料头部（2026-10-28 实读源码）：
+ * - 圆形底 + 包裹字形（[GlyphKind.PACKAGE]，本仓自绘），对应 TG 的圆头像位；
+ * - 名字 17.5sp 粗体、色 `key_profile_title` = #222222（TG 名字档，
+ *   `nameTextView.setTextSizePx(dp(17.5f))` + `bold()`）；
+ * - 链接 13.5sp、色 `key_actionBarDefaultSubtitle` = #79817E（TG 副行档，
+ *   `onlineTextView.setTextSizePx(dp(13.5f))`）。
+ * 两个色值**写死为 TG 浅色档的观感**（本仓主题没这两档，见第 35 条的 KDoc）。
+ *
+ * 镜像源**永远有内容**（用户口径「在用什么就读什么」）：显示当前生效的那一家
+ * （[registryLabel] 由外壳给，读不到设置时给出厂官方源）—— npm 进程永远有一个
+ * 实际在用的源，不存在"没读到就不画"。
+ *
+ * 只做展示：选作用域的下拉仍在 [ScopeCard]。
+ */
+@Composable
+private fun ScopeHeaderCard(scopeLabel: String, registryLabel: String) {
+    PanelCard {
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                Modifier
+                    .size(PROFILE_BADGE)
+                    .clip(CircleShape)
+                    .background(ThemeColors.featuredButton),
+                contentAlignment = Alignment.Center,
+            ) {
+                Glyph(
+                    kind = GlyphKind.PACKAGE,
+                    tint = ThemeColors.featuredButtonText,
+                    size = PROFILE_BADGE_ICON,
+                )
+            }
+            Spacer(Modifier.height(PROFILE_NAME_GAP))
+            Text(
+                text = scopeLabel,
+                color = TG_PROFILE_TITLE,
+                fontSize = 17.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(PROFILE_SUBTITLE_GAP))
+            Text(
+                text = registryLabel,
+                color = TG_PROFILE_SUBTITLE,
+                fontSize = 13.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ScopeCard(state: NpmState, onSelect: (String) -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }

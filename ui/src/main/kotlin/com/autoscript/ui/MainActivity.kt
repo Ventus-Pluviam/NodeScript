@@ -61,6 +61,7 @@ import com.autoscript.domain.automation.ScreenConsentOutcome
 import com.autoscript.domain.automation.ScreenConsentRequests
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.ui.screens.ScriptLimitsDraft
@@ -703,7 +704,10 @@ class MainActivity : ComponentActivity() {
                     // 日志管理两个列表都要现取：系统日志是控制台游标增量，任务日志读档案。
                     Tab.MANAGEMENT -> when (subPage) {
                         ManagementPage.CONSOLE -> reloadConsoleCmd()
-                        ManagementPage.NPM -> reloadNpm()
+                        // 依赖页页头要画"当前在用镜像源"（第十四批第 35 条），故进本页时
+                        // 把全局镜像源读数一并现取 —— 与镜像源管理页共享同一份
+                        // RegistryState，改过配置切回来也拿得到新值。
+                        ManagementPage.NPM -> { reloadNpm(); reloadRegistry() }
                         ManagementPage.ENV -> reloadEnv()
                         ManagementPage.REGISTRY -> reloadRegistry()
                         ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog(); reloadScriptLogs() }
@@ -830,6 +834,7 @@ class MainActivity : ComponentActivity() {
             )
             ManagementPage.NPM -> NpmScreen(
                 state = npmState,
+                registryLabel = registryState.snapshot?.effective ?: NpmRegistryKeys.OFFICIAL,
                 onClearLog = { npmState = NpmState.clearLog(npmState) },
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
                 onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },

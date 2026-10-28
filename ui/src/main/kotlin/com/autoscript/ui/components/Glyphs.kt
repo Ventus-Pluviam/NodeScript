@@ -51,6 +51,9 @@ enum class GlyphKind {
     /** 悬浮窗：叠层方块。 */
     OVERLAY,
 
+    /** 包裹/盲盒（依赖页页头的圆形图标，第十四批第 35 条）。 */
+    PACKAGE,
+
     /** 通知：铃铛。 */
     BELL,
 
@@ -285,6 +288,14 @@ private val P_FULLSCREEN_TR = arrayOf(0.68f to 0.42f, 0.78f to 0.32f, 0.78f to 0
 private val P_FULLSCREEN_BL = arrayOf(0.32f to 0.58f, 0.22f to 0.68f, 0.22f to 0.78f, 0.32f to 0.78f)
 /** 全屏：右下角。 */
 private val P_FULLSCREEN_BR = arrayOf(0.68f to 0.58f, 0.78f to 0.68f, 0.78f to 0.78f, 0.68f to 0.78f)
+/** 盲盒/包裹：盒身四角（开口朝上的箱体轮廓）。 */
+private val P_PACKAGE_BOX = arrayOf(0.24f to 0.36f, 0.24f to 0.80f, 0.76f to 0.80f, 0.76f to 0.36f)
+/** 盲盒/包裹：盒盖沿（一条横线，把盖与身分开 —— 无盖就是普通方块）。 */
+private val P_PACKAGE_LID = arrayOf(0.24f to 0.36f, 0.76f to 0.36f)
+/** 盲盒/包裹：穿盒的竖丝带（一头冒出盒顶、一头露出盒底 —— 表示"整包系了一圈"）。 */
+private val P_PACKAGE_RIB = arrayOf(0.50f to 0.22f, 0.50f to 0.92f)
+/** 盲盒/包裹：丝带顶结（结心两侧各一笔向上的翼 —— 没有它只像一根尺子）。 */
+private val P_PACKAGE_BOW = arrayOf(0.40f to 0.24f, 0.50f to 0.16f, 0.60f to 0.24f)
 /** 发送：横杆。 */
 private val P_SEND_BAR = arrayOf(0.16f to 0.50f, 0.80f to 0.50f)
 /** 发送：箭头。 */
@@ -532,6 +543,16 @@ fun Glyph(
             // "没合上的文件夹"（批 25 实机截图定案的形状修正）。
             GlyphKind.FOLDER -> {
                 drawPath(path(P_FOLDER_BODY).apply { close() }, tint, style = stroke)
+            }
+
+            // 盲盒/包裹（依赖页页头）：盒身 + 盖沿 + 竖丝带 + 顶结。盒身**首尾闭合**：
+            // 底边横线不能少（与 FOLDER 同一条教训），四条边读成"一只箱"而不是"凹槽"。
+            // 丝带与结是不闭合的折线 —— 它们是绕在盒子上的，不该连成一块。
+            GlyphKind.PACKAGE -> {
+                drawPath(path(P_PACKAGE_BOX).apply { close() }, tint, style = stroke)
+                drawPath(path(P_PACKAGE_LID), tint, style = stroke)
+                drawPath(path(P_PACKAGE_RIB), tint, style = stroke)
+                drawPath(path(P_PACKAGE_BOW), tint, style = stroke)
             }
 
             // 铅笔（FAB 主钮）：斜杆 + 笔尖三角 + 笔杆横线（TG floating_pencil 的线性读法）。
