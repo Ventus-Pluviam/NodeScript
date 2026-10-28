@@ -46,10 +46,10 @@ object NpmTargetScope {
      * 界面上怎么说这个作用域。
      *
      * 空串在屏幕上**不能显示成空**：「依赖作用域」那一行右边留白，用户读成"还没读到"，
-     * 而它其实是一个明确的作用域（全局）。所以全局那条在界面上永远显示成「全局」。
+     * 而它其实是一个明确的作用域（全局）。所以全局那条在界面上永远显示成「全局项目」。
      *
      * 措辞放在 `:domain` 而不是 `:ui`：宿主把事件、日志、去向上的 `projectId` 也写成空串，
      * 两边对同一个值的说法必须是一份（先例：`NpmConsoleKeys` 的拒收话术）。
      */
-    fun label(projectId: String): String = if (isGlobal(projectId)) "全局" else projectId
+    fun label(projectId: String): String = if (isGlobal(projectId)) "全局项目" else projectId
 }

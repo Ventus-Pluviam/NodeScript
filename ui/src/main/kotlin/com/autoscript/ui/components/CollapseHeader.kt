@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autoscript.ui.theme.ThemeColors
@@ -23,7 +24,7 @@ import com.autoscript.ui.theme.ThemeColors
 /**
  * 可折叠分组头（TG `CollapseTextCell` 的几何）：点一下在展开/收起之间翻。
  *
- * - **46dp 条**（`CollapseTextCell` 的 `onMeasure` 恒 46dp）、文字缩进 21dp、
+ * - **46dp 条**（`CollapseTextCell` 的 `onMeasure` 恒 46dp）、文字缩进缺省 21dp、
  *   14sp（`textView.setTextSize(dp(14))`）、正文色（`windowBackgroundWhiteBlackText`）；
  * - **右端三角**（[GlyphKind.CHEVRON]，14dp 同 `arrow_more` 的格）：收起 = 尖朝下
  *   （rotation 0）、展开 = 尖朝上（180°，340ms [EaseOutQuint] —— 与 TG 的
@@ -42,6 +43,8 @@ import com.autoscript.ui.theme.ThemeColors
  * @param expanded 当前展开态（三角朝向由它推）。
  * @param onClick 翻状态。**组件自己不持有状态**：同一屏里两个头各翻各的，
  *   状态归调用方（任务中心两份、依赖页一份）。
+ * @param textIndent 文字左缩进（缺省 21dp = TG 原值，任务中心照用）；依赖页的卡头要
+ *   与卡内行文字对齐，传自己的值过去。
  */
 @Composable
 fun CollapseHeader(
@@ -49,6 +52,7 @@ fun CollapseHeader(
     expanded: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    textIndent: Dp = HeaderTextIndent,
 ) {
     val palette = ThemeColors
     // 展开因子驱动旋转：0 = 收起（尖朝下）、1 = 展开（尖朝上）。TG 的插值器
@@ -67,7 +71,7 @@ fun CollapseHeader(
                 overlay = palette.pressedOverlay,
                 onClick = onClick,
             )
-            .padding(start = HeaderTextIndent, end = 16.dp),
+            .padding(start = textIndent, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

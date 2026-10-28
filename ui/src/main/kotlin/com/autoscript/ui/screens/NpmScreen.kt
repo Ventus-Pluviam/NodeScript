@@ -81,9 +81,9 @@ import com.autoscript.ui.theme.ThemeColors
 /**
  * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
- * 分段（自上而下）：**作用域与尺寸**（一张卡）· **安装依赖 + 依赖列表**（同一张白卡，卡头
- * 可折叠、默认收起）· **日志大框**（滚动内容的最下面）；页底另有一条**固定的动作栏**
- * （[OptionsBar] 那三颗维护按钮，不随内容滚）。
+ * 分段（自上而下）：**页头卡**（[ScopeHeaderCard]：圆形图标 · 作用域名 · 镜像源链接）·
+ * **三个维护动作**（[OptionsBar]，随内容滚）· **作用域与尺寸**（一张卡）· **安装依赖 +
+ * 依赖列表**（同一张白卡，卡头可折叠、默认收起）· **日志大框**（滚动内容的最下面）。
  *
  * 页底是**任务中心那块灰**（[ThemeColors.surfaceMuted]），页上每一段都是一张白卡
  * （[PanelCard]）—— 与管理面板（本页的入口）同族，见 [PanelCard] 的说明。
@@ -225,6 +225,19 @@ import com.autoscript.ui.theme.ThemeColors
  *     `avatarContainer` 的 `createFrame(100, 100)`），间距同批对齐 TG
  *     （名字上距 6dp）。
  *
+ * **第十五批（2026-10-29，用户口径原文）**：
+ * 37. 「把依赖管理页面最底下的三个按钮放到依赖作用域的上面」—— [OptionsBar] （三个维护
+ *     动作）从页底固定栏搬回滚动列表，排在作用域卡**上面**。第 30 条那条「钉在页底」的
+ *     口径作废：动作不再固定在屏底，跟别的卡一样随内容滚，导航栏让位
+ *     （[TabBarBottomClearance]）随之下移回列表的 `contentPadding`。
+ * 38. 「描述:全局改成全局项目」—— 作用域那一档的显示名从「全局」改口「全局项目」
+ *     （[NpmTargetScope.label] 一处改，下拉菜单 / 页头卡 / 依赖列表卡头 / 空态四处
+ *     随之；「提升到全局」「回收缓存是全局的」这些动词短语不是名字，不动）。
+ * 39. 「依赖列表的标题没有和其他列表文字对齐」—— 依赖列表那张卡的卡头（[CollapseHeader]）
+ *     文字一直沿用 TG `CollapseTextCell` 的 21dp 缩进，而卡内行是 [CARD_PADDING] 12dp，
+ *     标题比各行右移了 9dp。共享组件加 `textIndent` 参数（缺省 21dp，任务中心两处不变），
+ *     依赖页传入 12dp 与卡内文字对齐。
+ *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
  * `files/.ns/install-history.jsonl` 一并去掉，本页这些操作（安装 / 卸载 / 镜像源变更…）
@@ -304,14 +317,26 @@ fun NpmScreen(
         var depsExpanded by rememberSaveable { mutableStateOf(false) }
         LazyColumn(
             Modifier.fillMaxWidth().weight(1f),
-            // 底部留白**不再让 [TabBarBottomClearance]**：让位这件事现在归页底那条固定的
-            // 动作栏做（它自己带导航栏 inset），列表只留一道卡间缝。
-            contentPadding = PaddingValues(bottom = CARD_SPACING),
+            // 列表最底下是日志框，下面不再有固定动作栏 —— 导航栏让位（[TabBarBottomClearance]）
+            // 归列表的 contentPadding，日志框下面垫一道导航栏 inset + 卡间缝。
+            contentPadding = PaddingValues(bottom = CARD_SPACING + TabBarBottomClearance()),
         ) {
             // 页头三段卡（第十四批第 35 条）：圆形盲盒图标 · 黑粗作用域名 · 灰小镜像源
             // 链接，整页最上面一条。它是**展示**：下拉选作用域仍在 [ScopeCard]。
             item(contentType = SLICE_PROFILE) {
                 ScopeHeaderCard(state.scopeLabel, registryLabel)
+            }
+            // 三个维护动作（第十五批第 37 条，2026-10-29）：从页底固定栏移回滚动列表，
+            // 排在依赖作用域卡**上面**（用户口径「把依赖管理页面最底下的三个按钮放到
+            // 依赖作用域的上面」）。移出来之后不再是"这台机器的动作"，是这一屏的
+            // 内容 —— 随内容滚，直觉上和依赖作用域那张卡挨在一起。
+            item(contentType = SLICE_OPTIONS) {
+                OptionsBar(
+                    state = state,
+                    onMaintenance = onMaintenance,
+                    onDedupePromote = onDedupePromote,
+                    onReclaimCache = onReclaimCache,
+                )
             }
             // 依赖作用域与两行尺寸**同一张卡**（2026-10-17 第二批用户口径：「依赖作用域，
             // 默认为全局，放进和 node_modules 和 npm 缓存同一个列表分组」）。三行回答的是
@@ -333,14 +358,6 @@ fun NpmScreen(
             // 一个字没改，改的只是它上面少了三颗动作。
             item(contentType = SLICE_LOG) { LogCard(state) }
         }
-        // 三个维护动作**钉在页底**（第十一批第 30 条）：从列表里搬出来，不再随内容滚 ——
-        // 这一页的动作任何时候都够得着，而上面那个日志框可以很长。
-        OptionsBar(
-            state = state,
-            onMaintenance = onMaintenance,
-            onDedupePromote = onDedupePromote,
-            onReclaimCache = onReclaimCache,
-        )
     }
 }
 
@@ -513,7 +530,12 @@ private fun LazyListScope.dependenciesGroup(
         // 展开后卡头下面固定还有一段（清单框 / 空态），卡片**下缘**那两道圆角长在那一段上；
         // 收起时卡头自己就是最后一段。
         Column(Modifier.cardSlice(ThemeColors.background, first = false, last = !expanded)) {
-            CollapseHeader(title = depsTitle(state), expanded = expanded, onClick = onToggle)
+            CollapseHeader(
+                title = depsTitle(state),
+                expanded = expanded,
+                onClick = onToggle,
+                textIndent = CARD_PADDING,
+            )
         }
     }
     if (!expanded) return
@@ -522,10 +544,10 @@ private fun LazyListScope.dependenciesGroup(
             if (rows.isEmpty()) {
                 // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
                 if (!state.load.isLoaded) {
-                    EmptyHint("还没读到依赖清单：点右上角「刷新」再试，或看下面日志里怎么说的")
+                    EmptyHint("还没读到依赖清单：切到别的页再回来，或看下面日志里怎么说的")
                 } else {
                     EmptyHint(
-                        if (state.scopeIsGlobal) "读到了，全局还没有依赖（先装点什么）"
+                        if (state.scopeIsGlobal) "读到了，全局项目还没有依赖（先装点什么）"
                         else "读到了，这个项目还没有依赖（先装点什么）",
                     )
                 }
@@ -582,7 +604,7 @@ private fun DepsListBox(
  */
 private fun depsTitle(state: NpmState): String = when {
     !state.load.isLoaded -> "依赖列表"
-    state.scopeIsGlobal -> "全局依赖（${state.installed.size}）"
+    state.scopeIsGlobal -> "全局项目依赖（${state.installed.size}）"
     else -> "项目依赖（${state.installed.size}）"
 }
 
@@ -621,6 +643,7 @@ private fun Modifier.cardSlice(color: Color, first: Boolean, last: Boolean): Mod
  */
 private const val SLICE_SCOPE = "npm-scope-card"
 private const val SLICE_PROFILE = "npm-profile-header-slice"
+private const val SLICE_OPTIONS = "npm-options-slice"
 private const val SLICE_LOG = "npm-log-card"
 private const val SLICE_INSTALL = "npm-install-slice"
 private const val SLICE_HEADER = "npm-deps-header-slice"
@@ -922,7 +945,7 @@ private fun ScopeCard(state: NpmState, onSelect: (String) -> Unit) {
                 PanelRow(
                     label = "依赖作用域",
                     trailing = {
-                        // 措辞来自 [NpmTargetScope.label]（空串 → 「全局」），**不在界面里另写
+                        // 措辞来自 [NpmTargetScope.label]（空串 → 「全局项目」），**不在界面里另写
                         // 一份**：宿主写给事件/日志的 projectId 也是空串，两边对同一个值必须
                         // 是一种说法。还没读到（`scopeLabel` = "—"）时不冒充「全局」。
                         ToneText(state.scopeLabel, StatusTone.MUTED)
@@ -1044,13 +1067,14 @@ private fun OptionsBar(
     Row(
         Modifier
             .fillMaxWidth()
-            // 底色与页底同色：这一栏压在内容滚动区下面，不透光才切得干净。
-            .background(ThemeColors.surfaceMuted)
+            // 移回滚动列表后不再压页底：底让页面自己承担（灰页上的白卡，
+            // 见 [OptionTile] 的 KDoc），导航栏让位归 [LazyColumn] 的 contentPadding；
+            // 这里只留一道与相邻卡同节奏的灰缝。
             .padding(
                 start = CARD_MARGIN,
                 end = CARD_MARGIN,
                 top = CARD_SPACING,
-                bottom = CARD_SPACING + TabBarBottomClearance(),
+                bottom = CARD_SPACING,
             ),
         horizontalArrangement = Arrangement.spacedBy(OPTION_TILE_GAP),
     ) {
@@ -1079,7 +1103,8 @@ private fun OptionsBar(
 }
 
 /**
- * 一颗底部动作按钮 —— **照 TG `ProfileActionsView` 的源码做**（2026-10-18 用户口径
+ * 一颗动作按钮（第十五批第 37 条起随列表滚动，之前是页底三颗）—— **照 TG
+ * `ProfileActionsView` 的源码做**（2026-10-18 用户口径
  * 「你去看tg源码啊，/tmp/tg 你对着图做干嘛」）。参考图就是 TG 的「我的资料」那一行
  * （`MODE_MY_PROFILE` 的三颗：`KEY_SET_PHOTO` / `KEY_EDIT_INFO` / `KEY_SETTINGS`），
  * 所以取值一律以 `TMessagesProj/src/main/java/org/telegram/ui/Components/ProfileActionsView.java`

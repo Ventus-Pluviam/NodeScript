@@ -73,9 +73,9 @@ class NpmStateTest {
         val loaded = NpmState.of(NpmPanelSnapshot(listOf(project("demo"), global)))
 
         assertEquals(NpmTargetScope.GLOBAL, loaded.selectedProjectId, "缺省落在全局那一档")
-        assertEquals(NpmState.withProject(loaded, NpmTargetScope.GLOBAL).scopeLabel, "全局")
-        assertEquals("—", NpmState.NOT_LOADED.scopeLabel, "还没读到 ≠ 全局：那是两句话")
-        assertEquals("—", NpmState.failed(RuntimeException()).scopeLabel, "读失败也不冒充成全局")
+        assertEquals(NpmState.withProject(loaded, NpmTargetScope.GLOBAL).scopeLabel, "全局项目")
+        assertEquals("—", NpmState.NOT_LOADED.scopeLabel, "还没读到 ≠ 全局项目：那是两句话")
+        assertEquals("—", NpmState.failed(RuntimeException()).scopeLabel, "读失败也不冒充成全局项目")
     }
 
     /**

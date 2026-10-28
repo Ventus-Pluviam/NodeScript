@@ -263,7 +263,7 @@ class NpmConsoleKeysTest {
 
     @Test
     fun `作用域在界面上怎么说：空串显示成「全局」，其余就是项目号`() {
-        assertEquals("全局", NpmTargetScope.label(NpmTargetScope.GLOBAL))
+        assertEquals("全局项目", NpmTargetScope.label(NpmTargetScope.GLOBAL))
         assertEquals("my-proj", NpmTargetScope.label("my-proj"))
         assertTrue(NpmTargetScope.isGlobal(NpmTargetScope.GLOBAL))
         assertFalse(NpmTargetScope.isGlobal("my-proj"))
