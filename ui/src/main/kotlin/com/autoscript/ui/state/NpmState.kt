@@ -217,23 +217,7 @@ data class NpmState(
          * 下面什么也没有"。最后一档兜住"一个项目都没有"之外的任何残局。
          */
         fun of(snapshot: NpmPanelSnapshot, previous: NpmState = NOT_LOADED): NpmState {
-            // **快照没变就复用旧状态**（2026-10-28）：`npmSnapshot()` 每次回读都造一份内容
-            // 相同的快照（量尺寸那趟走完 node_modules，数字没动），盲目重建状态会让
-            // 依赖页**整屏陪重组一次** —— 展开的列表 N 行全进组合、卡头重算条数、日志框
-            // 的 `LaunchedEffect` 重跑。安装进行中轮询每 400ms 就有一回，滑到一半被打断
-            // 正是"展开时滑动特别卡"的来路之一。`NpmPanelSnapshot` 是 data class，
-            // 判等即内容判等；既然一个字没变，重算三档回落的结果也与 previous 逐字相同
-            // （previous 的选中项还在快照里），没有字段需要从这份快照重投影。
-            // **失败态不短路**（[LoadState.Failed]）：`failed()` 只改 `load`、不动快照，
-            // 短路会把「读取失败」这句错话留在日志框里 —— 一次成功的回读必须讲得掉它。
-            // **有操作账不短路**（[opError]/[opNotice]）：重建那份会把它俩归 null ——
-            // `opNotice` 的 KDoc 就写着「现取即清」，回执留在屏幕上等下一次刷新才消失
-            // 不是新增的功能，是这句注释原本答应的行为。
-            if (snapshot == previous.snapshot && previous.load !is LoadState.Failed &&
-                previous.opError == null && previous.opNotice == null
-            ) {
-                return previous
-            }
+            if (canReusePrevious(snapshot, previous)) return previous
             return NpmState(
                 load = LoadState.Loaded,
                 selectedProjectId = previous.selectedProjectId
@@ -256,6 +240,26 @@ data class NpmState(
                 consoleTruncated = previous.consoleTruncated,
             )
         }
+
+        /**
+         * 「快照一字没变 → 原样复用上一份」的判据（2026-10-28 第十三批）：`npmSnapshot()`
+         * 每次回读都造一份内容相同的快照（量尺寸那趟走完 node_modules，数字没动），盲目
+         * 重建状态会让依赖页**整屏陪重组一次** —— 展开的列表 N 行全进组合、卡头重算条数、
+         * 日志框的 `LaunchedEffect` 重跑。安装进行中轮询每 400ms 就有一回，滑到一半被打断
+         * 正是"展开时滑动特别卡"的来路之一。`NpmPanelSnapshot` 是 data class，判等即内容
+         * 判等；既然一个字没变，重算三档回落的结果也与 previous 逐字相同（previous 选中的
+         * 项目还在快照里），没有字段需要从这份快照重投影。
+         *
+         * 两个排除项各有各的账，**不许**并进短路：
+         * - **失败态**（[LoadState.Failed]）：`failed()` 只改 `load`、不动快照，短路会把
+         *   「读取失败」这句错话留在日志框里 —— 一次成功的回读必须讲得掉它；
+         * - **有操作账**（[opError]/[opNotice]）：重建那份会把它俩归 null —— `opNotice`
+         *   的 KDoc 就写着「现取即清」，回执留在屏幕上等下一次刷新才消失不是新增的功能，
+         *   是这句注释原本答应的行为。
+         */
+        private fun canReusePrevious(snapshot: NpmPanelSnapshot, previous: NpmState): Boolean =
+            snapshot == previous.snapshot && previous.load !is LoadState.Failed &&
+                previous.opError == null && previous.opNotice == null
 
         /**
          * 换一个项目看（[previous] 就是当前那份）。
