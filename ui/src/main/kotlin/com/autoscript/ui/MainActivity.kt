@@ -61,6 +61,7 @@ import com.autoscript.domain.automation.ScreenConsentOutcome
 import com.autoscript.domain.automation.ScreenConsentRequests
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.host.TaskRegistration
@@ -104,6 +105,9 @@ import com.autoscript.ui.state.runNpmMaintenanceOp
 import com.autoscript.ui.state.runDedupeAndPromoteOp
 import com.autoscript.ui.state.reclaimNpmCacheOp
 import com.autoscript.ui.state.reinstallInstalled
+import com.autoscript.ui.state.withInstallInFlight
+import com.autoscript.ui.state.withMaintenanceInFlight
+import com.autoscript.ui.state.withCacheReclaimInFlight
 import com.autoscript.ui.state.loadNpmSnapshot
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
@@ -837,22 +841,41 @@ class MainActivity : ComponentActivity() {
                 registryLabel = registryState.snapshot?.effective ?: NpmRegistryKeys.OFFICIAL,
                 onClearLog = { npmState = NpmState.clearLog(npmState) },
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
-                onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
+                onMaintenance = { action ->
+                    // 在途先写回（2026-10-29 修）：宿主挂起执行，不先置位按钮不会置灰。
+                    npmState = npmState.withMaintenanceInFlight(action)
+                    scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) }
+                },
                 onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },
-                onSubmitInstall = { scope.launch { npmState = submitInstall(hostSummary(), npmState) } },
-                onRemoveInstalled = { name -> scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) } },
+                onSubmitInstall = {
+                    // 在途先写回（2026-10-29 修）：不先置位，阶段条不出现、按钮不置灰，
+                    // 挂起期间也没有任何轮询在跑（兜底轮询的键就是 installing）。
+                    npmState = npmState.withInstallInFlight()
+                    scope.launch { npmState = submitInstall(hostSummary(), npmState) }
+                },
+                onRemoveInstalled = { name ->
+                    npmState = npmState.withInstallInFlight()
+                    scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) }
+                },
                 onBack = onCloseNpm,
                 // 「依赖去重」那个选项是**两件事**（去重 + 提升到全局），所以它有自己的一条
                 // 入口而不是从 `onMaintenance` 转手 —— 见 `OptionsCard` 的 KDoc。
-                onDedupePromote = { scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) } },
+                onDedupePromote = {
+                    npmState = npmState.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
+                    scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) }
+                },
                 onReinstall = { row ->
                     // 名字与版本都取自这一行（宿主读 lockfile 的结果），不是用户敲的 ——
                     // 走的是与「卸载」同一条命令通道，门禁强度因此不取决于按的是哪一颗。
+                    npmState = npmState.withInstallInFlight()
                     scope.launch { npmState = reinstallInstalled(hostSummary(), npmState, row.name, row.version) }
                 },
                 // 「清理缓存」那个选项（2026-10-17 第二批回到页面上）：它**不占安装会话**
                 // （只删几个缓存文件），所以走的是 `reclaimingCache` 那一条独立的状态位。
-                onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
+                onReclaimCache = {
+                    npmState = npmState.withCacheReclaimInFlight()
+                    scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) }
+                },
                 modifier = Modifier,
             )
             ManagementPage.ENV -> ScriptEnvScreen(

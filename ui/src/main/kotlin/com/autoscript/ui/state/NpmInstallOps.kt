@@ -42,6 +42,26 @@ private const val INSTALL_DRAFT_MAX = 200
 private const val INSTALL_FLAGS = " --prefer-offline"
 
 /**
+ * 「提交动作发生」那一刻的在途写回（2026-10-29 修 —— 见 [runPanelCommand] 的 KDoc）。
+ *
+ * 三个安装/卸载/重装入口在 **launch 之前**先同步写回这一份：宿主侧 `runNpmPanelCommand`
+ * 是**入队即返回**的假设已经过时 —— `enqueueHeavy` 是协程内联执行，调用要挂到会话
+ * 跑完才返回。挂起期间若什么都不写回，屏幕就停在按下前的那一刻：阶段条不出现、
+ * 按钮不置灰、爱连点几下点几下 —— 而 [NpmScreen] 侧兜底轮询
+ * （`LaunchedEffect(page, npmState.installing)`）的键也就永远不变化、永远不启动。
+ * 把在途先写回，这三件事各有归属：阶段条立现（QUEUED 起）、按钮即时置灰，
+ * 兜底轮询随即接管「挂起期间每 400ms 续拉事件 / 快照 / 日志」。
+ *
+ * 与 [runPanelCommand] 内部那份 busy **逐字同形**（那边复用本函数，不允许两处各写一份）。
+ */
+internal fun NpmState.withInstallInFlight(): NpmState = copy(
+    installing = true,
+    opError = null,
+    opNotice = null,
+    installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+)
+
+/**
  * 把输入框里的一行 + 两个旗标拼成一条命令（**纯函数**，可单测）。
  *
  * 返回 `null` = 拼不出（空输入）；否则是给 [HostSummary.runNpmPanelCommand] 的原文。
@@ -155,16 +175,14 @@ private suspend fun runPanelCommand(
     // **草稿在这里不清**：清了就意味着"提交即视为成功"，而宿主那一侧是先落 ECHO 行
     // **再抛**的（磁盘/配额预检、验签拒绝都在发出去之后才发生）。清早了，用户看到的是
     // 一句失败 + 一个空输入框 —— 他还得把包名重打一遍。清草稿是**成功之后**的事。
-    val busy = state.copy(
-        installing = true,
-        opError = null,
-        opNotice = null,
-        installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
-    )
+    val busy = state.withInstallInFlight()
     return try {
         host.runNpmPanelCommand(projectId, line)
-        // 入队之后**跟着拉到它跑完**（2026-10-10 批 90）：宿主是入队即返回的，
-        // 而 DOWNLOAD/REIFY 发生在返回之后 —— 只拉一次的话阶段条永远停在 QUEUED。
+        // 挂起返回之后**再拉到它跑完**（2026-10-10 批 90；2026-10-29 把话说准：
+        // `enqueueHeavy` 是协程内联执行，这一行其实要**挂到会话跑完才返回** —
+        // 阶段条实时走的那一路是」在途写回之后 [NpmScreen] 的兜底轮询
+        // （`LaunchedEffect(page, npmState.installing)`）拉着的。本条只是再追一遍，
+        // 兜住挂起返回时会话仍在跑的窗口。
         val polled = pollInstallWhileRunning(host, busy, projectId)
         loadNpmSnapshot(host, polled).copy(
             installing = false,

@@ -39,6 +39,28 @@ class NpmMaintenanceOpsTest {
     private fun loaded(vararg projects: NpmProjectSnapshot) =
         NpmState.of(NpmPanelSnapshot(projects.toList()))
 
+    /**
+     * 在途写回（2026-10-29 修）：提交那一瞬先置位、清账，别的交给挂起的执行协程。
+     *
+     * 两条各钉一句：维护与回收的**专属位**置上（防连点的判据 2026-10-17 起就是
+     * `canReclaimCache`/`canInstall` 读的那几个位），旧账（上次动作的 opError/opNotice）
+     * 一并清掉 —— 新动作的开局不该还挂着上一件事的回执。
+     */
+    @Test
+    fun `在途写回：维护位与回收位各自置上，并清掉旧账`() {
+        val busy = loaded(project()).copy(opError = "旧的失败", opNotice = "旧的回执")
+        val m = busy.withMaintenanceInFlight(NpmMaintenanceAction.PRUNE)
+        assertEquals(NpmMaintenanceAction.PRUNE, m.maintenance)
+        assertNull(m.opError, "新动作开局不许挂着上一件事的账")
+        assertNull(m.opNotice)
+
+        val r = busy.withCacheReclaimInFlight()
+        assertTrue(r.reclaimingCache)
+        assertFalse(r.canReclaimCache, "回收在途 → 防连点的判据立即生效")
+        assertNull(r.opError)
+        assertNull(r.opNotice)
+    }
+
     /** 记录被调过的 (projectId, action)，并可按需失败。 */
     private class MaintenanceHost(
         private val fail: Throwable? = null,

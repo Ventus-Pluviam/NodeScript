@@ -238,6 +238,19 @@ import com.autoscript.ui.theme.ThemeColors
  *     标题比各行右移了 9dp。共享组件加 `textIndent` 参数（缺省 21dp，任务中心两处不变），
  *     依赖页传入 12dp 与卡内文字对齐。
  *
+ * **第十六批（2026-10-29，用户真机反馈）**：
+ * 40. 「安装依赖队列状态条不会出现，要退出再重进才会出现」「删除依赖，依赖列表不会刷新，
+ *     还是显示原来的个数」—— 两个症状同一个根：`runNpmPanelCommand` 在宿主侧是
+ *     **同步挂起执行**（`enqueueHeavy` 协程内联，跑完才返回），而批 90 按「入队即返回」
+ *     设计的提交链路只在该协程**结束**时一次性写回 —— `installing`/`installProgress`
+ *     从没进过组合状态，[NpmScreen] 的兜底轮询 `LaunchedEffect(page, npmState.installing)`
+ *     键不变化、永不启动，挂起期间零反馈零刷新。「退出重进」触发 [reloadNpm] 的
+ *     `pollInstallEvents` 续拉，中间态才浮出来。修法：安装在途、维护在途、回收在途
+ *     三个 begin 写回（[withInstallInFlight] / [withMaintenanceInFlight] /
+ *     [withCacheReclaimInFlight]），五个动作入口 **launch
+ *     前**先同步置位 —— 阶段条立现（QUEUED 起）、按钮即时置灰（防连点判据生效）、
+ *     兜底轮询随即接管挂起期间的每 400ms 续拉（事件 / 快照 / 日志），卸载完成清单
+ *     不再等一次性的终态写回。
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
  * `files/.ns/install-history.jsonl` 一并去掉，本页这些操作（安装 / 卸载 / 镜像源变更…）

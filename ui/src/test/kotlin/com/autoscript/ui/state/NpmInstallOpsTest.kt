@@ -177,6 +177,17 @@ class NpmInstallOpsTest {
     }
 
     @Test
+    fun `在途写回：安装位置上，阶段条从 QUEUED 起，旧账清掉`() {
+        val busy = loaded(project("demo")).copy(opError = "旧的失败", opNotice = "旧的回执")
+        val inFlight = busy.withInstallInFlight()
+        assertTrue(inFlight.installing, "launch 前同步置位：兜底轮询的键、按钮置灰的判据都看它")
+        assertEquals(InstallEvent.Phase.QUEUED, inFlight.installProgress!!.phase, "阶段条从入队那一格起")
+        assertNull(inFlight.opError, "新动作开局不许挂着上一件事的账")
+        assertNull(inFlight.opNotice)
+        assertFalse(inFlight.canInstall, "在途 → 输入行与三颗按钮立即禁用")
+    }
+
+    @Test
     fun `提交：没有选中项目时不发，且说的是"没选项目"而不是"安装失败"`() = runBlocking {
         val host = PanelHost()
         val empty = NpmState.NOT_LOADED.copy(installDraft = "axios")

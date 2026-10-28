@@ -46,7 +46,7 @@ internal suspend fun runNpmMaintenanceOp(
     if (host == null) {
         return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
     }
-    val busy = state.copy(maintenance = action, opError = null, opNotice = null)
+    val busy = state.withMaintenanceInFlight(action)
     return try {
         host.runNpmMaintenance(projectId, action)
         loadNpmSnapshot(host, busy).copy(
@@ -85,7 +85,7 @@ internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState):
     if (host == null) {
         return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
     }
-    val busy = state.copy(maintenance = NpmMaintenanceAction.DEDUPE, opError = null, opNotice = null)
+    val busy = state.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
     return try {
         host.runNpmMaintenance(projectId, NpmMaintenanceAction.DEDUPE)
         var notice = "已入队 npm dedupe：拍平当前作用域的重复依赖"
@@ -127,7 +127,7 @@ internal suspend fun reclaimNpmCacheOp(host: HostSummary?, state: NpmState): Npm
     if (host == null) {
         return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
     }
-    val busy = state.copy(reclaimingCache = true, opError = null, opNotice = null)
+    val busy = state.withCacheReclaimInFlight()
     return try {
         val report = host.reclaimNpmCache()
         // 回收之后**必须**再取一次读数：配额条上那个数字就是用户按这颗按钮的原因，
@@ -149,6 +149,29 @@ private fun noticeFor(action: NpmMaintenanceAction): String = when (action) {
     NpmMaintenanceAction.DEDUPE -> "已入队 npm dedupe：拍平重复依赖，完成后清单会更新"
     NpmMaintenanceAction.CI -> "已入队 npm ci：按 lock 严格重建 node_modules（会先验 lock 签名）"
 }
+
+/**
+ * 「维护动作发生」那一刻的在途写回（2026-10-29 修，与 [runNpmPanelCommand]
+ * 同一条账）：`runNpmMaintenance` 与安装是同一条挂起语义 —— `enqueueHeavy`
+ * 协程内联、跑完才返回。提交时若不先把在途写回，三颗维护按钮会停留在可点状态、
+ * 界面没有任何「在跑」的指示，连点就堆出一串排队会话。
+ */
+internal fun NpmState.withMaintenanceInFlight(action: NpmMaintenanceAction): NpmState = copy(
+    maintenance = action,
+    opError = null,
+    opNotice = null,
+)
+
+/**
+ * 「回收缓存发生」那一刻的在途写回（2026-10-29 修）：回收虽然不占安装会话，
+ * 也一样是挂起调用 —— 提交时不置位，`canReclaimCache` 的防连点判据就永远
+ * 不生效，「按下去没反应还能再按」。
+ */
+internal fun NpmState.withCacheReclaimInFlight(): NpmState = copy(
+    reclaimingCache = true,
+    opError = null,
+    opNotice = null,
+)
 
 /**
  * 回收回执。
