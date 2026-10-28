@@ -72,6 +72,36 @@ class HostNodeExecutorSeedTest {
         )
     }
 
+    /**
+     * 2026-10-29 修的核心不变量（宿主「真树进门」）：项目根有真实 `node_modules` 时，
+     * `prepareWorkDir` 必须把它**整体搬进 workDir**（npm 要在真实依赖树上 reify，
+     * 否则卸载对空树执行、写回锁键全带 `npmwork-<uuid>` 墓碑路径 —— 设备上那份
+     * lockfile 的铁证）。
+     *
+     * 断言两点：树到了 workDir（`ATOMIC_MOVE`，同分区瞬时，不是复制）、
+     * 项目根在会话期间**没有** node_modules（唯一副本在 workDir，由 execute 的
+     * finally 负责失败回滚，见 [HostNodeExecutor.rollbackTree]）。
+     */
+    @Test
+    fun `真实 node_modules 整体搬进 workDir，项目根会话期间净空`() {
+        val op = op()
+        Files.createDirectories(op.projectRoot.resolve("node_modules/axios"))
+        Files.write(op.projectRoot.resolve("node_modules/axios/index.js"), ("// x").toByteArray())
+        Files.write(op.projectRoot.resolve("package.json"), ("""{"name":"mine","version":"2.0.0"}""").toByteArray())
+
+        val workDir = dir.resolve("work")
+        executor().prepareWorkDir(op, workDir)
+
+        assertTrue(
+            Files.isRegularFile(workDir.resolve("node_modules/axios/index.js")),
+            "真实树必须整体出现在 workDir（npm 的 --prefix 只见 workDir）",
+        )
+        assertFalse(
+            Files.exists(op.projectRoot.resolve("node_modules")),
+            "会话期间项目根没有 node_modules：唯一副本在 workDir，失败由 rollbackTree 移回",
+        )
+    }
+
     @Test
     fun `项目已有 package json 时原样拷过去，报「没新建」`() {
         val op = op()

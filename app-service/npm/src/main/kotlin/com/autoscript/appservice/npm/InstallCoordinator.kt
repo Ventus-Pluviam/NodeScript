@@ -1269,6 +1269,9 @@ class InstallCoordinator(
         journal.begin(nonce, projectId, stageDir.fileName.toString())
         tracked.journalStarted = true
         staging.begin(projectId, nonce)
+        // 2026-10-29 起 stageDir 不再是空屋里的产物母体：执行体把真实树搬进 workDir
+        // 才跑 npm（prepareWorkDir），stage 装的是「真树增量后的新树全集」，commit 照旧
+        // 原子落位（见 HostNodeExecutor 类头 work-prefix 模型第 4 步）。
         try {
             if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "安装已取消")
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.RESOLVE))
@@ -1307,7 +1310,7 @@ class InstallCoordinator(
             // §10.2 调用链末段：post-check（lock/产物就位校验）→ 落位 → 归档
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.POST_CHECK))
             warnScriptsSkipped(projectId, handle.id, stageDir)
-            // 执行体把产物写在 stageDir；落位由 staging.commit 原子 rename
+            // 执行体把新树写在 stageDir（harvest 提升）；落位由 staging.commit 原子 rename
             staging.commit(projectId, nonce)
             journal.commit(nonce, projectId, stageDir.fileName.toString())
             tracked.finish()
