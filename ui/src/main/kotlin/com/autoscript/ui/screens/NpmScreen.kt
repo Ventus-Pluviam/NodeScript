@@ -203,6 +203,12 @@ import com.autoscript.ui.theme.ThemeColors
  *     [dependenciesGroup]）：清单不再整段摊开在页面上，翻清单时动的只有那个框，
  *     页面自己的滚动只剩作用域卡 / 这一组 / 日志卡三段。
  *
+ * **第十三批（2026-10-28，用户口径原文）**：
+ * 33. 「去掉安装依赖下面会输出日志（目前它的下面和日志框里都会显示，只保留日志框里的
+ *     就行）」—— [InstallProgressRow] 只画六格阶段条：进行中的阶段文字（label + 包名）
+ *     和收尾后的结论行（装完/失败与病因）都去掉，结果与过程由日志大框（[LogCard]）一家
+ *     承担。阶段条是批 87 要的进度反馈、不是日志，照画；收尾后整段收起。
+ *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
  * `files/.ns/install-history.jsonl` 一并去掉，本页这些操作（安装 / 卸载 / 镜像源变更…）
@@ -404,43 +410,34 @@ private fun InstallRow(
 /**
  * 阶段条：六档排开，点亮到当前那一档。
  *
- * 收尾之后（[InstallProgressState.done]）**保留一行结论**而不是整条消失：
- * 「装完了 / 失败了 + 病因」是这次操作唯一需要留在屏幕上的东西，抹掉它等于让用户
- * 自己去清单里找变化。成功时不再画阶段格子（那六格已经没有信息量）。
+ * **只画进行中**（2026-10-28 第十三批第 33 条，用户口径原文「去掉安装依赖下面会输出
+ * 日志（目前它的下面和日志框里都会显示，只保留日志框里的就行）」）：
+ * - 收尾之后（[InstallProgressState.done]）**整段收起** —— 结果与病因由日志大框承担
+ *   （失败到 [NpmState.opError]、成功到 npm 输出与「已提交」回执），这里再画一行
+ *   就是同一句话说两处；
+ * - 进行中的阶段文字（label + 包名那行小字）同批去掉 —— npm 自己的输出在日志框里
+ *   讲的就是同一件事；**六格阶段条不是日志，照画** —— 那是批 87 要的进度反馈，
+ *   不识字也读得懂亮到第几格。
  */
 @Composable
 private fun InstallProgressRow(p: InstallProgressState) {
-    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-        if (p.done) {
-            ToneText(
-                text = if (p.ok) (p.detail ?: "安装完成") else "失败：${p.detail ?: "（无详情）"}",
-                tone = if (p.ok) StatusTone.MUTED else StatusTone.PROBLEM,
-                style = MaterialTheme.typography.bodySmall,
+    if (p.done) return
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        val reached = InstallProgressState.ORDER.indexOf(p.phase)
+        InstallProgressState.ORDER.forEachIndexed { i, _ ->
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(3.dp)
+                    .background(
+                        color = if (i <= reached) ThemeColors.featuredButton else ThemeColors.fieldBackground,
+                        shape = RoundedCornerShape(2.dp),
+                    ),
             )
-            return@Column
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            val reached = InstallProgressState.ORDER.indexOf(p.phase)
-            InstallProgressState.ORDER.forEachIndexed { i, _ ->
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(3.dp)
-                        .background(
-                            color = if (i <= reached) ThemeColors.featuredButton else ThemeColors.fieldBackground,
-                            shape = RoundedCornerShape(2.dp),
-                        ),
-                )
-            }
-        }
-        ToneText(
-            text = p.label + (p.pkg?.let { "  $it" } ?: ""),
-            tone = StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }
 
