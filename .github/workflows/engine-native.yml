@@ -12,7 +12,8 @@ name: engine-native
 # `bridge_native.node`**：node-slice（libnode + npm 素材）、image-native（libopencv）与
 # treesitter-native（tree-sitter 三件）的 artifact 都在且可取，只有这两个引擎件从来没有
 # 生产者。所以本 workflow 自己跑 `build-native.sh`，再跨 workflow 取那三条 artifact 喂
-# `LIBNODE`/`NPM_CLI_ROOT`/`LIBOPENCV`/`TREESITTER_OUT`，起 `assembleDebug`，最后逐件断言。
+# `LIBNODE`/`NPM_CLI_ROOT`/`LIBOPENCV`/`TREESITTER_OUT`，起 `assembleDebug` + `assembleRelease`
+# （release 变体 2026-10-28 第十六批补，性能形态对照，见构建步骤那里的注释），最后逐件断言。
 #
 # 第五件（tree-sitter 三件，2026-10-07 补）为什么必须在这条门里断言：装配侧
 # `autoscript.engine-natives` 对它是**选填件**（缺位只 warn），所以「没随进包」是绿门下的
@@ -231,59 +232,80 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
 
-      - name: 构建真形态 Debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+      # release 变体为什么存在（2026-10-28 第十六批，用户拍板）：真机复测（本 workflow 出包）
+      # 一直在 debug 形态上做 —— `android:debuggable=true` 让 ART 只做校验级编译（解释 + JIT），
+      # dex 也没过 R8，Compose 官方口径是「评性能必须 release + R8」。这批给真形态管线加
+      # release 变体做**对照实验**：同一 commit 出 debug/release 两个包，用户装上滑一下便知
+      # 卡顿是「代码的病」还是「包形态的病」。断言两包同跑一遍：release 走 R8 全量 + 资源
+      # 收缩，装配件（.so / assets）不进 dex 不被收缩，同判据应同结果，变了就是收缩链路的账
+      # （`app/proguard-rules.pro` 的反射面清单与它同步维护）。
+      - name: 构建真形态 APK（debug + release 两个变体）
+        run: ./gradlew :app:assembleDebug :app:assembleRelease --stacktrace
 
-      - name: 断言 APK 真形态（四件齐 + tree-sitter 三件 + npm 素材 + ABI 只 arm64）
+      - name: 断言 APK 真形态（debug + release 各一遍：四件齐 + tree-sitter 三件 + npm 素材 + ABI 只 arm64）
         run: |
           set -euo pipefail
-          APK="$(ls app/build/outputs/apk/debug/*.apk)"
-          [ -f "$APK" ] || { echo "::error::没出 APK"; exit 1; }
-          echo "APK: $APK（$(stat -c%s "$APK") 字节）"
           BT="$ANDROID_SDK_ROOT/build-tools/36.0.0"
-          # aapt2 会**安静地**把 `<dir>_*` 形态的条目从 listing 里滤掉（2026-10-02 踩过），
-          # 所以条目清单一律走 unzip，aapt2 只用来读 badging（native-code / SDK 版本）。
-          unzip -l "$APK" | awk '{print $4}' > "$RUNNER_TEMP/apk-entries.txt"
+          assert_apk() {
+            local APK="$1"
+            [ -f "$APK" ] || { echo "::error::没出 APK: $APK"; exit 1; }
+            echo "APK: $APK（$(stat -c%s "$APK") 字节）"
+            # aapt2 会**安静地**把 `<dir>_*` 形态的条目从 listing 里滤掉（2026-10-02 踩过），
+            # 所以条目清单一律走 unzip，aapt2 只用来读 badging（native-code / SDK 版本）。
+            unzip -l "$APK" | awk '{print $4}' > "$RUNNER_TEMP/apk-entries.txt"
 
-          echo "--- lib/arm64-v8a/ ---"
-          grep -E '^lib/arm64-v8a/' "$RUNNER_TEMP/apk-entries.txt" || true
-          for f in libnoden.so libnode.so libc++_shared.so libopencv.so libtree-sitter.so libtree-sitter-javascript.so libtreesitter.so; do
-            grep -qx "lib/arm64-v8a/$f" "$RUNNER_TEMP/apk-entries.txt" \
-              || { echo "::error::APK 缺 lib/arm64-v8a/$f"; exit 1; }
-          done
+            echo "--- lib/arm64-v8a/ ---"
+            grep -E '^lib/arm64-v8a/' "$RUNNER_TEMP/apk-entries.txt" || true
+            for f in libnoden.so libnode.so libc++_shared.so libopencv.so libtree-sitter.so libtree-sitter-javascript.so libtreesitter.so; do
+              grep -qx "lib/arm64-v8a/$f" "$RUNNER_TEMP/apk-entries.txt" \
+                || { echo "::error::APK 缺 lib/arm64-v8a/$f"; exit 1; }
+            done
 
-          # ABI 面：**只许有 arm64-v8a**（B10 拍板）。多出别的 = 声明面对装不上的设备做了承诺。
-          echo "--- native-code ---"
-          # compileSdkVersion 挂在 package: 行上、minSdkVersion 自带前缀 —— 不写窄锚点。
-          "$BT/aapt2" dump badging "$APK" | grep -E "^(package:|native-code|minSdkVersion|targetSdkVersion)" || true
-          NC="$("$BT/aapt2" dump badging "$APK" | sed -n "s/^native-code: //p")"
-          [ "$NC" = "'arm64-v8a'" ] \
-            || { echo "::error::native-code 不是单 arm64-v8a：$NC（B10：app/build.gradle.kts 的 ndk.abiFilters）"; exit 1; }
+            # ABI 面：**只许有 arm64-v8a**（B10 拍板）。多出别的 = 声明面对装不上的设备做了承诺。
+            echo "--- native-code ---"
+            # compileSdkVersion 挂在 package: 行上、minSdkVersion 自带前缀 —— 不写窄锚点。
+            "$BT/aapt2" dump badging "$APK" | grep -E "^(package:|native-code|minSdkVersion|targetSdkVersion)" || true
+            NC="$("$BT/aapt2" dump badging "$APK" | sed -n "s/^native-code: //p")"
+            [ "$NC" = "'arm64-v8a'" ] \
+              || { echo "::error::native-code 不是单 arm64-v8a：$NC（B10：app/build.gradle.kts 的 ndk.abiFilters）"; exit 1; }
 
-          # addon 走 assets（.node 不进 jniLibs：PackageManager 只提取 *.so）。
-          grep -qx 'assets/bridge-addon/bridge_native.node' "$RUNNER_TEMP/apk-entries.txt" \
-            || { echo "::error::APK 缺 assets/bridge-addon/bridge_native.node"; exit 1; }
-          # facade dist 随包（脚本侧 require('auto') 的落位源）。
-          for f in bootstrap.js index.js; do
-            grep -qx "assets/bridge-dist/$f" "$RUNNER_TEMP/apk-entries.txt" \
-              || { echo "::error::APK 缺 assets/bridge-dist/$f"; exit 1; }
-          done
+            # addon 走 assets（.node 不进 jniLibs：PackageManager 只提取 *.so）。
+            grep -qx 'assets/bridge-addon/bridge_native.node' "$RUNNER_TEMP/apk-entries.txt" \
+              || { echo "::error::APK 缺 assets/bridge-addon/bridge_native.node"; exit 1; }
+            # facade dist 随包（脚本侧 require('auto') 的落位源）。
+            for f in bootstrap.js index.js; do
+              grep -qx "assets/bridge-dist/$f" "$RUNNER_TEMP/apk-entries.txt" \
+                || { echo "::error::APK 缺 assets/bridge-dist/$f"; exit 1; }
+            done
 
-          # npm 素材：件数 + 两个锚（prepareNpmCliAssets 的「有货但缺锚 → 红」同一条判据）。
-          NPM_N="$(grep -c '^assets/npm/' "$RUNNER_TEMP/apk-entries.txt" || true)"
-          echo "assets/npm/ 条目数: $NPM_N"
-          [ "$NPM_N" -gt 1000 ] \
-            || { echo "::error::assets/npm/ 只随了 $NPM_N 条（素材没落位？NPM_CLI_ROOT 指对了没）"; exit 1; }
-          for f in assets/npm/bin/npm-cli.js assets/npm/bin/npx-cli.js; do
-            grep -qx "$f" "$RUNNER_TEMP/apk-entries.txt" \
-              || { echo "::error::APK 缺 $f（半瘫 CLI 比没交付更糟）"; exit 1; }
-          done
-          echo "[OK] 真形态 APK 断言全过"
+            # npm 素材：件数 + 两个锚（prepareNpmCliAssets 的「有货但缺锚 → 红」同一条判据）。
+            NPM_N="$(grep -c '^assets/npm/' "$RUNNER_TEMP/apk-entries.txt" || true)"
+            echo "assets/npm/ 条目数: $NPM_N"
+            [ "$NPM_N" -gt 1000 ] \
+              || { echo "::error::assets/npm/ 只随了 $NPM_N 条（素材没落位？NPM_CLI_ROOT 指对了没）"; exit 1; }
+            for f in assets/npm/bin/npm-cli.js assets/npm/bin/npx-cli.js; do
+              grep -qx "$f" "$RUNNER_TEMP/apk-entries.txt" \
+                || { echo "::error::APK 缺 $f（半瘫 CLI 比没交付更糟）"; exit 1; }
+            done
+            echo "[OK] $APK 断言全过"
+          }
 
-      - name: 上传真形态 APK
+          assert_apk "$(ls app/build/outputs/apk/debug/*.apk)"
+          assert_apk "$(ls app/build/outputs/apk/release/*.apk)"
+          echo "[OK] debug + release 两个真形态 APK 断言全过"
+
+      - name: 上传真形态 APK（debug）
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-debug-true-form
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: 上传真形态 APK（release）
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-release-true-form
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
