@@ -908,6 +908,8 @@ private fun ScopeHeaderCard(scopeLabel: String, registryLabel: String) {
         )
     }
 }
+
+@Composable
 private fun ScopeCard(state: NpmState, onSelect: (String) -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
     val projects = state.snapshot?.projects.orEmpty()
