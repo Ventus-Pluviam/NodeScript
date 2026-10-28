@@ -219,6 +219,11 @@ import com.autoscript.ui.theme.ThemeColors
  *     `ProfileActivity` 名字档）· 灰小镜像源链接（13.5sp，TG `actionBarDefaultSubtitle`
  *     档）。镜像源显示的是**当前生效的那一家**（配置的或出厂官方源），没有"读不到就不画"
  *     —— npm 进程永远有一个实际在用的源，在用什么就读什么。
+ * 36. 「图标不要被白色胶囊框组件包起来。它大小都没生效，和tg的不一致」—— 第 35 条复批：
+ *     去掉 [PanelCard] 白卡包装（TG 资料头部是直接铺在页面背景上的，本页页底的灰就是
+ *     原型里的背景），圆形底从 44dp 改回 TG 头像**原值 100dp**（`ProfileActivity.java`
+ *     `avatarContainer` 的 `createFrame(100, 100)`），间距同批对齐 TG
+ *     （名字上距 6dp）。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -734,17 +739,20 @@ private val DEP_LIST_MAX_HEIGHT = 320.dp
 /** 卡片圆角（`SettingsCard` / 任务中心 `Card` 同一档 16dp）。 */
 private val CARD_CORNER = 16.dp
 
-/** 页头圆形图标底的直径（第 35 条；TG 资料头部圆头像在卡片场景的缩小档）。 */
-private val PROFILE_BADGE = 44.dp
+/** 页头圆形图标底的直径（第 35 条）：TG `ProfileActivity` 头像容器 `createFrame(100, 100)` 的**原值**。 */
+private val PROFILE_BADGE = 100.dp
 
-/** 页头圆形图标底里的包裹字形尺寸。 */
-private val PROFILE_BADGE_ICON = 26.dp
+/** 页头圆形图标底里的包裹字形尺寸（按圆直径的 ~60%，与 TG 头像区照片的占比同量级）。 */
+private val PROFILE_BADGE_ICON = 60.dp
 
-/** 页头圆形图标底 → 名字的行距。 */
-private val PROFILE_NAME_GAP = 10.dp
+/** 页头圆形图标底 → 名字的行距（TG `nameTextView` 上 padding `dp(6)`）。 */
+private val PROFILE_NAME_GAP = 6.dp
 
 /** 名字 → 镜像源链接的行距。 */
-private val PROFILE_SUBTITLE_GAP = 3.dp
+private val PROFILE_SUBTITLE_GAP = 4.dp
+
+/** 页头裸放上下留白（不套白卡后与卡片间距 [CARD_SPACING] 同量级）。 */
+private val PROFILE_HEADER_PAD = 16.dp
 
 /**
  * 页头名字的黑色（第 35 条）：TG `key_profile_title` 的默认值 #222222。
@@ -839,13 +847,20 @@ private val INSTALL_FIELD_WIDTH = 168.dp
  * 圆形图标…圆形图标下面是黑色加粗的选中项目名称，项目名称下面是灰色小号的当前使用
  * npm镜像源链接（格式样式tg源码里都有）」）。
  *
- * 三段居中，视觉参数取自 TG `ProfileActivity` 的资料头部（2026-10-28 实读源码）：
- * - 圆形底 + 包裹字形（[GlyphKind.PACKAGE]，本仓自绘），对应 TG 的圆头像位；
- * - 名字 17.5sp 粗体、色 `key_profile_title` = #222222（TG 名字档，
- *   `nameTextView.setTextSizePx(dp(17.5f))` + `bold()`）；
- * - 链接 13.5sp、色 `key_actionBarDefaultSubtitle` = #79817E（TG 副行档，
+ * 三段居中，尺寸与间距全部取自 TG `ProfileActivity` 的资料头部（2026-10-28 实读源码）：
+ * - 圆形底 **100dp**（TG `avatarContainer` 的 `createFrame(100, 100)`，
+ *   `ProfileActivity.java:5358`）内放包裹字形（[GlyphKind.PACKAGE]，本仓自绘），
+ *   对应 TG 的圆头像位；
+ * - 名字 17.5sp 粗体、色 `key_profile_title` = #222222、上距 6dp（TG 名字档：
+ *   `setTextSizePx(dp(17.5f))` + `bold()` + `setPadding(0, dp(6), …)`）；
+ * - 链接 13.5sp、色 `key_actionBarDefaultSubtitle` = #79817E（TG 副行档：
  *   `onlineTextView.setTextSizePx(dp(13.5f))`）。
- * 两个色值**写死为 TG 浅色档的观感**（本仓主题没这两档，见第 35 条的 KDoc）。
+ * 两个色值**写死为 TG 浅色档**（本仓主题没这两档，见第 35 条的 KDoc）。
+ *
+ * **刻意不套 [PanelCard] 白卡**（第十四批第 35 条复批，用户口径「图标不要被白色
+ * 胶囊框组件包起来。它大小都没生效，和tg的不一致」）：TG 资料头部直接铺在页面
+ * 背景上，本页页底的灰（[ThemeColors.surfaceMuted]）就是原型里资料页的背景 ——
+ * 套白卡等于给原型加了一道框；圆形底 100dp 也是 TG 头像的**原值**，不是缩档。
  *
  * 镜像源**永远有内容**（用户口径「在用什么就读什么」）：显示当前生效的那一家
  * （[registryLabel] 由外壳给，读不到设置时给出厂官方源）—— npm 进程永远有一个
@@ -855,46 +870,44 @@ private val INSTALL_FIELD_WIDTH = 168.dp
  */
 @Composable
 private fun ScopeHeaderCard(scopeLabel: String, registryLabel: String) {
-    PanelCard {
-        Column(
-            Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = PROFILE_HEADER_PAD),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .size(PROFILE_BADGE)
+                .clip(CircleShape)
+                .background(ThemeColors.featuredButton),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                Modifier
-                    .size(PROFILE_BADGE)
-                    .clip(CircleShape)
-                    .background(ThemeColors.featuredButton),
-                contentAlignment = Alignment.Center,
-            ) {
-                Glyph(
-                    kind = GlyphKind.PACKAGE,
-                    tint = ThemeColors.featuredButtonText,
-                    size = PROFILE_BADGE_ICON,
-                )
-            }
-            Spacer(Modifier.height(PROFILE_NAME_GAP))
-            Text(
-                text = scopeLabel,
-                color = TG_PROFILE_TITLE,
-                fontSize = 17.5.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(PROFILE_SUBTITLE_GAP))
-            Text(
-                text = registryLabel,
-                color = TG_PROFILE_SUBTITLE,
-                fontSize = 13.5.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            Glyph(
+                kind = GlyphKind.PACKAGE,
+                tint = ThemeColors.featuredButtonText,
+                size = PROFILE_BADGE_ICON,
             )
         }
+        Spacer(Modifier.height(PROFILE_NAME_GAP))
+        Text(
+            text = scopeLabel,
+            color = TG_PROFILE_TITLE,
+            fontSize = 17.5.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(PROFILE_SUBTITLE_GAP))
+        Text(
+            text = registryLabel,
+            color = TG_PROFILE_SUBTITLE,
+            fontSize = 13.5.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
-
-@Composable
 private fun ScopeCard(state: NpmState, onSelect: (String) -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
     val projects = state.snapshot?.projects.orEmpty()
