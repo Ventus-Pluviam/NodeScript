@@ -14,7 +14,7 @@
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelRow( label: String, hint: String? = null, trailing: @Composable () -&gt; Unit, onClick: (() -&gt; Unit)? = null, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ReinstallButton(name: String, enabled: Boolean, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ScopeHeaderCard(scopeLabel: String, registryLabel: String)</ID>
-    <ID>FunctionNaming:NpmScreen.kt$private fun ScopeCard(state: NpmState, onSelect: (String) -&gt; Unit)</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ScopeCard(state: NpmState, onSelect: (String) -&gt; Unit)</ID>
     <ID>LongParameterList:NpmScreen.kt$( state: NpmState, /** 当前生效的镜像源 URL（全局配置读口 `globalRegistry().effective`，外壳兜底给出厂缺省）。 */ registryLabel: String, onClearLog: () -&gt; Unit, onSelectProject: (String) -&gt; Unit, onMaintenance: (NpmMaintenanceAction) -&gt; Unit, onInstallDraft: (String) -&gt; Unit, onSubmitInstall: () -&gt; Unit, onRemoveInstalled: (String) -&gt; Unit, onBack: () -&gt; Unit, onDedupePromote: () -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, onReclaimCache: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
   </CurrentIssues>
 </SmellBaseline>
