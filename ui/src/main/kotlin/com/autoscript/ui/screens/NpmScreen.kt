@@ -94,7 +94,8 @@ import com.autoscript.ui.theme.ThemeColors
  *    整段下线，页面上半部分**不再出现红字**；
  * 2. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成
  *    一张白卡（~~[DependencyListCard]：白卡 + 高度自限 + 卡内自滚~~，第十一批第 29/31
- *    条把它并进「安装 + 依赖列表」那一组、卡内那层滚动撤掉了）；
+ *    条把它并进「安装 + 依赖列表」那一组、卡内那层滚动撤掉了；**卡内自滚于
+ *    2026-10-28 第十二批第 32 条回来**，见该条）；
  * 3. 「最下面弄个显示日志的大框。灰色背景，胶囊框」—— [LogCard]，内容按当场裁定
  *    「两者都显示」= 先本页这次操作的账、后 npm 输出（组装在 [NpmState.logLines]）；
  * 4. 「背景颜色改成任务中心背景一样的颜色」—— 页底 + 顶栏改 [ThemeColors.surfaceMuted]，
@@ -193,7 +194,14 @@ import com.autoscript.ui.theme.ThemeColors
  *     [OptionsBar]，不再随内容滚；让位（[TabBarBottomClearance]）随之下移到这一栏。
  * 31. 「依赖列表滑动还是很卡」—— 卡里那层 `LazyColumn` **撤掉**：依赖行改成页面列表自己的
  *     item，这一屏从此只有一个可滚动容器（与第 29 条是同一处结构）。~~展开后卡内自滚~~
- *     （2026-10-17）这条口径同时作废。
+ *     （2026-10-17）这条口径同时作废。**本条自身（摊平 + 全页只留一个可滚动容器）也于
+ *     2026-10-28 第十二批第 32 条作废** —— 摊平没治好卡，用户裁定了相反的结构。
+ *
+ * **第十二批（2026-10-28，用户口径原文）**：
+ * 32. 「还是很卡顿，依赖列表你不要让它完全展开。而是在一个组件框里滑动」—— 依赖行收回
+ *     一个**定高的框**里自己滚（`heightIn(max)` + 框内自己的 `LazyColumn`，见
+ *     [dependenciesGroup]）：清单不再整段摊开在页面上，翻清单时动的只有那个框，
+ *     页面自己的滚动只剩作用域卡 / 这一组 / 日志卡三段。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -262,10 +270,11 @@ fun NpmScreen(
         // 顶栏下面**不再有任何报错/回执**（2026-10-17 用户令：「删除顶上的报错。不需要它」
         // + 裁定「报错全部收进底部日志大框」）：读失败、[NpmState.opError]、[NpmState.opNotice]
         // 三样统统画在最下面那个日志大框里（[LogCard]）—— 页面上半部分只放读数与动作。
-        // 「依赖列表」的展开态**提到这一层**：这一组现在是**好几条列表项拼出来的**
-        // （安装行一段 / 卡头一段 / 每颗依赖各一段），那条布尔得由拼它们的人读
-        // （见 [dependenciesGroup]）。此前它长在 `DependencyListCard` 里 —— 那时整组只
-        // 是一条 item，展开态跟着那一件走。
+        // 「依赖列表」的展开态**提到这一层**：这一组是**好几条列表项拼出来的**
+        // （安装行一段 / 卡头一段 / 展开后清单框一段 —— 依赖行自 2026-10-28 第十二批
+        // 第 32 条起收在框内自己的 LazyColumn 里，不再是本列表的 item），那条布尔得由
+        // 拼它们的人读（见 [dependenciesGroup]）。此前它长在 `DependencyListCard` 里 ——
+        // 那时整组只是一条 item，展开态跟着那一件走。
         var depsExpanded by rememberSaveable { mutableStateOf(false) }
         LazyColumn(
             Modifier.fillMaxWidth().weight(1f),
@@ -439,20 +448,21 @@ private fun InstallProgressRow(p: InstallProgressState) {
  * 「安装依赖 + 依赖列表」这一组（2026-10-18 第十一批第 29 条，用户口径原文「安装依赖和
  * 依赖列表合并成一个列表分组」）。
  *
- * **它不是一条 item，是一串 item**：安装行一段、卡头一段、之后每颗依赖各一段，整组由
- * [cardSlice] 拼成**一张卡**（相邻两段同色贴紧，缝看不见）。一条改动同时办掉两件事：
+ * 三条 item 由 [cardSlice] 拼成**一张卡**（相邻两段同色贴紧，缝看不见）：安装行一段、
+ * 卡头一段、展开后再加一段（清单框，或空态那句话）。
  *
- * 1. **合成一个分组**：安装与依赖落在同一张白卡里，卡头就是那棵树的账；
- * 2. **这一页从此只有一个可滚动容器。** 此前依赖列表是**卡里再套一个 LazyColumn**
- *    （高度上限 `DEP_LIST_MAX_HEIGHT`），于是这一屏有两层竖向滚动 —— 拖动要在两层之间
- *    交接、内层滚到头外层才接管，手感是断的（第十一批第 31 条，用户口径「依赖列表滑动
- *    还是很卡」）。摊平成列表项之后，只有可见的行才组合、才绘制，滚动只有一条路。
+ * **依赖行收在一个定高的框里自己滚**（2026-10-28 第十二批第 32 条，用户口径原文
+ * 「还是很卡顿，依赖列表你不要让它完全展开。而是在一个组件框里滑动」）：清单是**一条**
+ * item，里面一个 `heightIn(max = DEP_LIST_MAX_HEIGHT)` 的 `LazyColumn`（[DepsListBox]）
+ * —— 行在框内懒加载，翻清单时动的只有那个框；页面自己的滚动只剩三段卡。
+ * 这**作废了第十一批第 31 条**（摊平成页面 item、全页只留一个可滚动容器）：摊平之后整页
+ * 是一条由全部依赖行组成的长列表，滚动时每一帧都在这条链路上付行物理与组合的钱，卡顿
+ * 没有治好。当年拆掉卡内自滚的理由（"两层竖向滚动要交接、手感是断的"）在这个形状下也
+ * 不成立：框是**定高**的，拖动先归框、框到头归页面，正是用户要的"在一个组件框里滑动"。
  *
  * **为什么默认收起**（2026-10-17 用户口径「点下可以伸展开，默认是收起来的」，照旧）：
- * 这一屏最常同时看的是"清单 + 下面那个日志大框"，装到几十上百个包的机器上全摊开会把日志
- * 顶到很远；而收起态的卡头自己写着条数（「全局依赖（37）」），不看内容也知道装了多少。
- *
- * ~~展开后仍然卡内自滚~~（2026-10-17 那版口径）：它的代价正是上面第 2 点，本条作废它。
+ * 这一屏最常同时看的是"清单 + 下面那个日志大框"；而收起态的卡头自己写着条数
+ * （「全局依赖（37）」），不看内容也知道装了多少。
  *
  * **条数与称呼跟着作用域走**（2026-10-17 第二批）：作用域是「全局」时写"项目依赖"就是一句
  * 错话 —— 全局那棵 node_modules 不属于任何项目。**只在读到了的时候才报数**：没读到时的 0
@@ -471,24 +481,23 @@ private fun LazyListScope.dependenciesGroup(
     onRemove: (String) -> Unit,
     onReinstall: (NpmRowState) -> Unit,
 ) {
-    // 展开之后卡头下面还有几段：读到但是空的、没读到的，各占一段（三态各说各的那句话）；
-    // 收起时是 0 段。卡片**下缘**那两道圆角长在最后一段上，所以要先把段数算出来。
     val rows = if (expanded && state.load.isLoaded) state.installed else emptyList()
-    val bodySlices = if (expanded) maxOf(1, rows.size) else 0
     item(key = "npm-install", contentType = SLICE_INSTALL) {
         Column(Modifier.cardSlice(ThemeColors.background, first = true, last = false)) {
             InstallRow(state = state, onDraft = onDraft, onSubmit = onSubmit)
         }
     }
     item(key = "npm-deps-header", contentType = SLICE_HEADER) {
-        Column(Modifier.cardSlice(ThemeColors.background, first = false, last = bodySlices == 0)) {
+        // 展开后卡头下面固定还有一段（清单框 / 空态），卡片**下缘**那两道圆角长在那一段上；
+        // 收起时卡头自己就是最后一段。
+        Column(Modifier.cardSlice(ThemeColors.background, first = false, last = !expanded)) {
             CollapseHeader(title = depsTitle(state), expanded = expanded, onClick = onToggle)
         }
     }
     if (!expanded) return
-    if (rows.isEmpty()) {
-        item(key = "npm-deps-empty", contentType = SLICE_EMPTY) {
-            Column(Modifier.cardSlice(ThemeColors.background, first = false, last = true)) {
+    item(key = "npm-deps-body", contentType = SLICE_DEP_BODY) {
+        Column(Modifier.cardSlice(ThemeColors.background, first = false, last = true)) {
+            if (rows.isEmpty()) {
                 // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
                 if (!state.load.isLoaded) {
                     EmptyHint("还没读到依赖清单：点右上角「刷新」再试，或看下面日志里怎么说的")
@@ -498,29 +507,45 @@ private fun LazyListScope.dependenciesGroup(
                         else "读到了，这个项目还没有依赖（先装点什么）",
                     )
                 }
+            } else {
+                DepsListBox(
+                    rows = rows,
+                    enabled = state.canInstall,
+                    onRemove = onRemove,
+                    onReinstall = onReinstall,
+                )
             }
         }
-        return
     }
-    itemsIndexed(
-        rows,
-        key = { _, row -> "npm-dep-${row.name}@${row.version}" },
-        // **六种 item 形状必须各报各的类型**：类型为 null 时它们共用一个复用池，
-        // 一条依赖行滚出视野后节点被下一件"看起来同类型"的东西取走 —— 取到安装行/日志卡
-        // 那种形状对不上的，Compose 只能把复用出来的组合整个丢掉重来，**比不复用还慢**。
-        // 上一版全屏 5 种形状挤在一个池子里，正是这个池子在每次滚动时互相顶掉。
-        contentType = { _, _ -> SLICE_DEP },
-    ) { index, row ->
-        Column(
-            Modifier.cardSlice(
-                ThemeColors.background,
-                first = false,
-                last = index == rows.lastIndex,
-            ),
-        ) {
+}
+
+/**
+ * 依赖清单的**定高内滚框**（2026-10-28 第十二批第 32 条，见 [dependenciesGroup] 的 KDoc）。
+ *
+ * 高度封顶 [DEP_LIST_MAX_HEIGHT]：清单不再把页面拉长成一条几百行的长列表，翻清单时
+ * 只有这个框在动。框内各行不再各挂 [cardSlice]（四角圆角由整段那一片头/尾形状兜着），
+ * 行与行之间没有分隔线（2026-10-17 用户口径「依赖列表取消横线分隔」，照旧）。
+ *
+ * 拖动的归属：框没滚到头时归框，到头之后归页面 —— 嵌套滚动的缺省交接，不做额外判据。
+ */
+@Composable
+private fun DepsListBox(
+    rows: List<NpmRowState>,
+    enabled: Boolean,
+    onRemove: (String) -> Unit,
+    onReinstall: (NpmRowState) -> Unit,
+) {
+    LazyColumn(Modifier.fillMaxWidth().heightIn(max = DEP_LIST_MAX_HEIGHT)) {
+        itemsIndexed(
+            rows,
+            key = { _, row -> "npm-dep-${row.name}@${row.version}" },
+            // 框内只有一种形状，但类型照样报：滚出视野的行与别的 item 共用一个复用池时，
+            // 形状对不上的复用比不复用还慢（整段组合丢掉重来）。
+            contentType = { _, _ -> SLICE_DEP },
+        ) { _, row ->
             InstalledRow(
                 row = row,
-                enabled = state.canInstall,
+                enabled = enabled,
                 onRemove = onRemove,
                 onReinstall = onReinstall,
             )
@@ -566,14 +591,17 @@ private fun Modifier.cardSlice(color: Color, first: Boolean, last: Boolean): Mod
 }
 
 /**
- * 列表 item 的**类型**（`contentType`）。一屏里有六种形状，类型必须分开报 ——
- * 见 [dependenciesGroup] 里那条注释。这些都是字符串常量，比的是值。
+ * 列表 item 的**类型**（`contentType`）。本页外层列表有五种形状，类型必须分开报 ——
+ * 类型为 null 时它们共用一个复用池，一件滚出视野后节点被下一件"看起来同类型"的东西
+ * 取走，取到形状对不上的，Compose 只能把复用出来的组合整个丢掉重来，**比不复用还慢**。
+ * （框内各行另有一层自己的类型 [SLICE_DEP]，见 [DepsListBox]。）
+ * 这些都是字符串常量，比的是值。
  */
 private const val SLICE_SCOPE = "npm-scope-card"
 private const val SLICE_LOG = "npm-log-card"
 private const val SLICE_INSTALL = "npm-install-slice"
 private const val SLICE_HEADER = "npm-deps-header-slice"
-private const val SLICE_EMPTY = "npm-deps-empty-slice"
+private const val SLICE_DEP_BODY = "npm-deps-body-slice"
 private const val SLICE_DEP = "npm-dep-slice"
 
 /**
@@ -677,6 +705,13 @@ private fun PanelCard(content: @Composable () -> Unit) {
 
 /** 日志大框的高度上限（约 6~7 行）。 */
 private val LOG_MAX_HEIGHT = 200.dp
+
+/**
+ * 依赖清单框的高度上限（2026-10-28 第十二批第 32 条）：约 7 行（[ROW_MIN_HEIGHT] 44dp），
+ * 再高"清单收在一个框里"这条口径就名存实亡了。行数更少时框跟着内容收缩
+ * （`heightIn` 是上限不是定值），空态不撑这个高度。
+ */
+private val DEP_LIST_MAX_HEIGHT = 320.dp
 
 /** 卡片圆角（`SettingsCard` / 任务中心 `Card` 同一档 16dp）。 */
 private val CARD_CORNER = 16.dp

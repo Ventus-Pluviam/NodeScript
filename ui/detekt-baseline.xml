@@ -47,6 +47,7 @@
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallRow( state: NpmState, onDraft: (String) -&gt; Unit, onSubmit: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstallProgressRow(p: InstallProgressState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun InstalledRow( row: NpmRowState, enabled: Boolean, onRemove: (String) -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:NpmScreen.kt$@Composable private fun DepsListBox( rows: List<NpmRowState>, enabled: Boolean, onRemove: (String) -&gt; Unit, onReinstall: (NpmRowState) -&gt; Unit, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun LogCard(state: NpmState)</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun PanelRow( label: String, hint: String? = null, trailing: @Composable () -&gt; Unit, onClick: (() -&gt; Unit)? = null, )</ID>
     <ID>FunctionNaming:NpmScreen.kt$@Composable private fun ReinstallButton(name: String, enabled: Boolean, onClick: () -&gt; Unit)</ID>
