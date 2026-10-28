@@ -171,6 +171,42 @@ class NpmStateTest {
         assertTrue(NpmState.failed(RuntimeException()).installed.isEmpty())
     }
 
+    /**
+     * 「快照没变就复用旧状态」（2026-10-28）：`npmSnapshot()` 每次回读一份内容相同的
+     * 快照（量尺寸那趟走完 node_modules，数字没动），盲目重建会让展开的依赖列表
+     * **整屏陪重组** —— 安装轮询每 400ms 撞一次，滑动手感就断一帧。
+     * 这里把「内容没变 → 同一份实例」钉成不变量：`===` 断言的是引用，不是值 ——
+     * `copy` 出来的同值对象救不了重组，只有原样复用才救得了。
+     */
+    @Test
+    fun `快照没变时复用旧状态_同一份实例`() {
+        val snapshot = NpmPanelSnapshot(listOf(project("demo", installed = listOf(PkgNode("esbuild", "0.21.5")))))
+        val loaded = NpmState.of(snapshot)
+        val refreshed = NpmState.of(snapshot, loaded)
+        assertTrue(refreshed === loaded, "内容没变的回读应该原样复用上一份，而不是重建一份相等的")
+    }
+
+    @Test
+    fun `失败态不短路_同一份快照读成功要讲得掉读取失败`() {
+        val snapshot = NpmPanelSnapshot(listOf(project("demo")))
+        val loaded = NpmState.of(snapshot)
+        val failed = NpmState.failed(IllegalStateException("npm 未接线"), loaded)
+        val recovered = NpmState.of(snapshot, failed)
+        assertFalse(recovered === failed, "失败态下同一份快照读成功必须重建 —— 那句「读取失败」是成功的回读讲掉的")
+        assertTrue(recovered.load.isLoaded)
+        assertNull(recovered.load.failedReason())
+    }
+
+    @Test
+    fun `有操作账不短路_回执按「现取即清」讲掉`() {
+        val snapshot = NpmPanelSnapshot(listOf(project("demo")))
+        val loaded = NpmState.of(snapshot)
+        val noticed = loaded.copy(opNotice = "已提交 npm install")
+        val refreshed = NpmState.of(snapshot, noticed)
+        assertFalse(refreshed === noticed, "带着操作账的刷新必须重建 —— 短路会把回执留到下一次")
+        assertNull(refreshed.opNotice, "opNotice 的契约是「现取即清」：一次成功的回读把它讲掉")
+    }
+
     @Test
     fun `尺寸没量到不画成零字节，且不再有配额分母`() {
         val unmeasured = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = null))))

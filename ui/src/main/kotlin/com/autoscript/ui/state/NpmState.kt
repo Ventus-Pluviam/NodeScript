@@ -216,27 +216,46 @@ data class NpmState(
          * 那时凭空选一个空串就是选了一个不存在的条目 —— 界面上表现为"作用域那行写着全局，
          * 下面什么也没有"。最后一档兜住"一个项目都没有"之外的任何残局。
          */
-        fun of(snapshot: NpmPanelSnapshot, previous: NpmState = NOT_LOADED) = NpmState(
-            load = LoadState.Loaded,
-            selectedProjectId = previous.selectedProjectId
-                ?.takeIf { id -> snapshot.projects.any { it.projectId == id } }
-                ?: snapshot.projects.firstOrNull { NpmTargetScope.isGlobal(it.projectId) }?.projectId
-                ?: snapshot.projects.firstOrNull()?.projectId,
-            snapshot = snapshot,
-            // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、「在途」与阶段条
-            // 都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建一份就等于每次刷新
-            // 把用户打到一半的包名和正在跑的进度条一起清空。
-            // `installed` 那一侧不需要这样：它本来就来自 `snapshot`（宿主才是权威）。
-            installDraft = previous.installDraft,
-            installing = previous.installing,
-            installProgress = previous.installProgress,
-            installSeq = previous.installSeq,
-            // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
-            // 就等于把用户刚看到的 npm 输出抹成空的。
-            consoleLines = previous.consoleLines,
-            consoleSeq = previous.consoleSeq,
-            consoleTruncated = previous.consoleTruncated,
-        )
+        fun of(snapshot: NpmPanelSnapshot, previous: NpmState = NOT_LOADED): NpmState {
+            // **快照没变就复用旧状态**（2026-10-28）：`npmSnapshot()` 每次回读都造一份内容
+            // 相同的快照（量尺寸那趟走完 node_modules，数字没动），盲目重建状态会让
+            // 依赖页**整屏陪重组一次** —— 展开的列表 N 行全进组合、卡头重算条数、日志框
+            // 的 `LaunchedEffect` 重跑。安装进行中轮询每 400ms 就有一回，滑到一半被打断
+            // 正是"展开时滑动特别卡"的来路之一。`NpmPanelSnapshot` 是 data class，
+            // 判等即内容判等；既然一个字没变，重算三档回落的结果也与 previous 逐字相同
+            // （previous 的选中项还在快照里），没有字段需要从这份快照重投影。
+            // **失败态不短路**（[LoadState.Failed]）：`failed()` 只改 `load`、不动快照，
+            // 短路会把「读取失败」这句错话留在日志框里 —— 一次成功的回读必须讲得掉它。
+            // **有操作账不短路**（[opError]/[opNotice]）：重建那份会把它俩归 null ——
+            // `opNotice` 的 KDoc 就写着「现取即清」，回执留在屏幕上等下一次刷新才消失
+            // 不是新增的功能，是这句注释原本答应的行为。
+            if (snapshot == previous.snapshot && previous.load !is LoadState.Failed &&
+                previous.opError == null && previous.opNotice == null
+            ) {
+                return previous
+            }
+            return NpmState(
+                load = LoadState.Loaded,
+                selectedProjectId = previous.selectedProjectId
+                    ?.takeIf { id -> snapshot.projects.any { it.projectId == id } }
+                    ?: snapshot.projects.firstOrNull { NpmTargetScope.isGlobal(it.projectId) }?.projectId
+                    ?: snapshot.projects.firstOrNull()?.projectId,
+                snapshot = snapshot,
+                // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、「在途」与阶段条
+                // 都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建一份就等于每次刷新
+                // 把用户打到一半的包名和正在跑的进度条一起清空。
+                // `installed` 那一侧不需要这样：它本来就来自 `snapshot`（宿主才是权威）。
+                installDraft = previous.installDraft,
+                installing = previous.installing,
+                installProgress = previous.installProgress,
+                installSeq = previous.installSeq,
+                // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
+                // 就等于把用户刚看到的 npm 输出抹成空的。
+                consoleLines = previous.consoleLines,
+                consoleSeq = previous.consoleSeq,
+                consoleTruncated = previous.consoleTruncated,
+            )
+        }
 
         /**
          * 换一个项目看（[previous] 就是当前那份）。

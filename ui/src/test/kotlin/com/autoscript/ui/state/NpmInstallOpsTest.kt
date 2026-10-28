@@ -307,6 +307,22 @@ class NpmInstallOpsTest {
         assertEquals(1L, second.installSeq)
     }
 
+    /**
+     * 「指针没动就原样复用」（2026-10-28）：安装轮询每 400ms 一 tick，安静的阶段
+     * （写入 node_modules 那种没有事件可报的窗口）里每一 tick 都是等值重建 ——
+     * LazyColumn 的 item lambda 捕获的是 state **引用**，换一份等值的也会让
+     * 展开的可见行重组合一次。`===` 断的是引用不变，不是值相等。
+     */
+    @Test
+    fun `进度：事件没推进时原样返回同一份，轮询期不白重画`() = runBlocking {
+        val host = PanelHost() // 事件环是空的：每轮都是空批
+        val before = loaded(project("demo"))
+        val first = pollInstallEvents(host, before, "demo")
+        assertTrue(first === before, "没有新事件的第一轮就该原样复用")
+        val again = pollInstallEvents(host, first, "demo")
+        assertTrue(again === first, "持续空批的 tick 必须引用不变，才不触发可见行重组")
+    }
+
     @Test
     fun `进度：读失败不动已有进度，也不把它抬成 opError`() = runBlocking {
         val host = object : FakeHost() {

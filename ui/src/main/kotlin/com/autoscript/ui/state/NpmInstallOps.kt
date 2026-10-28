@@ -236,6 +236,11 @@ internal suspend fun pollInstallEvents(host: HostSummary, state: NpmState, proje
     return try {
         val batch = host.npmInstallEvents(projectId, since, INSTALL_EVENT_PAGE)
         val folded = foldProgress(state.installProgress, batch.events.map { it.event })
+        // **游标没动、阶段也没变 → 原样返回这一份**（2026-10-28）：等值重建照样
+        // 让展开的可见行重组合一次 —— LazyColumn 的 item lambda 捕获的是 state
+        // **引用**，换一份等值的也是换。安装长跑在安静的阶段（写入 node_modules
+        // 那种没有事件可报的窗口）时，每 400ms 一 tick 全是白重画。
+        if (batch.lastSeq == since && folded == state.installProgress) return state
         state.copy(
             installSeq = batch.lastSeq,
             installProgress = folded,
