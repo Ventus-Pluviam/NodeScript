@@ -225,11 +225,69 @@ internal suspend fun pollInstallWhileRunning(
         intervalMillis = intervalMillis,
         maxTicks = maxTicks,
         tick = { current ->
-            val withEvents = pollInstallEvents(host, current, projectId)
+            // 逐格版而不是单次版：客户看到的安装瓶颈不在"有没有事件"，在"事件都挤在同一
+            // 批里被一口气折完"（见 `pollInstallEventsStepped` 的 KDoc）。
+            val withEvents = pollInstallEventsStepped(host, current, projectId)
             if (withEvents.selectedProjectId == projectId) loadNpmSnapshot(host, withEvents) else withEvents
         },
         shouldContinue = { it.installing && it.selectedProjectId == projectId },
     )
+
+/**
+ * 轮询版的事件拉取 —— **逐格步进**（2026-10-29 用户口径「进度条只显示排队中，
+ * 直到完成才一次性出现」）。
+ *
+ * 一根：[pollInstallEvents] 是"拉一次"（进页面/刷新），它整批折叠 —— 那是对的，现取
+ * 要的就是"此刻宿主报到哪一步"。但轮询循环若也整批折，观感就成了另一个东西：
+ * 宿主在**一条协程里同步内联跑完整个安装会话**（`enqueueHeavy` 协程内联执行，
+ * QUEUED → RESOLVE → POST_CHECK → FINISHED 毫秒级全发，事件环里它们本来就排成
+ * 一串），400ms 才回来拉一次的轮询大概率一次端回**整串** —— 整批折完，阶段条
+ * 从「排队中」直接跳「完成」，中间五档一格都没露过脸，就是用户说的"不刷新，
+ * 直到完成时一次性全部出现"。
+ *
+ * 这里把节奏闸在 UI 侧立起来：**一个 tick 只消费一条事件**，批里剩下的进
+ * [NpmState.pendingProgressEvents] 缓冲，等下个 tick 再放一条 —— 阶段条逐格走完
+ * 六档（400ms/格 × 6 格 ≈ 2.4 秒，一次安装也就这个量级）。缓冲里没有可消费的
+ * 才去拉新的（否则每 tick 都拉新批，消费节流就白立了）。
+ *
+ * 游标纪律与 [pollInstallEvents] 相同：`batch.lastSeq` 是那次所拉全部事件的最尾
+ * seq，**即使只展示了一条**，游标也要推进到批尾 —— 事件只消费一遍，展示慢一点
+ * 是节奏，重复消费就是重放了。
+ */
+internal suspend fun pollInstallEventsStepped(
+    host: HostSummary,
+    state: NpmState,
+    projectId: String,
+): NpmState {
+    if (state.selectedProjectId != projectId || state.installProgress == null) return state
+    // 上一批还有没放出来的：本 tick 只放一条，不动游标（游标已在拉批那拍推到底）。
+    if (state.pendingProgressEvents.isNotEmpty()) {
+        val folded = foldProgress(state.installProgress, listOf(state.pendingProgressEvents.first()))
+        return state.copy(
+            installProgress = folded,
+            pendingProgressEvents = state.pendingProgressEvents.drop(1),
+            installing = if (folded?.done == true) false else state.installing,
+        )
+    }
+    val since = state.installSeq
+    return try {
+        val batch = host.npmInstallEvents(projectId, since, INSTALL_EVENT_PAGE)
+        if (batch.events.isEmpty() && batch.lastSeq == since) return state
+        val first = batch.events.firstOrNull()
+        val folded = if (first != null) foldProgress(state.installProgress, listOf(first)) else state.installProgress
+        state.copy(
+            installSeq = batch.lastSeq,
+            installProgress = folded,
+            pendingProgressEvents = batch.events.drop(1),
+            installing = if (folded?.done == true) false else state.installing,
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // 与 [pollInstallEvents] 同一条：进度是装饰性读数，读失败不动已有进度、不抬成报错。
+        state
+    }
+}
 
 /**
  * 拉一次安装事件（阶段进度条的数据源，§10.9 第 1 条）。
@@ -262,6 +320,8 @@ internal suspend fun pollInstallEvents(host: HostSummary, state: NpmState, proje
         state.copy(
             installSeq = batch.lastSeq,
             installProgress = folded,
+            // 单次现取**整批折完**：逐格桥的缓冲不随这次带过来（copy 缺省即空）——
+            // 阶段条已被折到批尾，缓冲里没有比它更新的东西（见 `pollInstallEventsStepped`）。
             // `Finished` 到了 = 这次安装**在宿主侧已经收尾**（句柄逐出）——
             // 「在途」这个旗标跟着它落，而不是等调用方那一句 `copy(installing = false)`。
             // 两者看着等价，差在**轮询**上：`pollInstallWhileRunning` 的停条件就是它，

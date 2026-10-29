@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -734,25 +735,33 @@ private fun LogCard(state: NpmState) {
             EmptyHint("暂无日志")
             return@PanelCard
         }
-        LazyColumn(
-            state = listState,
+        // 选择容器（2026-10-29 用户口径「日志框里无法自己选择性复制日志」）：框里的
+        // 行是**结果**（npm 报了什么、报错原文），用户要能长按划选复制 —— 安装失败时
+        // 拿去搜的就是那一两行。容器挂在**滚动区外框**上：LazyColumn 在它里面照常懒加载，
+        // 选中的是"这一屏可见的那些行"（不可见的本来就不该拖进剪贴板）。
+        SelectionContainer(
             modifier = Modifier.fillMaxWidth().heightIn(max = LOG_MAX_HEIGHT),
-            contentPadding = PaddingValues(
-                start = CARD_PADDING,
-                end = CARD_PADDING,
-                top = 6.dp,
-                bottom = CARD_PADDING,
-            ),
         ) {
-            // 不给 key：这一列是"流水"，同一句话出现两次是常事（报错尤其），
-            // 而键重复在本仓已经有过一次闪退（见 [dependenciesGroup] 的 KDoc）。
-            items(lines) { line ->
-                ToneText(
-                    text = line.text,
-                    tone = line.tone,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
-                )
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(
+                    start = CARD_PADDING,
+                    end = CARD_PADDING,
+                    top = 6.dp,
+                    bottom = CARD_PADDING,
+                ),
+            ) {
+                // 不给 key：这一列是"流水"，同一句话出现两次是常事（报错尤其），
+                // 而键重复在本仓已经有过一次闪退（见 [dependenciesGroup] 的 KDoc）。
+                items(lines) { line ->
+                    ToneText(
+                        text = line.text,
+                        tone = line.tone,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                    )
+                }
             }
         }
     }

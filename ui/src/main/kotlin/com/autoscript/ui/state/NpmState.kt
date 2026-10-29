@@ -71,6 +71,19 @@ data class NpmState(
      */
     val installSeq: Long = 0L,
     /**
+     * 轮询逐格桥的**缓冲**（2026-10-29 用户口径「进度条只显示排队中，直到完成才一次性出现」）：
+     *
+     * 宿主在一条协程里同步内联跑完整个安装会话（QUEUED → … → FINISHED 毫秒级全发），
+     * 轮询 400ms 才拉一次 —— 一次拉回一整批，整批折完阶段条直接跳到终态，中间各格
+     * 一格都没露过脸。这里放「已经拉到、但还没到逐格展示的那一条」：每次轮询 tick
+     * 只消费一条进阶段条，其余留到下一个 tick（见 `pollInstallEventsStepped`）。
+     *
+     * **只是节奏闸，不是新的数据源**：事件只从这里过一遍，[installSeq] 也在同一拍前进；
+     * 单次现取（`pollInstallEvents`，进页面/刷新）整批折叠、并把缓冲清空 ——
+     * 阶段条已被折到批尾，缓冲里不该有比它还旧的东西继续往后放。
+     */
+    val pendingProgressEvents: List<InstallEvent> = emptyList(),
+    /**
      * 日志大框里的 npm 输出行（这个项目的；**累积**，按 seq 递增）。
      *
      * 行状态直接复用控制台那份 [ConsoleCmdLineState]：**着色判读只有一份**
@@ -233,6 +246,9 @@ data class NpmState(
                 installing = previous.installing,
                 installProgress = previous.installProgress,
                 installSeq = previous.installSeq,
+                // 逐格桥的缓冲**不保留**（缺省即空）：单次现取整批折叠到批尾，阶段条已是
+                // 最新，缓冲里比它还旧的那几条没有意义 —— 留着只会在下一个轮询 tick 里
+                // 把它往回拽（见 `pendingProgressEvents` 的 KDoc）。
                 // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
                 // 就等于把用户刚看到的 npm 输出抹成空的。
                 consoleLines = previous.consoleLines,
@@ -281,6 +297,8 @@ data class NpmState(
                     selectedProjectId = projectId,
                     installProgress = null,
                     installSeq = 0L,
+                    // 逐格桥的缓冲也是项目域的：它是"还没放出来的进度事件"，换项目没有对象。
+                    pendingProgressEvents = emptyList(),
                     // 日志那一段与安装事件**同一条理由**（seq 是环内全局单调、drain 才按
                     // projectId 过滤）：沿用上一个项目的游标会漏掉新项目 seq 更小的行。
                     // 归 0 = 把这个项目还留在环里的行全取回来。
