@@ -948,11 +948,54 @@ class InstallCoordinatorTest {
 
     @Test
     fun `list 直读 lockfile v3`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0","dayjs":"^1.11.0"}}""")
         writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0","integrity":"sha512-x"},"node_modules/dayjs":{"version":"1.11.0"}}}""")
         val c = coordinator()
         val list = c.list("p1", 0)
         assertEquals(setOf("axios", "dayjs"), list.map { it.name }.toSet())
         assertEquals("1.7.0", list.first { it.name == "axios" }.version)
+    }
+
+    /**
+     * 直接依赖视界（2026-10-29 用户口径「依赖列表不要展示闭包依赖」）：清单只画
+     * `package.json` 声明过的名字，lock 闭包里的传递项（axios → follow-redirects /
+     * proxy-from-env…）没有座次 —— 那是依赖解析器的账本，不是"用户装了什么"。
+     */
+    @Test
+    fun `list 只画直接依赖：声明两个包，闭包五个包，清单只有那两个`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0","dayjs":"^1.11.0"}}""")
+        writeLock(
+            "p1",
+            """{"lockfileVersion":3,"packages":{"":{},
+                "node_modules/axios":{"version":"1.7.9","integrity":"sha512-a"},
+                "node_modules/follow-redirects":{"version":"1.15.9","integrity":"sha512-f"},
+                "node_modules/proxy-from-env":{"version":"1.1.0","integrity":"sha512-p"},
+                "node_modules/form-data":{"version":"4.0.1","integrity":"sha512-fo"},
+                "node_modules/dayjs":{"version":"1.11.13","integrity":"sha512-d"},
+                "node_modules/axios/node_modules/follow-redirects":{"version":"1.15.8"}}}""",
+        )
+        val list = coordinator().list("p1", 0)
+        assertEquals(
+            listOf("axios", "dayjs"),
+            list.map { it.name },
+            "声明外的 follow-redirects / proxy-from-env / form-data 一律不出现，连嵌套的那份也不出现",
+        )
+        assertEquals("1.7.9", list.first { it.name == "axios" }.version)
+    }
+
+    /** 声明里有、lock 里读不到（还没装过 / 锁被清过）的自然不出现 —— 清单回答"声明且装上了什么"。 */
+    @Test
+    fun `list 声明过但 lock 没有的包不出现（也不凭空给个版本）`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0","todo":"^2.0.0"}}""")
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0"}}}""")
+        assertEquals(listOf("axios"), coordinator().list("p1", 0).map { it.name })
+    }
+
+    /** 没有 package.json（还没装过/目录坏了）→ 空清单，不是把 lock 全文端上来。 */
+    @Test
+    fun `list 声明文件都没有时是空清单`() = runBlocking {
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0"}}}""")
+        assertTrue(coordinator().list("p1", 0).isEmpty(), "没声明 = 清单没有可画的条目")
     }
 
     @Test
@@ -962,9 +1005,10 @@ class InstallCoordinatorTest {
         // 是同名同版的两份）。依赖管理页用 `items(key = "<name>@<version>")` 铺这份清单，
         // 键重复时 Compose **当场抛**（`Key "c@1.0.0" was already used`）——
         // 2026-10-17 设备实测的「依赖装多了，查看的时候容易闪退」。
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"a":"1.0.0","b":"1.0.0","c":"2.0.0"}}""")
         writeLock(
             "p1",
-            """{"lockfileVersion":3,"packages":{"":{"dependencies":{"a":"1.0.0"}},
+            """{"lockfileVersion":3,"packages":{"":{},
                 "node_modules/a":{"version":"1.0.0"},
                 "node_modules/b":{"version":"1.0.0"},
                 "node_modules/c":{"version":"2.0.0"},
@@ -1356,6 +1400,8 @@ class InstallCoordinatorTest {
      */
     @Test
     fun `全局作用域读的是 files-scripts 那棵的 lock，与项目不串`() = runBlocking {
+        writeManifest(NpmTargetScope.GLOBAL, """{"name":"scripts","version":"1.0.0","dependencies":{"axios":"^1.7.0"}}""")
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"left-pad":"^1.3.0"}}""")
         seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
         seedProjectLock("p1", "left-pad" to null)
         val c = coordinator()
@@ -2186,6 +2232,7 @@ class InstallCoordinatorTest {
             ByteArray(10),
         )
         seedProjectLock("p1", "esbuild" to null, "@babel/core" to null, "not-on-disk" to null)
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"esbuild":"^0.21.5","@babel/core":"^7.24.0","not-on-disk":"^1.0.0"}}""")
 
         val p1 = coordinator().snapshot().projects.single { it.projectId == "p1" }
 
@@ -2222,6 +2269,7 @@ class InstallCoordinatorTest {
         val pkg = Files.createDirectories(nm.resolve("esbuild"))
         Files.write(pkg.resolve("index.js"), ByteArray(1000))
         seedProjectLock("p1", "esbuild" to null)
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"esbuild":"^0.21.5"}}""")
 
         // `projects` 里还有一条全局作用域（`snapshot()` 最后那条永远在），故按 id 挑。
         suspend fun p1() = c.snapshot().projects.single { it.projectId == "p1" }.installed.single().sizeBytes

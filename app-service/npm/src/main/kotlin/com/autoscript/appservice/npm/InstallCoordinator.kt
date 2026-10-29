@@ -479,7 +479,16 @@ class InstallCoordinator(
     // ══════════ 轻操作（Kotlin 直读，零 Node 进程） ══════════
 
     /**
-     * 已装清单（§10.9.1）：lockfile v3 的 `packages` 段逐键读出来的**平铺闭包**。
+     * 已装清单（§10.9.1）：lockfile v3 的 `packages` 段逐键读出来的**平铺闭包**，再按
+     * `package.json` 的**声明**（[NpmScriptResolver.declaredNames]，dependencies +
+     * devDependencies 两段）滤成**直接依赖视界** ——
+     * 2026-10-29 用户口径「依赖列表不要展示闭包依赖」：axios 会拉进 follow-redirects、
+     * proxy-from-env…，那棵传递闭包里的每一项都不是用户声明过的，逐行画出来只有噪音
+     * （卸载时也不该出现在清单上 —— `npm uninstall` 认的是用户声明的名字）。
+     *
+     * **声明是全量的闸，lock 是版本与时点的闸**：声明里没有的包名字一律不给座次；
+     * 声明里有、lock 里读不到（还没装过 / 锁被清过）的自然也不出现 ——
+     * 清单回答的是"我声明且装上了什么"，不是"盘上有什么"。
      *
      * **按 (name, version) 归一**（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：
      * lock v3 的键是**安装位置**（`node_modules/c`、`node_modules/a/node_modules/c`…），不是包的
@@ -500,7 +509,11 @@ class InstallCoordinator(
      */
     override suspend fun list(projectId: String, depth: Int): List<PkgNode> =
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            LockfileReader.readLocked(layout.lockfile(ProjectId(projectId)))
+            val pid = ProjectId(projectId)
+            val direct = NpmScriptResolver.declaredNames(layout.projectRoot(pid)) ?: return@withContext emptyList()
+            if (direct.isEmpty()) return@withContext emptyList()
+            LockfileReader.readLocked(layout.lockfile(pid))
+                .filter { it.name in direct }
                 .distinctBy { it.name to it.version }
                 .map { PkgNode(name = it.name, version = it.version) }
         }
