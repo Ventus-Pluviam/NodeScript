@@ -810,7 +810,10 @@ class MainActivity : ComponentActivity() {
         // 页不在前台（`page` 变了）时效应随之取消：**不在看的页面不该一直问宿主**。
         LaunchedEffect(page, consoleCmdState.running) {
             if (page == ManagementPage.CONSOLE && consoleCmdState.running) {
-                consoleCmdState = pollConsoleWhileRunning(hostSummary(), consoleCmdState)
+                // 逐轮写回组合状态（2026-10-30 修，与依赖页兜底轮询同一条账）：
+                // 键里带 `running` 的这条循环靠 onStep 把 npm 的每行输出实时排进屏幕，
+                // 而不是协程结束才一口涌出。
+                consoleCmdState = pollConsoleWhileRunning(hostSummary(), consoleCmdState) { consoleCmdState = it }
             }
         }
         LaunchedEffect(page, npmState.installing) {
@@ -821,7 +824,10 @@ class MainActivity : ComponentActivity() {
             // 四件事各自是"不轮询"的理由，不是一句合起来的判断。
             if (page != ManagementPage.NPM || !npmState.installing) return@LaunchedEffect
             if (projectId == null || host == null) return@LaunchedEffect
-            npmState = pollInstallWhileRunning(host, npmState, projectId)
+            // 逐轮写回组合状态（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：
+            // 轮询的中间态不再憋到协程结束 —— 阶段条逐格走、日志逐行长
+            // 靠的就是这一拍拍的写回，而不是终态一口涌。
+            npmState = pollInstallWhileRunning(host, npmState, projectId) { npmState = it }
         }
         when (page) {
             ManagementPage.CONSOLE -> ConsoleScreen(

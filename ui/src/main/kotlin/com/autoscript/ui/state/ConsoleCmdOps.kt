@@ -103,12 +103,17 @@ internal suspend fun loadConsoleCmd(host: HostSummary?, previous: ConsoleCmdStat
  * 停的条件是**宿主给的** [ConsoleCmdState.running]（句柄账），不是界面猜的；
  * 有界见 [pollWhile]。跑完那一轮**必然**多拉一次（`shouldContinue` 在循环体之前判，
  * 而 `running` 变成 false 正是最后一轮拉回来的），故终态行不会漏。
+ *
+ * **逐轮写回靠 [onStep]**（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：
+ * 中间态每轮进组合状态，输出才是一行行长的；返回终值只是兜底。
  */
 internal suspend fun pollConsoleWhileRunning(
     host: HostSummary?,
     state: ConsoleCmdState,
     intervalMillis: Long = LIVE_POLL_INTERVAL_MILLIS,
     maxTicks: Int = LIVE_POLL_MAX_TICKS,
+    /** 每一轮的推进都回调一次（终态轮在内）：调用方在这里把中间值写回组合状态。 */
+    onStep: suspend (ConsoleCmdState) -> Unit = {},
 ): ConsoleCmdState =
     pollWhile(
         initial = state,
@@ -116,6 +121,7 @@ internal suspend fun pollConsoleWhileRunning(
         maxTicks = maxTicks,
         tick = { current -> loadConsoleCmd(host, current) },
         shouldContinue = { it.running },
+        onStep = onStep,
     )
 
 /** 换一个项目看（先清行归零，再拉一轮）。 */

@@ -32,8 +32,19 @@ import kotlinx.coroutines.delay
  * 停的时候**不报错也不清状态**：轮询是显示面，它停下来只说明"不追了"，
  * 不是"命令失败了"。下一批新行仍会由用户刷新或下次进页面取到。
  *
- * @param tick 取一轮（挂起）。调用方把新状态写回它自己那份 state，并返回它。
+ * **中间值要逐轮交给调用方**（[onStep]，2026-10-30 修）：这条循环本来的写法是
+ * 循环结束才把最终值返回、由调用方一次性写回 —— 于是轮询期间组合状态一个字
+ * 不动（阶段条不逐格走、日志不逐行长），直到整条协程结束才"一口涌"出终态，
+ * 这正是「安装完才一次性全部出现 // 退出重进才刷新」的根（见 `NpmInstallOps`
+ * 第十六批的账）。[onStep] 每轮 tick 之后都回调一次：调用方在里面把当前值写回
+ * 自己的组合状态，中间态从此实时可见。终态轮（tick 里 `shouldContinue` 变 false
+ * 的那一轮）也走 [onStep] —— 它已经是会被 `return current` 交出去的同一份，
+ * 提前一拍进组合，屏幕上就少一次"停了一下又跳"。
+ *
+ * @param tick 取一轮（挂起）。返回新状态。
  * @param shouldContinue 拿**刚取到的那份状态**判还要不要继续。
+ * @param onStep 每轮 tick 的推进回调一次（终态轮也在内）：调用方在这里把中间值
+ *   写回组合状态。
  * @param intervalMillis 两次拉取之间的间隔。**可注入**：单测要验"有界"就得让
  *   [maxTicks] 跑满，用真实间隔（400ms）会让那条用例跑成四分钟 —— 一条拖慢整条
  *   CI 的用例迟早会被人用 `@Disabled` 关掉，那等于没有这条守卫。
@@ -44,12 +55,14 @@ internal suspend fun <T> pollWhile(
     maxTicks: Int = LIVE_POLL_MAX_TICKS,
     tick: suspend (T) -> T,
     shouldContinue: (T) -> Boolean,
+    onStep: suspend (T) -> Unit = {},
 ): T {
     var current = initial
     repeat(maxTicks) {
         if (!shouldContinue(current)) return current
         delay(intervalMillis)
         current = tick(current)
+        onStep(current)
     }
     return current
 }

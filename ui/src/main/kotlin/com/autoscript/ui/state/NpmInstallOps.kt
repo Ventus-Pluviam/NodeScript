@@ -207,6 +207,13 @@ private suspend fun runPanelCommand(
  *
  * **与 [pollInstallEvents] 的分工**：那个是"拉一次"（刷新按钮、进页面），
  * 这个是"拉到跑完"（提交之后）。两者共用同一个读口，不另开取数路径。
+ *
+ * **两处写回时机**（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：[onStep]
+ * 逐轮把中间态写回组合状态 —— 阶段条逐格走、日志逐行长都是这条链路给的；
+ * 返回值只是兜底（`runPanelCommand` 在轮询结束后还要基于终态拼回执）。
+ * **首轮不等那 400ms**：`pollWhile` 的节奏是"先等一拍再拉"，而安装会话本身
+ * 以秒计（卸载 627ms 的一次，等一拍回来整批已经端齐）—— 首拉先走一把，
+ * 从 `QUEUED` 起的第一格才立得住。
  */
 internal suspend fun pollInstallWhileRunning(
     host: HostSummary,
@@ -214,19 +221,33 @@ internal suspend fun pollInstallWhileRunning(
     projectId: String,
     intervalMillis: Long = LIVE_POLL_INTERVAL_MILLIS,
     maxTicks: Int = LIVE_POLL_MAX_TICKS,
-): NpmState =
-    pollWhile(
-        initial = state,
+    /** 每一轮的推进都回调一次（终态轮在内）：调用方在这里把中间值写回组合状态。 */
+    onStep: suspend (NpmState) -> Unit = {},
+): NpmState {
+    val shouldContinue: (NpmState) -> Boolean = { it.installing && it.selectedProjectId == projectId }
+    val tick: suspend (NpmState) -> NpmState = { current ->
+        // 逐格版而不是单次版：客户看到的安装瓶颈不在"有没有事件"，在"事件都挤在同一
+        // 批里被一口气折完"（见 `pollInstallEventsStepped` 的 KDoc）。
+        val withEvents = pollInstallEventsStepped(host, current, projectId)
+        if (withEvents.selectedProjectId == projectId) loadNpmSnapshot(host, withEvents) else withEvents
+    }
+    // 首拉不进 `pollWhile`，这里先走一把：等第一拍（400ms）白等、还大概率把整批
+    // 事件等齐（会话 1 秒内跑完的例子已经见过两回）。首拉推进也走 [onStep]，
+    // 与轮内同一条写回通道 —— 否则第一格（QUEUED 之后的 RESOLVE）又只有终态才现身。
+    var current = state
+    if (shouldContinue(state)) {
+        current = tick(state)
+        onStep(current)
+    }
+    return pollWhile(
+        initial = current,
         intervalMillis = intervalMillis,
         maxTicks = maxTicks,
-        tick = { current ->
-            // 逐格版而不是单次版：客户看到的安装瓶颈不在"有没有事件"，在"事件都挤在同一
-            // 批里被一口气折完"（见 `pollInstallEventsStepped` 的 KDoc）。
-            val withEvents = pollInstallEventsStepped(host, current, projectId)
-            if (withEvents.selectedProjectId == projectId) loadNpmSnapshot(host, withEvents) else withEvents
-        },
-        shouldContinue = { it.installing && it.selectedProjectId == projectId },
+        tick = tick,
+        shouldContinue = shouldContinue,
+        onStep = onStep,
     )
+}
 
 /**
  * 轮询版的事件拉取 —— **逐格步进**（2026-10-29 用户口径「进度条只显示排队中，

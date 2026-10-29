@@ -351,6 +351,57 @@ class NpmInstallOpsTest {
         assertEquals(1L, host.lastSince, "游标推进到批尾（1）之后停在原地，不重拉已消费过的")
     }
 
+    /**
+     * 轮询**整段**的两条新纪律（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：
+     * 首拉**不等那 400ms**（安装会话以秒计，等一拍回来整批已齐）；中间态**逐轮
+     * 进 [onStep]** —— 两条合起来才是「逐格步进真的在屏幕上走」的链路。旧实现
+     * 把全部推进攒在轮询协程局部、结束才一口写回：逐格桥的返回值测试全绿，
+     * 屏幕上一个字不动 —— 单 tick 函数断的是节奏，这条断的是节奏**到达组合**。
+     */
+    @Test
+    fun `轮询整段：首拉不等拍、格格进 onStep、终态轮也在内`() = runBlocking {
+        val demo = NpmPanelSnapshot(listOf(project("demo")))
+        val host = object : PanelHost(
+            events = listOf(
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.QUEUED),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.RESOLVE),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.DOWNLOAD),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.POST_CHECK),
+                InstallEvent.Finished("demo", "h1", success = true, detail = "npm uninstall 完成"),
+            ),
+        ) {
+            // 快照必须稳定：每轮 `loadNpmSnapshot` 若把项目抹掉，shouldContinue
+            // 的 `selectedProjectId == projectId` 立刻为假、循环当场停 ——
+            // 那拍到的是"回读把面板读没了"，不是轮询本身。
+            override suspend fun npmSnapshot(): NpmPanelSnapshot = demo
+        }
+        var s = NpmState.of(demo).copy(
+            installing = true,
+            installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+        )
+        val seen = mutableListOf<String>()
+        val final = pollInstallWhileRunning(host, s, "demo", intervalMillis = 1L, maxTicks = 8) {
+            seen += it.installProgress!!.let { p -> "${p.label}:${p.done}" }
+        }
+        assertEquals(
+            listOf(
+                "排队中:false",
+                "解析依赖:false",
+                "下载:false",
+                "写入 node_modules:false",
+                "收尾校验:false",
+                "收尾校验:true",
+            ),
+            seen,
+            "首拉把第一格立刻送上 onStep（不等 400ms），随后一格一拍；终态轮（收条那拍）也在 onStep 里",
+        )
+        assertEquals(1, host.polls, "六条一次拉齐，逐格只消费缓冲，不再回头问宿主")
+        assertEquals(0L, host.lastSince, "游标在拉批那拍推进到批尾，展示慢是节奏不是重放")
+        assertFalse(final.installing, "Finished 折入那一格跟着落「在途」")
+        assertTrue(final.installProgress!!.done)
+    }
+
     @Test
     fun `进度：一批事件折成当前阶段，终态把条收起来`() {
         val folded = foldProgress(
