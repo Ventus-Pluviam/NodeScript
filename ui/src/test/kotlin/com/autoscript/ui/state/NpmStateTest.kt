@@ -296,14 +296,16 @@ class NpmStateTest {
     }
 
     /**
-     * 日志大框那一段：本页操作的账在前、npm 输出在后（用户 2026-10-17 裁定「两者都显示」），
-     * 且**裁过要说**。
+     * 日志大框那一段：npm 输出在前（时间序）、操作账跟进**流水尾**（2026-10-29
+     * 用户口径「这些描述不要在日志框最上面出现，而是慢慢追加」—— 2026-10-17 的
+     * 「操作账在前」随本次翻转），且**裁过要说**。
      */
     @Test
-    fun `日志框先操作账后 npm 输出，且累积不重复`() {
+    fun `日志框 npm 输出在前操作账跟进流水尾，且累积不重复`() {
         val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
         val withLog = NpmState.withConsole(
-            base.copy(opError = "npm 退出码 1: E404", opNotice = "已提交 npm install"),
+            // 写账走 [withOpAccount]（顺带钉住入口纪律：直接 copy 会留下 1970 时间戳）
+            base.withOpAccount("npm 退出码 1: E404", "已提交 npm install"),
             consoleSnapshot(
                 seq = 2,
                 lines = listOf("npm install axios" to NpmConsoleLineKind.ECHO, "ok" to NpmConsoleLineKind.OUTPUT),
@@ -311,19 +313,21 @@ class NpmStateTest {
             // 时区**注入**（不读系统默认）：断言里那个 `00:00:00` 才是个定值，而不是"跑在哪个时区就变一次"。
             zone = ZoneId.of("UTC"),
         )
-        assertEquals(
-            listOf(
-                "npm 退出码 1: E404",
-                "已提交 npm install",
-                "00:00:00  npm install axios",
-                "00:00:00  ok",
-            ),
-            withLog.logLines.map { it.text },
-            "两条操作账要排在 npm 输出**前面**",
+        val texts = withLog.logLines.map { it.text }
+        assertEquals("00:00:00  npm install axios", texts[0], "npm 输出行排前（时间戳定值）：${texts[0]}")
+        assertEquals("00:00:00  ok", texts[1], "npm 输出按序排前：${texts[1]}")
+        assertTrue(
+            texts[2].matches(Regex("""\d{2}:\d{2}:\d{2}  npm 退出码 1: E404""")),
+            "操作账跟流水尾、带落账时刻的时间戳（写账入口钉的是格式，值是当刻）：${texts[2]}",
+        )
+        assertTrue(
+            texts[3].matches(Regex("""\d{2}:\d{2}:\d{2}  已提交 npm install""")),
+            "回执同款：${texts[3]}",
         )
         assertEquals(
-            listOf(StatusTone.PROBLEM, StatusTone.MUTED, StatusTone.MUTED, StatusTone.NEUTRAL),
+            listOf(StatusTone.MUTED, StatusTone.NEUTRAL, StatusTone.PROBLEM, StatusTone.MUTED),
             withLog.logLines.map { it.tone },
+            "npm 输出两行（ECHO/OUTPUT 各自语气）+ 失败红字 + 回执灰字",
         )
 
         // 同一批再折一遍：seq 去重，不重复入列、游标不倒退。

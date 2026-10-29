@@ -118,7 +118,7 @@ class NpmMaintenanceOpsTest {
         // 枚举仍是三个取值（界面 2026-10-17 只露两颗：`dedupe` 改走去重+提升那条路、
         // `ci` 整颗下线）—— 这条断的是**通用路本身**：谁被接回来，回执照样分得开。
         assertEquals(3, notices.toSet().size, "每个动作的回执必须各自可辨：$notices")
-        assertTrue(notices[2]!!.contains("验 lock 签名"), "ci 要先验 lock 签名，回执得先说：${notices[2]}")
+        assertTrue(notices[2]!!.contains("校验 lock 签名"), "ci 要先校验 lock 签名，回执得先说：${notices[2]}")
     }
 
     @Test
