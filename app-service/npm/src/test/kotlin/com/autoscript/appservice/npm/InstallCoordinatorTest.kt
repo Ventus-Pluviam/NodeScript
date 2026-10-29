@@ -1352,6 +1352,7 @@ class InstallCoordinatorTest {
     fun `全局装了之后快照里那条带上尺寸与清单`() = runBlocking {
         val pkg = Files.createDirectories(layout.globalNodeModules.resolve("axios"))
         Files.write(pkg.resolve("index.js"), ByteArray(2048))
+        writeManifest(NpmTargetScope.GLOBAL, """{"name":"scripts","version":"1.0.0","dependencies":{"axios":"^1.7.0"}}""")
         seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
 
         val global = coordinator().snapshot().projects.single { it.projectId == NpmTargetScope.GLOBAL }
