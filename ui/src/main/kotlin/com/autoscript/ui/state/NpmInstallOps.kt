@@ -273,12 +273,12 @@ internal suspend fun pollInstallEventsStepped(
     return try {
         val batch = host.npmInstallEvents(projectId, since, INSTALL_EVENT_PAGE)
         if (batch.events.isEmpty() && batch.lastSeq == since) return state
-        val first = batch.events.firstOrNull()
-        val folded = if (first != null) foldProgress(state.installProgress, listOf(first)) else state.installProgress
+        val events = batch.events.map { it.event }
+        val folded = if (events.isNotEmpty()) foldProgress(state.installProgress, listOf(events.first())) else state.installProgress
         state.copy(
             installSeq = batch.lastSeq,
             installProgress = folded,
-            pendingProgressEvents = batch.events.drop(1),
+            pendingProgressEvents = events.drop(1),
             installing = if (folded?.done == true) false else state.installing,
         )
     } catch (e: CancellationException) {
