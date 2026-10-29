@@ -129,9 +129,10 @@ class HostNodeNpmE2ETest {
         c.install("e2e3", listOf(PackageSpec("lodash", "4.17.21")))
         // 锁键形态：锚定真实树的 `node_modules/<pkg>`（不是 `npmwork-<uuid>` 墓碑路径）
         val lockText = Files.readString(layout.lockfile(ProjectId("e2e3")))
+        val lockSample = lockText.lineSequence().firstOrNull { it.contains("lodash") }?.trim().orEmpty()
         assertTrue(
-            lockText.contains(""node_modules/lodash"") && !lockText.contains("npmwork-"),
-            "锁键必须是干净的 node_modules/lodash（实为：${lockText.lineSequence().first { it.contains("lodash") }?.trim()?.take(120)}）",
+            lockText.contains(Regex("""node_modules["/]lodash""")) && "npmwork-" !in lockText,
+            "锁键必须是干净的 node_modules/lodash（实为：${lockSample.take(120)}）",
         )
 
         val nm = layout.nodeModules(ProjectId("e2e3"))
