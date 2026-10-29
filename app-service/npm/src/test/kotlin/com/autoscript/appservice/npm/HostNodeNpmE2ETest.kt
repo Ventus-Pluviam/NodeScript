@@ -6,6 +6,7 @@ import com.autoscript.domain.npm.PackageSpec
 import kotlinx.coroutines.runBlocking
 import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeAll
