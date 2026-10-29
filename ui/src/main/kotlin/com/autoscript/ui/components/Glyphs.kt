@@ -51,6 +51,9 @@ enum class GlyphKind {
     /** 悬浮窗：叠层方块。 */
     OVERLAY,
 
+    /** 包裹/盲盒（依赖页页头的圆形图标，第十四批第 35 条）。 */
+    PACKAGE,
+
     /** 通知：铃铛。 */
     BELL,
 
@@ -143,6 +146,174 @@ enum class GlyphKind {
 private const val StrokeRatio = 0.085f
 
 /**
+ * 各字形折线的**归一化坐标**（类加载时建一次，绘制期零分配 —— 见 [Glyph] 的 KDoc）。
+ *
+ * 一条常量就是原来的一个 `path(…)` 调用点，数值逐字相同：`Array<out Pair<Float, Float>>`
+ * 里每个点都是 `P_` 名下那个 `x to y`。命名 `<字形>_<笔的读法>`（`P_HOME_ROOF` = 屋顶那笔），
+ * 几何只存在这一处 —— 改形状改这里，调用点不动。
+ */
+// 房子：屋顶（三控制点折线）。
+private val P_HOME_ROOF = arrayOf(0.09f to 0.48f, 0.50f to 0.13f, 0.91f to 0.48f)
+/** 房子：屋身（左下→右下→右侧竖边，闭合不要求 —— 首尾本来就是端点）。 */
+private val P_HOME_BODY = arrayOf(0.23f to 0.45f, 0.23f to 0.87f, 0.77f to 0.87f, 0.77f to 0.45f)
+/** 时钟：时针（朝上）。 */
+private val P_TASKS_HOUR = arrayOf(0.50f to 0.50f, 0.50f to 0.27f)
+/** 时钟：分针（朝右下）。 */
+private val P_TASKS_MINUTE = arrayOf(0.50f to 0.50f, 0.69f to 0.61f)
+/** 终端：提示符 ">"。 */
+private val P_CONSOLE_PROMPT = arrayOf(0.30f to 0.40f, 0.42f to 0.50f, 0.30f to 0.60f)
+/** 终端：光标 "_"。 */
+private val P_CONSOLE_CURSOR = arrayOf(0.54f to 0.60f, 0.71f to 0.60f)
+/** 盾牌：六边形外周（上宽下尖）。 */
+private val P_SHIELD_BODY = arrayOf(0.50f to 0.11f, 0.87f to 0.25f, 0.87f to 0.51f, 0.50f to 0.89f, 0.13f to 0.51f, 0.13f to 0.25f)
+/** 无障碍：平举的双臂（一横）。 */
+private val P_A11Y_ARMS = arrayOf(0.20f to 0.34f, 0.80f to 0.34f)
+/** 无障碍：躯干（一竖）。 */
+private val P_A11Y_BODY = arrayOf(0.50f to 0.34f, 0.50f to 0.62f)
+/** 无障碍：左臂下行（手自然下垂那一笔）。 */
+private val P_A11Y_ARM_L = arrayOf(0.50f to 0.62f, 0.36f to 0.88f)
+/** 无障碍：右臂下行（手自然下垂那一笔）。 */
+private val P_A11Y_ARM_R = arrayOf(0.50f to 0.62f, 0.64f to 0.88f)
+/** 屏幕采集：底座竖颈。 */
+private val P_SCREEN_NECK = arrayOf(0.50f to 0.70f, 0.50f to 0.82f)
+/** 屏幕采集：底座横条。 */
+private val P_SCREEN_BASE = arrayOf(0.34f to 0.84f, 0.66f to 0.84f)
+/** 悬浮窗：底层方块。 */
+private val P_OVERLAY_BACK = arrayOf(0.14f to 0.30f, 0.62f to 0.30f, 0.62f to 0.78f, 0.14f to 0.78f)
+/** 悬浮窗：右上叠出的小方块（三笔折线，不开底 —— 层级感）。 */
+private val P_OVERLAY_FRONT = arrayOf(0.38f to 0.22f, 0.86f to 0.22f, 0.86f to 0.70f)
+/** 设置：上齿（短刺）。 */
+private val P_SETTINGS_TEETH_UP = arrayOf(0.50f to 0.08f, 0.50f to 0.20f)
+/** 设置：下齿（短刺）。 */
+private val P_SETTINGS_TEETH_DOWN = arrayOf(0.50f to 0.80f, 0.50f to 0.92f)
+/** 设置：左齿（短刺）。 */
+private val P_SETTINGS_TEETH_LEFT = arrayOf(0.08f to 0.50f, 0.20f to 0.50f)
+/** 设置：右齿（短刺）。 */
+private val P_SETTINGS_TEETH_RIGHT = arrayOf(0.80f to 0.50f, 0.92f to 0.50f)
+/** 搜索：放大镜斜柄。 */
+private val P_SEARCH_HANDLE = arrayOf(0.65f to 0.65f, 0.86f to 0.86f)
+/** JS 徽标：左尖括号。 */
+private val P_FILE_JS_LT = arrayOf(0.42f to 0.40f, 0.30f to 0.50f, 0.42f to 0.60f)
+/** JS 徽标：右尖括号。 */
+private val P_FILE_JS_GT = arrayOf(0.58f to 0.40f, 0.70f to 0.50f, 0.58f to 0.60f)
+/** 文档：竖长页轮廓（右下折角起点在 0.76,0.26 —— 折角线由 [P_FILE_DOC_FOLD] 收口）。 */
+private val P_FILE_DOC_BODY = arrayOf(0.24f to 0.10f, 0.62f to 0.10f, 0.76f to 0.26f, 0.76f to 0.90f, 0.24f to 0.90f)
+/** 文档：右上折角。 */
+private val P_FILE_DOC_FOLD = arrayOf(0.62f to 0.10f, 0.62f to 0.26f, 0.76f to 0.26f)
+/** 文档：第一行文字线。 */
+private val P_FILE_DOC_LINE1 = arrayOf(0.36f to 0.48f, 0.64f to 0.48f)
+/** 文档：第二行文字线。 */
+private val P_FILE_DOC_LINE2 = arrayOf(0.36f to 0.62f, 0.64f to 0.62f)
+/** 网页：竖向经线。 */
+private val P_FILE_HTML_MERIDIAN = arrayOf(0.50f to 0.12f, 0.50f to 0.88f)
+/** 网页：上纬线。 */
+private val P_FILE_HTML_PARALLEL1 = arrayOf(0.24f to 0.28f, 0.76f to 0.28f)
+/** 网页：下纬线。 */
+private val P_FILE_HTML_PARALLEL2 = arrayOf(0.24f to 0.72f, 0.76f to 0.72f)
+/** 网页：赤道横线。 */
+private val P_FILE_HTML_EQUATOR = arrayOf(0.12f to 0.50f, 0.88f to 0.50f)
+/** Shell：终端提示符（与 [P_CONSOLE_PROMPT] 同形，无外框）。 */
+private val P_FILE_SH_PROMPT = arrayOf(0.18f to 0.34f, 0.36f to 0.50f, 0.18f to 0.66f)
+/** Shell：光标下横。 */
+private val P_FILE_SH_DASH = arrayOf(0.44f to 0.66f, 0.70f to 0.66f)
+/** 立方体：正面方块。 */
+private val P_FILE_GENERIC_FRONT = arrayOf(0.16f to 0.28f, 0.58f to 0.28f, 0.58f to 0.72f, 0.16f to 0.72f)
+/** 立方体：右侧面（体量感）。 */
+private val P_FILE_GENERIC_SIDE = arrayOf(0.58f to 0.28f, 0.84f to 0.42f, 0.84f to 0.86f, 0.58f to 0.72f)
+/** 铃铛：钟形外周。 */
+private val P_BELL_BODY = arrayOf(0.50f to 0.14f, 0.22f to 0.42f, 0.22f to 0.68f, 0.78f to 0.68f, 0.78f to 0.42f, 0.50f to 0.14f)
+/** 铃铛：底部小舌。 */
+private val P_BELL_CLAPPER = arrayOf(0.42f to 0.82f, 0.58f to 0.82f)
+/** 文件夹：背板 + 标签突起（闭合 —— 底边那一横不能少，批 25 定案）。 */
+private val P_FOLDER_BODY = arrayOf(0.10f to 0.74f, 0.10f to 0.30f, 0.36f to 0.30f, 0.44f to 0.38f, 0.90f to 0.38f, 0.90f to 0.74f)
+/** 铅笔：斜杆。 */
+private val P_PENCIL_SHAFT = arrayOf(0.24f to 0.76f, 0.24f to 0.62f, 0.66f to 0.20f, 0.80f to 0.34f, 0.38f to 0.76f)
+/** 铅笔：笔尖三角。 */
+private val P_PENCIL_TIP = arrayOf(0.24f to 0.76f, 0.38f to 0.76f, 0.24f to 0.62f)
+/** 铅笔：笔杆横线。 */
+private val P_PENCIL_LINE = arrayOf(0.62f to 0.24f, 0.76f to 0.38f)
+/** 播放三角（实心 —— PLAY 与 RUN 共用这一支，形态本来就该一模一样）。 */
+private val P_PLAY_TRIANGLE = arrayOf(0.30f to 0.20f, 0.30f to 0.80f, 0.80f to 0.50f)
+/** 排序切换：三条横杠共用的第一条（y≈0.23）。 */
+private val P_SORT_LINE1 = arrayOf(0.11f to 0.23f, 0.75f to 0.23f)
+/** 排序切换：三条横杠共用的第二条（y≈0.45）。 */
+private val P_SORT_LINE2 = arrayOf(0.11f to 0.45f, 0.58f to 0.45f)
+/** 排序切换：三条横杠共用的第三条（y≈0.67）。 */
+private val P_SORT_LINE3 = arrayOf(0.11f to 0.67f, 0.44f to 0.67f)
+/** 排序切换（按时间档）：字母 A 的主体（"切到字母"那档的尾缀）。 */
+private val P_SORT_LETTER_A = arrayOf(0.62f to 0.80f, 0.74f to 0.50f, 0.86f to 0.80f)
+/** 排序切换（按时间档）：字母 A 的横杠。 */
+private val P_SORT_LETTER_BAR = arrayOf(0.655f to 0.70f, 0.825f to 0.70f)
+/** 排序切换（按字母档）：时钟分针。 */
+private val P_SORT_TIME_HAND = arrayOf(0.755f to 0.655f, 0.755f to 0.545f)
+/** 排序切换（按字母档）：时钟右侧小针。 */
+private val P_SORT_TIME_PIVOT = arrayOf(0.755f to 0.655f, 0.83f to 0.655f)
+/** 搜索框放大镜：斜柄（比 [P_SEARCH_HANDLE] 短一档，粗环配短柄）。 */
+private val P_SEARCH_FIELD_HANDLE = arrayOf(0.62f to 0.56f, 0.786f to 0.728f)
+/** 展开/收起三角（arrow_more 的下尖 chevron）。 */
+private val P_CHEVRON = arrayOf(0.19f to 0.36f, 0.50f to 0.70f, 0.81f to 0.36f)
+/** 柱状图：左柱。 */
+private val P_CHART_L = arrayOf(0.17f to 0.84f, 0.17f to 0.52f)
+/** 柱状图：中柱（最高）。 */
+private val P_CHART_M = arrayOf(0.50f to 0.84f, 0.50f to 0.24f)
+/** 柱状图：右柱。 */
+private val P_CHART_R = arrayOf(0.83f to 0.84f, 0.83f to 0.42f)
+/** 暂停：左竖杠。 */
+private val P_PAUSE_L = arrayOf(0.36f to 0.22f, 0.36f to 0.78f)
+/** 暂停：右竖杠。 */
+private val P_PAUSE_R = arrayOf(0.64f to 0.22f, 0.64f to 0.78f)
+/** 继续：右侧实心三角（[P_PLAY_TRIANGLE] 同形、右移 —— 悬浮窗内自足）。 */
+private val P_RESUME_TRIANGLE = arrayOf(0.34f to 0.22f, 0.34f to 0.78f, 0.76f to 0.50f)
+/** 停止：实心方块。 */
+private val P_STOP_SQUARE = arrayOf(0.31f to 0.31f, 0.69f to 0.31f, 0.69f to 0.69f, 0.31f to 0.69f)
+/** 清空：桶盖横线。 */
+private val P_CLEAR_LID = arrayOf(0.28f to 0.28f, 0.72f to 0.28f)
+/** 清空：提手。 */
+private val P_CLEAR_HANDLE = arrayOf(0.40f to 0.28f, 0.40f to 0.20f, 0.60f to 0.20f, 0.60f to 0.28f)
+/** 清空：梯形桶身。 */
+private val P_CLEAR_BIN = arrayOf(0.32f to 0.28f, 0.68f to 0.28f, 0.62f to 0.82f, 0.38f to 0.82f)
+/** 清空：桶身左竖纹。 */
+private val P_CLEAR_GROOVE_L = arrayOf(0.45f to 0.40f, 0.45f to 0.70f)
+/** 清空：桶身右竖纹。 */
+private val P_CLEAR_GROOVE_R = arrayOf(0.55f to 0.40f, 0.55f to 0.70f)
+/** 关闭：✕ 第一条对角线。 */
+private val P_CLOSE_DIAG_1 = arrayOf(0.28f to 0.28f, 0.72f to 0.72f)
+/** 关闭：✕ 第二条对角线。 */
+private val P_CLOSE_DIAG_2 = arrayOf(0.72f to 0.28f, 0.28f to 0.72f)
+/** 全屏：左上角。 */
+private val P_FULLSCREEN_TL = arrayOf(0.32f to 0.42f, 0.22f to 0.32f, 0.22f to 0.22f, 0.32f to 0.22f)
+/** 全屏：右上角。 */
+private val P_FULLSCREEN_TR = arrayOf(0.68f to 0.42f, 0.78f to 0.32f, 0.78f to 0.22f, 0.68f to 0.22f)
+/** 全屏：左下角。 */
+private val P_FULLSCREEN_BL = arrayOf(0.32f to 0.58f, 0.22f to 0.68f, 0.22f to 0.78f, 0.32f to 0.78f)
+/** 全屏：右下角。 */
+private val P_FULLSCREEN_BR = arrayOf(0.68f to 0.58f, 0.78f to 0.68f, 0.78f to 0.78f, 0.68f to 0.78f)
+/** 盲盒/包裹：盒身四角（开口朝上的箱体轮廓）。 */
+private val P_PACKAGE_BOX = arrayOf(0.24f to 0.36f, 0.24f to 0.80f, 0.76f to 0.80f, 0.76f to 0.36f)
+/** 盲盒/包裹：盒盖沿（一条横线，把盖与身分开 —— 无盖就是普通方块）。 */
+private val P_PACKAGE_LID = arrayOf(0.24f to 0.36f, 0.76f to 0.36f)
+/** 盲盒/包裹：穿盒的竖丝带（一头冒出盒顶、一头露出盒底 —— 表示"整包系了一圈"）。 */
+private val P_PACKAGE_RIB = arrayOf(0.50f to 0.22f, 0.50f to 0.92f)
+/** 盲盒/包裹：丝带顶结（结心两侧各一笔向上的翼 —— 没有它只像一根尺子）。 */
+private val P_PACKAGE_BOW = arrayOf(0.40f to 0.24f, 0.50f to 0.16f, 0.60f to 0.24f)
+/** 发送：横杆。 */
+private val P_SEND_BAR = arrayOf(0.16f to 0.50f, 0.80f to 0.50f)
+/** 发送：箭头。 */
+private val P_SEND_ARROW = arrayOf(0.58f to 0.28f, 0.82f to 0.50f, 0.58f to 0.72f)
+/** 重装：弧端箭头（三点来历见 REFRESH 那支的 KDoc）。 */
+private val P_REFRESH_ARROW = arrayOf(0.763f to 0.119f, 0.776f to 0.268f, 0.631f to 0.230f)
+/** 叠层：顶上一枚菱形。 */
+private val P_LAYERS_DIAMOND = arrayOf(0.50f to 0.10f, 0.90f to 0.32f, 0.50f to 0.54f, 0.10f to 0.32f)
+/** 叠层：第一道 V 折线。 */
+private val P_LAYERS_V1 = arrayOf(0.10f to 0.56f, 0.50f to 0.78f, 0.90f to 0.56f)
+/** 叠层：第二道 V 折线。 */
+private val P_LAYERS_V2 = arrayOf(0.10f to 0.74f, 0.50f to 0.96f, 0.90f to 0.74f)
+/** 缓存：左侧边。 */
+private val P_CACHE_SIDE_L = arrayOf(0.17f to 0.26f, 0.17f to 0.74f)
+/** 缓存：右侧边。 */
+private val P_CACHE_SIDE_R = arrayOf(0.83f to 0.26f, 0.83f to 0.74f)
+
+/**
  * [Glyph] 一次绘制要用的临时对象 —— `Path` 与 `Stroke` 都留住复用（理由见 [Glyph] 的 KDoc）。
  *
  * 借出是**按顺序**的：每次绘制开头 [begin]，后面每个 `path()` 取池子里的下一条并 `reset()`。
@@ -209,6 +380,18 @@ private class GlyphScratch {
  * 全文件没有 `val p = path(...)` 这种把两条 Path 同时留活的写法 —— 池子按顺序借出即可；
  * ② 池子按 `remember` 挂在**这一个** Canvas 节点上，不与别的字形共用；
  * ③ 绘制 lambda 在 UI 线程录制期跑，改的是自己上一步刚 reset 的那条 Path。
+ *
+ * ## 第二刀（2026-10-28）：坐标提成常量，绘制期零分配
+ *
+ * 池子只去掉了 `Path` 与 `Stroke` 的每帧分配，坐标那一路还漏着：`path(0.19f to 0.36f, …)`
+ * 的 vararg 数组、`Pair` 与装箱的 `Float` 是**在调用点**现造的 —— 而 `when (kind)` 整段
+ * 每帧都要重跑一遍，于是每个可见字形每帧仍要造十几个小对象（展开的依赖列表一行一颗
+ * ⟳，滚动时就是每帧上百个）。GC 是「一段时间里攒出来的一次停顿」—— 帧率读屏看到的就是
+ * 一阵一阵的卡。
+ *
+ * 改法：每一条 `path(...)` 的坐标整体提成文件级常量（`P_<字形>_<笔名>`，`Array<out
+ * Pair<Float, Float>>`，类加载时建一次），`path()` 改收这份常量。调用点形状不变、
+ * 数值逐字相同，只是不再有「每帧新建数组 + Pair + 装箱 Float」那一步 —— 绘制期零分配。
  */
 @Composable
 fun Glyph(
@@ -224,7 +407,7 @@ fun Glyph(
         val u = this.size.minDimension
         val stroke = scratch.stroke(u, weight)
         fun at(x: Float, y: Float) = Offset(x * u, y * u)
-        fun path(vararg points: Pair<Float, Float>): Path = scratch.path().apply {
+        fun path(points: Array<out Pair<Float, Float>>): Path = scratch.path().apply {
             points.forEachIndexed { i, (x, y) ->
                 if (i == 0) moveTo(x * u, y * u) else lineTo(x * u, y * u)
             }
@@ -234,19 +417,15 @@ fun Glyph(
             // 房子：屋顶两笔 + 屋身三笔（左下→右下→右侧竖边）。不画门 ——
             // 24dp 里再塞一扇门就只剩一团黑。
             GlyphKind.HOME -> {
-                drawPath(path(0.09f to 0.48f, 0.50f to 0.13f, 0.91f to 0.48f), tint, style = stroke)
-                drawPath(
-                    path(0.23f to 0.45f, 0.23f to 0.87f, 0.77f to 0.87f, 0.77f to 0.45f),
-                    tint,
-                    style = stroke,
-                )
+                drawPath(path(P_HOME_ROOF), tint, style = stroke)
+                drawPath(path(P_HOME_BODY), tint, style = stroke)
             }
 
             // 时钟：外圈 + 时针（朝上）+ 分针（朝右下）。任务是"什么时候跑"，钟面比清单更贴。
             GlyphKind.TASKS -> {
                 drawCircle(tint, radius = 0.37f * u, center = at(0.5f, 0.5f), style = stroke)
-                drawPath(path(0.50f to 0.50f, 0.50f to 0.27f), tint, style = stroke)
-                drawPath(path(0.50f to 0.50f, 0.69f to 0.61f), tint, style = stroke)
+                drawPath(path(P_TASKS_HOUR), tint, style = stroke)
+                drawPath(path(P_TASKS_MINUTE), tint, style = stroke)
             }
 
             // 终端：窗口外框 + 提示符 ">" + 光标 "_"。
@@ -258,33 +437,22 @@ fun Glyph(
                     cornerRadius = CornerRadius(0.14f * u),
                     style = stroke,
                 )
-                drawPath(path(0.30f to 0.40f, 0.42f to 0.50f, 0.30f to 0.60f), tint, style = stroke)
-                drawPath(path(0.54f to 0.60f, 0.71f to 0.60f), tint, style = stroke)
+                drawPath(path(P_CONSOLE_PROMPT), tint, style = stroke)
+                drawPath(path(P_CONSOLE_CURSOR), tint, style = stroke)
             }
 
             // 盾牌：上宽下尖的六边形。root/授权类条目管的是"开/关"，盾牌最不容易读错。
             GlyphKind.SHIELD -> {
-                drawPath(
-                    path(
-                        0.50f to 0.11f,
-                        0.87f to 0.25f,
-                        0.87f to 0.51f,
-                        0.50f to 0.89f,
-                        0.13f to 0.51f,
-                        0.13f to 0.25f,
-                    ).apply { close() },
-                    tint,
-                    style = stroke,
-                )
+                drawPath(path(P_SHIELD_BODY).apply { close() }, tint, style = stroke)
             }
 
             // 无障碍：头（圆）+ 躯干（一竖）+ 平举的双臂（一横）。
             GlyphKind.ACCESSIBILITY -> {
                 drawCircle(tint, radius = 0.09f * u, center = at(0.5f, 0.16f), style = stroke)
-                drawPath(path(0.20f to 0.34f, 0.80f to 0.34f), tint, style = stroke)
-                drawPath(path(0.50f to 0.34f, 0.50f to 0.62f), tint, style = stroke)
-                drawPath(path(0.50f to 0.62f, 0.36f to 0.88f), tint, style = stroke)
-                drawPath(path(0.50f to 0.62f, 0.64f to 0.88f), tint, style = stroke)
+                drawPath(path(P_A11Y_ARMS), tint, style = stroke)
+                drawPath(path(P_A11Y_BODY), tint, style = stroke)
+                drawPath(path(P_A11Y_ARM_L), tint, style = stroke)
+                drawPath(path(P_A11Y_ARM_R), tint, style = stroke)
             }
 
             // 屏幕采集：显示器外框（圆角矩形）+ 底座（短横 + 竖颈）。
@@ -296,38 +464,30 @@ fun Glyph(
                     cornerRadius = CornerRadius(0.10f * u),
                     style = stroke,
                 )
-                drawPath(path(0.50f to 0.70f, 0.50f to 0.82f), tint, style = stroke)
-                drawPath(path(0.34f to 0.84f, 0.66f to 0.84f), tint, style = stroke)
+                drawPath(path(P_SCREEN_NECK), tint, style = stroke)
+                drawPath(path(P_SCREEN_BASE), tint, style = stroke)
             }
 
             // 悬浮窗：底层方块 + 右上叠出的小方块（层级感）。
             GlyphKind.OVERLAY -> {
-                drawPath(
-                    path(0.14f to 0.30f, 0.62f to 0.30f, 0.62f to 0.78f, 0.14f to 0.78f).apply { close() },
-                    tint,
-                    style = stroke,
-                )
-                drawPath(
-                    path(0.38f to 0.22f, 0.86f to 0.22f, 0.86f to 0.70f),
-                    tint,
-                    style = stroke,
-                )
+                drawPath(path(P_OVERLAY_BACK).apply { close() }, tint, style = stroke)
+                drawPath(path(P_OVERLAY_FRONT), tint, style = stroke)
             }
 
             // 设置：齿轮 = 外圈（圆）+ 齿（四向短刺）+ 中孔（小圆）。
             GlyphKind.SETTINGS -> {
                 drawCircle(tint, radius = 0.30f * u, center = at(0.5f, 0.5f), style = stroke)
                 drawCircle(tint, radius = 0.10f * u, center = at(0.5f, 0.5f), style = stroke)
-                drawPath(path(0.50f to 0.08f, 0.50f to 0.20f), tint, style = stroke)
-                drawPath(path(0.50f to 0.80f, 0.50f to 0.92f), tint, style = stroke)
-                drawPath(path(0.08f to 0.50f, 0.20f to 0.50f), tint, style = stroke)
-                drawPath(path(0.80f to 0.50f, 0.92f to 0.50f), tint, style = stroke)
+                drawPath(path(P_SETTINGS_TEETH_UP), tint, style = stroke)
+                drawPath(path(P_SETTINGS_TEETH_DOWN), tint, style = stroke)
+                drawPath(path(P_SETTINGS_TEETH_LEFT), tint, style = stroke)
+                drawPath(path(P_SETTINGS_TEETH_RIGHT), tint, style = stroke)
             }
 
             // 搜索：放大镜 = 斜柄 + 圆环（环心偏离几何中心，柄在右下）。
             GlyphKind.SEARCH -> {
                 drawCircle(tint, radius = 0.28f * u, center = at(0.44f, 0.44f), style = stroke)
-                drawPath(path(0.65f to 0.65f, 0.86f to 0.86f), tint, style = stroke)
+                drawPath(path(P_SEARCH_HANDLE), tint, style = stroke)
             }
 
             // JS：圆角方块（语言徽标的底）+ 内嵌一对尖括号 < >。
@@ -339,101 +499,67 @@ fun Glyph(
                     cornerRadius = CornerRadius(0.16f * u),
                     style = stroke,
                 )
-                drawPath(path(0.42f to 0.40f, 0.30f to 0.50f, 0.42f to 0.60f), tint, style = stroke)
-                drawPath(path(0.58f to 0.40f, 0.70f to 0.50f, 0.58f to 0.60f), tint, style = stroke)
+                drawPath(path(P_FILE_JS_LT), tint, style = stroke)
+                drawPath(path(P_FILE_JS_GT), tint, style = stroke)
             }
 
             // 文档：竖长页 + 右上折角 + 两行文字线。
             GlyphKind.FILE_DOC -> {
-                drawPath(
-                    path(0.24f to 0.10f, 0.62f to 0.10f, 0.76f to 0.26f, 0.76f to 0.90f, 0.24f to 0.90f).apply { close() },
-                    tint,
-                    style = stroke,
-                )
-                drawPath(path(0.62f to 0.10f, 0.62f to 0.26f, 0.76f to 0.26f), tint, style = stroke)
-                drawPath(path(0.36f to 0.48f, 0.64f to 0.48f), tint, style = stroke)
-                drawPath(path(0.36f to 0.62f, 0.64f to 0.62f), tint, style = stroke)
+                drawPath(path(P_FILE_DOC_BODY).apply { close() }, tint, style = stroke)
+                drawPath(path(P_FILE_DOC_FOLD), tint, style = stroke)
+                drawPath(path(P_FILE_DOC_LINE1), tint, style = stroke)
+                drawPath(path(P_FILE_DOC_LINE2), tint, style = stroke)
             }
 
             // 网页：地球 = 外圆 + 竖向椭圆（两条经线的近似）+ 赤道横线。
             GlyphKind.FILE_HTML -> {
                 drawCircle(tint, radius = 0.38f * u, center = at(0.5f, 0.5f), style = stroke)
-                drawPath(path(0.50f to 0.12f, 0.50f to 0.88f), tint, style = stroke)
-                drawPath(path(0.24f to 0.28f, 0.76f to 0.28f), tint, style = stroke)
-                drawPath(path(0.24f to 0.72f, 0.76f to 0.72f), tint, style = stroke)
-                drawPath(path(0.12f to 0.50f, 0.88f to 0.50f), tint, style = stroke)
+                drawPath(path(P_FILE_HTML_MERIDIAN), tint, style = stroke)
+                drawPath(path(P_FILE_HTML_PARALLEL1), tint, style = stroke)
+                drawPath(path(P_FILE_HTML_PARALLEL2), tint, style = stroke)
+                drawPath(path(P_FILE_HTML_EQUATOR), tint, style = stroke)
             }
 
             // Shell：终端提示符（与 CONSOLE 同形的简化版，少了外框 —— 文件图标要满框）。
             GlyphKind.FILE_SH -> {
-                drawPath(path(0.18f to 0.34f, 0.36f to 0.50f, 0.18f to 0.66f), tint, style = stroke)
-                drawPath(path(0.44f to 0.66f, 0.70f to 0.66f), tint, style = stroke)
+                drawPath(path(P_FILE_SH_PROMPT), tint, style = stroke)
+                drawPath(path(P_FILE_SH_DASH), tint, style = stroke)
             }
 
             // 其余：立方体 = 正面方块 + 右侧面（体量感）。
             GlyphKind.FILE_GENERIC -> {
-                drawPath(
-                    path(0.16f to 0.28f, 0.58f to 0.28f, 0.58f to 0.72f, 0.16f to 0.72f).apply { close() },
-                    tint,
-                    style = stroke,
-                )
-                drawPath(
-                    path(0.58f to 0.28f, 0.84f to 0.42f, 0.84f to 0.86f, 0.58f to 0.72f),
-                    tint,
-                    style = stroke,
-                )
+                drawPath(path(P_FILE_GENERIC_FRONT).apply { close() }, tint, style = stroke)
+                drawPath(path(P_FILE_GENERIC_SIDE), tint, style = stroke)
             }
 
             // 通知：铃铛（钟形）+ 顶部小柄 + 底部小舌。
             GlyphKind.BELL -> {
-                drawPath(
-                    path(
-                        0.50f to 0.14f,
-                        0.22f to 0.42f,
-                        0.22f to 0.68f,
-                        0.78f to 0.68f,
-                        0.78f to 0.42f,
-                        0.50f to 0.14f,
-                    ),
-                    tint,
-                    style = stroke,
-                )
-                drawPath(path(0.42f to 0.82f, 0.58f to 0.82f), tint, style = stroke)
+                drawPath(path(P_BELL_BODY), tint, style = stroke)
+                drawPath(path(P_BELL_CLAPPER), tint, style = stroke)
             }
 
             // 文件夹：折角文件夹（TG menu_folder_add 的轮廓读法：背板 + 标签突起）。
             // 首尾闭合（close）—— 底边那一条横线不能少：开放路径在 24dp 下读起来就是
             // "没合上的文件夹"（批 25 实机截图定案的形状修正）。
             GlyphKind.FOLDER -> {
-                drawPath(
-                    path(
-                        0.10f to 0.74f,
-                        0.10f to 0.30f,
-                        0.36f to 0.30f,
-                        0.44f to 0.38f,
-                        0.90f to 0.38f,
-                        0.90f to 0.74f,
-                    ).apply { close() },
-                    tint,
-                    style = stroke,
-                )
+                drawPath(path(P_FOLDER_BODY).apply { close() }, tint, style = stroke)
+            }
+
+            // 盲盒/包裹（依赖页页头）：盒身 + 盖沿 + 竖丝带 + 顶结。盒身**首尾闭合**：
+            // 底边横线不能少（与 FOLDER 同一条教训），四条边读成"一只箱"而不是"凹槽"。
+            // 丝带与结是不闭合的折线 —— 它们是绕在盒子上的，不该连成一块。
+            GlyphKind.PACKAGE -> {
+                drawPath(path(P_PACKAGE_BOX).apply { close() }, tint, style = stroke)
+                drawPath(path(P_PACKAGE_LID), tint, style = stroke)
+                drawPath(path(P_PACKAGE_RIB), tint, style = stroke)
+                drawPath(path(P_PACKAGE_BOW), tint, style = stroke)
             }
 
             // 铅笔（FAB 主钮）：斜杆 + 笔尖三角 + 笔杆横线（TG floating_pencil 的线性读法）。
             GlyphKind.PENCIL -> {
-                drawPath(
-                    path(
-                        0.24f to 0.76f,
-                        0.24f to 0.62f,
-                        0.66f to 0.20f,
-                        0.80f to 0.34f,
-                        0.38f to 0.76f,
-                    ),
-                    tint,
-                    style = stroke,
-                )
-                drawPath(path(0.24f to 0.76f, 0.38f to 0.76f, 0.24f to 0.62f), tint, style = stroke)
-                drawPath(path(0.62f to 0.24f, 0.76f to 0.38f), tint, style = stroke)
+                drawPath(path(P_PENCIL_SHAFT), tint, style = stroke)
+                drawPath(path(P_PENCIL_TIP), tint, style = stroke)
+                drawPath(path(P_PENCIL_LINE), tint, style = stroke)
             }
 
             // 播放三角（任务行尾「立即执行」/ 项目页文件行尾「运行」）：实心
@@ -441,7 +567,7 @@ fun Glyph(
             // 形态本来就该一模一样，抄成两支迟早只改一支。
             GlyphKind.PLAY, GlyphKind.RUN -> {
                 drawPath(
-                    path(0.30f to 0.20f, 0.30f to 0.80f, 0.80f to 0.50f).apply { close() },
+                    path(P_PLAY_TRIANGLE).apply { close() },
                     tint,
                     style = Fill,
                 )
@@ -451,20 +577,20 @@ fun Glyph(
             // y≈0.23/0.45/0.67，长度递减 x→0.75/0.58/0.44；尾缀 = 切过去的那一档——
             // 按时间排序时显示字母 A（切到字母），按字母时显示时钟（切到时间），与 TG 同款）。
             GlyphKind.SORT_NAME -> {
-                drawPath(path(0.11f to 0.23f, 0.75f to 0.23f), tint, style = stroke)
-                drawPath(path(0.11f to 0.45f, 0.58f to 0.45f), tint, style = stroke)
-                drawPath(path(0.11f to 0.67f, 0.44f to 0.67f), tint, style = stroke)
-                drawPath(path(0.62f to 0.80f, 0.74f to 0.50f, 0.86f to 0.80f), tint, style = stroke)
-                drawPath(path(0.655f to 0.70f, 0.825f to 0.70f), tint, style = stroke)
+                drawPath(path(P_SORT_LINE1), tint, style = stroke)
+                drawPath(path(P_SORT_LINE2), tint, style = stroke)
+                drawPath(path(P_SORT_LINE3), tint, style = stroke)
+                drawPath(path(P_SORT_LETTER_A), tint, style = stroke)
+                drawPath(path(P_SORT_LETTER_BAR), tint, style = stroke)
             }
 
             GlyphKind.SORT_TIME -> {
-                drawPath(path(0.11f to 0.23f, 0.75f to 0.23f), tint, style = stroke)
-                drawPath(path(0.11f to 0.45f, 0.58f to 0.45f), tint, style = stroke)
-                drawPath(path(0.11f to 0.67f, 0.44f to 0.67f), tint, style = stroke)
+                drawPath(path(P_SORT_LINE1), tint, style = stroke)
+                drawPath(path(P_SORT_LINE2), tint, style = stroke)
+                drawPath(path(P_SORT_LINE3), tint, style = stroke)
                 drawCircle(tint, radius = 0.165f * u, center = at(0.755f, 0.655f), style = stroke)
-                drawPath(path(0.755f to 0.655f, 0.755f to 0.545f), tint, style = stroke)
-                drawPath(path(0.755f to 0.655f, 0.83f to 0.655f), tint, style = stroke)
+                drawPath(path(P_SORT_TIME_HAND), tint, style = stroke)
+                drawPath(path(P_SORT_TIME_PIVOT), tint, style = stroke)
             }
 
             // 搜索框放大镜（outline_search_1_24 的 72 视口实测：环心 (0.44, 0.427)、
@@ -478,7 +604,7 @@ fun Glyph(
                     center = at(0.44f, 0.427f),
                     style = Stroke(width = 0.064f * u, cap = StrokeCap.Round),
                 )
-                drawPath(path(0.62f to 0.56f, 0.786f to 0.728f), tint, style = stroke)
+                drawPath(path(P_SEARCH_FIELD_HANDLE), tint, style = stroke)
             }
 
             // 展开/收起三角（arrow_more 的 webp 实测：下尖 chevron，三控制点
@@ -486,15 +612,15 @@ fun Glyph(
             // 收起 = 尖朝下（原样），展开 = 转 180° 尖朝上（CollapseTextCell 的
             // `rotation(collapsed ? 0 : 180)` 同语义）。
             GlyphKind.CHEVRON -> {
-                drawPath(path(0.19f to 0.36f, 0.50f to 0.70f, 0.81f to 0.36f), tint, style = stroke)
+                drawPath(path(P_CHEVRON), tint, style = stroke)
             }
 
             // 柱状图：三根圆头柱子（中柱最高）。不画坐标轴 —— 24dp 里轴线与柱子
             // 共用同一份 StrokeRatio 笔画，会糊成一张表格。
             GlyphKind.CHART -> {
-                drawPath(path(0.17f to 0.84f, 0.17f to 0.52f), tint, style = stroke)
-                drawPath(path(0.50f to 0.84f, 0.50f to 0.24f), tint, style = stroke)
-                drawPath(path(0.83f to 0.84f, 0.83f to 0.42f), tint, style = stroke)
+                drawPath(path(P_CHART_L), tint, style = stroke)
+                drawPath(path(P_CHART_M), tint, style = stroke)
+                drawPath(path(P_CHART_R), tint, style = stroke)
             }
 
             // 「更多」三点（TG `ic_ab_other` 的实测：三点竖排、半径 2.1/24≈0.088、
@@ -512,61 +638,50 @@ fun Glyph(
 
             // 暂停：两条竖杠（与 RESUME 同一钮位，状态切换不断布局）。
             GlyphKind.PAUSE -> {
-                drawPath(path(0.36f to 0.22f, 0.36f to 0.78f), tint, style = stroke)
-                drawPath(path(0.64f to 0.22f, 0.64f to 0.78f), tint, style = stroke)
+                drawPath(path(P_PAUSE_L), tint, style = stroke)
+                drawPath(path(P_PAUSE_R), tint, style = stroke)
             }
 
             // 继续：右侧实心三角（PLAY 同形 —— 悬浮窗内没有播放语境，不会读错）。
             GlyphKind.RESUME -> {
-                drawPath(
-                    path(0.34f to 0.22f, 0.34f to 0.78f, 0.76f to 0.50f).apply { close() },
-                    tint,
-                )
+                drawPath(path(P_RESUME_TRIANGLE).apply { close() }, tint)
             }
 
             // 结束脚本：实心方块（停止的通用字形 —— 与 PLAY/RUN 那颗三角互为对偶，
             // 窗里两颗都在时一眼读得出"这颗是停"）。画法照 PLAY：实心而非描边。
             GlyphKind.STOP -> {
-                drawPath(
-                    path(0.31f to 0.31f, 0.69f to 0.31f, 0.69f to 0.69f, 0.31f to 0.69f).apply { close() },
-                    tint,
-                    style = Fill,
-                )
+                drawPath(path(P_STOP_SQUARE).apply { close() }, tint, style = Fill)
             }
 
             // 清空：垃圾桶 = 桶盖横线 + 提手 + 梯形桶身 + 两条竖纹。
             GlyphKind.CLEAR -> {
-                drawPath(path(0.28f to 0.28f, 0.72f to 0.28f), tint, style = stroke)
-                drawPath(path(0.40f to 0.28f, 0.40f to 0.20f, 0.60f to 0.20f, 0.60f to 0.28f), tint, style = stroke)
-                drawPath(
-                    path(0.32f to 0.28f, 0.68f to 0.28f, 0.62f to 0.82f, 0.38f to 0.82f).apply { close() },
-                    tint,
-                    style = stroke,
-                )
-                drawPath(path(0.45f to 0.40f, 0.45f to 0.70f), tint, style = stroke)
-                drawPath(path(0.55f to 0.40f, 0.55f to 0.70f), tint, style = stroke)
+                drawPath(path(P_CLEAR_LID), tint, style = stroke)
+                drawPath(path(P_CLEAR_HANDLE), tint, style = stroke)
+                drawPath(path(P_CLEAR_BIN).apply { close() }, tint, style = stroke)
+                drawPath(path(P_CLEAR_GROOVE_L), tint, style = stroke)
+                drawPath(path(P_CLEAR_GROOVE_R), tint, style = stroke)
             }
 
             // 关闭：✕ 两条对角（ActionBar 选择模式的 `backGlyph = "✕"` 同款字形，画出来）。
             GlyphKind.CLOSE -> {
-                drawPath(path(0.28f to 0.28f, 0.72f to 0.72f), tint, style = stroke)
-                drawPath(path(0.72f to 0.28f, 0.28f to 0.72f), tint, style = stroke)
+                drawPath(path(P_CLOSE_DIAG_1), tint, style = stroke)
+                drawPath(path(P_CLOSE_DIAG_2), tint, style = stroke)
             }
 
             // 全屏：四角向外（四段折线，各自朝角落；已全屏时同一颗钮含义为"退出全屏"，字形不变）。
             GlyphKind.FULLSCREEN -> {
-                drawPath(path(0.32f to 0.42f, 0.22f to 0.32f, 0.22f to 0.22f, 0.32f to 0.22f), tint, style = stroke)
-                drawPath(path(0.68f to 0.42f, 0.78f to 0.32f, 0.78f to 0.22f, 0.68f to 0.22f), tint, style = stroke)
-                drawPath(path(0.32f to 0.58f, 0.22f to 0.68f, 0.22f to 0.78f, 0.32f to 0.78f), tint, style = stroke)
-                drawPath(path(0.68f to 0.58f, 0.78f to 0.68f, 0.78f to 0.78f, 0.68f to 0.78f), tint, style = stroke)
+                drawPath(path(P_FULLSCREEN_TL), tint, style = stroke)
+                drawPath(path(P_FULLSCREEN_TR), tint, style = stroke)
+                drawPath(path(P_FULLSCREEN_BL), tint, style = stroke)
+                drawPath(path(P_FULLSCREEN_BR), tint, style = stroke)
             }
 
             // 发送：一条横杆 + 右侧箭头。**不用纸飞机** —— 那是"发消息出去"的语义，
             // 而这一颗是"把这一行送进正在跑的那个脚本"，一支直白的箭头最不容易读错
             // （与 `arrow_more` 那种装饰性 chevron 也分得开：它有杆）。
             GlyphKind.SEND -> {
-                drawPath(path(0.16f to 0.50f, 0.80f to 0.50f), tint, style = stroke)
-                drawPath(path(0.58f to 0.28f, 0.82f to 0.50f, 0.58f to 0.72f), tint, style = stroke)
+                drawPath(path(P_SEND_BAR), tint, style = stroke)
+                drawPath(path(P_SEND_ARROW), tint, style = stroke)
             }
 
             // 重装：开口圆环（40°→320°，缺口在右侧）+ 弧端一支箭头 —— 「同一件事再来一遍」
@@ -590,24 +705,16 @@ fun Glyph(
                     size = Size(2 * r, 2 * r),
                     style = stroke,
                 )
-                drawPath(
-                    path(0.763f to 0.119f, 0.776f to 0.268f, 0.631f to 0.230f),
-                    tint,
-                    style = stroke,
-                )
+                drawPath(path(P_REFRESH_ARROW), tint, style = stroke)
             }
 
             // 叠层：顶上一枚菱形（四点闭合）+ 下面两道 V 折线。三笔的间距与那两道 V 的
             // 开口（0.10↔0.90）取自"叠片"的通用画法 —— 画成三条平行横线读起来是"列表"，
             // 画成三个方块是"网格"，只有菱形+折线这一个形态在 24dp 下还能读出"层"。
             GlyphKind.LAYERS -> {
-                drawPath(
-                    path(0.50f to 0.10f, 0.90f to 0.32f, 0.50f to 0.54f, 0.10f to 0.32f).apply { close() },
-                    tint,
-                    style = stroke,
-                )
-                drawPath(path(0.10f to 0.56f, 0.50f to 0.78f, 0.90f to 0.56f), tint, style = stroke)
-                drawPath(path(0.10f to 0.74f, 0.50f to 0.96f, 0.90f to 0.74f), tint, style = stroke)
+                drawPath(path(P_LAYERS_DIAMOND).apply { close() }, tint, style = stroke)
+                drawPath(path(P_LAYERS_V1), tint, style = stroke)
+                drawPath(path(P_LAYERS_V2), tint, style = stroke)
             }
 
             // 缓存：圆柱（顶面椭圆 + 两条侧边 + 底弧）。顶面那圈用 `drawArc` 画**整圈**
@@ -625,8 +732,8 @@ fun Glyph(
                     size = Size(0.66f * u, 0.26f * u),
                     style = stroke,
                 )
-                drawPath(path(0.17f to 0.26f, 0.17f to 0.74f), tint, style = stroke)
-                drawPath(path(0.83f to 0.26f, 0.83f to 0.74f), tint, style = stroke)
+                drawPath(path(P_CACHE_SIDE_L), tint, style = stroke)
+                drawPath(path(P_CACHE_SIDE_R), tint, style = stroke)
                 drawArc(
                     color = tint,
                     startAngle = 0f,

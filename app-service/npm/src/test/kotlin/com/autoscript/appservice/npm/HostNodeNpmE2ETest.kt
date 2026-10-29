@@ -6,6 +6,7 @@ import com.autoscript.domain.npm.PackageSpec
 import kotlinx.coroutines.runBlocking
 import com.autoscript.domain.scripts.ProjectId
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeAll
@@ -107,6 +108,40 @@ class HostNodeNpmE2ETest {
             "控制台敲一行 → 回显 / 结果 / 终态（实为 ${consoleLines.map { it.kind }}）",
         )
         assertTrue(consoleLines[1].text.contains("lodash@4.17.21"), "结果里要有真装上的那个包")
+    }
+
+    /**
+     * 2026-10-29 修的实证切片：**卸载必须在真实树上生效**。
+     *
+     * 修之前 npm 跑在每次新建的空 workDir 上，`uninstall` 对空树执行 —— 设备上
+     * 的观测是「卸载输出 install 风格的 `added 1 package in 2s` 且锁纹丝不动」
+     * （项目根锁里 `extraneous` 孤儿 + `npmwork-<uuid>` 路径键就是那次设计的产物）。
+     * 修之后 [prepareWorkDir] 把真实树搬进 workDir，卸载命中真包：输出
+     * `removed N packages`、node_modules 与 lockfile 同步消失。两条断言各钉一端。
+     */
+    @Test
+    fun `卸载在真实树上生效（removed 而非 added，锁与目录同步消失）`() = runBlocking {
+        val root = dir
+        val c = coordinatorAt(root, root.resolve("npm-cache"))
+        val layout = NpmProjectLayout(ScriptPaths.projectsRoot(root))
+        Files.createDirectories(layout.projectRoot(ProjectId("e2e3")))
+        Files.write(layout.projectRoot(ProjectId("e2e3")).resolve("package.json"), ("""{"name":"e2e3","version":"0.0.1"}""").toByteArray())
+
+        c.install("e2e3", listOf(PackageSpec("lodash", "4.17.21")))
+        // 锁键形态：锚定真实树的 `node_modules/<pkg>`（不是 `npmwork-<uuid>` 墓碑路径）
+        val lockText = Files.readString(layout.lockfile(ProjectId("e2e3")))
+        val lockSample = lockText.lineSequence().firstOrNull { it.contains("lodash") }?.trim().orEmpty()
+        assertTrue(
+            lockText.contains(Regex("""node_modules["/]lodash""")) && "npmwork-" !in lockText,
+            "锁键必须是干净的 node_modules/lodash（实为：${lockSample.take(120)}）",
+        )
+
+        val nm = layout.nodeModules(ProjectId("e2e3"))
+        assertTrue(Files.isDirectory(nm.resolve("lodash")), "前置：lodash 已装")
+        c.uninstall("e2e3", "lodash")
+
+        assertFalse(Files.exists(nm.resolve("lodash")), "node_modules/lodash 必须被卸载掉")
+        assertFalse(c.list("e2e3", 0).any { it.name == "lodash" }, "lockfile 清单同步移除 lodash")
     }
 
     @Test

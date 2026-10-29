@@ -8,7 +8,9 @@ import androidx.compose.runtime.Immutable
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConsoleSnapshot
+import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.LazyThreadSafetyMode
 
 /**
@@ -35,8 +37,20 @@ data class NpmState(
      * 「报错全部收进底部日志大框」）—— 见 [logLines]。页面上半部分不再出现红字。
      */
     val opError: String? = null,
-    /** 上一次操作的结论回执（现取即清，不缓存）。 */
+    /**
+     * 上一次操作的结论回执（**累积**：像 npm 输出行一样留在日志流里，直到清日志或
+     * 新操作顶替 —— 2026-10-29 用户口径「这些描述要慢慢追加，不要闪一下就没」）。
+     */
     val opNotice: String? = null,
+    /**
+     * 操作账（[opError]/[opNotice]）落账的**时刻**（毫秒；0 = 当前没有账）。
+     *
+     * 日志大框从 2026-10-29 起把操作账也当**日志行**画（[logLines] 里排进流水、
+     * 带 `HH:mm:ss`）—— 没有这个时刻，那两行就只能顶在框首当悬浮摘要，或者拿
+     * 渲染当刻冒充落账当刻（每次重组时间都在漂）。**写账必须走 [withOpAccount]**，
+     * 它同时置时刻；直接 `copy(opError=…)` 会得到 1970 的时间戳，测试可抓。
+     */
+    val opAtMillis: Long = 0L,
     /**
      * 有维护动作在挂起中（null = 没有）—— 防连点，
      * 但**要记住是哪一个**：三颗按钮同时禁用，其中被按下的那颗显示「进行中」，
@@ -71,6 +85,19 @@ data class NpmState(
      */
     val installSeq: Long = 0L,
     /**
+     * 轮询逐格桥的**缓冲**（2026-10-29 用户口径「进度条只显示排队中，直到完成才一次性出现」）：
+     *
+     * 宿主在一条协程里同步内联跑完整个安装会话（QUEUED → … → FINISHED 毫秒级全发），
+     * 轮询 400ms 才拉一次 —— 一次拉回一整批，整批折完阶段条直接跳到终态，中间各格
+     * 一格都没露过脸。这里放「已经拉到、但还没到逐格展示的那一条」：每次轮询 tick
+     * 只消费一条进阶段条，其余留到下一个 tick（见 `pollInstallEventsStepped`）。
+     *
+     * **只是节奏闸，不是新的数据源**：事件只从这里过一遍，[installSeq] 也在同一拍前进；
+     * 单次现取（`pollInstallEvents`，进页面/刷新）整批折叠、并把缓冲清空 ——
+     * 阶段条已被折到批尾，缓冲里不该有比它还旧的东西继续往后放。
+     */
+    val pendingProgressEvents: List<InstallEvent> = emptyList(),
+    /**
      * 日志大框里的 npm 输出行（这个项目的；**累积**，按 seq 递增）。
      *
      * 行状态直接复用控制台那份 [ConsoleCmdLineState]：**着色判读只有一份**
@@ -89,7 +116,7 @@ data class NpmState(
     /**
      * 界面怎么说当前作用域（2026-10-17 用户口径：「项目选择改成依赖作用域，然后下拉框加个全局」）。
      *
-     * 措辞来自 [NpmTargetScope.label]（`""` → 「全局」），**不在界面里另写一份**：
+     * 措辞来自 [NpmTargetScope.label]（`""` → 「全局项目」），**不在界面里另写一份**：
      * 宿主写给事件/日志的 `projectId` 也是空串，两边对同一个值必须是一种说法。
      *
      * 还没读到（[selectedProjectId] 为 null）时给 `"—"` 而不是 `"全局"` —— 那是"还不知道"，
@@ -160,9 +187,10 @@ data class NpmState(
     /**
      * 日志大框里要画的行（**只读的投影**，页面上半部分不再有红字）。
      *
-     * 次序是**用户 2026-10-17 裁定的「两者都显示」**：本页这次操作的账在前
-     * （读失败 / [opError] / [opNotice]），npm 输出行在后 —— 前者是"谁把这事干的"，
-     * 后者是"它说了什么"。
+     * 次序是**用户 2026-10-17 裁定的「两者都显示」** + 2026-10-29 把操作账并进流水：
+     * 裁切标注 → 读失败 → npm 输出行（时间序）→ 操作账（回执/错误，同样带时间戳、
+     * 排在最新输出之后）—— 前者是"它说了什么"，后者是"谁把这事干的"；账不再顶在
+     * 框首当悬浮摘要（用户口径：「这些描述不要在日志框最上面出现，而是慢慢追加」）。
      *
      * 三条刻意：
      * - **读失败也进这个框**（口径是"页面上半部分不再出现红字"），但措辞保留
@@ -173,14 +201,22 @@ data class NpmState(
      * - 一条都没有时给一句**怎么做才有**的话，而不是一个空框。
      */
     val logLines: List<NpmLogLine> by lazy(LazyThreadSafetyMode.NONE) {
+        // 操作账与 npm 输出行同一副时间戳长相（HH:mm:ss，与 [ConsoleCmdLineState.timeText]
+        // 同一格式：一套日志流里不该有两种时间写法）。
+        fun timeText(): String =
+            OP_TIME_FORMAT.format(Instant.ofEpochMilli(opAtMillis).atZone(ZoneId.systemDefault()))
         buildList {
             if (consoleTruncated) add(NpmLogLine("更早的输出已裁掉，这里只留最近 $LOG_KEEP 行", StatusTone.MUTED))
             (load as? LoadState.Failed)?.let {
                 add(NpmLogLine("读取失败：${it.reason}（下面显示的是上次读到的，可能已过期）", StatusTone.PROBLEM))
             }
-            opError?.let { add(NpmLogLine(it, StatusTone.PROBLEM)) }
-            opNotice?.let { add(NpmLogLine(it, StatusTone.MUTED)) }
             consoleLines.forEach { add(NpmLogLine(it.timeText + "  " + it.text, it.tone)) }
+            // 操作账（回执/错误）**也按日志行进流水**（2026-10-29 用户口径
+            // 「这些描述不要在日志框最上面出现，而是慢慢追加」）：不再是顶在框首的一段
+            // 悬浮摘要，而是排在最新输出**之后**的普通一行 —— 位置在底、时间戳与
+            // npm 输出同格式，读起来就是"又追加了一行"。
+            opError?.let { add(NpmLogLine(timeText() + "  " + it, StatusTone.PROBLEM)) }
+            opNotice?.let { add(NpmLogLine(timeText() + "  " + it, StatusTone.MUTED)) }
         }
     }
 
@@ -216,27 +252,57 @@ data class NpmState(
          * 那时凭空选一个空串就是选了一个不存在的条目 —— 界面上表现为"作用域那行写着全局，
          * 下面什么也没有"。最后一档兜住"一个项目都没有"之外的任何残局。
          */
-        fun of(snapshot: NpmPanelSnapshot, previous: NpmState = NOT_LOADED) = NpmState(
-            load = LoadState.Loaded,
-            selectedProjectId = previous.selectedProjectId
-                ?.takeIf { id -> snapshot.projects.any { it.projectId == id } }
-                ?: snapshot.projects.firstOrNull { NpmTargetScope.isGlobal(it.projectId) }?.projectId
-                ?: snapshot.projects.firstOrNull()?.projectId,
-            snapshot = snapshot,
-            // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、「在途」与阶段条
-            // 都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建一份就等于每次刷新
-            // 把用户打到一半的包名和正在跑的进度条一起清空。
-            // `installed` 那一侧不需要这样：它本来就来自 `snapshot`（宿主才是权威）。
-            installDraft = previous.installDraft,
-            installing = previous.installing,
-            installProgress = previous.installProgress,
-            installSeq = previous.installSeq,
-            // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
-            // 就等于把用户刚看到的 npm 输出抹成空的。
-            consoleLines = previous.consoleLines,
-            consoleSeq = previous.consoleSeq,
-            consoleTruncated = previous.consoleTruncated,
-        )
+        fun of(snapshot: NpmPanelSnapshot, previous: NpmState = NOT_LOADED): NpmState {
+            if (canReusePrevious(snapshot, previous)) return previous
+            return NpmState(
+                load = LoadState.Loaded,
+                selectedProjectId = previous.selectedProjectId
+                    ?.takeIf { id -> snapshot.projects.any { it.projectId == id } }
+                    ?: snapshot.projects.firstOrNull { NpmTargetScope.isGlobal(it.projectId) }?.projectId
+                    ?: snapshot.projects.firstOrNull()?.projectId,
+                snapshot = snapshot,
+                // 现取**不许**把操作面抹掉（2026-10-09 批 87）：输入行草稿、「在途」与阶段条
+                // 都是**用户的**状态，不是宿主的读数 —— 从 `snapshot` 重建一份就等于每次刷新
+                // 把用户打到一半的包名和正在跑的进度条一起清空。
+                // `installed` 那一侧不需要这样：它本来就来自 `snapshot`（宿主才是权威）。
+                installDraft = previous.installDraft,
+                installing = previous.installing,
+                installProgress = previous.installProgress,
+                installSeq = previous.installSeq,
+                // 逐格桥的缓冲**不保留**（缺省即空）：单次现取整批折叠到批尾，阶段条已是
+                // 最新，缓冲里比它还旧的那几条没有意义 —— 留着只会在下一个轮询 tick 里
+                // 把它往回拽（见 `pendingProgressEvents` 的 KDoc）。
+                // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
+                // 就等于把用户刚看到的 npm 输出抹成空的。
+                consoleLines = previous.consoleLines,
+                consoleSeq = previous.consoleSeq,
+                consoleTruncated = previous.consoleTruncated,
+                // 操作账（回执/错误）从 2026-10-29 起也**累积**（像 npm 输出行一样留在
+                // 日志流里直到清日志或新账顶替）—— 现取即清的话，轮询 400ms 一现取，
+                // 回执"闪一下就没了"，用户看到的就是"没有慢慢追加"。
+                opError = previous.opError,
+                opNotice = previous.opNotice,
+                opAtMillis = previous.opAtMillis,
+            )
+        }
+
+        /**
+         * 「快照一字没变 → 原样复用上一份」的判据（2026-10-28 第十三批）：`npmSnapshot()`
+         * 每次回读都造一份内容相同的快照（量尺寸那趟走完 node_modules，数字没动），盲目
+         * 重建状态会让依赖页**整屏陪重组一次** —— 展开的列表 N 行全进组合、卡头重算条数、
+         * 日志框的 `LaunchedEffect` 重跑。安装进行中轮询每 400ms 就有一回，滑到一半被打断
+         * 正是"展开时滑动特别卡"的来路之一。`NpmPanelSnapshot` 是 data class，判等即内容
+         * 判等；既然一个字没变，重算三档回落的结果也与 previous 逐字相同（previous 选中的
+         * 项目还在快照里），没有字段需要从这份快照重投影。
+         *
+         * 两个排除项各有各的账，**不许**并进短路：
+         * - **失败态**（[LoadState.Failed]）：`failed()` 只改 `load`、不动快照，短路会把
+         *   「读取失败」这句错话留在日志框里 —— 一次成功的回读必须讲得掉它；
+         * - **有操作账**（[opError]/[opNotice]）：账随 previous 走（2026-10-29 起累积、
+         *   不清于现取），快照没变时复用 previous 那本就带着账，无需为清账强制重建。
+         */
+        private fun canReusePrevious(snapshot: NpmPanelSnapshot, previous: NpmState): Boolean =
+            snapshot == previous.snapshot && previous.load !is LoadState.Failed
 
         /**
          * 换一个项目看（[previous] 就是当前那份）。
@@ -258,6 +324,8 @@ data class NpmState(
                     selectedProjectId = projectId,
                     installProgress = null,
                     installSeq = 0L,
+                    // 逐格桥的缓冲也是项目域的：它是"还没放出来的进度事件"，换项目没有对象。
+                    pendingProgressEvents = emptyList(),
                     // 日志那一段与安装事件**同一条理由**（seq 是环内全局单调、drain 才按
                     // projectId 过滤）：沿用上一个项目的游标会漏掉新项目 seq 更小的行。
                     // 归 0 = 把这个项目还留在环里的行全取回来。
@@ -273,6 +341,28 @@ data class NpmState(
          */
         fun failed(t: Throwable, previous: NpmState = NOT_LOADED) =
             previous.copy(load = LoadState.of(t))
+
+        /**
+         * 清空日志大框（右上角「清日志」，2026-10-28 第十四批第 34 条，用户口径原文
+         * 「右上角刷新改成删除日志框里的日志」）。
+         *
+         * 清的是**这一段显示**：npm 输出行（[consoleLines]）、裁切标注（[consoleTruncated]）
+         * 与本页两次操作的账（[opError]/[opNotice]）一并归空 —— 用户要的是一个干净的空框，
+         * 留一句旧的失败原文，下一次刷新它又从 [logLines] 里冒回来，等于没清。
+         *
+         * **[consoleSeq] 不动**：那是宿主环的水位（「该从哪条往后拉」），不是内容。
+         * [withConsole] 按它拉**增量**（宿主 `consoleRing.drain(projectId, sinceSeq, maxLines)`
+         * 只给游标之后的行），把游标也归零的话下一次刷新就会把刚清掉的行**重新拉回来** ——
+         * 「清了又回来了」。与悬浮日志窗 `LogWindowController.clearLogs`（推水位只进不退、
+         * 清可见行、回显一起清）同一条语义。
+         */
+        fun clearLog(previous: NpmState): NpmState = previous.copy(
+            consoleLines = emptyList(),
+            consoleTruncated = false,
+            opError = null,
+            opNotice = null,
+            opAtMillis = 0L,
+        )
 
         /**
          * 把一批 npm 输出折进日志大框（**纯函数**，可单测）。
@@ -303,6 +393,22 @@ data class NpmState(
 
 /** 日志大框最多留多少行（更早的裁掉，并在框里说明 —— 见 [NpmState.consoleTruncated]）。 */
 internal const val LOG_KEEP = 200
+
+/**
+ * 操作账写账的**唯一入口**（[NpmState.opError]/[opNotice] 的落账点）。
+ *
+ * 日志大框把操作账当日志行画，需要落账时刻（[NpmState.opAtMillis]）—— 直接
+ * `copy(opError = …)` 会留下 1970 的时间戳（测试可抓）。清账（两个都传 null）
+ * 也走这里：时刻一并归零，与清账同一次变化。
+ */
+internal fun NpmState.withOpAccount(error: String?, notice: String?): NpmState = copy(
+    opError = error,
+    opNotice = notice,
+    opAtMillis = if (error != null || notice != null) System.currentTimeMillis() else 0L,
+)
+
+/** 操作账行的时刻格式（与控制台行 [ConsoleCmdLineState.timeText] 同一 `HH:mm:ss`）。 */
+private val OP_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
 /** 日志大框一次拉多少行（与控制台那个缺省页大小同量级：一次现取就够把框填满）。 */
 internal const val LOG_PAGE = 256

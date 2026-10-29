@@ -104,6 +104,24 @@ internal object NpmScriptResolver {
     }
 
     /**
+     * `package.json` 声明段的**包名集合**（2026-10-29 用户口径「依赖列表不要展示闭包依赖」）：
+     * `dependencies` + `devDependencies` 两段键名的并集 —— 「这个项目声明了哪些依赖」的
+     * 唯一事实源，供 [InstallCoordinator.list] 把 lock 闭包滤成直接依赖清单。
+     *
+     * 与 [declaredSpecs] 同读 [manifestOf]，故同一条纪律：manifest 不存在 → null
+     * （那是"没有这个项目 / 还没装过"）；声明段缺失或为空 → 空集（不写 null）。
+     */
+    fun declaredNames(projectRoot: Path): Set<String>? {
+        val manifest = manifestOf(projectRoot) ?: return null
+        val out = LinkedHashSet<String>()
+        for (section in listOf("dependencies", "devDependencies")) {
+            val fields = (manifest[section] as? DomainJson.Value.Obj)?.fields ?: continue
+            for (name in fields.keys) if (name.isNotBlank()) out += name
+        }
+        return out
+    }
+
+    /**
      * `node_modules` 里声明了名为 [bin] 的 bin 的那个包（纯 JS 白名单已过）。
      *
      * 扫描深度 1（`node_modules/<pkg>`）+ 深度 2 的 scope（`node_modules/@scope/<pkg>`），

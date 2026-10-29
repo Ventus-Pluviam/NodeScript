@@ -350,6 +350,17 @@ internal fun <T> ManagementTransition(
         // 灰罩只跟**露出那一段**走，且 TG 的整块（`:1180`）有 `translationX != 0` 的门：
         // 切出已经结束（`top` 归位前那一瞬 `innerTranslationX` 归 0）就不该再压暗。
         val scrimOn = predictive || innerTranslationX != 0f
+        // **稳态剥壳（2026-10-28 第十四批）**：`top` 完全就位（progress == 1、手势与飞出
+        // 都归零）时，顶层内容**裸直绘** —— 不挂 `alpha`/`graphicsLayer`/圆角 `clip` 这三层
+        // 包装。它们在稳态全是恒等变换（alpha=1/scale=1/translation=0，Compose 1.7 下恒等
+        // 值不建离屏层），但 `Modifier.clip` 那层**每帧**都在给整屏滚动内容重做一次圆角
+        // 裁剪路径，而这一页的滚动面（依赖列表）是唯一常驻顶层 —— 首页在 pager 里没有
+        // 任何一层包装。剥掉后它与首页同构：滚动就是滚动。
+        // 判据逐项都是画布打开期间**会写**的瞬态：progress 在 150ms 动画里每帧动、
+        // `gesture`/`dismiss` 只有手势与飞出期间非零。动画一开始判据即破、包装挂回；
+        // 动画一收尾判据复立、包装剥掉 —— 都在同一帧的快照内完成，不会闪。
+        val settled = progress.value >= 1f && dismiss.value == 0f &&
+            !gesture.hasProgress && innerTranslationX == 0f
 
         if (top == null) {
             Box(Modifier.matchParentSize()) { content(under) }
@@ -392,6 +403,15 @@ internal fun <T> ManagementTransition(
             }
         }
         top?.let { over ->
+            if (settled) {
+                // **稳态：裸直绘**（2026-10-28，见上面 `settled` 的 KDoc）—— 与首页同构的
+                // 一条链路：内容直接落屏幕，没有 alpha/graphicsLayer/圆角 clip 任何一层。
+                // `claimPointerHits` 留在两路里：它是**功能**（挡住触穿到下层面板），
+                // 不是动画。
+                Box(Modifier.matchParentSize().claimPointerHits()) {
+                    content(over)
+                }
+            } else {
             Box(
                 Modifier
                     // 透明度只跟 `progress`（切入/返回键那条 150ms 路径用）。手势提交的飞出
@@ -432,6 +452,7 @@ internal fun <T> ManagementTransition(
                     content(over)
                 }
             }
+            } // else（非稳态：动画壳）
         }
     }
 }

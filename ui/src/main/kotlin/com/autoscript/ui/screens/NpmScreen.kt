@@ -32,8 +32,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -69,7 +72,6 @@ import com.autoscript.ui.components.PillButton
 import com.autoscript.ui.components.pressable
 import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
-import com.autoscript.ui.components.rememberRefreshAction
 import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.InstallProgressState
 import com.autoscript.ui.state.NpmState
@@ -82,9 +84,9 @@ import com.autoscript.ui.theme.ThemeColors
 /**
  * 依赖管理页（管理面板 → 依赖管理；§10.9.1 依赖面板）。
  *
- * 分段（自上而下）：**作用域与尺寸**（一张卡）· **安装依赖 + 依赖列表**（同一张白卡，卡头
- * 可折叠、默认收起）· **日志大框**（滚动内容的最下面）；页底另有一条**固定的动作栏**
- * （[OptionsBar] 那三颗维护按钮，不随内容滚）。
+ * 分段（自上而下）：**页头卡**（[ScopeHeaderCard]：圆形图标 · 作用域名 · 镜像源链接）·
+ * **三个维护动作**（[OptionsBar]，随内容滚）· **作用域与尺寸**（一张卡）· **安装依赖 +
+ * 依赖列表**（同一张白卡，卡头可折叠、默认收起）· **日志大框**（滚动内容的最下面）。
  *
  * 页底是**任务中心那块灰**（[ThemeColors.surfaceMuted]），页上每一段都是一张白卡
  * （[PanelCard]）—— 与管理面板（本页的入口）同族，见 [PanelCard] 的说明。
@@ -94,7 +96,8 @@ import com.autoscript.ui.theme.ThemeColors
  *    整段下线，页面上半部分**不再出现红字**；
  * 2. 「弄个依赖列表，把已装依赖收进去」—— 已装依赖从"直接铺在页面里的一段"变成
  *    一张白卡（~~[DependencyListCard]：白卡 + 高度自限 + 卡内自滚~~，第十一批第 29/31
- *    条把它并进「安装 + 依赖列表」那一组、卡内那层滚动撤掉了）；
+ *    条把它并进「安装 + 依赖列表」那一组、卡内那层滚动撤掉了；**卡内自滚于
+ *    2026-10-28 第十二批第 32 条回来**，见该条）；
  * 3. 「最下面弄个显示日志的大框。灰色背景，胶囊框」—— [LogCard]，内容按当场裁定
  *    「两者都显示」= 先本页这次操作的账、后 npm 输出（组装在 [NpmState.logLines]）；
  * 4. 「背景颜色改成任务中心背景一样的颜色」—— 页底 + 顶栏改 [ThemeColors.surfaceMuted]，
@@ -193,7 +196,73 @@ import com.autoscript.ui.theme.ThemeColors
  *     [OptionsBar]，不再随内容滚；让位（[TabBarBottomClearance]）随之下移到这一栏。
  * 31. 「依赖列表滑动还是很卡」—— 卡里那层 `LazyColumn` **撤掉**：依赖行改成页面列表自己的
  *     item，这一屏从此只有一个可滚动容器（与第 29 条是同一处结构）。~~展开后卡内自滚~~
- *     （2026-10-17）这条口径同时作废。
+ *     （2026-10-17）这条口径同时作废。**本条自身（摊平 + 全页只留一个可滚动容器）也于
+ *     2026-10-28 第十二批第 32 条作废** —— 摊平没治好卡，用户裁定了相反的结构。
+ *
+ * **第十二批（2026-10-28，用户口径原文）**：
+ * 32. 「还是很卡顿，依赖列表你不要让它完全展开。而是在一个组件框里滑动」—— 依赖行收回
+ *     一个**定高的框**里自己滚（`heightIn(max)` + 框内自己的 `LazyColumn`，见
+ *     [dependenciesGroup]）：清单不再整段摊开在页面上，翻清单时动的只有那个框，
+ *     页面自己的滚动只剩作用域卡 / 这一组 / 日志卡三段。
+ *
+ * **第十三批（2026-10-28，用户口径原文）**：
+ * 33. 「去掉安装依赖下面会输出日志（目前它的下面和日志框里都会显示，只保留日志框里的
+ *     就行）」—— [InstallProgressRow] 只画六格阶段条：进行中的阶段文字（label + 包名）
+ *     和收尾后的结论行（装完/失败与病因）都去掉，结果与过程由日志大框（[LogCard]）一家
+ *     承担。阶段条是批 87 要的进度反馈、不是日志，照画；收尾后整段收起。
+ *
+ * **第十四批（2026-10-28，用户口径原文）**：
+ * 34. 「右上角刷新改成删除日志框里的日志」—— 顶栏那颗「刷新」换成「清日志」
+ *     （[NpmState.clearLog]）。本屏不再有手动刷新：快照与日志在**切进本页**时现取
+ *     （`ManagementPage.NPM` 的切页签 effect），安装中的阶段续拉由
+ *     `pollInstallWhileRunning` 自己拉到跑完（批 90），两件职责都另有归属。
+ * 35. 「依赖管理界面最上面我想放个包裹/盲盒圆形图标…黑色加粗的选中项目名称…灰色小号的
+ *     当前使用npm镜像源链接（格式样式tg源码里都有）」—— 页头最上面加一张居中三段卡
+ *     （[ScopeHeaderCard]）：圆形底 + 包裹字形 · 黑粗作用域名（17.5sp Bold，TG
+ *     `ProfileActivity` 名字档）· 灰小镜像源链接（13.5sp，TG `actionBarDefaultSubtitle`
+ *     档）。镜像源显示的是**当前生效的那一家**（配置的或出厂官方源），没有"读不到就不画"
+ *     —— npm 进程永远有一个实际在用的源，在用什么就读什么。
+ * 36. 「图标不要被白色胶囊框组件包起来。它大小都没生效，和tg的不一致」—— 第 35 条复批：
+ *     去掉 [PanelCard] 白卡包装（TG 资料头部是直接铺在页面背景上的，本页页底的灰就是
+ *     原型里的背景），圆形底从 44dp 改回 TG 头像**原值 100dp**（`ProfileActivity.java`
+ *     `avatarContainer` 的 `createFrame(100, 100)`），间距同批对齐 TG
+ *     （名字上距 6dp）。
+ *
+ * **第十五批（2026-10-29，用户口径原文）**：
+ * 37. 「把依赖管理页面最底下的三个按钮放到依赖作用域的上面」—— [OptionsBar] （三个维护
+ *     动作）从页底固定栏搬回滚动列表，排在作用域卡**上面**。第 30 条那条「钉在页底」的
+ *     口径作废：动作不再固定在屏底，跟别的卡一样随内容滚，导航栏让位
+ *     （[TabBarBottomClearance]）随之下移回列表的 `contentPadding`。
+ * 38. 「描述:全局改成全局项目」—— 作用域那一档的显示名从「全局」改口「全局项目」
+ *     （[NpmTargetScope.label] 一处改，下拉菜单 / 页头卡 / 依赖列表卡头 / 空态四处
+ *     随之；「提升到全局」「回收缓存是全局的」这些动词短语不是名字，不动）。
+ * 39. 「依赖列表的标题没有和其他列表文字对齐」—— 依赖列表那张卡的卡头（[CollapseHeader]）
+ *     文字一直沿用 TG `CollapseTextCell` 的 21dp 缩进，而卡内行是 [CARD_PADDING] 12dp，
+ *     标题比各行右移了 9dp。共享组件加 `textIndent` 参数（缺省 21dp，任务中心两处不变），
+ *     依赖页传入 12dp 与卡内文字对齐。
+ *
+ * **第十六批（2026-10-29，用户真机反馈）**：
+ * 40. 「安装依赖队列状态条不会出现，要退出再重进才会出现」「删除依赖，依赖列表不会刷新，
+ *     还是显示原来的个数」—— 两个症状同一个根：`runNpmPanelCommand` 在宿主侧是
+ *     **同步挂起执行**（`enqueueHeavy` 协程内联，跑完才返回），而批 90 按「入队即返回」
+ *     设计的提交链路只在该协程**结束**时一次性写回 —— `installing`/`installProgress`
+ *     从没进过组合状态，[NpmScreen] 的兜底轮询 `LaunchedEffect(page, npmState.installing)`
+ *     键不变化、永不启动，挂起期间零反馈零刷新。「退出重进」触发 [reloadNpm] 的
+ *     `pollInstallEvents` 续拉，中间态才浮出来。修法：安装在途、维护在途、回收在途
+ *     三个 begin 写回（[withInstallInFlight] / [withMaintenanceInFlight] /
+ *     [withCacheReclaimInFlight]），五个动作入口 **launch
+ *     前**先同步置位 —— 阶段条立现（QUEUED 起）、按钮即时置灰（防连点判据生效）、
+ *     兜底轮询随即接管挂起期间的每 400ms 续拉（事件 / 快照 / 日志），卸载完成清单
+ *     不再等一次性的终态写回。
+ *
+ * **第十七批（2026-10-29，动作可辨别）**：
+ * 41. 卸载/重装两颗按钮并排 8dp、误触无从感知，而卸载回执还在说「已提交…在跑」——
+ *     宿主早已同步执行完（[runPanelCommand] 等到挂起返回才构造回执），把"卸载完成"
+ *     说成"刚提交、还在装"正是「卸载没生效」观感的一半来源。两件一起修：
+ *     - 回执改完成句式，动作名 + 对象 + 结果（「已卸载 axios：清单已更新」/「已安装
+ *       axios@1.7.9：清单已更新」，见 `NpmInstallOps.noticeForPanel`）；
+ *     - 卸载与重装**先弹确认框**（[ConfirmActionDialog]）—— 确认框把动作名与对象在
+ *       发命令之前摆在眼前，点错当场看见，不再去日志框里考古。
  *
  * **顶栏原先那颗「审计」已下线**（2026-10-17 用户令「去除审计这个东西，把这个日志输出到
  * 系统日志中」）：那颗按钮进的子页 + 它背后那份只追加的落盘账
@@ -224,12 +293,16 @@ import com.autoscript.ui.theme.ThemeColors
  * **控制台**敲 `npm prune` —— 那条路是通的，但「有路可走」不等于「有一键」，
  * 而这个页面的全部意义就是让用户在这一屏把地方腾出来。
  *
- * 读取与刷新由外壳驱动（进入本页/手动刷新）；本屏只画，状态原样来自 [NpmState]。
+ * 读取由外壳驱动（**进入本页**时现取，第十四批第 34 条起不再有手动刷新）；本屏只画，
+ * 状态原样来自 [NpmState]。唯一例外是页头的镜像源链接（[ScopeHeaderCard]）——
+ * 它读的是全局配置（§10.9 第 8 条），由外壳把读好的 `registryLabel` 传进来。
  */
 @Composable
 fun NpmScreen(
     state: NpmState,
-    onRefresh: suspend () -> Unit,
+    /** 当前生效的镜像源 URL（全局配置读口 `globalRegistry().effective`，外壳兜底给出厂缺省）。 */
+    registryLabel: String,
+    onClearLog: () -> Unit,
     onSelectProject: (String) -> Unit,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
     onInstallDraft: (String) -> Unit,
@@ -241,38 +314,62 @@ fun NpmScreen(
     onReclaimCache: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 「刷新」兼作进度续拉（`:ui` 没有常驻轮询循环，见 `pollInstallEvents` 的 KDoc）：
-    // 宿主是入队即返回的，一次现取多半只拿到 `QUEUED`，再点一次就能看到下一步。
-    // 续拉在 `MainActivity.reloadNpm()` 里与快照一起发生 —— 本屏不持有读口。
-    val refresh = rememberRefreshAction { onRefresh() }
+    // 「清日志」只清显示（`NpmState.clearLog`），不需要挂起。
+    // 安装进行中的进度续拉已由 `pollInstallWhileRunning` 接管（提交之后自己拉到跑完，
+    // 见 NpmInstallOps 的 KDoc），那一屏不再需要一颗手动「刷新」。
+    //
     // 页底与**任务中心/管理面板同一块灰**（2026-10-17 用户口径：「背景颜色改成任务中心
     // 背景一样的颜色」）：浅色 #F1F1F3、深色 #161E27（深色下 `surfaceMuted` 与
     // `background` 同值，所以这一改只动浅色档）。顶栏跟着传同一个色 —— 缺省是"与屏底
     // 同色"（见 `ActionBar.background` 的说明），页底换了而这里不传，就会出现
     // "白栏压灰页"那道缝（任务中心批 41 踩过同一个坑）。
+    //
+    // 待确认的卸载/重装（第十七批第 41 条）：点了先弹确认框，确认才发命令。
+    // 放**函数体这一层**而不是 [InstalledRow] 里：行是懒加载的（滚出视野会销毁），
+    // 把待确认动作塞进行的内存 = 滚一下确认框就没了；而声明在 `Column {}` lambda
+    // 内部、引用在 lambda 外面（尾部对话框块）也读不到 —— 它俩同属主函数作用域。
+    var confirm by remember { mutableStateOf<ConfirmAction?>(null) }
     Column(modifier.fillMaxSize().background(ThemeColors.surfaceMuted)) {
         ActionBar(
             title = "依赖管理",
             background = ThemeColors.surfaceMuted,
             onBack = onBack,
             actions = {
-                ActionBarAction("刷新", refresh::trigger)
+                ActionBarAction("清日志", onClearLog)
             },
         )
         // 顶栏下面**不再有任何报错/回执**（2026-10-17 用户令：「删除顶上的报错。不需要它」
         // + 裁定「报错全部收进底部日志大框」）：读失败、[NpmState.opError]、[NpmState.opNotice]
         // 三样统统画在最下面那个日志大框里（[LogCard]）—— 页面上半部分只放读数与动作。
-        // 「依赖列表」的展开态**提到这一层**：这一组现在是**好几条列表项拼出来的**
-        // （安装行一段 / 卡头一段 / 每颗依赖各一段），那条布尔得由拼它们的人读
-        // （见 [dependenciesGroup]）。此前它长在 `DependencyListCard` 里 —— 那时整组只
-        // 是一条 item，展开态跟着那一件走。
+        // 「依赖列表」的展开态**提到这一层**：这一组是**好几条列表项拼出来的**
+        // （安装行一段 / 卡头一段 / 展开后清单框一段 —— 依赖行自 2026-10-28 第十二批
+        // 第 32 条起收在框内自己的 LazyColumn 里，不再是本列表的 item），那条布尔得由
+        // 拼它们的人读（见 [dependenciesGroup]）。此前它长在 `DependencyListCard` 里 ——
+        // 那时整组只是一条 item，展开态跟着那一件走。
         var depsExpanded by rememberSaveable { mutableStateOf(false) }
         LazyColumn(
             Modifier.fillMaxWidth().weight(1f),
-            // 底部留白**不再让 [TabBarBottomClearance]**：让位这件事现在归页底那条固定的
-            // 动作栏做（它自己带导航栏 inset），列表只留一道卡间缝。
-            contentPadding = PaddingValues(bottom = CARD_SPACING),
+            // 列表最底下是日志框，下面不再有固定动作栏 —— 导航栏让位（[TabBarBottomClearance]）
+            // 归列表的 contentPadding，日志框下面垫一道导航栏 inset + 卡间缝。
+            contentPadding = PaddingValues(bottom = CARD_SPACING + TabBarBottomClearance()),
         ) {
+            // 页头三段卡（第十四批第 35 条）：圆形盲盒图标 · 黑粗作用域名 · 灰小镜像源
+            // 链接，整页最上面一条。它是**展示**：下拉选作用域仍在 [ScopeCard]。
+            item(contentType = SLICE_PROFILE) {
+                ScopeHeaderCard(state.scopeLabel, registryLabel)
+            }
+            // 三个维护动作（第十五批第 37 条，2026-10-29）：从页底固定栏移回滚动列表，
+            // 排在依赖作用域卡**上面**（用户口径「把依赖管理页面最底下的三个按钮放到
+            // 依赖作用域的上面」）。移出来之后不再是"这台机器的动作"，是这一屏的
+            // 内容 —— 随内容滚，直觉上和依赖作用域那张卡挨在一起。
+            item(contentType = SLICE_OPTIONS) {
+                OptionsBar(
+                    state = state,
+                    onMaintenance = onMaintenance,
+                    onDedupePromote = onDedupePromote,
+                    onReclaimCache = onReclaimCache,
+                )
+            }
             // 依赖作用域与两行尺寸**同一张卡**（2026-10-17 第二批用户口径：「依赖作用域，
             // 默认为全局，放进和 node_modules 和 npm 缓存同一个列表分组」）。三行回答的是
             // 同一个问题——"这一屏在管哪一棵 node_modules、它有多大"——分成两张卡时那几个
@@ -285,21 +382,30 @@ fun NpmScreen(
                 onToggle = { depsExpanded = !depsExpanded },
                 onDraft = onInstallDraft,
                 onSubmit = onSubmitInstall,
-                onRemove = onRemoveInstalled,
-                onReinstall = onReinstall,
+                // 卸载与重装**先过确认框**（第十七批第 41 条）：两颗按钮并排 8dp，
+                // 误触无从感知 —— 确认框把「你按的到底是什么」在发命令之前摆在眼前，
+                // 点错重装当卸载的事当场现形。
+                onRemove = { name -> confirm = ConfirmAction.Remove(name) },
+                onReinstall = { row -> confirm = ConfirmAction.Reinstall(row) },
             )
             // 日志大框在**滚动内容的最下面**（第十批第 28 条）。它现在跟在"安装 + 依赖列表"
             // 那一组后面 —— 页底那条固定的动作栏不占列表位置，所以"日志在最后"这条口径
             // 一个字没改，改的只是它上面少了三颗动作。
             item(contentType = SLICE_LOG) { LogCard(state) }
         }
-        // 三个维护动作**钉在页底**（第十一批第 30 条）：从列表里搬出来，不再随内容滚 ——
-        // 这一页的动作任何时候都够得着，而上面那个日志框可以很长。
-        OptionsBar(
-            state = state,
-            onMaintenance = onMaintenance,
-            onDedupePromote = onDedupePromote,
-            onReclaimCache = onReclaimCache,
+    }
+    confirm?.let { action ->
+        ConfirmActionDialog(
+            action = action,
+            scope = state.scopeLabel,
+            onDismiss = { confirm = null },
+            onConfirm = {
+                confirm = null
+                when (action) {
+                    is ConfirmAction.Remove -> onRemoveInstalled(action.name)
+                    is ConfirmAction.Reinstall -> onReinstall(action.row)
+                }
+            },
         )
     }
 }
@@ -395,43 +501,34 @@ private fun InstallRow(
 /**
  * 阶段条：六档排开，点亮到当前那一档。
  *
- * 收尾之后（[InstallProgressState.done]）**保留一行结论**而不是整条消失：
- * 「装完了 / 失败了 + 病因」是这次操作唯一需要留在屏幕上的东西，抹掉它等于让用户
- * 自己去清单里找变化。成功时不再画阶段格子（那六格已经没有信息量）。
+ * **只画进行中**（2026-10-28 第十三批第 33 条，用户口径原文「去掉安装依赖下面会输出
+ * 日志（目前它的下面和日志框里都会显示，只保留日志框里的就行）」）：
+ * - 收尾之后（[InstallProgressState.done]）**整段收起** —— 结果与病因由日志大框承担
+ *   （失败到 [NpmState.opError]、成功到 npm 输出与「已提交」回执），这里再画一行
+ *   就是同一句话说两处；
+ * - 进行中的阶段文字（label + 包名那行小字）同批去掉 —— npm 自己的输出在日志框里
+ *   讲的就是同一件事；**六格阶段条不是日志，照画** —— 那是批 87 要的进度反馈，
+ *   不识字也读得懂亮到第几格。
  */
 @Composable
 private fun InstallProgressRow(p: InstallProgressState) {
-    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-        if (p.done) {
-            ToneText(
-                text = if (p.ok) (p.detail ?: "安装完成") else "失败：${p.detail ?: "（无详情）"}",
-                tone = if (p.ok) StatusTone.MUTED else StatusTone.PROBLEM,
-                style = MaterialTheme.typography.bodySmall,
+    if (p.done) return
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        val reached = InstallProgressState.ORDER.indexOf(p.phase)
+        InstallProgressState.ORDER.forEachIndexed { i, _ ->
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(3.dp)
+                    .background(
+                        color = if (i <= reached) ThemeColors.featuredButton else ThemeColors.fieldBackground,
+                        shape = RoundedCornerShape(2.dp),
+                    ),
             )
-            return@Column
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            val reached = InstallProgressState.ORDER.indexOf(p.phase)
-            InstallProgressState.ORDER.forEachIndexed { i, _ ->
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(3.dp)
-                        .background(
-                            color = if (i <= reached) ThemeColors.featuredButton else ThemeColors.fieldBackground,
-                            shape = RoundedCornerShape(2.dp),
-                        ),
-                )
-            }
-        }
-        ToneText(
-            text = p.label + (p.pkg?.let { "  $it" } ?: ""),
-            tone = StatusTone.MUTED,
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }
 
@@ -439,20 +536,21 @@ private fun InstallProgressRow(p: InstallProgressState) {
  * 「安装依赖 + 依赖列表」这一组（2026-10-18 第十一批第 29 条，用户口径原文「安装依赖和
  * 依赖列表合并成一个列表分组」）。
  *
- * **它不是一条 item，是一串 item**：安装行一段、卡头一段、之后每颗依赖各一段，整组由
- * [cardSlice] 拼成**一张卡**（相邻两段同色贴紧，缝看不见）。一条改动同时办掉两件事：
+ * 三条 item 由 [cardSlice] 拼成**一张卡**（相邻两段同色贴紧，缝看不见）：安装行一段、
+ * 卡头一段、展开后再加一段（清单框，或空态那句话）。
  *
- * 1. **合成一个分组**：安装与依赖落在同一张白卡里，卡头就是那棵树的账；
- * 2. **这一页从此只有一个可滚动容器。** 此前依赖列表是**卡里再套一个 LazyColumn**
- *    （高度上限 `DEP_LIST_MAX_HEIGHT`），于是这一屏有两层竖向滚动 —— 拖动要在两层之间
- *    交接、内层滚到头外层才接管，手感是断的（第十一批第 31 条，用户口径「依赖列表滑动
- *    还是很卡」）。摊平成列表项之后，只有可见的行才组合、才绘制，滚动只有一条路。
+ * **依赖行收在一个定高的框里自己滚**（2026-10-28 第十二批第 32 条，用户口径原文
+ * 「还是很卡顿，依赖列表你不要让它完全展开。而是在一个组件框里滑动」）：清单是**一条**
+ * item，里面一个 `heightIn(max = DEP_LIST_MAX_HEIGHT)` 的 `LazyColumn`（[DepsListBox]）
+ * —— 行在框内懒加载，翻清单时动的只有那个框；页面自己的滚动只剩三段卡。
+ * 这**作废了第十一批第 31 条**（摊平成页面 item、全页只留一个可滚动容器）：摊平之后整页
+ * 是一条由全部依赖行组成的长列表，滚动时每一帧都在这条链路上付行物理与组合的钱，卡顿
+ * 没有治好。当年拆掉卡内自滚的理由（"两层竖向滚动要交接、手感是断的"）在这个形状下也
+ * 不成立：框是**定高**的，拖动先归框、框到头归页面，正是用户要的"在一个组件框里滑动"。
  *
  * **为什么默认收起**（2026-10-17 用户口径「点下可以伸展开，默认是收起来的」，照旧）：
- * 这一屏最常同时看的是"清单 + 下面那个日志大框"，装到几十上百个包的机器上全摊开会把日志
- * 顶到很远；而收起态的卡头自己写着条数（「全局依赖（37）」），不看内容也知道装了多少。
- *
- * ~~展开后仍然卡内自滚~~（2026-10-17 那版口径）：它的代价正是上面第 2 点，本条作废它。
+ * 这一屏最常同时看的是"清单 + 下面那个日志大框"；而收起态的卡头自己写着条数
+ * （「全局依赖（37）」），不看内容也知道装了多少。
  *
  * **条数与称呼跟着作用域走**（2026-10-17 第二批）：作用域是「全局」时写"项目依赖"就是一句
  * 错话 —— 全局那棵 node_modules 不属于任何项目。**只在读到了的时候才报数**：没读到时的 0
@@ -471,56 +569,76 @@ private fun LazyListScope.dependenciesGroup(
     onRemove: (String) -> Unit,
     onReinstall: (NpmRowState) -> Unit,
 ) {
-    // 展开之后卡头下面还有几段：读到但是空的、没读到的，各占一段（三态各说各的那句话）；
-    // 收起时是 0 段。卡片**下缘**那两道圆角长在最后一段上，所以要先把段数算出来。
     val rows = if (expanded && state.load.isLoaded) state.installed else emptyList()
-    val bodySlices = if (expanded) maxOf(1, rows.size) else 0
     item(key = "npm-install", contentType = SLICE_INSTALL) {
         Column(Modifier.cardSlice(ThemeColors.background, first = true, last = false)) {
             InstallRow(state = state, onDraft = onDraft, onSubmit = onSubmit)
         }
     }
     item(key = "npm-deps-header", contentType = SLICE_HEADER) {
-        Column(Modifier.cardSlice(ThemeColors.background, first = false, last = bodySlices == 0)) {
-            CollapseHeader(title = depsTitle(state), expanded = expanded, onClick = onToggle)
+        // 展开后卡头下面固定还有一段（清单框 / 空态），卡片**下缘**那两道圆角长在那一段上；
+        // 收起时卡头自己就是最后一段。
+        Column(Modifier.cardSlice(ThemeColors.background, first = false, last = !expanded)) {
+            CollapseHeader(
+                title = depsTitle(state),
+                expanded = expanded,
+                onClick = onToggle,
+                textIndent = CARD_PADDING,
+            )
         }
     }
     if (!expanded) return
-    if (rows.isEmpty()) {
-        item(key = "npm-deps-empty", contentType = SLICE_EMPTY) {
-            Column(Modifier.cardSlice(ThemeColors.background, first = false, last = true)) {
+    item(key = "npm-deps-body", contentType = SLICE_DEP_BODY) {
+        Column(Modifier.cardSlice(ThemeColors.background, first = false, last = true)) {
+            if (rows.isEmpty()) {
                 // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
                 if (!state.load.isLoaded) {
-                    EmptyHint("还没读到依赖清单：点右上角「刷新」再试，或看下面日志里怎么说的")
+                    EmptyHint("还没读到依赖清单：切到别的页再回来，或看下面日志里怎么说的")
                 } else {
                     EmptyHint(
-                        if (state.scopeIsGlobal) "读到了，全局还没有依赖（先装点什么）"
+                        if (state.scopeIsGlobal) "读到了，全局项目还没有依赖（先装点什么）"
                         else "读到了，这个项目还没有依赖（先装点什么）",
                     )
                 }
+            } else {
+                DepsListBox(
+                    rows = rows,
+                    enabled = state.canInstall,
+                    onRemove = onRemove,
+                    onReinstall = onReinstall,
+                )
             }
         }
-        return
     }
-    itemsIndexed(
-        rows,
-        key = { _, row -> "npm-dep-${row.name}@${row.version}" },
-        // **六种 item 形状必须各报各的类型**：类型为 null 时它们共用一个复用池，
-        // 一条依赖行滚出视野后节点被下一件"看起来同类型"的东西取走 —— 取到安装行/日志卡
-        // 那种形状对不上的，Compose 只能把复用出来的组合整个丢掉重来，**比不复用还慢**。
-        // 上一版全屏 5 种形状挤在一个池子里，正是这个池子在每次滚动时互相顶掉。
-        contentType = { _, _ -> SLICE_DEP },
-    ) { index, row ->
-        Column(
-            Modifier.cardSlice(
-                ThemeColors.background,
-                first = false,
-                last = index == rows.lastIndex,
-            ),
-        ) {
+}
+
+/**
+ * 依赖清单的**定高内滚框**（2026-10-28 第十二批第 32 条，见 [dependenciesGroup] 的 KDoc）。
+ *
+ * 高度封顶 [DEP_LIST_MAX_HEIGHT]：清单不再把页面拉长成一条几百行的长列表，翻清单时
+ * 只有这个框在动。框内各行不再各挂 [cardSlice]（四角圆角由整段那一片头/尾形状兜着），
+ * 行与行之间没有分隔线（2026-10-17 用户口径「依赖列表取消横线分隔」，照旧）。
+ *
+ * 拖动的归属：框没滚到头时归框，到头之后归页面 —— 嵌套滚动的缺省交接，不做额外判据。
+ */
+@Composable
+private fun DepsListBox(
+    rows: List<NpmRowState>,
+    enabled: Boolean,
+    onRemove: (String) -> Unit,
+    onReinstall: (NpmRowState) -> Unit,
+) {
+    LazyColumn(Modifier.fillMaxWidth().heightIn(max = DEP_LIST_MAX_HEIGHT)) {
+        itemsIndexed(
+            rows,
+            key = { _, row -> "npm-dep-${row.name}@${row.version}" },
+            // 框内只有一种形状，但类型照样报：滚出视野的行与别的 item 共用一个复用池时，
+            // 形状对不上的复用比不复用还慢（整段组合丢掉重来）。
+            contentType = { _, _ -> SLICE_DEP },
+        ) { _, row ->
             InstalledRow(
                 row = row,
-                enabled = state.canInstall,
+                enabled = enabled,
                 onRemove = onRemove,
                 onReinstall = onReinstall,
             )
@@ -535,7 +653,7 @@ private fun LazyListScope.dependenciesGroup(
  */
 private fun depsTitle(state: NpmState): String = when {
     !state.load.isLoaded -> "依赖列表"
-    state.scopeIsGlobal -> "全局依赖（${state.installed.size}）"
+    state.scopeIsGlobal -> "全局项目依赖（${state.installed.size}）"
     else -> "项目依赖（${state.installed.size}）"
 }
 
@@ -566,14 +684,19 @@ private fun Modifier.cardSlice(color: Color, first: Boolean, last: Boolean): Mod
 }
 
 /**
- * 列表 item 的**类型**（`contentType`）。一屏里有六种形状，类型必须分开报 ——
- * 见 [dependenciesGroup] 里那条注释。这些都是字符串常量，比的是值。
+ * 列表 item 的**类型**（`contentType`）。本页外层列表有五种形状，类型必须分开报 ——
+ * 类型为 null 时它们共用一个复用池，一件滚出视野后节点被下一件"看起来同类型"的东西
+ * 取走，取到形状对不上的，Compose 只能把复用出来的组合整个丢掉重来，**比不复用还慢**。
+ * （框内各行另有一层自己的类型 [SLICE_DEP]，见 [DepsListBox]。）
+ * 这些都是字符串常量，比的是值。
  */
 private const val SLICE_SCOPE = "npm-scope-card"
+private const val SLICE_PROFILE = "npm-profile-header-slice"
+private const val SLICE_OPTIONS = "npm-options-slice"
 private const val SLICE_LOG = "npm-log-card"
 private const val SLICE_INSTALL = "npm-install-slice"
 private const val SLICE_HEADER = "npm-deps-header-slice"
-private const val SLICE_EMPTY = "npm-deps-empty-slice"
+private const val SLICE_DEP_BODY = "npm-deps-body-slice"
 private const val SLICE_DEP = "npm-dep-slice"
 
 /**
@@ -612,25 +735,33 @@ private fun LogCard(state: NpmState) {
             EmptyHint("暂无日志")
             return@PanelCard
         }
-        LazyColumn(
-            state = listState,
+        // 选择容器（2026-10-29 用户口径「日志框里无法自己选择性复制日志」）：框里的
+        // 行是**结果**（npm 报了什么、报错原文），用户要能长按划选复制 —— 安装失败时
+        // 拿去搜的就是那一两行。容器挂在**滚动区外框**上：LazyColumn 在它里面照常懒加载，
+        // 选中的是"这一屏可见的那些行"（不可见的本来就不该拖进剪贴板）。
+        SelectionContainer(
             modifier = Modifier.fillMaxWidth().heightIn(max = LOG_MAX_HEIGHT),
-            contentPadding = PaddingValues(
-                start = CARD_PADDING,
-                end = CARD_PADDING,
-                top = 6.dp,
-                bottom = CARD_PADDING,
-            ),
         ) {
-            // 不给 key：这一列是"流水"，同一句话出现两次是常事（报错尤其），
-            // 而键重复在本仓已经有过一次闪退（见 [dependenciesGroup] 的 KDoc）。
-            items(lines) { line ->
-                ToneText(
-                    text = line.text,
-                    tone = line.tone,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
-                )
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(
+                    start = CARD_PADDING,
+                    end = CARD_PADDING,
+                    top = 6.dp,
+                    bottom = CARD_PADDING,
+                ),
+            ) {
+                // 不给 key：这一列是"流水"，同一句话出现两次是常事（报错尤其），
+                // 而键重复在本仓已经有过一次闪退（见 [dependenciesGroup] 的 KDoc）。
+                items(lines) { line ->
+                    ToneText(
+                        text = line.text,
+                        tone = line.tone,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                    )
+                }
             }
         }
     }
@@ -678,8 +809,41 @@ private fun PanelCard(content: @Composable () -> Unit) {
 /** 日志大框的高度上限（约 6~7 行）。 */
 private val LOG_MAX_HEIGHT = 200.dp
 
+/**
+ * 依赖清单框的高度上限（2026-10-28 第十二批第 32 条）：约 7 行（[ROW_MIN_HEIGHT] 44dp），
+ * 再高"清单收在一个框里"这条口径就名存实亡了。行数更少时框跟着内容收缩
+ * （`heightIn` 是上限不是定值），空态不撑这个高度。
+ */
+private val DEP_LIST_MAX_HEIGHT = 320.dp
+
 /** 卡片圆角（`SettingsCard` / 任务中心 `Card` 同一档 16dp）。 */
 private val CARD_CORNER = 16.dp
+
+/** 页头圆形图标底的直径（第 35 条）：TG `ProfileActivity` 头像容器 `createFrame(100, 100)` 的**原值**。 */
+private val PROFILE_BADGE = 100.dp
+
+/** 页头圆形图标底里的包裹字形尺寸（按圆直径的 ~60%，与 TG 头像区照片的占比同量级）。 */
+private val PROFILE_BADGE_ICON = 60.dp
+
+/** 页头圆形图标底 → 名字的行距（TG `nameTextView` 上 padding `dp(6)`）。 */
+private val PROFILE_NAME_GAP = 6.dp
+
+/** 名字 → 镜像源链接的行距。 */
+private val PROFILE_SUBTITLE_GAP = 4.dp
+
+/** 页头裸放上下留白（不套白卡后与卡片间距 [CARD_SPACING] 同量级）。 */
+private val PROFILE_HEADER_PAD = 16.dp
+
+/**
+ * 页头名字的黑色（第 35 条）：TG `key_profile_title` 的默认值 #222222。
+ *
+ * 与 [TG_PROFILE_SUBTITLE] 一样是 TG 浅色档的写死观感，不接主题系统 ——
+ * 本仓主题没有这两档，接浅色档的 `textPrimary` 会偏淡、接深色档会偏亮。
+ */
+private val TG_PROFILE_TITLE = Color(0xFF222222)
+
+/** 页头镜像源链接的灰色（第 35 条）：TG `key_actionBarDefaultSubtitle` 默认值 #79817E。 */
+private val TG_PROFILE_SUBTITLE = Color(0xFF79817E)
 
 /**
  * 段的形状：只有整组的第一段与最后一段各圆两道角，中间段四角全平。
@@ -758,6 +922,73 @@ private val INSTALL_FIELD_WIDTH = 168.dp
  * 缓存是全局读数，作用域目录出问题时它照样是有效的。
  * 「依赖作用域」那一行**永远画**（它是这个分组的话题），哪怕一个作用域都还没读到。
  */
+/**
+ * 页头三段卡（2026-10-28 第十四批第 35 条，用户口径原文「最上面我想放个包裹/盲盒
+ * 圆形图标…圆形图标下面是黑色加粗的选中项目名称，项目名称下面是灰色小号的当前使用
+ * npm镜像源链接（格式样式tg源码里都有）」）。
+ *
+ * 三段居中，尺寸与间距全部取自 TG `ProfileActivity` 的资料头部（2026-10-28 实读源码）：
+ * - 圆形底 **100dp**（TG `avatarContainer` 的 `createFrame(100, 100)`，
+ *   `ProfileActivity.java:5358`）内放包裹字形（[GlyphKind.PACKAGE]，本仓自绘），
+ *   对应 TG 的圆头像位；
+ * - 名字 17.5sp 粗体、色 `key_profile_title` = #222222、上距 6dp（TG 名字档：
+ *   `setTextSizePx(dp(17.5f))` + `bold()` + `setPadding(0, dp(6), …)`）；
+ * - 链接 13.5sp、色 `key_actionBarDefaultSubtitle` = #79817E（TG 副行档：
+ *   `onlineTextView.setTextSizePx(dp(13.5f))`）。
+ * 两个色值**写死为 TG 浅色档**（本仓主题没这两档，见第 35 条的 KDoc）。
+ *
+ * **刻意不套 [PanelCard] 白卡**（第十四批第 35 条复批，用户口径「图标不要被白色
+ * 胶囊框组件包起来。它大小都没生效，和tg的不一致」）：TG 资料头部直接铺在页面
+ * 背景上，本页页底的灰（[ThemeColors.surfaceMuted]）就是原型里资料页的背景 ——
+ * 套白卡等于给原型加了一道框；圆形底 100dp 也是 TG 头像的**原值**，不是缩档。
+ *
+ * 镜像源**永远有内容**（用户口径「在用什么就读什么」）：显示当前生效的那一家
+ * （[registryLabel] 由外壳给，读不到设置时给出厂官方源）—— npm 进程永远有一个
+ * 实际在用的源，不存在"没读到就不画"。
+ *
+ * 只做展示：选作用域的下拉仍在 [ScopeCard]。
+ */
+@Composable
+private fun ScopeHeaderCard(scopeLabel: String, registryLabel: String) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = PROFILE_HEADER_PAD),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .size(PROFILE_BADGE)
+                .clip(CircleShape)
+                .background(ThemeColors.featuredButton),
+            contentAlignment = Alignment.Center,
+        ) {
+            Glyph(
+                kind = GlyphKind.PACKAGE,
+                tint = ThemeColors.featuredButtonText,
+                size = PROFILE_BADGE_ICON,
+            )
+        }
+        Spacer(Modifier.height(PROFILE_NAME_GAP))
+        Text(
+            text = scopeLabel,
+            color = TG_PROFILE_TITLE,
+            fontSize = 17.5.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(PROFILE_SUBTITLE_GAP))
+        Text(
+            text = registryLabel,
+            color = TG_PROFILE_SUBTITLE,
+            fontSize = 13.5.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 @Composable
 private fun ScopeCard(state: NpmState, onSelect: (String) -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
@@ -771,7 +1002,7 @@ private fun ScopeCard(state: NpmState, onSelect: (String) -> Unit) {
                 PanelRow(
                     label = "依赖作用域",
                     trailing = {
-                        // 措辞来自 [NpmTargetScope.label]（空串 → 「全局」），**不在界面里另写
+                        // 措辞来自 [NpmTargetScope.label]（空串 → 「全局项目」），**不在界面里另写
                         // 一份**：宿主写给事件/日志的 projectId 也是空串，两边对同一个值必须
                         // 是一种说法。还没读到（`scopeLabel` = "—"）时不冒充「全局」。
                         ToneText(state.scopeLabel, StatusTone.MUTED)
@@ -893,13 +1124,14 @@ private fun OptionsBar(
     Row(
         Modifier
             .fillMaxWidth()
-            // 底色与页底同色：这一栏压在内容滚动区下面，不透光才切得干净。
-            .background(ThemeColors.surfaceMuted)
+            // 移回滚动列表后不再压页底：底让页面自己承担（灰页上的白卡，
+            // 见 [OptionTile] 的 KDoc），导航栏让位归 [LazyColumn] 的 contentPadding；
+            // 这里只留一道与相邻卡同节奏的灰缝。
             .padding(
                 start = CARD_MARGIN,
                 end = CARD_MARGIN,
                 top = CARD_SPACING,
-                bottom = CARD_SPACING + TabBarBottomClearance(),
+                bottom = CARD_SPACING,
             ),
         horizontalArrangement = Arrangement.spacedBy(OPTION_TILE_GAP),
     ) {
@@ -928,7 +1160,8 @@ private fun OptionsBar(
 }
 
 /**
- * 一颗底部动作按钮 —— **照 TG `ProfileActionsView` 的源码做**（2026-10-18 用户口径
+ * 一颗动作按钮（第十五批第 37 条起随列表滚动，之前是页底三颗）—— **照 TG
+ * `ProfileActionsView` 的源码做**（2026-10-18 用户口径
  * 「你去看tg源码啊，/tmp/tg 你对着图做干嘛」）。参考图就是 TG 的「我的资料」那一行
  * （`MODE_MY_PROFILE` 的三颗：`KEY_SET_PHOTO` / `KEY_EDIT_INFO` / `KEY_SETTINGS`），
  * 所以取值一律以 `TMessagesProj/src/main/java/org/telegram/ui/Components/ProfileActionsView.java`
@@ -1174,3 +1407,61 @@ private val REINSTALL_TOUCH = 36.dp
 
 /** 重装那颗 ⟳ 的图标边长。 */
 private val REINSTALL_ICON = 18.dp
+
+/**
+ * 待确认的卸载/重装（第十七批第 41 条）。
+ *
+ * 纯数据不掺 [ConfirmActionDialog] 的画法：确认框读两类各自的字面（动作名、对象），
+ * 文案的拼装在对话框里 —— 要加一行说明改一处。
+ */
+private sealed interface ConfirmAction {
+    /** 卸载（破坏性：node_modules 与锁里这一行一起移除，无回收站）。 */
+    data class Remove(val name: String) : ConfirmAction
+
+    /** 重装（改写盘上树：重新拉取这一行落盘，`package.json` 声明不动 —— `--no-save`）。 */
+    data class Reinstall(val row: NpmRowState) : ConfirmAction
+}
+
+/**
+ * 卸载/重装的确认框（第十七批第 41 条）。
+ *
+ * **为什么卸载也要确认而不仅仅是重装**：这一屏没有别的破坏性动作，卸载是唯一不可逆的
+ * （重装还能再删、删除没有回收站）；而「卸载」与「重装」并排 8dp，误触无从感知 ——
+ * 确认框把动作名与对象在**发命令之前**摆在用户眼前，点错了当场看见，而不是在
+ * 日志框里找「当时到底按的是哪颗」。
+ *
+ * 文案分两类写清（卸载说移除什么、重装说装什么），作用域名 [NpmState.scopeLabel] 一起
+ * 说上 —— 用户对「动了哪一棵 node_modules」要有数。
+ */
+@Composable
+private fun ConfirmActionDialog(
+    action: ConfirmAction,
+    scope: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val (title, text, confirmLabel) = when (action) {
+        is ConfirmAction.Remove -> Triple(
+            "卸载 ${action.name}",
+            "从「$scope」移除 ${action.name}：node_modules 与锁里这一行一起删掉。确定卸载？",
+            "卸载",
+        )
+        is ConfirmAction.Reinstall -> Triple(
+            "重装 ${action.row.name}",
+            "在「$scope」重新拉取 ${action.row.name}@${action.row.version} 落盘" +
+                "（package.json 的声明不动）。确定重装？",
+            "重装",
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("返回") }
+        },
+    )
+}

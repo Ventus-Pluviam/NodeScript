@@ -42,21 +42,20 @@ internal suspend fun runNpmMaintenanceOp(
     action: NpmMaintenanceAction,
 ): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖维护跑在某个项目的 node_modules 上", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖维护跑在某个项目的 node_modules 上", null)
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
-    val busy = state.copy(maintenance = action, opError = null, opNotice = null)
+    val busy = state.withMaintenanceInFlight(action)
     return try {
         host.runNpmMaintenance(projectId, action)
         loadNpmSnapshot(host, busy).copy(
             maintenance = null,
-            opNotice = noticeFor(action),
-        )
+        ).withOpAccount(null, noticeFor(action))
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
-        busy.copy(maintenance = null, opError = t.message ?: t.javaClass.simpleName, opNotice = null)
+        busy.copy(maintenance = null).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 
@@ -81,21 +80,21 @@ internal suspend fun runNpmMaintenanceOp(
  */
 internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", null)
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
-    val busy = state.copy(maintenance = NpmMaintenanceAction.DEDUPE, opError = null, opNotice = null)
+    val busy = state.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
     return try {
         host.runNpmMaintenance(projectId, NpmMaintenanceAction.DEDUPE)
-        var notice = "已入队 npm dedupe：拍平当前作用域的重复依赖"
+        var notice = "已入队 npm dedupe：合并当前作用域的重复依赖"
         var promoteError: String? = null
         if (NpmTargetScope.isGlobal(projectId)) {
-            notice += "。当前作用域就是全局，没有可提升的对象"
+            notice += "；当前作用域即全局，无依赖可提升"
         } else {
             try {
                 host.promoteNpmToGlobal(projectId)
-                notice += "；已把「$projectId」声明的依赖提升到全局（别的项目也能用）"
+                notice += "；已提升「$projectId」的声明依赖至全局"
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Exception) {
@@ -104,13 +103,11 @@ internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState):
         }
         loadNpmSnapshot(host, busy).copy(
             maintenance = null,
-            opNotice = notice,
-            opError = promoteError,
-        )
+        ).withOpAccount(promoteError, notice)
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
-        busy.copy(maintenance = null, opError = t.message ?: t.javaClass.simpleName, opNotice = null)
+        busy.copy(maintenance = null).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 
@@ -125,30 +122,48 @@ internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState):
  */
 internal suspend fun reclaimNpmCacheOp(host: HostSummary?, state: NpmState): NpmState {
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
-    val busy = state.copy(reclaimingCache = true, opError = null, opNotice = null)
+    val busy = state.withCacheReclaimInFlight()
     return try {
         val report = host.reclaimNpmCache()
         // 回收之后**必须**再取一次读数：配额条上那个数字就是用户按这颗按钮的原因，
         // 不回读的话屏幕上还是旧值，看起来像"没生效"。
         loadNpmSnapshot(host, busy).copy(
             reclaimingCache = false,
-            opNotice = reclaimNotice(report),
-        )
+        ).withOpAccount(null, reclaimNotice(report))
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
-        busy.copy(reclaimingCache = false, opError = t.message ?: t.javaClass.simpleName, opNotice = null)
+        busy.copy(reclaimingCache = false).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 
 /** 三颗按钮各自的"接下来会发生什么"（**不替用户宣布结果** —— 结果在清单里）。 */
 private fun noticeFor(action: NpmMaintenanceAction): String = when (action) {
-    NpmMaintenanceAction.PRUNE -> "已入队 npm prune：删掉 lock 里不需要的包，完成后清单会更新"
-    NpmMaintenanceAction.DEDUPE -> "已入队 npm dedupe：拍平重复依赖，完成后清单会更新"
-    NpmMaintenanceAction.CI -> "已入队 npm ci：按 lock 严格重建 node_modules（会先验 lock 签名）"
+    NpmMaintenanceAction.PRUNE -> "已入队 npm prune：移除 lock 中未声明的包，完成后清单更新"
+    NpmMaintenanceAction.DEDUPE -> "已入队 npm dedupe：合并重复依赖，完成后清单更新"
+    NpmMaintenanceAction.CI -> "已入队 npm ci：按 lock 重建 node_modules（先校验 lock 签名）"
 }
+
+/**
+ * 「维护动作发生」那一刻的在途写回（2026-10-29 修，与 [runNpmPanelCommand]
+ * 同一条账）：`runNpmMaintenance` 与安装是同一条挂起语义 —— `enqueueHeavy`
+ * 协程内联、跑完才返回。提交时若不先把在途写回，三颗维护按钮会停留在可点状态、
+ * 界面没有任何「在跑」的指示，连点就堆出一串排队会话。
+ */
+internal fun NpmState.withMaintenanceInFlight(action: NpmMaintenanceAction): NpmState = copy(
+    maintenance = action,
+).withOpAccount(null, null)
+
+/**
+ * 「回收缓存发生」那一刻的在途写回（2026-10-29 修）：回收虽然不占安装会话，
+ * 也一样是挂起调用 —— 提交时不置位，`canReclaimCache` 的防连点判据就永远
+ * 不生效，「按下去没反应还能再按」。
+ */
+internal fun NpmState.withCacheReclaimInFlight(): NpmState = copy(
+    reclaimingCache = true,
+).withOpAccount(null, null)
 
 /**
  * 回收回执。
@@ -157,15 +172,15 @@ private fun noticeFor(action: NpmMaintenanceAction): String = when (action) {
  * （§10 的离线能力全建在它上面），所以留下来的那部分要说得像是**结果**而不是**残留**。
  */
 internal fun reclaimNotice(r: NpmCacheReclaimReport): String = buildString {
-    append("缓存已按各项目 lock 回收：删了 ").append(r.removedEntries).append(" 条（")
+    append("缓存回收完成：删除 ").append(r.removedEntries).append(" 项（")
     append(r.removedBytes / 1024 / 1024).append("MB）")
-    append("；保留 ").append(r.keptEntries).append(" 条（").append(r.keptBytes / 1024 / 1024).append("MB）")
+    append("；保留 ").append(r.keptEntries).append(" 项（").append(r.keptBytes / 1024 / 1024).append("MB）")
     if (r.keptEntries == 0) {
-        append(" —— 缓存已空，下次安装必须联网")
+        append("；缓存已空，下次安装需联网")
     } else {
-        append("，离线重装仍可用")
+        append("；离线重装不受影响")
     }
-    if (r.indexRebuilt) append("；顺带修掉了缓存索引里的悬空引用")
+    if (r.indexRebuilt) append("；缓存索引悬空引用已清除")
 }
 
 /**
