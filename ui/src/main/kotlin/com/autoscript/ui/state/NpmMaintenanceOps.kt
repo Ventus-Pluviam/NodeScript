@@ -42,21 +42,20 @@ internal suspend fun runNpmMaintenanceOp(
     action: NpmMaintenanceAction,
 ): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖维护跑在某个项目的 node_modules 上", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖维护跑在某个项目的 node_modules 上", null)
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
     val busy = state.withMaintenanceInFlight(action)
     return try {
         host.runNpmMaintenance(projectId, action)
         loadNpmSnapshot(host, busy).copy(
             maintenance = null,
-            opNotice = noticeFor(action),
-        )
+        ).withOpAccount(null, noticeFor(action))
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
-        busy.copy(maintenance = null, opError = t.message ?: t.javaClass.simpleName, opNotice = null)
+        busy.copy(maintenance = null).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 
@@ -81,17 +80,17 @@ internal suspend fun runNpmMaintenanceOp(
  */
 internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", null)
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
     val busy = state.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
     return try {
         host.runNpmMaintenance(projectId, NpmMaintenanceAction.DEDUPE)
-        var notice = "已入队 npm dedupe：拍平当前作用域的重复依赖"
+        var notice = "已入队 npm dedupe：合并当前作用域的重复依赖"
         var promoteError: String? = null
         if (NpmTargetScope.isGlobal(projectId)) {
-            notice += "。当前作用域就是全局，没有可提升的对象"
+            notice += "；当前作用域即全局，无依赖可提升"
         } else {
             try {
                 host.promoteNpmToGlobal(projectId)
@@ -104,13 +103,11 @@ internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState):
         }
         loadNpmSnapshot(host, busy).copy(
             maintenance = null,
-            opNotice = notice,
-            opError = promoteError,
-        )
+        ).withOpAccount(promoteError, notice)
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
-        busy.copy(maintenance = null, opError = t.message ?: t.javaClass.simpleName, opNotice = null)
+        busy.copy(maintenance = null).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 
@@ -125,7 +122,7 @@ internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState):
  */
 internal suspend fun reclaimNpmCacheOp(host: HostSummary?, state: NpmState): NpmState {
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
     val busy = state.withCacheReclaimInFlight()
     return try {
@@ -134,12 +131,11 @@ internal suspend fun reclaimNpmCacheOp(host: HostSummary?, state: NpmState): Npm
         // 不回读的话屏幕上还是旧值，看起来像"没生效"。
         loadNpmSnapshot(host, busy).copy(
             reclaimingCache = false,
-            opNotice = reclaimNotice(report),
-        )
+        ).withOpAccount(null, reclaimNotice(report))
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
-        busy.copy(reclaimingCache = false, opError = t.message ?: t.javaClass.simpleName, opNotice = null)
+        busy.copy(reclaimingCache = false).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 
@@ -158,9 +154,7 @@ private fun noticeFor(action: NpmMaintenanceAction): String = when (action) {
  */
 internal fun NpmState.withMaintenanceInFlight(action: NpmMaintenanceAction): NpmState = copy(
     maintenance = action,
-    opError = null,
-    opNotice = null,
-)
+).withOpAccount(null, null)
 
 /**
  * 「回收缓存发生」那一刻的在途写回（2026-10-29 修）：回收虽然不占安装会话，
@@ -169,9 +163,7 @@ internal fun NpmState.withMaintenanceInFlight(action: NpmMaintenanceAction): Npm
  */
 internal fun NpmState.withCacheReclaimInFlight(): NpmState = copy(
     reclaimingCache = true,
-    opError = null,
-    opNotice = null,
-)
+).withOpAccount(null, null)
 
 /**
  * 回收回执。

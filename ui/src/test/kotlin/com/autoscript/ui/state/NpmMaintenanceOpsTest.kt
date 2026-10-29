@@ -170,7 +170,7 @@ class NpmMaintenanceOpsTest {
         assertNull(next.opError)
         val n = next.opNotice!!
         assertTrue(n.contains("dedupe"), "第一段干了什么要说：$n")
-        assertTrue(n.contains("提升到全局"), "第二段干了什么更要说 —— 那是这颗按钮的意思：$n")
+        assertTrue(n.contains("已提升"), "第二段干了什么更要说 —— 那是这颗按钮的意思：$n")
         assertFalse(n.contains("已完成"), "入队 ≠ 完成：不许替用户宣布结果：$n")
     }
 
@@ -184,7 +184,7 @@ class NpmMaintenanceOpsTest {
         assertTrue(host.promoted.isEmpty(), "把自己提升到自己身上是句空话，不该发出去")
         // **必须明说跳过了**：不然用户会以为"提升"那半截悄悄失败了（这正是这条按钮的语义）。
         assertTrue(next.opNotice!!.contains("全局"), "实为 ${next.opNotice}")
-        assertTrue(next.opNotice!!.contains("没有可提升"), "实为 ${next.opNotice}")
+        assertTrue(next.opNotice!!.contains("可提升"), "实为 ${next.opNotice}")
     }
 
     @Test
@@ -236,16 +236,16 @@ class NpmMaintenanceOpsTest {
         assertEquals(1, host.reclaims)
         assertFalse(next.reclaimingCache, "跑完要清忙碌标记")
         val n = next.opNotice!!
-        assertTrue(n.contains("删了 3 条"), "删了多少要说：$n")
-        assertTrue(n.contains("保留 7 条"), "留了多少更要说（缓存不是越空越好）：$n")
-        assertTrue(n.contains("离线重装仍可用"), "还有内容就要说清离线没坏：$n")
+        assertTrue(n.contains("删除 3 项"), "删了多少要说：$n")
+        assertTrue(n.contains("保留 7 项"), "留了多少更要说（缓存不是越空越好）：$n")
+        assertTrue(n.contains("离线重装不受影响"), "还有内容就要说清离线没坏：$n")
     }
 
     @Test
     fun `缓存被清空 → 回执如实说下次安装必须联网`() = runBlocking {
         val host = MaintenanceHost(report = NpmCacheReclaimReport(9, 9L * 1024 * 1024, 0, 0, 0, false))
         val n = reclaimNpmCacheOp(host, loaded(project())).opNotice!!
-        assertTrue(n.contains("下次安装必须联网"), "空了就是空了，不许说「离线仍可用」：$n")
+        assertTrue(n.contains("下次安装需联网"), "空了就是空了，不许说「离线仍可用」：$n")
     }
 
     @Test

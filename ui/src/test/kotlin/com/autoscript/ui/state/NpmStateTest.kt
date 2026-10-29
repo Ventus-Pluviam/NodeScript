@@ -198,13 +198,13 @@ class NpmStateTest {
     }
 
     @Test
-    fun `有操作账不短路_回执按「现取即清」讲掉`() {
+    fun `操作账随现取累积：快照没变短路复用也带着账`() {
         val snapshot = NpmPanelSnapshot(listOf(project("demo")))
         val loaded = NpmState.of(snapshot)
         val noticed = loaded.copy(opNotice = "已提交 npm install")
         val refreshed = NpmState.of(snapshot, noticed)
-        assertFalse(refreshed === noticed, "带着操作账的刷新必须重建 —— 短路会把回执留到下一次")
-        assertNull(refreshed.opNotice, "opNotice 的契约是「现取即清」：一次成功的回读把它讲掉")
+        assertTrue(refreshed === noticed, "快照没变 → 复用上一份（账随 previous 走，不回退）")
+        assertEquals("已提交 npm install", refreshed.opNotice, "回执与 npm 输出同等待遇：累积到清日志/新账顶替")
     }
 
     @Test

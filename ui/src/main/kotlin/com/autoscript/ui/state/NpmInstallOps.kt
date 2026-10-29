@@ -56,10 +56,8 @@ private const val INSTALL_FLAGS = " --prefer-offline"
  */
 internal fun NpmState.withInstallInFlight(): NpmState = copy(
     installing = true,
-    opError = null,
-    opNotice = null,
     installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
-)
+).withOpAccount(null, null)
 
 /**
  * 把输入框里的一行 + 两个旗标拼成一条命令（**纯函数**，可单测）。
@@ -118,12 +116,12 @@ internal fun buildReinstallCommand(name: String, version: String): String =
  */
 internal suspend fun submitInstall(host: HostSummary?, state: NpmState): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖装在那个项目的 node_modules 里", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖装在那个项目的 node_modules 里", null)
     if (state.installDraft.trim().length > INSTALL_DRAFT_MAX) {
-        return state.copy(opError = "输入过长（上限 $INSTALL_DRAFT_MAX 字符）：请只写包名与版本", opNotice = null)
+        return state.withOpAccount("输入过长（上限 $INSTALL_DRAFT_MAX 字符）：请只写包名与版本", null)
     }
     val line = buildInstallCommand(state.installDraft)
-        ?: return state.copy(opError = "先写要装什么（例如 axios 或 axios@1.7.0）", opNotice = null)
+        ?: return state.withOpAccount("先写要装什么（例如 axios 或 axios@1.7.0）", null)
     return runPanelCommand(host, state, projectId, line, clearDraft = true)
 }
 
@@ -135,7 +133,7 @@ internal suspend fun submitInstall(host: HostSummary?, state: NpmState): NpmStat
  */
 internal suspend fun removeInstalled(host: HostSummary?, state: NpmState, name: String): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖装在那个项目的 node_modules 里", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖装在那个项目的 node_modules 里", null)
     return runPanelCommand(host, state, projectId, buildRemoveCommand(name), clearDraft = false)
 }
 
@@ -151,7 +149,7 @@ internal suspend fun removeInstalled(host: HostSummary?, state: NpmState, name: 
  */
 internal suspend fun reinstallInstalled(host: HostSummary?, state: NpmState, name: String, version: String): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖装在那个作用域的 node_modules 里", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖装在那个作用域的 node_modules 里", null)
     return runPanelCommand(host, state, projectId, buildReinstallCommand(name, version), clearDraft = false)
 }
 
@@ -163,11 +161,11 @@ private suspend fun runPanelCommand(
     line: String,
     clearDraft: Boolean,
 ): NpmState {
-    NpmConsoleKeys.rejectProjectId(projectId)?.let { return state.copy(opError = it, opNotice = null) }
+    NpmConsoleKeys.rejectProjectId(projectId)?.let { return state.withOpAccount(it, null) }
     val parsed = NpmConsoleKeys.parse(line)
-    if (parsed is NpmConsoleCommand.Rejected) return state.copy(opError = parsed.reason, opNotice = null)
+    if (parsed is NpmConsoleCommand.Rejected) return state.withOpAccount(parsed.reason, null)
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
     // 命令已过判据 → 必然是一条 `npm <sub>`：阶段条从 `QUEUED` 起（那一格之前没有别的
     // 信息可给）。
@@ -187,8 +185,7 @@ private suspend fun runPanelCommand(
         loadNpmSnapshot(host, polled).copy(
             installing = false,
             installDraft = if (clearDraft) "" else state.installDraft,
-            opNotice = noticeForPanel(parsed),
-        )
+        ).withOpAccount(null, noticeForPanel(parsed))
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
@@ -196,9 +193,7 @@ private suspend fun runPanelCommand(
         val polled = pollInstallEvents(host, busy, projectId)
         loadNpmSnapshot(host, polled).copy(
             installing = false,
-            opError = t.message ?: t.javaClass.simpleName,
-            opNotice = null,
-        )
+        ).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 

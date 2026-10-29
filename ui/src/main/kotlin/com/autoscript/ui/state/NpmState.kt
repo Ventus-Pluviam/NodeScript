@@ -8,7 +8,9 @@ import androidx.compose.runtime.Immutable
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConsoleSnapshot
+import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.LazyThreadSafetyMode
 
 /**
@@ -35,8 +37,20 @@ data class NpmState(
      * 「报错全部收进底部日志大框」）—— 见 [logLines]。页面上半部分不再出现红字。
      */
     val opError: String? = null,
-    /** 上一次操作的结论回执（现取即清，不缓存）。 */
+    /**
+     * 上一次操作的结论回执（**累积**：像 npm 输出行一样留在日志流里，直到清日志或
+     * 新操作顶替 —— 2026-10-29 用户口径「这些描述要慢慢追加，不要闪一下就没」）。
+     */
     val opNotice: String? = null,
+    /**
+     * 操作账（[opError]/[opNotice]）落账的**时刻**（毫秒；0 = 当前没有账）。
+     *
+     * 日志大框从 2026-10-29 起把操作账也当**日志行**画（[logLines] 里排进流水、
+     * 带 `HH:mm:ss`）—— 没有这个时刻，那两行就只能顶在框首当悬浮摘要，或者拿
+     * 渲染当刻冒充落账当刻（每次重组时间都在漂）。**写账必须走 [withOpAccount]**，
+     * 它同时置时刻；直接 `copy(opError=…)` 会得到 1970 的时间戳，测试可抓。
+     */
+    val opAtMillis: Long = 0L,
     /**
      * 有维护动作在挂起中（null = 没有）—— 防连点，
      * 但**要记住是哪一个**：三颗按钮同时禁用，其中被按下的那颗显示「进行中」，
@@ -173,9 +187,10 @@ data class NpmState(
     /**
      * 日志大框里要画的行（**只读的投影**，页面上半部分不再有红字）。
      *
-     * 次序是**用户 2026-10-17 裁定的「两者都显示」**：本页这次操作的账在前
-     * （读失败 / [opError] / [opNotice]），npm 输出行在后 —— 前者是"谁把这事干的"，
-     * 后者是"它说了什么"。
+     * 次序是**用户 2026-10-17 裁定的「两者都显示」** + 2026-10-29 把操作账并进流水：
+     * 裁切标注 → 读失败 → npm 输出行（时间序）→ 操作账（回执/错误，同样带时间戳、
+     * 排在最新输出之后）—— 前者是"它说了什么"，后者是"谁把这事干的"；账不再顶在
+     * 框首当悬浮摘要（用户口径：「这些描述不要在日志框最上面出现，而是慢慢追加」）。
      *
      * 三条刻意：
      * - **读失败也进这个框**（口径是"页面上半部分不再出现红字"），但措辞保留
@@ -186,14 +201,22 @@ data class NpmState(
      * - 一条都没有时给一句**怎么做才有**的话，而不是一个空框。
      */
     val logLines: List<NpmLogLine> by lazy(LazyThreadSafetyMode.NONE) {
+        // 操作账与 npm 输出行同一副时间戳长相（HH:mm:ss，与 [ConsoleCmdLineState.timeText]
+        // 同一格式：一套日志流里不该有两种时间写法）。
+        fun timeText(): String =
+            OP_TIME_FORMAT.format(Instant.ofEpochMilli(opAtMillis).atZone(ZoneId.systemDefault()))
         buildList {
             if (consoleTruncated) add(NpmLogLine("更早的输出已裁掉，这里只留最近 $LOG_KEEP 行", StatusTone.MUTED))
             (load as? LoadState.Failed)?.let {
                 add(NpmLogLine("读取失败：${it.reason}（下面显示的是上次读到的，可能已过期）", StatusTone.PROBLEM))
             }
-            opError?.let { add(NpmLogLine(it, StatusTone.PROBLEM)) }
-            opNotice?.let { add(NpmLogLine(it, StatusTone.MUTED)) }
             consoleLines.forEach { add(NpmLogLine(it.timeText + "  " + it.text, it.tone)) }
+            // 操作账（回执/错误）**也按日志行进流水**（2026-10-29 用户口径
+            // 「这些描述不要在日志框最上面出现，而是慢慢追加」）：不再是顶在框首的一段
+            // 悬浮摘要，而是排在最新输出**之后**的普通一行 —— 位置在底、时间戳与
+            // npm 输出同格式，读起来就是"又追加了一行"。
+            opError?.let { add(NpmLogLine(timeText() + "  " + it, StatusTone.PROBLEM)) }
+            opNotice?.let { add(NpmLogLine(timeText() + "  " + it, StatusTone.MUTED)) }
         }
     }
 
@@ -254,6 +277,12 @@ data class NpmState(
                 consoleLines = previous.consoleLines,
                 consoleSeq = previous.consoleSeq,
                 consoleTruncated = previous.consoleTruncated,
+                // 操作账（回执/错误）从 2026-10-29 起也**累积**（像 npm 输出行一样留在
+                // 日志流里直到清日志或新账顶替）—— 现取即清的话，轮询 400ms 一现取，
+                // 回执"闪一下就没了"，用户看到的就是"没有慢慢追加"。
+                opError = previous.opError,
+                opNotice = previous.opNotice,
+                opAtMillis = previous.opAtMillis,
             )
         }
 
@@ -269,13 +298,11 @@ data class NpmState(
          * 两个排除项各有各的账，**不许**并进短路：
          * - **失败态**（[LoadState.Failed]）：`failed()` 只改 `load`、不动快照，短路会把
          *   「读取失败」这句错话留在日志框里 —— 一次成功的回读必须讲得掉它；
-         * - **有操作账**（[opError]/[opNotice]）：重建那份会把它俩归 null —— `opNotice`
-         *   的 KDoc 就写着「现取即清」，回执留在屏幕上等下一次刷新才消失不是新增的功能，
-         *   是这句注释原本答应的行为。
+         * - **有操作账**（[opError]/[opNotice]）：账随 previous 走（2026-10-29 起累积、
+         *   不清于现取），快照没变时复用 previous 那本就带着账，无需为清账强制重建。
          */
         private fun canReusePrevious(snapshot: NpmPanelSnapshot, previous: NpmState): Boolean =
-            snapshot == previous.snapshot && previous.load !is LoadState.Failed &&
-                previous.opError == null && previous.opNotice == null
+            snapshot == previous.snapshot && previous.load !is LoadState.Failed
 
         /**
          * 换一个项目看（[previous] 就是当前那份）。
@@ -334,6 +361,7 @@ data class NpmState(
             consoleTruncated = false,
             opError = null,
             opNotice = null,
+            opAtMillis = 0L,
         )
 
         /**
@@ -365,6 +393,22 @@ data class NpmState(
 
 /** 日志大框最多留多少行（更早的裁掉，并在框里说明 —— 见 [NpmState.consoleTruncated]）。 */
 internal const val LOG_KEEP = 200
+
+/**
+ * 操作账写账的**唯一入口**（[NpmState.opError]/[opNotice] 的落账点）。
+ *
+ * 日志大框把操作账当日志行画，需要落账时刻（[NpmState.opAtMillis]）—— 直接
+ * `copy(opError = …)` 会留下 1970 的时间戳（测试可抓）。清账（两个都传 null）
+ * 也走这里：时刻一并归零，与清账同一次变化。
+ */
+internal fun NpmState.withOpAccount(error: String?, notice: String?): NpmState = copy(
+    opError = error,
+    opNotice = notice,
+    opAtMillis = if (error != null || notice != null) System.currentTimeMillis() else 0L,
+)
+
+/** 操作账行的时刻格式（与控制台行 [ConsoleCmdLineState.timeText] 同一 `HH:mm:ss`）。 */
+private val OP_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
 /** 日志大框一次拉多少行（与控制台那个缺省页大小同量级：一次现取就够把框填满）。 */
 internal const val LOG_PAGE = 256
