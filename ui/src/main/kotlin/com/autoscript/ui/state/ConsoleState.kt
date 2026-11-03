@@ -6,7 +6,6 @@ import com.autoscript.domain.host.ConsoleLineRow
 import com.autoscript.domain.host.ConsoleSnapshot
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 /**
  * 控制台呈现态（纯数据，Compose 之外可 JVM 测）。

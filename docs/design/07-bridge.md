@@ -33,12 +33,12 @@ RuntimeBridge (单例)                        ← requestId 生成/关联、TTL�
 - `tsf_data`：console、事件流、传感器采样 —— 可丢包（丢包统计/背压，溢出时回调 JS 层 `queueError`）。数据面闲置自动 unref。
 两类消息都带 `ctxId + seq` 与 generation 校验。
 
-- **消费侧已落地（2026-09-24，控制台屏）**：Kotlin 侧 `ConsoleCollector`（有界 2000、容量满丢最老并计数、`drain(sinceSeq, max)` seq 游标**非破坏**拉取） → 读口 `HostSummary.console(sinceSeq, maxLines)`（DTO `ConsoleSnapshot` 住 `:domain`，
-  拼装 `ConsoleRead` 住 `:app` 壳装配包、纯 JVM 可测）→ `:ui` 第四页签控制台屏。**2026-10-09 批 84 改名**：那个页签**不再是控制台** —— 用户口径「控制台不是放系统日志的地方，是用来执行命令的」，控制台改做命令面（§10.9 第 3 条，读口是 `HostSummary.runNpmCommand`/`consoleOutput`，**与本节这条读口无关**），而这条读口（`HostSummary.console`）的消费方改为**管理面板 → 日志管理**（系统日志/脚本输出/任务日志三段）与任务中心的在途执行块。**数据面一个字没动**：`ConsoleCollector`、游标语义、`stopRun`、`ConsoleSnapshot` 的字段与纪律全同下。呈现纪律：**游标只进不退、行累积**（刷新 = 增量拉取不是重画；并发同游标按 seq 去重）、
+- **消费侧已落地（控制台屏）**：Kotlin 侧 `ConsoleCollector`（有界 2000、容量满丢最老并计数、`drain(sinceSeq, max)` seq 游标**非破坏**拉取） → 读口 `HostSummary.console(sinceSeq, maxLines)`（DTO `ConsoleSnapshot` 住 `:domain`，
+  拼装 `ConsoleRead` 住 `:app` 壳装配包、纯 JVM 可测）→ `:ui` 第四页签控制台屏。**改名**：那个页签**不再是控制台** —— 用户口径「控制台不是放系统日志的地方，是用来执行命令的」，控制台改做命令面（§10.9 第 3 条，读口是 `HostSummary.runNpmCommand`/`consoleOutput`，**与本节这条读口无关**），而这条读口（`HostSummary.console`）的消费方改为**管理面板 → 日志管理**（系统日志/脚本输出/任务日志三段）与任务中心的在途执行块。**数据面一个字没动**：`ConsoleCollector`、游标语义、`stopRun`、`ConsoleSnapshot` 的字段与纪律全同下。呈现纪律：**游标只进不退、行累积**（刷新 = 增量拉取不是重画；并发同游标按 seq 去重）、
   **读失败保留旧行与游标**（瞬时失败抹掉用户已看到的日志比报错更糟；失败只亮原因）、拉满标「可能还有」不假装到底、**丢包非零不藏**（`droppedTotal` 上屏 —
   — 显示的不是全部得说出来）、在途执行两端对照随快照带上（§8.3：宿主读不到如实说读不到、**不渲染成某个状态**；分歧标红，判据仍在 `RuntimeController` 不在呈现层）。
-  刷新时机与能力中心/任务中心同构：回前台/切页签现取，页大小 256，读失败不自激。**停止操作面同批落地（2026-09-24）**：读口 `HostSummary.stopRun(runId)`（`:domain`）→ `AssembledShell.stopRun`（壳持有的在途表 `RuntimeController.stop` → 池四步 quiesce，
-  `AlreadyGone` 如实 false 不抛）→ `AppShellApplication.stopRun`（壳未装配抛）→ `:ui` **日志管理「脚本输出」段的在途行**每行一个「停止」按钮（批 84 前在控制台）（`ConsoleState.stopError/stopNotice/stopInFlight` 与读账分开记账、
+  刷新时机与能力中心/任务中心同构：回前台/切页签现取，页大小 256，读失败不自激。**停止操作面同批落地**：读口 `HostSummary.stopRun(runId)`（`:domain`）→ `AssembledShell.stopRun`（壳持有的在途表 `RuntimeController.stop` → 池四步 quiesce，
+  `AlreadyGone` 如实 false 不抛）→ `AppShellApplication.stopRun`（壳未装配抛）→ `:ui` **日志管理「脚本输出」段的在途行**每行一个「停止」按钮（前在控制台）（`ConsoleState.stopError/stopNotice/stopInFlight` 与读账分开记账、
   刷新现取归零；回执措辞：true = 已请求停止、false = 已不在途；挂起中按钮禁用）。与 `Scheduler.stopLastRun` 的分工：那是调度单槽快捷口（恢复重投会覆盖），
   本口按 runId 精确命中在途表、不受覆盖影响。
 ### 7.4 数据与对象生命周期
@@ -49,7 +49,7 @@ RuntimeBridge (单例)                        ← requestId 生成/关联、TTL�
   - 任何操作若 `gen` 不匹配 → `ERR_STALE_HANDLE`（防「旧引用操纵新资源」竞态）。
   - 资源 `dispose` 后 tombstone 立即清除内核引用；销毁由内核单线程执行，杜绝并发 Dispose。
 - **引用计数对象**（Image/MediaPlayer）用弱引用 + finalize 兜底；`Image.recycle()` 比 GC 优先。
-- **帧的所有权：发号侧归一（§18 第 8 项 (b)，2026-09-26 落地）**：图像帧的在场性/发号/像素
+- **帧的所有权：发号侧归一（§18 第 8 项 (b)）**：图像帧的在场性/发号/像素
   **只由 `:domain` `ImageAnalyzer` 一家持有**（`decode` 与 `ingest` 同一个 `nextRefId`）。
   `screen` 与 `images` 是**两个释放入口、一张表**：`frame.recycle()` 按来源各打各的
   namespace，落进去是同一个"已释放"事实 —— 放过的帧任一侧再用都是 `ERR_STALE_HANDLE`。
@@ -93,7 +93,7 @@ P0 起用 **unix domain socket**（同应用可持久连接、双向流、背压
 
 **日志归属与边界**：`ConsoleCollector.handle` 必须从认证上下文取 `engineRunId`，缺身份回
 `ERR_PERMISSION_DENIED`，绝不回退 0；宿主 `HostLog` 直写仍用 0。系统日志仅显示宿主行，
-脚本行在**日志管理的「脚本输出」段**按 `[#runId]` 显示（2026-10-09 批 84 前那是控制台页）；日志归属是 `EngineRunReceipt.runId`，不是 intentRunId/池槽/runNonce。
+脚本行在**日志管理的「脚本输出」段**按 `[#runId]` 显示（前那是控制台页）；日志归属是 `EngineRunReceipt.runId`，不是 intentRunId/池槽/runNonce。
 队列仍有界、TSF 仍可丢包、强制退出仍可损失尾行，不新增持久化或完整 logcat。
 `consoleSink` 捕获桥错误后会通过 `onQueueError` 报告并正常兑现 Promise，故 **await 完成不证明送达**；
 验收须核对原始 RPC 成功 ACK 与宿主实际入队行，入队亦不代表永久保存。
@@ -110,10 +110,10 @@ class AutojsError extends Error {
 }
 ```
 错误目录（前 20 个中最关键）：`ERR_TIMEOUT`、`ERR_STALE_HANDLE`、`ERR_PERMISSION_DENIED`（能力未授权/被降级）、`ERR_SERVICE_DISABLED`、`ERR_SCREEN_LOCKED`、`ERR_BLACK_FRAME`（FLAG_SECURE）、
-`ERR_CAPTURE_DENIED`、`ERR_ENGINE_STOPPED`、`ERR_ENGINE_CRASHED`（进程死）、`ERR_NOT_IMPLEMENTED`（本平台不支持，如 child_process）、`ERR_INVALID_PARAM`、`ERR_INTERNAL`（宿主代码缺陷，**不是调用方的参数错**；2026-10-11 批 97 补 —— 此前所有未预料异常都折成 `ERR_INVALID_PARAM`，等于把宿主 bug 说成脚本的参数错）、`ERR_FILE_NOT_FOUND`、`ERR_FILE_EXISTS`（打包产物已存在等）、
+`ERR_CAPTURE_DENIED`、`ERR_ENGINE_STOPPED`、`ERR_ENGINE_CRASHED`（进程死）、`ERR_NOT_IMPLEMENTED`（本平台不支持，如 child_process）、`ERR_INVALID_PARAM`、`ERR_INTERNAL`（宿主代码缺陷，**不是调用方的参数错**；2026-10-11 补 —— 此前所有未预料异常都折成 `ERR_INVALID_PARAM`，等于把宿主 bug 说成脚本的参数错）、`ERR_FILE_NOT_FOUND`、`ERR_FILE_EXISTS`（打包产物已存在等）、
 `ERR_DISK_FULL`、`ERR_NOT_FOUND`（UiSelector 未找到 → 可选 `NotFoundError` 对齐 Pro v9）。
 映射规则：`Java Exception → 分类 → AutojsError`，保留 `javaStack`，JS `instanceof` 可判。
-**折叠分两档，中间隔一档「宿主内部错误」（2026-10-11 批 97 定，`BridgeRouter` 落）**：
+**折叠分两档，中间隔一档「宿主内部错误」（定，`BridgeRouter` 落）**：
 ① `AutojsException` → **原码透传**（SPI 抛的真码如 `ERR_PERMISSION_DENIED` 不许被说成「宿主有 bug」）；
 ② `IllegalArgumentException` → `ERR_INVALID_PARAM`（**能读懂的事实**：参数、时序、状态不对，脚本据此改参数）；
 ③ **其余一切 → `ERR_INTERNAL`**（**读不懂的事实** = 代码缺陷；脚本侧按「宿主有问题、详情找日志」处理，
@@ -122,17 +122,17 @@ class AutojsError extends Error {
 这条同时把 `RpcNamespaceHandler` 基类 KDoc 的口径（未知异常不接、照旧穿出）与路由层实际行为对齐了：
 **基类收两类，其余由路由层兜成 `ERR_INTERNAL` 而非吞掉**。
 目录三处落字（`:domain` `core/Error.kt` 的 `ErrorCode`、`bridge/js/src/errors.ts` 的 `ErrCode` + `ERROR_CODES`、本文提及）由 `bridge/js/test/err-catalog.test.cjs` **三面对账**（Kotlin ⇄ JS 双向相等、
-同文件枚举 ⇄ 字面量表双向相等、文档提及必须两处都在；随 `npm test` 进 CI）——2026-09-26 首跑就抓到真漂移：`ERR_IO` 在宿主全线服役（zip/settings/images/
+同文件枚举 ⇄ 字面量表双向相等、文档提及必须两处都在；随 `npm test` 进 CI）——首跑就抓到真漂移：`ERR_IO` 在宿主全线服役（zip/settings/images/
 spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 false；已补码并被该门的「回潮」断言钉死。
 
-### 7.6.1 每连接配额与并发闸（2026-10-12，批 107，外审 M2 的另一半）
+### 7.6.1 每连接配额与并发闸（外审 M2 的另一半）
 
 §7.6 的折叠规则解决的是「错误码对不对」；本节解决的是「**一条连接能不能吃满全宿主**」。
 在此之前接入端只有**三道全局闸**（在途 256 条 / 16 MiB / 单帧 8 MiB，见 §7.7），
 于是一条连接就能占满全部 256 条在途，其他连接的请求全被挤在门外；且 handler 跑在
 `Dispatchers.IO` 的默认 64 线程上，无任何并行度上限。
 
-批 107 补三道**每连接**闸（`NewlineFrameServer` 的 `PerConnectionLimits`）：
+补三道**每连接**闸（`NewlineFrameServer` 的 `PerConnectionLimits`）：
 
 | 闸 | 限的是 | 缺省 |
 |---|---|---|
@@ -162,9 +162,9 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 |---|---|---|
 | 空 RPC（JS→:main→回） | p95 < 2ms | 直连 unix socket、零 JSON 二次解析、TSF 双队列 |
 | 无障碍 `find → click` | 200ms 内 p60 / ~10ms 树读 | 紧凑索引树 + 按需属性 + 句柄（不全量序列化） |
-| `captureScreen → findImage` | < 1s 且一次截图两次匹配 < 700ms | 屏幕帧→native 0 拷贝，模板匹配在 `libopencv.so`；**链路已通**（§18 第 8 项 (b) 2026-09-26 落地：截屏帧经 `ImageAnalyzer.ingest` 进 `images` 同一张帧表，"帧不通用"取消）—— 数字仍是**待实测**的验收口径（真机未量） |
+| `captureScreen → findImage` | < 1s 且一次截图两次匹配 < 700ms | 屏幕帧→native 0 拷贝，模板匹配在 `libopencv.so`；**链路已通**（§18 第 8 项 (b) 落地：截屏帧经 `ImageAnalyzer.ingest` 进 `images` 同一张帧表，"帧不通用"取消）—— 数字仍是**待实测**的验收口径（真机未量） |
 | `findColor`（单人独立子图 1080p） | < 10ms | native 遍历（`cv::inRange` 逐分量包含 + **行主序首命中早退**（2026-10-01：原 `findNonZero` 会把整张命中点表物化出来再取第一个，全帧大命中面时 1.99M 点 ≈16MB —— **取首点那一段** 19.4~22.1ms；改成按行主序自己扫、第一个非零即返回，同一段 0.003~0.016ms。**整调用另有地板**：全帧 `cv::inRange` 本身 ≈4.3ms，整算子全帧 ≈4.33ms（判据口径是「单人独立子图」300×150 ROI，2026-09-30 真机 0.88ms ✅；全帧在口径外）。答案仍是「行主序第一个命中」，与 `findNonZero` 同解）；ROI 是浅视图不拷像素；kleidicv 覆盖 `inRange` 面） |
-| `matchTemplate` 1080p | < 40ms（**小模板 48×48 全帧形态 <100ms**，2026-10-02 拍板 `design-decisions.md` 第 25 项） | OpenCV TM_CCOEFF_NORMED（实测它、不是早前写的 CCORR：见下注）；2026-09-30 起**金字塔粗筛 + 原像素精配**（灰度缩小图只提名候选、坐标与置信度回原 4 通道小窗重算，语义一字不动）+ 两匹配方法可选 `region` 缩窗（机制与错误码见下注、方案裁决见 `design-decisions.md` 第 13 项）——**✅ 2026-09-30 三次实测：370×80 形态全帧 24.47ms 达标转绿（形态注明），48×48 形态见三次实测注**；**2026-10-02 E2 拆 std/相位双门 + 负结果精确兜底**（第七次实测）——48×48 形态 host 33ms / **真机 64.43ms**（同会话同 so 强制精确 882.25ms，13.7×，原恒精确 855~948ms）—— 原判据下差 1.6×，**同日拍板（第 25 项）放宽该形态判据 <100ms → ✅ 转绿（形态注明）**；常规形态 <40ms 绿字仍由 370×80 真机 19.67ms 支撑 |
+| `matchTemplate` 1080p | < 40ms（**小模板 48×48 全帧形态 <100ms**，拍板 `design-decisions.md` 第 25 项） | OpenCV TM_CCOEFF_NORMED（实测它、不是早前写的 CCORR：见下注）；2026-09-30 起**金字塔粗筛 + 原像素精配**（灰度缩小图只提名候选、坐标与置信度回原 4 通道小窗重算，语义一字不动）+ 两匹配方法可选 `region` 缩窗（机制与错误码见下注、方案裁决见 `design-decisions.md` 第 13 项）——**✅ 2026-09-30 三次实测：370×80 形态全帧 24.47ms 达标转绿（形态注明），48×48 形态见三次实测注**；**2026-10-02 E2 拆 std/相位双门 + 负结果精确兜底**（第七次实测）——48×48 形态 host 33ms / **真机 64.43ms**（同会话同 so 强制精确 882.25ms，13.7×，原恒精确 855~948ms）—— 原判据下差 1.6×，**同日拍板（第 25 项）放宽该形态判据 <100ms → ✅ 转绿（形态注明）**；常规形态 <40ms 绿字仍由 370×80 真机 19.67ms 支撑 |
 | 紧凑树构建/传输 | < 15ms / 数十 KB | 预聚合属性，代价解析放"取用即取" |
 
 > **2026-09-30 真机实测回填（A2–A4；云手机 Android 13 / arm64 + OpenCV 4.14 `libopencv.so`
@@ -183,7 +183,7 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 >   正中 A2 形态，实现落点在 `imgnative.cpp` 帧表侧；② 预筛收缩搜索窗（findColor/金字塔粗定位
 >   后再小窗精确 match）；③ 判据改口径 —— 把 <40ms 定义到「预筛后小窗」而非全图搜索（拍板项）。
 >   数字出处、方法与 driver 缺陷修正见 [`design-status.md`](../design-status.md) 流水 2026-09-30
->   「A2–A4 真机性能实测」条（2026-10-02 起流水按日期切片，该条在 [`log/2026-09-30.md`](../log/2026-09-30.md)）。
+>   「A2–A4 真机性能实测」条（起流水按日期切片，该条在 [`log/2026-09-30.md`](../log/2026-09-30.md)）。
 >
 > **2026-09-30 出路落定（只追加，上列选项原文不动；裁决全文见 `design-decisions.md` 第 13 项）**：
 >   ① 帧内缓存频谱**被评审否掉** —— bench 的 A2 是同帧**同**模板 match×2 看着免费，
@@ -231,7 +231,7 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 >     全帧 63ms ❌ vs region 11.8ms ✅，改口径与否是拍板动作，等裁决。~~
 >     **已裁决（同日三次实测后，见下块）：370×80 形态转绿（形态注明），判据原文不改。**
 >
-> **第三次～第六次实测（2026-09-30 至 2026-10-01，共四轮调优）2026-10-06 已整段搬到**
+> **第三次～第六次实测（至 2026-10-01，共四轮调优）2026-10-06 已整段搬到**
 > [`docs/implementation-notes.md`](../implementation-notes.md) 的「§7.7 实测记账」节 —— 契约卷留**结论**，
 > 逐轮的数字与探针记录留在注记里。结论见上表判据行与本文件 §7.7 的第七次实测块。
 >
@@ -279,7 +279,7 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 >     （≈0.1× 全图成本）买不起原赔率。
 >   - **host 门全绿**：`run-host-tests.sh` 九个二进制 **422 检查 0 失败**（同命令、
 >     同 OpenCV pin）。
->   - **真机复测（2026-10-02 同日补跑；云手机 frp-box，同机同 `scr.raw` 同 bench ×100
+>   - **真机复测（同日补跑；云手机 frp-box，同机同 `scr.raw` 同 bench ×100
 >     中位，so = 本 PR 的 image-native CI 产物 sha256 `72728f52…`，A/B = 同一 so 的
 >     `AUTOSCRIPT_MATCH_FORCE_EXACT` 开关，同会话无基线漂移）**：
 >
@@ -303,9 +303,9 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 >       同报 (48,1295) —— 屏上多行像素级重复副本（y=751/1023/1295），argmax 口径，
 >       与三次实测 (57,751) 同源。
 >     - **host 数字的定位不变**：33ms 只证明机制与量级，判据状态以本表真机数为准
->       （本机绿不是门禁有效，2026-09-30 实测纪律）。
+>       （本机绿不是门禁有效，实测纪律）。
 >
-> **`TM_CCOEFF_NORMED` 而不是 `TM_CCORR_NORMED`（2026-09-25 实测改口径，非抄来的）**：
+> **`TM_CCOEFF_NORMED` 而不是 `TM_CCORR_NORMED`（实测改口径，非抄来的）**：
 > `imgnative_match` 一直用 CCOEFF，早前本表与 `:domain` KDoc 两处写成 CCORR —— 名字漂移
 > 谁都没炸，因为真实纹理模板下两者都能拿 1.0。差别在**画面里没有模板**时（host 静态库实测）：
 > CCORR_NORMED 的 max 仍有 **+0.955**（阈值 0.9 直接误判命中），CCOEFF_NORMED 的 max 只有
@@ -350,7 +350,7 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 > mock 单测 6 例 + `AUTOSCRIPT_TEST_ADDON` 门禁的真 addon 全环（setup 前
 > `droppedData` 前账 → attach 结算 → 心跳负 id 不撞在途）。
 >
-> **facade dist 随包 + 打包入口 `attachNative` 接线已落（2026-09-24，资产交付轨）**：
+> **facade dist 随包 + 打包入口 `attachNative` 接线已落（资产交付轨）**：
 > `prepareBridgeDistAssets`（`:app` 构建任务）把 **npm build 产物**（步骤 7 出库，CI jvm-tests 前置构建）`bridge/js/dist`
 > 拷成 `assets/bridge-dist/`（srcDir 取**父目录** —— 资产键 = `bridge-dist/<file>`，
 > 指成子目录会拍平到 assets 根、`list("bridge-dist")` 恒空且**没有报错**）→
@@ -371,7 +371,7 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 > `installed`、addon `setup` 三关，外加 env 缺席/坏 bootstrap 两条诚实分支）+
 > `BridgeDistDeployTest`（7 项）+ `AppShellBridgeDistTest` + 引擎 env 契约用例。
 >
-> **jniLibs 二进制交付 + `libc++_shared.so` 也已落（2026-09-24，同轨 §19）**：
+> **jniLibs 二进制交付 + `libc++_shared.so` 也已落（同轨 §19）**：
 > `:app` 的 `prepareEngineNativeLibs` 把本机构建三件（`build-native.sh` 的 `noden`→
 > `libnoden.so`、`LIBNODE`/`node-runtime-build/out` 的 `libnode.so`、NDK sysroot 的
 > `libc++_shared.so` —— readelf 实证它是 libnode 的 NEEDED）拷进
@@ -385,7 +385,7 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
 > bridge_native.node`（单文件、字节即版本、不 claim 目录故无孤儿清理）→
 > `addonPath` 注入，引擎按文件在位降级（缺 = 不注入，脚本照跑）。
 > APK 实测三条 `lib/arm64-v8a/*` + `assets/bridge-addon/*` 齐在（debug ~40MB，
-> 含未 strip 的 libnode）。**真机台账（2026-09-29，非 root shell，Android 13/arm64）**：
+> 含未 strip 的 libnode）。**真机台账（非 root shell，Android 13/arm64）**：
 > exec + `dlopen` + `node::Start` 通（node v24.21.0，冷启 158ms），abstract socket +
 > `SO_PEERCRED` 通，facade→addon→桥→宿主全链 6 帧往返（生产布局 `lib/arm64-v8a/` +
 > 无 `LD_LIBRARY_PATH`）；失败形态按设计：addon 缺位 = 降级照跑，socket 给错 = exit 3。
@@ -467,7 +467,7 @@ spawn/打包），JS 目录独缺，脚本 `ERROR_CODES.includes('ERR_IO')` 为 
    见 §12.4 切片路线）。未 attach 时响应帧计入 `droppedData()`
    （诚实可查，不静默吞）。`console.log` 经 tsf_data → socket → `ConsoleCollector`
    （E2E 已在 JVM+Node 双侧验证语义，待真机跑通即 §19 垂直切片闭环）。
-   **脚本里的裸 `console.log` 也走这条**（2026-10-15 用户令「js 的语法都要和原来的
+   **脚本里的裸 `console.log` 也走这条**（用户令「js 的语法都要和原来的
    调用方式一样」）：kBootstrap 在 require 真脚本之前调
    `require($DIST/console-bridge.js).installConsoleBridge()`（守卫：dist env 在位 +
    `runtimeBridge.installed` 为真；失败只打一行 stderr、脚本照跑）把全局 console

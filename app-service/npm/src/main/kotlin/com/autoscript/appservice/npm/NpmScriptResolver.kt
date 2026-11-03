@@ -150,7 +150,7 @@ internal object NpmScriptResolver {
             )
         }
         val (pkgDir, rel) = hits.single()
-        // 顺序是**刻意**的（修）：逃逸 → 存在 → 是不是 JS。
+        // 顺序是**刻意**的：逃逸 → 存在 → 是不是 JS。
         // 白名单判据现在要**读文件**，故必须排在存在性之后；而逃逸检查本就该最先 ——
         // 它对恶意 manifest 是第一条防线，没有理由排在一条纯字符串后缀检查后面。
         val entry = pkgDir.resolve(rel).normalize()
@@ -243,7 +243,7 @@ internal object NpmScriptResolver {
 }
 
 /**
- * bin 目标「是不是能交给 node 跑的纯 JS」的**唯一判据处**（修）。
+ * bin 目标「是不是能交给 node 跑的纯 JS」的**唯一判据处**。
  *
  * 为什么从 [NpmScriptResolver] 里拆出来：探测从「看文件名后缀」变成
  * 「读文件内容」（ELF 魔数 / shebang / 后缀三道），解析器因此多出三个函数、越过了
@@ -259,7 +259,7 @@ internal object PureJsProbe {
     /**
      * 纯 JS bin 目标的**辅助**后缀表（`.js`/`.cjs`/`.mjs`）。按文件名的结尾判，不是整名相等。
      *
-     * **不再是唯一判据**（修）：它是 [isPureJsEntry] 里 shebang 之后的**第二道**，
+     * **不再是唯一判据**：它是 [isPureJsEntry] 里 shebang 之后的**第二道**，
      * 不是第一道。理由见该函数的 KDoc。
      */
     private val JS_SUFFIXES = listOf(".js", ".cjs", ".mjs")
@@ -279,7 +279,7 @@ internal object PureJsProbe {
     private val NODE_SHEBANG = Regex("(^|\\s|/)node(\\s|$)")
 
     /**
-     * bin 目标是不是**能交给 node 跑的纯 JS**（修）。
+     * bin 目标是不是**能交给 node 跑的纯 JS**。
      *
      * **修的是什么**：原判据是「文件名以 `.js`/`.cjs`/`.mjs` 结尾」。而 npm 生态里大量 bin
      * 是**无后缀**的 —— `typescript` 的 `{"tsc": "./bin/tsc"}`、`esbuild` 的 `bin/esbuild`

@@ -192,7 +192,7 @@ class NodeProcessEngine(
     /**
      * 拼 spawn 命令行：**堆上限标志位插在脚本路径之前**。
      *
-     * 位置是契约不是排版：`main.cpp` 按 node argv 规则**两段拼**（修）——
+     * 位置是契约不是排版：`main.cpp` 按 node argv 规则**两段拼**——
      * `node_argv = {argv[0], [选项…], [-e BOOTSTRAP --], script, args...}`，选项落在
      * `--` **之前**（node 先吃选项、遇 `--` 收手）；标志位若排在 `--` 之后会被当成脚本的
      * 第一个位置参数（设备实测 `Cannot find module '--max-old-space-size=192'`，
@@ -228,8 +228,8 @@ class NodeProcessEngine(
                     }
                     old.lease?.naturalExit()
                 }
-                // scriptPath/projectId 的词法闸在 ScriptPaths.scriptFile 内（外审 M1 收口，
-                // ）。这里把它折成 ERR_INVALID_PARAM 而不是让 IllegalArgumentException
+                // scriptPath/projectId 的词法闸在 ScriptPaths.scriptFile 内（外审 M1 收口）。
+                // 这里把它折成 ERR_INVALID_PARAM 而不是让 IllegalArgumentException
                 // 裸穿出去：这条路径两个调用方语义不同 —— 桥侧 RPC 本来就把 IAE 折成
                 // ERR_INVALID_PARAM（RpcNamespaceHandler），而调度侧会把裸 IAE 记成宿主内部错。
                 // 判据「参数不对」只有一个错误码，两条路才对得上。
@@ -337,7 +337,7 @@ class NodeProcessEngine(
     }
 
     /**
-     * 冻住这次执行（；SPI [ScriptEngine.pause] 的真实现）。
+     * 冻住这次执行（SPI [ScriptEngine.pause] 的真实现）。
      *
      * 委托当前 execution 的进程（SIGSTOP）。false = 没有在跑的执行 / 进程侧冻不住
      * （pid 拿不到 / `kill` 二进制缺席 —— `SpawnedProcess.pauseExecution` 如实报）。

@@ -7,7 +7,6 @@ import com.autoscript.domain.npm.ShellConsoleMode
 import com.autoscript.domain.npm.SequencedConsoleLine
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 /**
  * 控制台（命令面）呈现态（纯数据，Compose 之外可 JVM 测；§10.9 第 3 条）。

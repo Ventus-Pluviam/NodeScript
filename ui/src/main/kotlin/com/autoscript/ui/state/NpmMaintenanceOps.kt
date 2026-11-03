@@ -156,7 +156,7 @@ internal fun NpmState.withMaintenanceInFlight(action: NpmMaintenanceAction): Npm
 ).withOpAccount(null, null)
 
 /**
- * 「回收缓存发生」那一刻的在途写回（修）：回收虽然不占安装会话，
+ * 「回收缓存发生」那一刻的在途写回：回收虽然不占安装会话，
  * 也一样是挂起调用 —— 提交时不置位，`canReclaimCache` 的防连点判据就永远
  * 不生效，「按下去没反应还能再按」。
  */

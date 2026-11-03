@@ -80,7 +80,7 @@ fun LogWindowInAppHost(
      * 夹取由状态层做（它才知道窗多宽）—— 两边各答一半，谁都不抄对方的数。
      */
     onDrag: (dx: Float, dy: Float, boundsW: Float, boundsH: Float) -> Unit,
-    /** 底部输入框的草稿变更 / 送行（；两个宿主都往同一份状态写）。 */
+    /** 底部输入框的草稿变更 / 送行（两个宿主都往同一份状态写）。 */
     onInputDraft: (String) -> Unit,
     onSendInput: () -> Unit,
     /** 输入框焦点变化（系统窗要靠它开输入法；in-app 宿主只转发，见 `LogWindowContent` 的 KDoc）。 */

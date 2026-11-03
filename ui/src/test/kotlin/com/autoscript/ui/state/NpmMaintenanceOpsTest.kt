@@ -40,7 +40,7 @@ class NpmMaintenanceOpsTest {
         NpmState.of(NpmPanelSnapshot(projects.toList()))
 
     /**
-     * 在途写回（修）：提交那一瞬先置位、清账，别的交给挂起的执行协程。
+     * 在途写回：提交那一瞬先置位、清账，别的交给挂起的执行协程。
      *
      * 两条各钉一句：维护与回收的**专属位**置上（防连点的判据就是
      * `canReclaimCache`/`canInstall` 读的那几个位），旧账（上次动作的 opError/opNotice）

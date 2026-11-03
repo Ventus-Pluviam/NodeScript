@@ -10,7 +10,6 @@ import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.LazyThreadSafetyMode
 
 /**

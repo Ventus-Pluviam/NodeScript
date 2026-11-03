@@ -282,7 +282,7 @@ class AssembledShell internal constructor(
         require(ScriptRunnability.isRunnable(relPath)) {
             "这个文件不能被引擎执行（引擎起的是 node，只认 ${ScriptRunnability.EXECUTABLE_EXTENSIONS.joinToString("/") { ".$it" }}）：$relPath"
         }
-        // **形状转换在这一层收口**（修）：本口收的是文件清单那条 relPath
+        // **形状转换在这一层收口**：本口收的是文件清单那条 relPath
         // （`files/scripts/` 之下，首段 = 项目名 —— 与 `readScriptFile` 同一个形状，
         // 见 `HostSummary.runScriptFile` 的 @param），而调度器与引擎按**项目内**路径说。
         // 直接透传的后果是引擎把 `demo/data/test.js` 拼成

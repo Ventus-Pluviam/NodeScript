@@ -268,7 +268,7 @@ object PlatformWiring {
         IntentStoreWiring.open(context.applicationContext, nsDir)
 
     /**
-     * **其余两份存储的生产打开**（；§8.5 运行档案 + §8.6 任务注册表）：
+     * **其余两份存储的生产打开**（§8.5 运行档案 + §8.6 任务注册表）：
      * 各开 SQLite 并在之前做一次性 jsonl 迁移。
      *
      * **为什么合成一个入口**：它们是同一件事的两面（同一 `.ns` 目录、同一套迁移纪律、
