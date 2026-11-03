@@ -9,7 +9,8 @@
     "test": "npm run build && node --test",
     "gen:wire": "node ../schema/generate.mjs",
     "gen:wire:check": "node ../schema/generate.mjs --check",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "postinstall": "node scripts/patch-typedoc-matchone.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",
