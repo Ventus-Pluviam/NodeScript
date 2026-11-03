@@ -203,9 +203,8 @@ data class ConsoleCmdLineState(
             kind = line.kind,
             text = line.text,
             ok = line.ok,
-            timeText = TIME.format(Instant.ofEpochMilli(line.atMillis).atZone(zone)),
+            timeText = HH_MM_SS.format(Instant.ofEpochMilli(line.atMillis).atZone(zone)),
         )
 
-        private val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     }
 }

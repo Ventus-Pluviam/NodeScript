@@ -204,7 +204,7 @@ data class NpmState(
         // 操作账与 npm 输出行同一副时间戳长相（HH:mm:ss，与 [ConsoleCmdLineState.timeText]
         // 同一格式：一套日志流里不该有两种时间写法）。
         fun timeText(): String =
-            OP_TIME_FORMAT.format(Instant.ofEpochMilli(opAtMillis).atZone(ZoneId.systemDefault()))
+            HH_MM_SS.format(Instant.ofEpochMilli(opAtMillis).atZone(ZoneId.systemDefault()))
         buildList {
             if (consoleTruncated) add(NpmLogLine("更早的输出已裁掉，这里只留最近 $LOG_KEEP 行", StatusTone.MUTED))
             (load as? LoadState.Failed)?.let {
@@ -406,8 +406,6 @@ internal fun NpmState.withOpAccount(error: String?, notice: String?): NpmState =
     opAtMillis = if (error != null || notice != null) System.currentTimeMillis() else 0L,
 )
 
-/** 操作账行的时刻格式（与控制台行 [ConsoleCmdLineState.timeText] 同一 `HH:mm:ss`）。 */
-private val OP_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
 /** 日志大框一次拉多少行（与控制台那个缺省页大小同量级：一次现取就够把框填满）。 */
 internal const val LOG_PAGE = 256

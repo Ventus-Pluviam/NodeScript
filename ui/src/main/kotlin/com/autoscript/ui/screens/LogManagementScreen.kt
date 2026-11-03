@@ -562,7 +562,7 @@ private fun ScriptLogDetail(
                     items(lines, key = { it.hashCode() }) { raw ->
                         val parts = raw.split('|', limit = 3)
                         val text = if (parts.size == 3) {
-                            val time = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")
+                            val time = HH_MM_SS
                                 .format(
                                     java.time.Instant.ofEpochMilli(parts[0].toLongOrNull() ?: 0L)
                                         .atZone(java.time.ZoneId.systemDefault()),
