@@ -120,40 +120,35 @@ import kotlinx.coroutines.launch
 /**
  * 任务中心（TG 联系人页 `ContactsActivity` 的版式复刻，内容从联系人换成任务）：
  *
- * - **屏底与顶栏同灰**（批 41 拍板）：页面 = `windowBackgroundGray`
- *   （[ThemeColors.surfaceMuted]），顶栏传 [ActionBar] 的 `background` 用**同一个
- *   灰** —— 栏与列表连成一块（TG 那页的 actionBarDefault 是白/夜间深灰，用户要的
- *   灰栏是本仓的定制，落在 `surfaceMuted` 上）；
+ * - **屏底与顶栏同灰**：页面 = `windowBackgroundGray`（[ThemeColors.surfaceMuted]），
+ *   顶栏传 [ActionBar] 的 `background` 用**同一个灰** —— 栏与列表连成一块（TG 那页的
+ *   actionBarDefault 是白/夜间深灰，灰栏是本仓的定制，落在 `surfaceMuted` 上）；
  * - **顶栏**：标题「任务中心」（对应 TG 的「联系人」：Medium 20sp，`createTitleTextView`
- *   的 portrait 档；**标题下面没有副标题**——批 45 用户口径，此前那句"共 N 条任务"整条
- *   摘掉），右上角只有**排序切换钮**（TG `msg_contacts_name`/`msg_contacts_time`
- *   两态：图标画的是"切过去的那一档"——按名称排序时显示时钟）。批 41 摘掉「刷新」：
- *   切页签/回前台现取（`TabReloadEffect`）与操作后现取（`performTaskOp`）已覆盖
- *   数据会变的所有时机，常驻按钮没有事可做；
- * - **悬浮搜索栏**（批 41 起**浮在列表上**，TG 的 `searchField` 是 contentView 最后
- *   加的子 view）：`FragmentSearchField` 版式 —— 52dp 槽位、水平 6dp 边距 + 药丸自身
- *   再缩 3dp（`setSectionBackground` 的 `setPadding(3,3,3,3)`）+ **再缩 3dp**（药丸
- *   背景 `createRoundRectDrawableShadowed` = `InsetDrawable(defaultDrawable, 3,3,3,3)`；
- *   批 43 补上 —— 批 42 只算了一层，药丸因此比 TG 宽 6dp、高 6dp）= **屏宽 −24dp 的
- *   白药丸**、高 **40dp**、圆角 20dp + 微投影、`outline_search_1_24` 放大镜（24dp、60%）、
+ *   的 portrait 档；标题下面没有副标题），右上角只有**排序切换钮**（TG
+ *   `msg_contacts_name`/`msg_contacts_time` 两态：图标画的是"切过去的那一档"——
+ *   按名称排序时显示时钟）。没有「刷新」按钮：切页签/回前台现取（`TabReloadEffect`）
+ *   与操作后现取（`performTaskOp`）已覆盖数据会变的所有时机，常驻按钮没有事可做；
+ * - **悬浮搜索栏**（浮在列表上，TG 的 `searchField` 是 contentView 最后加的子 view）：
+ *   `FragmentSearchField` 版式 —— 52dp 槽位、水平 6dp 边距 + 药丸自身再缩 3dp
+ *   （`setSectionBackground` 的 `setPadding(3,3,3,3)`）+ **再缩 3dp**（药丸背景
+ *   `createRoundRectDrawableShadowed` = `InsetDrawable(defaultDrawable, 3,3,3,3)` ——
+ *   两层 padding 都要算，漏一层药丸就比 TG 宽 6dp、高 6dp）= **屏宽 −24dp 的白药丸**、
+ *   高 **40dp**、圆角 20dp + 微投影、`outline_search_1_24` 放大镜（24dp、60%）、
  *   15sp 文字、提示词 50%。列表 contentPadding.top 让出 **60dp** = 槽位下内边距 6 +
- *   药丸 40 + **14dp 空隙**（批 44 用户口径「和 TG 的间距一致」：批 43 的 52dp 算下来
- *   只留了 6dp，不够。TG 侧的锚点是 `ContactsActivity` 空态 `emptyView` 的
+ *   药丸 40 + **14dp 空隙**（TG 侧的锚点是 `ContactsActivity` 空态 `emptyView` 的
  *   `createFrame(…, 12, 52 + 12, 12, 0)` —— 药丸槽位（52dp）之下再让 12dp 起首行），
  *   滚动的首行从药丸底下穿过（`checkUi_listViewPadding` 的 actionBar 高 + 44dp 同口径）；
  * - **白色圆角卡片 ×2**（`setSections(12, 16, false)` 的读法：水平 12dp 边距、圆角
  *   16dp、无投影 —— `SharedConfig.shadowsInSections` 缺省 false），
- *   **运行中的任务与定时任务各自成卡**（批 42 用户改口拆组 —— 批 40 的「同卡」口径
- *   作废），两卡之间 **12dp 灰缝**（批 44：TG 多 section 页在两组之间插 `ShadowSectionCell`，
- *   它的缺省高就是 12dp —— `this(context, 12, null)`，那才是 TG 的组间距；`setSections`
- *   的 12 是**左右边距**，不是组间距）；
- * - **分组头**（批 41 重做：TG `CollapseTextCell` 的白底收起行）：46dp 白条、14sp
- *   Medium 正文色、文字缩进 21dp，右端 14dp **三角**（收起 = 尖朝下、展开 = 180°
- *   尖朝上、340ms EASE_OUT_QUINT）。**空组照样有三角、照样能收放**（批 44 用户拍板，
- *   推翻批 41 的"空组不给三角"）：组头是**开关**不是内容指示器，灰一个、点不动一个，
- *   同一排的两个头就会长得不一样；空组展开后就是空的（不铺"无在途执行"这类占位句，
- *   见下面的边界条），收起它是用户的自由。两组**缺省都收起**（批 45 用户口径）——
- *   进屏先看见两张干净的卡，展开是用户自己按的；
+ *   **运行中的任务与定时任务各自成卡**，两卡之间 **12dp 灰缝**（TG 多 section 页在
+ *   两组之间插 `ShadowSectionCell`，它的缺省高就是 12dp —— `this(context, 12, null)`，
+ *   那才是 TG 的组间距；`setSections` 的 12 是**左右边距**，不是组间距）；
+ * - **分组头**（TG `CollapseTextCell` 的白底收起行）：46dp 白条、14sp Medium 正文色、
+ *   文字缩进 21dp，右端 14dp **三角**（收起 = 尖朝下、展开 = 180° 尖朝上、340ms
+ *   EASE_OUT_QUINT）。**空组照样有三角、照样能收放**：组头是**开关**不是内容指示器，
+ *   灰一个、点不动一个，同一排的两个头就会长得不一样；空组展开后就是空的（不铺
+ *   "无在途执行"这类占位句，见下面的边界条），收起它是用户的自由。两组**缺省都收起**
+ *   —— 进屏先看见两张干净的卡，展开是用户自己按的；
  * - **任务行**：TG `UserCell` 的 call 样式（联系人页实际用的那档：行高 56dp、头像
  *   44dp 圆、名字 15sp Medium、次行 13sp、分隔线缩进 68dp）—— 头像用脚本类型徽标
  *   （项目页 [FileTypeAvatar] 的 44dp 版），行尾「立即执行」= 实心播放三角，
@@ -163,17 +158,17 @@ import kotlinx.coroutines.launch
  * - **FAB**：TG `FragmentFloatingButton`（48dp 圆、按下缩到 0.9、松开过冲回 1），
  *   只有一个动作 = 登记任务（表单弹底部面板）。
  *
- * 诚实边界（与其他屏同一条纪律，一条不松；批 41 按用户口径收窄了两处）：
- * - 没读到/读失败**不冒充**空清单：「读到了，没有」那句空话摘掉（空组展开后"没有行"
- *   本身就是那句说明 —— 批 44 起空组也能收放，见上面分组头那条）；卡内空行区分
+ * 诚实边界（与其他屏同一条纪律，一条不松）：
+ * - 没读到/读失败**不冒充**空清单：「读到了，没有」那句空话没有（空组展开后"没有行"
+ *   本身就是那句说明 —— 空组也能收放，见上面分组头那条）；卡内空行区分
  *   「尚未读取」「读失败：原文」「没有匹配的任务」三种 —— **这两行是读账的唯一出口**
- *   （批 45 摘掉副标题后，顶栏不再复述读状态）；
- * - **空组不铺占位提示**（批 41）：「无在途执行」「读到了，没有已登记的任务」两句
- *   摘掉 —— 空清单的事实由"没有行"本身说，红字/灰字只留给真正有内容的错；
- * - **恢复账/未结算执行整块摘掉**（批 41 用户拍板）：非空也不显示 —— 那两笔账的
- *   权威呈现回到控制台与本仓的日志/测试（`AppShellTaskCenterTest` 等仍守着数据面）；
+ *   （顶栏没有副标题，不复述读状态）；
+ * - **空组不铺占位提示**：「无在途执行」「读到了，没有已登记的任务」这类句子没有 ——
+ *   空清单的事实由"没有行"本身说，红字/灰字只留给真正有内容的错；
+ * - **恢复账/未结算执行不显示** —— 那两笔账的权威呈现在控制台与本仓的日志/测试
+ *   （`AppShellTaskCenterTest` 等仍守着数据面）；
  * - 操作失败（`opError`）**不清任务清单**；成功回执只说"调用被接受"；
- * - **操作回执走外壳的浮层（toast，批 44）**：挂起/失败原文/成功回执三类不再插进列表
+ * - **操作回执走外壳的浮层（toast）**：挂起/失败原文/成功回执三类不插进列表
  *   —— 插一行会把第一张卡往下推一次。文案与判读在 [opToastMessage]/[stopToastMessage]
  *   （纯层、可 JVM 测），这里只把解析出的那一句交给 `LocalToast`；
  * - 在途执行的数据来自**控制台**的运行列表（[ConsoleState.activeRuns]）：停止的
@@ -203,17 +198,17 @@ fun TaskCenterScreen(
     // 搜索词/排序档/两组展开态：本屏私有的现值，不进读口（与项目页 FileSort 同分工）。
     // 排序缺省 = 按时间（TG SharedConfig.sortContactsByName 缺省 false 的同款取向）。
     var query by rememberSaveable { mutableStateOf("") }
-    // 「点输入框外面就收键盘/撤光标」（2026-10-16 用户报"焦点转移后光标还在闪"）：
-    // 一份 state 管本屏那一个搜索框，见 `FocusDismiss` 的 KDoc。
+    // 「点输入框外面就收键盘/撤光标」：一份 state 管本屏那一个搜索框，
+    // 见 `FocusDismiss` 的 KDoc。
     val focusDismiss = rememberFocusDismissState()
     var sort by rememberSaveable { mutableStateOf(TaskSort.TIME) }
-    // 两组缺省**收起**（批 45 用户口径）：进屏先看见两张干净的卡，展开是用户自己按的。
+    // 两组缺省**收起**：进屏先看见两张干净的卡，展开是用户自己按的。
     var runsExpanded by rememberSaveable { mutableStateOf(false) }
     var tasksExpanded by rememberSaveable { mutableStateOf(false) }
 
     val copy = rememberCopyAction()
-    // 操作回执走外壳浮层（批 44）：此前是搜索框下面的一行，弹一条就把首卡往下推一次。
-    // 文案一个字没动（判读见 [opToastMessage]/[stopToastMessage]），只是换了地方 ——
+    // 操作回执走外壳浮层：插进列表的话，弹一条就把首卡往下推一次。
+    // 判读见 [opToastMessage]/[stopToastMessage] ——
     // 本屏自己那条（操作）优先于借控制台那条（停止），两边同时有话说时先说自己的。
     val toast = LocalToast.current
     val opToast = opToastMessage(state.opError, state.opNotice, state.opInFlight)
@@ -225,9 +220,8 @@ fun TaskCenterScreen(
     val scope = rememberCoroutineScope()
     val particleColor = ThemeColors.accent
 
-    // 副标题整条摘掉（批 45 用户口径：「标题下面不要再有字」）—— 此前是
-    // `Status.count` 的那句"共 N 条任务（含已停用）"。读账不靠它：还没读到/读失败
-    // 由卡内那两行如实说（[InCardHint]），条数由两张卡自己数得出来。
+    // 顶栏没有副标题：读账不靠它 —— 还没读到/读失败由卡内那两行如实说
+    // （[InCardHint]），条数由两张卡自己数得出来。
     // 任务消失（取消、或一次性任务跑完出册）时在原地炸一簇粒子。
     val taskIds = state.tasks.map { it.id }
     LaunchedEffect(taskIds) { particles.sync(taskIds, particleColor) }
@@ -247,12 +241,12 @@ fun TaskCenterScreen(
     RegisterFocusDismiss(focusDismiss)
     DismissFocusOnWindowBlur(focusDismiss)
     Column(modifier.fillMaxWidth().background(ThemeColors.surfaceMuted).dismissFocusOnTapOutside(focusDismiss)) {
-        // 顶栏跟页面同灰（批 41 用户拍板）：传 `background` 覆盖 `actionBarDefault`，
-        // 栏与列表连成一块灰，不再是"白栏压灰页"。
+        // 顶栏跟页面同灰：传 `background` 覆盖 `actionBarDefault`，
+        // 栏与列表连成一块灰，不是"白栏压灰页"。
         ActionBar(
             title = "任务中心",
             titleStyle = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
-            // 不传 subtitle（批 45 用户口径）：标题下面不要任何字。
+            // 不传 subtitle：标题下面不要任何字。
             background = ThemeColors.surfaceMuted,
             actions = {
                 // 排序切换（TG ContactsActivity：图标 = 切过去的那一档 ——
@@ -293,7 +287,7 @@ fun TaskCenterScreen(
                     // TG checkUi_listViewPadding 的读法：列表顶让出「顶栏高 + 44dp」
                     // —— 44dp 里装的是悬浮搜索框（52dp 槽位 − 顶栏 4dp 呼吸 + 首行 4dp）；
                     // 列表滚上来时首行从药丸底下穿过。左右 12dp、底部让位底栏照旧。
-                    // 批 44：让位 52→60dp —— 药丸底到第一张卡的间距按用户口径对齐 TG
+                    // 让位 60dp —— 药丸底到第一张卡的间距对齐 TG
                     // （14dp，出处见类 KDoc 的搜索栏那条）。
                     contentPadding = PaddingValues(
                         start = 12.dp,
@@ -303,12 +297,12 @@ fun TaskCenterScreen(
                     ),
                 ) {
                     // 卡片自身（clip 先于 background，圆角裁住全部内层）—— 抽出来给
-                    // 两组各用一份（批 42 拆组：TG 联系人页的多个 section 本来就是
+                    // 两组各用一份（TG 联系人页的多个 section 本来就是
                     // 各自一张卡、卡间留缝，不是一张大卡里塞两个头）。
                     item {
                         // 白色圆角卡片一：运行中的任务。
                         Card {
-                            // 空组照样能收放（批 44 用户拍板）：组头是开关，不是内容指示器 ——
+                            // 空组照样能收放：组头是开关，不是内容指示器 ——
                             // 有没有行是内容自己的事，灰三角/点不动会让两个头长得不一样。
                             CollapseHeader(
                                 title = "运行中的任务",
@@ -342,7 +336,7 @@ fun TaskCenterScreen(
                         }
                     }
                     item {
-                        // 两卡之间 12dp 灰缝（批 44 对到 TG 的组间距：多 section 页两组之间
+                        // 两卡之间 12dp 灰缝（对到 TG 的组间距：多 section 页两组之间
                         // 那张 `ShadowSectionCell` 的缺省高就是 12dp）。
                         Spacer(Modifier.height(12.dp))
                         // 白色圆角卡片二：定时任务。
@@ -389,7 +383,7 @@ fun TaskCenterScreen(
             particles.Overlay(Modifier.matchParentSize())
             // 悬浮搜索框最后画 = 浮在列表上（TG：searchField 是 contentView 最后加的
             // 一个子 view）。压住列表首行 —— 所以 contentPadding.top 让出 52dp
-            // （药丸 40dp + 12dp 空隙，批 43：对齐 TG 首行留白）。
+            // （药丸 40dp + 12dp 空隙，对齐 TG 首行留白）。
             SearchField(
                 query = query,
                 onChange = { query = it },
@@ -523,7 +517,7 @@ fun TaskCenterScreen(
 }
 
 /**
- * 白色圆角卡片（批 42 从「两张分组头共用一卡」拆成一组一卡 —— TG 联系人页的多个
+ * 白色圆角卡片（一组一卡 —— TG 联系人页的多个
  * section 本来就是各自一张卡、卡间露灰缝）：几何 = `setSections(12, 16, false)`
  * 的读法（圆角 16dp、无投影），clip 先于 background，圆角裁住全部内层。
  */
@@ -801,12 +795,12 @@ private fun TaskAvatar(scriptPath: String, name: String) {
 }
 
 /**
- * 悬浮搜索框（TG `FragmentSearchField` 的逐项几何，批 41 起**浮在列表上**）：
+ * 悬浮搜索框（TG `FragmentSearchField` 的逐项几何，**浮在列表上**）：
  *
  * - **52dp 槽位**：`contentView.addView(searchField, createFrame(MATCH_PARENT,
  *   52, Gravity.TOP, 6, 0, 6, 0))` —— 外层水平 6dp；`setSectionBackground()` 的
  *   `setPadding(dp(3), …)` 是药丸自身再缩 3dp；**药丸背景又是 `InsetDrawable(...,
- *   3,3,3,3)`**（`createRoundRectDrawableShadowed` 的包装层，批 43 才补上 —— 批 42
+ *   3,3,3,3)`**（`createRoundRectDrawableShadowed` 的包装层 ——
  *   只算了一层 padding），于是**药丸 = 屏宽 −24dp、高 40dp**、圆角 20dp；
  * - **边缘**：圆角 20dp 落在 40dp 高上 = **两端全圆**（半圆帽，不是 46dp 高时那种
  *   四角圆角的方片）；投影是 `setShadowLayer(2dp, 0, 0.33dp, 0x11000000)` —— 本仓用

@@ -213,7 +213,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 脚本资源限额表（批 107；§8.1「脚本资源限额」）。
+     * 脚本资源限额表（§8.1「脚本资源限额」）。
      *
      * **与 [scriptEnvStoreOrNull] 逐字同款的懒建形状**（同一 `.ns` 目录、同一种
      * 「建不出来如实 null」）：这两份表是同一个界面的两页（管理面板 → 环境变量 /
@@ -273,7 +273,7 @@ class AppShellApplication : Application(), HostSummary {
      * 高清会话是后续升级，换 producer 即插）；走 [install] 的调用方仍可自行覆盖注入。
      *
      * APK 资产（内置脚本 / facade dist / addon / npm CLI 素材）的读法与各自的降级口径
-     * 在 [AssetsRead]（2026-10-07 backlog D7 自本方法外迁）：那四段 `try/catch` 的吞法
+     * 在 [AssetsRead]：那四段 `try/catch` 的吞法
      * 逐条不同，混在这张九十行的具名参数表里读不出"为什么这条这么吞"。
      *
      * 失败如实降级：装配抛错 → 记日志 + 壳保持 null（[alarmWork] 继续漏投记账），
@@ -315,21 +315,21 @@ class AppShellApplication : Application(), HostSummary {
             val nativeLibDir = Paths.get(applicationInfo.nativeLibraryDir)
             // 引擎四件 .so（hostBinary / libnodePath / npmNodeBin / npmLibnode）**唯一合法
             // 落位** = nativeLibDir（jniLibs 交付，§19；useLegacyPackaging 安装期解压位）。
-            // 不许改成 files/.ns —— 2026-10-14 真机 bug：批 109 改名连带把这几处串成
+            // 不许改成 files/.ns —— 改名时这几处被连带串成过
             // nsDir.resolve，Kotlin 不报错、设备上全量 ERR_FILE_NOT_FOUND
             // （design-decisions §77.3 记的就是这种「改名的碰撞」）。落位门 =
             // AppShellEnginePathsTest（读本文件钉接收者）；改这几处要连门一起改。
-            // 第四件（npmLibnode，2026-10-17）：与 npmNodeBin 是**同一件必填件的两半** ——
+            // 第四件（npmLibnode）：与 npmNodeBin 是**同一件必填件的两半** ——
             // noden 起来头一件事就是按 AUTOSCRIPT_LIBNODE 去 dlopen 它，缺了 exit 2。
             // §8.5 意图日志的存储引擎：SQLite（打开前做一次性迁移 jsonl → SQLite，
-            // 带原 runId）。**打不开不回落**（2026-10-08 裁定）—— 异常直接冒到本函数的
+            // 带原 runId）。**打不开不回落** —— 异常直接冒到本函数的
             // catch，判本次装配失败：壳保持未就绪、闹钟走漏投记账，不拿一条锚点靠
             // 单写者假设撑着的降级路径冒充"调度还能用"。
             // 打开住 PlatformWiring（本类不 import 任何 com.autoscript.platform..，
             // ArchitectureTest「平台实现只许装配包碰」看住）。
             val nsDir = filesDir.resolve(".ns")
             val intentStore = PlatformWiring.intentStore(appContext, nsDir)
-            // runId 高水位（2026-10-14 真机 bug 的装配侧）：档案里**已用过的最大 engineRunId**。
+            // runId 高水位：档案里**已用过的最大 engineRunId**。
             // 引擎的 runId 分配器是**进程内**的（每次 App 重启从 1 重数），而 engineRunId 是
             // 跨进程持久的身份 —— 不把水位作为构造配置喂下去，新进程第一次执行就会重发上一
             // 进程用掉的号，`SqliteRunArchive.put` 撞「终态记录不可改写」响亮失败（用户看到的
@@ -337,7 +337,7 @@ class AppShellApplication : Application(), HostSummary {
             // 而引擎由 `AppShellKit` 装配期 eager 建（池构造）—— 只有这一层读得到。打不开即抛
             // （与 intentStore 同一条无回落纪律）：拿 0 冒充"没有历史"正是本条要修的病。
             val engineRunIdHighWater = runArchiveHighWater(appContext, nsDir)
-            // 运行档案与任务注册表（批 102 P4）：生产面换 SQLite，各带一次性 jsonl 迁移。
+            // 运行档案与任务注册表：生产面是 SQLite，各带一次性 jsonl 迁移。
             // 与 intentStore 同一纪律 —— 打不开即抛（异常冒到本函数的失败分支：记日志、
             // 壳保持未就绪、闹钟走漏投记账），**不回落 jsonl**。
             val built = AppShellKit.assemble(
@@ -374,7 +374,7 @@ class AppShellApplication : Application(), HostSummary {
                                     ?.associate { it.key to it.value }
                                     .orEmpty()
                             },
-                            // 脚本资源限额（批 107）：与 scriptEnv **同一条纪律** ——
+                            // 脚本资源限额：与 scriptEnv **同一条纪律** ——
                             // 闭包捕获 store、每次 spawn 现读，改完下次执行即生效。
                             // **建不出来回 null（不注入）**：那等于「交给 Node 的默认」，
                             // 而这不是「闸被静默关掉」那种最坏结果 —— 脚本照跑，
@@ -407,9 +407,9 @@ class AppShellApplication : Application(), HostSummary {
                 // 设备上它就是 nativeLibraryDir/libnoden.so，ProcessBuilder 直接 exec。
                 npmNodeBin = nativeLibDir.resolve("libnoden.so").toString(),
                 // npm 会话宿主（同一个 noden）要 dlopen 的那件：`main.cpp` 按
-                // AUTOSCRIPT_LIBNODE 找它，缺了直接 exit 2（2026-10-17 设备实测 bug）。
+                // AUTOSCRIPT_LIBNODE 找它，缺了子进程直接 exit 2。
                 npmLibnode = nativeLibDir.resolve("libnode.so"),
-                // npm 操作事实的去向（2026-10-17 用户令「去掉审计、改打系统日志」）：
+                // npm 操作事实的去向：
                 // 原先 `:app-service:npm` 自己写一本 `files/.ns/install-history.jsonl`，
                 // 现在只把事实交出来，由这里接到 [HostLog]（logcat + 日志管理页
                 // 「系统日志」段 runId=0）。**恒传**：缺了 → 装完什么都没留下。
@@ -419,7 +419,7 @@ class AppShellApplication : Application(), HostSummary {
                 // **取钥判定在 AppShellKit 内**（它同时记账 built.npmLockKeyFailure），
                 // 本类只递 Keystore 那条缝 —— 与 npmCliSource/npmNodeBin 同一分工。
                 npmLockKeys = LockKeyStore.AndroidKeystore,
-                // T1 桥 socket（§10.3 T1，2026-10-10 批 91）：**设备侧必须显式给这条**。
+                // T1 桥 socket（§10.3 T1）：**设备侧必须显式给这条**。
                 // 缺省那条（`NpmT1Bridge.fileSystemBinder`）是 JDK unix domain socket，
                 // 而 `java.net.UnixDomainSocketAddress` 根本不在 android.jar 里 ——
                 // 在设备上它不是"降级"而是 NoClassDefFoundError（Error 拦不住），
@@ -445,7 +445,7 @@ class AppShellApplication : Application(), HostSummary {
                 // 同一本账，引用计数共存，框架 stop 只放框架自己的那一份。
                 powerManagerHandler = PlatformWiring.powerManagerHandler(foregroundKeeper()),
                 systemHandlers = wiring.systemHandlers,
-                // 控制台 shell 面（2026-10-09）：真实现住 PlatformWiring（它同时看得见
+                // 控制台 shell 面：真实现住 PlatformWiring（它同时看得见
                 // :platform:system 与 :platform:capabilities），这里只递那条缝。
                 // 缺省（JVM 装配/单测不传）→ Unavailable，如实 ERR_NOT_IMPLEMENTED；
                 // 生产由 PlatformWiring.inject 恒填（见那条的 KDoc）。
@@ -457,7 +457,7 @@ class AppShellApplication : Application(), HostSummary {
             bridge?.start(built.shell)
             install(built.shell)
             assembled = built
-            // 桥侧每连接闸**装填期现读一次**（批 107）：闸是宿主进程里的一份 `@Volatile`
+            // 桥侧每连接闸**装填期现读一次**：闸是宿主进程里的一份 `@Volatile`
             // 当前值，不推它就一直用出厂档，而设置页会显示「已保存」—— 正是「保存了却没生效」。
             // 单脚本那半不在这儿做（引擎每次 spawn 现读那条缝，装填期推反而多一份能漂的副本）。
             // 读表失败**不掀翻装配**：限额表读不出来 ≠ 宿主起不来，而那一档的处理是
@@ -658,7 +658,7 @@ class AppShellApplication : Application(), HostSummary {
             facade = permissionCenter(),
             // 降级任务账（§8.6「可能偏差」）：键排序只为让 UI 上的顺序稳定，不改账本语义。
             degradedAlarmTaskIds = degradedAlarmTasks().keys.sorted(),
-            // §15 的 E1 处置（2026-10-02 拍板「接受超支并在能力中心明示」）：量已装 APK 与
+            // §15 的 E1 处置（接受超支并在能力中心明示）：量已装 APK 与
             // native 库目录，不抄文档里的 ≈92MB —— 那是未压缩三件套，与用户装的不是同一个数。
             installSize = InstallSizeRead.measure(
                 apkFile = File(applicationInfo.sourceDir),
@@ -761,7 +761,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 冻住/解冻一次在途执行（[HostSummary] 的生产实现；2026-10-13）。
+     * 冻住/解冻一次在途执行（[HostSummary] 的生产实现）。
      *
      * 壳没装好就抛（与 [stopRun] 同一条纪律）；false = 已结算/从未存在，或本设备
      * 冻不住（原文由引擎侧日志，UI 按 false 反馈「该执行不支持暂停」）。
@@ -780,7 +780,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 往一次在途执行的脚本进程 stdin 送一行（[HostSummary] 的生产实现；2026-10-16
+     * 往一次在途执行的脚本进程 stdin 送一行（[HostSummary] 的生产实现
      * 悬浮窗底部输入框那颗蓝色箭头）。
      *
      * 壳没装好就抛（与 [pauseRun] 同一条纪律）；false = 已结算/从未存在，或管道已随
@@ -793,7 +793,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 脚本输出日志的文件列表（[HostSummary] 的生产实现；2026-10-13）。
+     * 脚本输出日志的文件列表（[HostSummary] 的生产实现）。
      *
      * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：只读 `filesDir/.ns/script-logs/`
      * 落盘，壳没装好也照样列。`running` 那一列要壳里的在途表：壳未就绪 = 空集
@@ -811,7 +811,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 一次执行的日志全文（[HostSummary] 的生产实现；2026-10-13）。
+     * 一次执行的日志全文（[HostSummary] 的生产实现）。
      *
      * 只读落盘文件，不依赖壳寄存器（与 [scriptLogIndex] 同口径）；文件缺失/坏行
      * 的判据在 [ScriptLogRead.content] —— 缺失抛（"读不到"与"没输出"是两句话）。
@@ -820,7 +820,7 @@ class AppShellApplication : Application(), HostSummary {
         ScriptLogRead.content(filesDir.toPath(), runId, maxLines)
 
     /**
-     * 系统级悬浮窗资格（[HostSummary] 的生产实现；2026-10-13）。
+     * 系统级悬浮窗资格（[HostSummary] 的生产实现）。
      *
      * 就是 `Settings.canDrawOverlays` 那一句（`:ui` 不碰 `Settings`，实现只能住这里；
      * 先例见 `AndroidSystemStateReader.overlayDrawable`）。同步、便宜、无抛：
@@ -858,7 +858,7 @@ class AppShellApplication : Application(), HostSummary {
      * 与 [scriptFiles] 同一条"不依赖壳寄存器"口径：落盘只看 `files/scripts/` 目录。
      * 合法性/撞名/层级存在性裁决在 [ScriptFileOps]（原文抛给 UI）。
      *
-     * [dirRelPath] 就是"用户在哪一层按的新建"（2026-10-16 用户口径）：透传给
+     * [dirRelPath] 就是"用户在哪一层按的新建"：透传给
      * [ScriptFileOps]，本层不解释路径。
      */
     override suspend fun createEntry(
@@ -963,7 +963,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 在控制台执行一条 **shell 命令**（2026-10-09 用户口径，[HostSummary] 的生产实现）。
+     * 在控制台执行一条 **shell 命令**（[HostSummary] 的生产实现）。
      *
      * 与 [runNpmCommand] 同一条分工：交给**装配产物里那个 facade**（第二个协调器会各自持
      * 一条控制台环，用户就会看到一本与 npm 命令互不相干的账）；未接线**抛**，不假装跑过。
@@ -1000,7 +1000,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 停掉控制台在跑的命令（批 94，[HostSummary] 的生产实现）。
+     * 停掉控制台在跑的命令（[HostSummary] 的生产实现）。
      *
      * 与 [runNpmCommand] 同一条分工：交给**装配产物里那个 facade** —— 句柄账在那个
      * 协调器手里，换一个实例去 cancel 就是在一本空账上找句柄（永远找不到，表现为
@@ -1037,7 +1037,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 把项目声明的依赖提升到全局作用域（2026-10-17，[HostSummary] 的生产实现）。
+     * 把项目声明的依赖提升到全局作用域（[HostSummary] 的生产实现）。
      *
      * 与 [runNpmMaintenance] 同一条纪律：走的是**装配产物里那个 facade**（第二个
      * `InstallCoordinator` 会拿另一份 layout，那就装到别处去了）；未接线**抛**，
@@ -1079,7 +1079,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 控制台命令历史读数（§10.9 第 3 条，[HostSummary] 的生产实现，2026-10-10 批 90）。
+     * 控制台命令历史读数（§10.9 第 3 条，[HostSummary] 的生产实现）。
      *
      * 与 [consoleOutput] 同一条纪律：读的是**装配产物里那个 facade** —— 历史是那个
      * 协调器在派发时写下的（`services.consoleHistory`），换一个实例读到的就是另一本账
@@ -1094,7 +1094,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 记一条控制台命令历史（写口，2026-10-10 批 90）。
+     * 记一条控制台命令历史（写口）。
      *
      * 与 [consoleHistory] 同一个 facade（写进去的和读出来的是同一本账）。
      *
@@ -1108,7 +1108,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 依赖面板的变更半边（§10.9 第 1 条，[HostSummary] 的生产实现，2026-10-09 批 87）。
+     * 依赖面板的变更半边（§10.9 第 1 条，[HostSummary] 的生产实现）。
      *
      * **与 [runNpmCommand] 是同一个口**（依赖面板的输入行与控制台敲的是同一种东西，
      * 门禁强度不该取决于用户从哪个界面按下去）—— 这里只是把控制台那个调用名换成一个
@@ -1166,7 +1166,7 @@ class AppShellApplication : Application(), HostSummary {
     }
 
     /**
-     * 脚本资源限额读数（§8.1，批 107；[HostSummary] 的生产实现）。
+     * 脚本资源限额读数（§8.1；[HostSummary] 的生产实现）。
      *
      * 表打不开**抛**（不返回出厂值）：出厂值长得很像「用户填的」，回它会把「盘读不出来」
      * 画成「你的设置重置了」。而它恰好是内存闸 —— 静默退回出厂值 = **闸被静默关掉**，
@@ -1178,7 +1178,7 @@ class AppShellApplication : Application(), HostSummary {
         }.load()
 
     /**
-     * 保存脚本资源限额（§8.1，批 107；[HostSummary] 的生产实现）。
+     * 保存脚本资源限额（§8.1；[HostSummary] 的生产实现）。
      *
      * 越界由落盘实现的 `ScriptRuntimeLimits.reject` **抛**（判据唯一一份在 `:domain`），
      * 本类只转发，不另判一遍 —— 与 [putScriptEnv] 同一句理由。

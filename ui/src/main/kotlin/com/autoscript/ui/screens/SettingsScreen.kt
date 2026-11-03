@@ -73,32 +73,30 @@ import com.autoscript.ui.state.ScriptLimitsState
 import kotlinx.coroutines.launch
 
 /**
- * 设置页（批 49 起「两组纯文字 + 权限列表子页」两层）：
+ * 设置页（「两组纯文字 + 权限列表子页」两层）：
  *
  * **顶页** = 头部标识区（软件图标 90dp 正圆 + `NodeScript` 22sp 粗体 —— TG 设置页
  * `topView` 的对应位，随列表滚动）+ 两张纯文字卡：①「权限列表」（点进子页）/
  *「语言切换」/「帮助文档」；②「反馈」/「关于」/「检查更新」；再加降级定时任务段。
- * 这些行**无图标、无副标题**（批 49 用户口径「都不需要图标，还有标题下面的小字」——
- * 连同批 48 挂在入口副标题位的读态一并撤下）；没实现的功能点按 toast 如实说「尚未开放」，
+ * 这些行**无图标、无副标题**；没实现的功能点按 toast 如实说「尚未开放」，
  * 不画成空页。顶栏只留右上 `⋮`（主题切换）。
  * **子页** = 点「权限列表」进入：顶栏换「‹ 返回 + 权限列表」，全部权限行同卡、
  * 无分隔线、行尾三态值，可授权行整行可点（权限行保留图标 —— 那是模块自己的脸）。
  * 系统返回先关子页再交外壳（[BackHandler]）。
  *
- * 为什么收进子页（批 48 用户口径「顶层入口进二级页」，TG 主设置页
+ * 为什么收进子页（顶层入口进二级页，TG 主设置页
  * 「Privacy and Security」的形态）：顶层要的是**命名的列表结构**，权限九行平铺会把
  * 入口与内容混在一层。
  *
  * 诚实边界（与其他屏同一条纪律）：
- * - 读态顶页不再展示（批 49 去掉标题下的小字）；子页没读到 / 读失败时卡内如实说一句
+ * - 读态顶页不展示；子页没读到 / 读失败时卡内如实说一句
  *   （[Status] 的三态分派），**不铺空卡**冒充「一个权限都没有」；
  * - 行尾三态中文说法与逐态着色判读在可测的 [CapabilityRowState]，可授权的行整行可点
  *   （[CapabilityRowState.canRequestGrant] 的投影）；
- * - 引导文案**不渲染**（批 47 口径「去除各个权限的描述」）；安装体积**不渲染**
- *   （批 47 口径）—— 字段与换算仍在状态层，测试钉着；
+ * - 引导文案**不渲染**；安装体积**不渲染** —— 字段与换算仍在状态层，测试钉着；
  * - 降级中的定时任务在**顶页**单列一段（§8.6 承诺「可能偏差」的账，不是权限问题）。
  *
- * 刷新钮不设（批 41/47 同一口径）：`TabReloadEffect` 在切页签 / 回前台现取，
+ * 刷新钮不设：`TabReloadEffect` 在切页签 / 回前台现取，
  * 子页开着时回前台同样现取（授权返回后的重读走这一条）。
  */
 // 10 个参数压着 detekt `LongParameterList` 的线（9）。**刻意不打包**：五个限额回调本来
@@ -110,7 +108,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     state: CapabilityCenterState,
     onOpenSettings: (Capability) -> Unit,
-    /** 脚本设置子页的状态与回调（批 107；§8.1）。本屏不持有读口，只透传。 */
+    /** 脚本设置子页的状态与回调（§8.1）。本屏不持有读口，只透传。 */
     limitsState: ScriptLimitsState,
     onLimitsRefresh: suspend () -> Unit,
     onLimitsDraft: (field: ScriptLimitsDraft, value: String) -> Unit,
@@ -132,7 +130,7 @@ fun SettingsScreen(
     // 动画进行中（TG `animationInProgress`）—— 底下那份的入口照旧吞点击，与管理面板
     // 同一口径：退出动画没播完就点新入口，在 TG 里是什么都不发生。
     var animating by remember { mutableStateOf(false) }
-    // 悬浮底栏的隐藏开关（外壳供）。**进了子页底栏整条收掉**（用户口径 2026-10-13：
+    // 悬浮底栏的隐藏开关（外壳供）。**进了子页底栏整条收掉**（
     // 「点进列表里面时让底栏消失，退出来时才重新出现」）—— 子页与项目页的目录层同一条
     // 理由：那四个页签既是别的页面、又压着内容底部。
     val tabBarHidden = LocalTabBarHidden.current
@@ -143,7 +141,7 @@ fun SettingsScreen(
     LaunchedEffect(active, fullScreen) { if (active) tabBarHidden.value = fullScreen }
 
     // 读态三态分派走 Status（`LoadState` 的纪律：界面不自己 when 它）。
-    // 顶页不再挂它（批 49 去掉标题下的小字）—— 只在子页没读到 / 读失败时如实说。
+    // 顶页不挂它 —— 只在子页没读到 / 读失败时如实说。
     val status = Status.of(
         load = state.load,
         notLoadedText = "尚未读取",
@@ -201,7 +199,7 @@ fun SettingsScreen(
                                 item { IdentityHeader() }
                                 item {
                                     // 第一组：权限列表（唯一有里页的行）+ 两个未开放入口。
-                                    // 全部纯文字（批 49：无图标、无副标题）。
+                                    // 全部纯文字（无图标、无副标题）。
                                     SettingsCard {
                                         SettingsCellRow(
                                             title = "权限列表",
@@ -223,7 +221,7 @@ fun SettingsScreen(
                                 }
                                 item { SectionGap() }
                                 item {
-                                    // 第二组：三个未开放入口，同一档纯文字（用户口径整页不要图标）。
+                                    // 第二组：三个未开放入口，同一档纯文字。
                                     SettingsCard {
                                         SettingsCellRow(
                                             title = "反馈",
@@ -277,7 +275,7 @@ fun SettingsScreen(
                 ) {
                     PermissionsPage(state, status, pageListState, onOpenSettings)
                 }
-                // 脚本设置子页（批 107；§8.1 脚本资源限额）：状态与回调整份从外面进来，
+                // 脚本设置子页（§8.1 脚本资源限额）：状态与回调整份从外面进来，
                 // 本屏不持有读口 —— 设置页此前只收 `CapabilityCenterState`，接第一个
                 // 持久化读口时把那份 `HostSummary` 依赖挡在外面（`:ui` 只依赖 `:domain`）。
                 SettingsSubPage.SCRIPT_LIMITS -> SettingsSubPageLayer(
@@ -300,7 +298,7 @@ fun SettingsScreen(
 }
 
 /**
- * 一个设置子页的外壳（批 115）：顶栏 + 本体。
+ * 一个设置子页的外壳：顶栏 + 本体。
  *
  * **不挂 `BackHandler`** —— 与 [ManagementTransition] 那个普通返回键同源：外壳的
  * `PredictiveBackHandler` 在**非手势**返回键（系统三键/手势导航的返回按钮）上同样会
@@ -326,7 +324,7 @@ private fun SettingsSubPageLayer(
 }
 
 /**
- * 权限子页本体（批 107 自 [SettingsScreen] 抽出）。
+ * 权限子页本体。
  *
  * **为什么抽**：加了脚本设置子页后 [SettingsScreen] 顶到 detekt `LongMethod` 的线，而那一段
  * 是**另一个页的完整实现** —— 顶页只做「选哪个子页」，各子页各画各的。留在里面会让
@@ -361,7 +359,7 @@ private fun PermissionsPage(
     }
 }
 
-/** 两张卡片之间的灰底空隙（TG `ShadowSectionCell` 缺省高 12dp —— 批 44 实测口径）。 */
+/** 两张卡片之间的灰底空隙（TG `ShadowSectionCell` 缺省高 12dp）。 */
 @Composable
 private fun SectionGap() {
     Spacer(Modifier.height(12.dp))
@@ -385,7 +383,7 @@ private fun CardCaptionRow(text: String, tone: StatusTone) {
  * 软件图标 90dp 正圆 → 10dp → `NodeScript` 22sp 粗体，全部居中。
  *
  * 落位按 TG 实测三个数：图标顶 26dp、标题顶 ≈126dp（26 + 90 + 10）、整区高 188dp。
- * **读态不在这里**（批 48 挪到「权限」入口的副标题位）—— 它描述的是权限清单，
+ * **读态不在这里** —— 它描述的是权限清单，
  * 不是这张脸；头部只留 TG 副标题那格的静默（本仓没有"电话号码"可填）。
  */
 @Composable
@@ -415,7 +413,7 @@ private fun IdentityHeader() {
  *
  * 图标 = 本应用当前的 launcher 图标（`PackageManager.getApplicationIcon`）——
  * 仓库现在没有 `android:icon` 声明，取到的就是**系统默认图标先占个位置**
- * （批 47 用户口径「就先用系统默认的占位置」）；将来补上真图标即自动生效，不用改这里。
+ * （先用系统默认的占位置）；将来补上真图标即自动生效，不用改这里。
  * 取不到时回落成同尺寸的占位圆，不留 90dp 空洞。
  */
 @Composable
@@ -458,7 +456,7 @@ private fun Drawable.toImageBitmapOrNull(): ImageBitmap? = runCatching {
  * 子页里的一行权限（TG `SettingCell` 单行档：50dp、无副标题、无分隔线）。
  * 行尾 = 三态的中文说法（可点的行 LINK 蓝，与「点得动」读成一条；
  * GRANTED 灰、降级/被拒逐态警示色）。
- * 引导文案不渲染（批 47 用户口径「去除各个权限的描述」）—— 去授权靠整行可点。
+ * 引导文案不渲染 —— 去授权靠整行可点。
  */
 @Composable
 private fun PermissionRow(row: CapabilityRowState, onOpenSettings: (Capability) -> Unit) {
@@ -491,7 +489,7 @@ private fun PermissionRow(row: CapabilityRowState, onOpenSettings: (Capability) 
  * TG 那格挂的是退出登录（`LogoutActivity`），本仓无登录概念 —— 挂全局的主题切换
  * （与项目页 ⋮ 第一格同一项、同一份「标签 = 目标模式」文案口径；那一格的
  * `dismissOnClick = false` 也同一份口径：切主题不关菜单）。
- * 刷新钮批 47 已整颗删掉，不再挪进菜单；子页顶栏没有这一格（返回即全部）。
+ * 子页顶栏没有刷新钮（返回即全部）。
  *
  * 参数 `onSwitchTheme` 收**这颗 ⋮ 在根坐标里的中心**：外壳的圆形揭示从它长出来
  * （见 `centerInRoot` —— 菜单本体住独立 popup 窗口，量不到被点那一行的坐标）。
@@ -554,7 +552,7 @@ private fun Capability.glyph(): GlyphKind = when (this) {
 
 
 /**
- * 设置页的两个子页（批 107；此前只有一个「权限列表」，用 Boolean 表示）。
+ * 设置页的两个子页。
  *
  * **改成枚举是因为多了一个子页**：布尔只能表示「开着没有」，第二个子页就得再加一个互斥
  * 判据 —— 那正是「按下去两个同时开着」那类 bug 的形状。`NONE` 显式存在而不是靠「两个都
@@ -567,7 +565,7 @@ enum class SettingsSubPage(val title: String) {
 }
 
 /**
- * 五个草稿里是哪一个（批 107）。
+ * 五个草稿里是哪一个。
  *
  * 五个 [String] 字段用「位置」传是错的（编译器不检查顺序），用 `copy` 又要在 `MainActivity`
  * 里抄五遍字段名 —— 那正是「加一项要改六处」的形状。枚举让 `copy` 的选择在一个地方做完。
