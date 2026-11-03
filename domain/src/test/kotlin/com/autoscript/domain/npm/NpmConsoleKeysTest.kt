@@ -72,7 +72,7 @@ class NpmConsoleKeysTest {
 
     @Test
     fun `默认模式下裸首词按 npm bin 解析（装好的依赖提供的命令）`() {
-        // 2026-10-09 二次裁定：控制台要能直接敲 tsc / eslint 这类命令。
+        // 控制台要能直接敲 tsc / eslint 这类命令。
         assertEquals(NpmConsoleCommand.Exec("tsc", emptyList()), NpmConsoleKeys.parse("tsc"))
         assertEquals(
             NpmConsoleCommand.Exec("tsc", listOf("--noEmit")),
@@ -224,9 +224,9 @@ class NpmConsoleKeysTest {
         assertNull(NpmConsoleKeys.rejectProjectId("main"))
         assertNull(NpmConsoleKeys.rejectProjectId("my-proj_1-2"))
         // `.` 与 `..` 在名单里是刻意的：`resolve("..")` 正好跳出项目根，
-        // 而原正则 `[A-Za-z0-9._-]+` 把它们放行了（批 84 收口）。
-        // 样本自 2026-10-16 起去掉 `a b`（含空格，判据放宽后合法）——「禁的那几样」才是本用例要钉的。
-        // 样本自 2026-10-17 起去掉 `""`：空串是根层哨兵，在依赖面上读作「全局」作用域，
+        // 而原正则 `[A-Za-z0-9._-]+` 把它们放行了（ 收口）。
+        // 样本不含 `a b`（含空格，判据放宽后合法）——「禁的那几样」才是本用例要钉的。
+        // 样本不含 `""`：空串是根层哨兵，在依赖面上读作「全局」作用域，
         // **合法**（见下面那条用例）；它仍在禁名单里就会把这条用例变成"钉一个已经不成立的口径"。
         for (bad in listOf(".", "..", "a/b", "a.b", "a\\b", "a\nb")) {
             val why = NpmConsoleKeys.rejectProjectId(bad)
@@ -241,7 +241,7 @@ class NpmConsoleKeysTest {
     }
 
     /**
-     * 空串在依赖面上是**合法**作用域（2026-10-17 用户口径「下拉框加个全局」）。
+     * 空串在依赖面上是**合法**作用域。
      *
      * 判据放宽的是"非空"这一条，**不是**防逃逸那一条 —— 后者一字未动（上一条用例钉着）。
      * 放行空串不会打开任何缝：`projectsRoot.resolve("")` 恒等自身，逃不出项目根。

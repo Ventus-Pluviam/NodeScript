@@ -67,7 +67,7 @@ class NpmBridgeHandler(
 
     private suspend fun payload(request: BridgeRequest): String? {
         val f = DomainJson.decodeObject(requirePayload(request))
-        // 判据进 [ProjectId]（批 109）：本方法是 npm 桥面的**唯一入口**，脚本给的
+        // 判据进 [ProjectId]：本方法是 npm 桥面的**唯一入口**，脚本给的
         // projectId 从这里一路拼到 `files/scripts/<id>/` 落盘。判不过就地折
         // ERR_INVALID_PARAM，三种非法形态各有各的话术（照旧，只把最后一种收窄）。
         val rawProjectId = when (val v = f["projectId"]) {

@@ -9,7 +9,7 @@ import com.autoscript.domain.scripts.IntentStore.StoredRow
 /**
  * 意图日志的 SQLite 实现（docs §8.5「append-only（SQLite，启动即回放）」）。
  *
- * 语义与已退役的 jsonl 存储（`JournalFileStore`，2026-10-08 删除）**逐条等价** ——
+ * 语义与已退役的 jsonl 存储（`JournalFileStore`，删除）**逐条等价** ——
  * 两者共用同一套契约测试（`IntentStoreContract`，见 `:domain` 的 testFixtures）：
  * 崩溃持久、幂等锚点原子、runId 单调不复用、`seal`/`sealAndReopen` 的边界行为。
  *

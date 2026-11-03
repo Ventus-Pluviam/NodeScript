@@ -101,7 +101,7 @@ class FileScriptEnvStore(
     fun maxLiveBytes(): Long = maxLiveBytes
 
     /**
-     * replay：**流式**扫盘（外审 B3 的「全量 `readAllBytes`」那半，2026-10-12 改）。
+     * replay：**流式**扫盘（不全量 `readAllBytes`）。
      *
      * 为什么必须流式：append-only 的长度只增不减，而这份表的写入方是**用户点出来的**
      * 「添加一条」—— 同一个 key 改一百次就是一百行，删掉的键也各留一行墓碑。`readAllBytes`
@@ -138,7 +138,7 @@ class FileScriptEnvStore(
     }
 
     /**
-     * 盘上超过 [maxLiveBytes] 就**压实**成收敛视图（外审 B3 的「无压缩」那半，批 106）。
+     * 盘上超过 [maxLiveBytes] 就**压实**成收敛视图（外审 B3 的「无压缩」那半）。
      *
      * 为什么这一份可以无损压实：读口 [all] 要的是**现状**，不是历史。append-only 只增不减，
      * 同一个键改一百次就是一百行、删掉的键各留一行墓碑，而收敛后可能只剩几十条 ——

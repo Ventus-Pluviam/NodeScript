@@ -8,7 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * 脚本输出日志文件的拼装（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+ * 脚本输出日志文件的拼装（日志管理页「脚本输出」tab）。
  *
  * 读的是落盘目录（`filesDir/.ns/script-logs/`，`ScriptLogStore` 写）——
  * **壳无关**（与 [ScriptFilesRead] 同一条"不依赖壳寄存器"口径）：目录照样可读，
@@ -160,7 +160,7 @@ object ScriptLogRead {
      *
      * **为什么不能照抄 `ConsoleHistory.longField`**：那边的键是裸数字、值却要求带引号
      * （历史账的畸形形状）；本面的 writer 从生下来就是裸数字 —— 抄那份等于让每一行
-     * index 都解析失败、列表恒空（正是 2026-10-14 那 6 条全红的根因）。
+     * index 都解析失败、列表恒空。
      */
     private fun longField(text: String, name: String): Long? {
         val key = "\"" + name + "\":"

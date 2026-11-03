@@ -6,7 +6,7 @@ import kotlin.coroutines.CoroutineContext
 /**
  * 输入通道（docs §9.3）：`auto`（无障碍）/ `adb`（Shizuku）/ `root`（`su`）。
  *
- * **不是「降级顺序」，是「三个平级通道」**（2026-10-06 拍板，见 `design-decisions.md`）：
+ * **不是「降级顺序」，是「三个平级通道」**（拍板，见 `design-decisions.md`）：
  * 调用方**必须显式**指定要走哪一条；指定的那条不可用就**如实失败**，绝不改用别的通道。
  * 这一条与本仓既有的降级哲学**刻意相反**（§9.5 的 `DEGRADED` 是「能力受限但仍可用」），
  * 因为三者的**可观测后果不同**：无障碍注入会被前台应用看出（`FLAG_SECURE` 类对抗、
@@ -55,7 +55,7 @@ enum class InputChannel {
  * 作为 [CoroutineContext.Element] 传给该连接的所有帧任务，隔离是**结构上**的
  * （同连接内的帧共享，不同连接天然不共享），不靠人记得清。
  *
- * **缺省是「没选」而不是 `auto`**（2026-10-06 用户口径「必须显式传，无默认」）：
+ * **缺省是「没选」而不是 `auto`**：
  * [current] 为 null 时调用方**必须**在单次调用的载荷里给 `channel`，否则
  * `ERR_INVALID_PARAM`。这里**刻意不预置 `auto`** —— 预置等于「什么都没说 = 走了无障碍」，
  * 而三者可观测后果不同（见 [InputChannel] 的 KDoc），那种静默正是本机制要消灭的东西。

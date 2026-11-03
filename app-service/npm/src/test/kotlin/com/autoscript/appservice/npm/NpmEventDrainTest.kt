@@ -54,9 +54,9 @@ class NpmEventDrainTest {
     private fun handler(c: InstallCoordinator) = NpmBridgeHandler(c)
 
     /**
-     * 执行体经 [ProgressSink] 报的阶段**必须进环**（2026-10-10 批 90 修的真错）。
+     * 执行体经 [ProgressSink] 报的阶段**必须进环**（ 修的真错）。
      *
-     * 批 90 之前这里是 `events.tryEmit(ev)`：只喂了那条 `SharedFlow`，而
+     * 此前这里是 `events.tryEmit(ev)`：只喂了那条 `SharedFlow`，而
      * [InstallCoordinator.drainEvents] 读的是 `installEventRing`、控制台读的是
      * `consoleRing` —— 两个环**只在 `emit` 里写**。后果是执行体独有的
      * `DOWNLOAD`/`REIFY` 两格**生产里从来没亮过**（脚本侧 `onProgress` 收不到，

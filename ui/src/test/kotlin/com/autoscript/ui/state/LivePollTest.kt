@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 「有东西在跑就自己拉」那条循环（2026-10-10 批 90）。
+ * 「有东西在跑就自己拉」那条循环。
  *
  * 断的是两件在真机上看得见的事：
  * - 控制台敲完一行之后，**跑到一半的输出会自己出现**（不必用户点刷新）；

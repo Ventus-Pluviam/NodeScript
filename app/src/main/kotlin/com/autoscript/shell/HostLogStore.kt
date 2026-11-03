@@ -8,7 +8,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 /**
- * **宿主日志（系统日志）的落盘**（2026-10-17 用户令「系统日志不要每次进 app 都清除」）。
+ * **宿主日志（系统日志）的落盘**。
  *
  * 修的是一个很具体的体验缺口：管理面板 → 日志管理页的第一段「系统日志」
  * （= `ConsoleCollector` 里 `runId == 0` 的那些行，也就是[HostLog] 镜像进来的宿主事件）

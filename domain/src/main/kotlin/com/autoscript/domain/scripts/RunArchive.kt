@@ -61,7 +61,7 @@ interface RunArchive {
      * （`EngineRunReceipt.runId`）分配，而 `:engine:node-process` 的分配器是**进程内**计数器
      * —— 每次 App 进程重启都从 1 重新数。档案却是持久的：上一进程留下的终态行（比如
      * `engine_run_id = 1`）还在库里，新进程第一次执行又拿 1 → [put] 撞上「终态记录不可改写」
-     * 当场抛（2026-10-14 真机实测：`终态记录不可改写: engineRunId=1 state=CRASHED`，
+     * 当场抛（真机实测：`终态记录不可改写: engineRunId=1 state=CRASHED`，
      * 悬浮窗落空态）。
      *
      * 所以装配期要用本口把新进程的分配器顶到历史之后 —— 装配根读到本口的值，经引擎自己的

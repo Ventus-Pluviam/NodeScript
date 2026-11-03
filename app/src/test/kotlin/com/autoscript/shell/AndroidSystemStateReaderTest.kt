@@ -131,7 +131,7 @@ class AndroidSystemStateReaderTest {
 
     @Test
     fun `ADB 输入没就绪是 DENIED —— 三通道三选一之后没有降级链`() = runBlocking {
-        // 批 61（2026-10-06）把输入面从「一条实现 + 降级」改成三条平级通道 + 显式选路：
+        // 把输入面从「一条实现 + 降级」改成三条平级通道 + 显式选路：
         // 脚本指定 adb 而该通道不可用就是 ERR_PERMISSION_DENIED，**绝不改用别的通道**
         // （§9.3，口径见 design-decisions.md 第 35 项）。此前这里恒 DEGRADED，靠的是
         // 「未就绪时输入走无障碍手势」那条承诺 —— 那条路已经不存在了。
@@ -148,7 +148,7 @@ class AndroidSystemStateReaderTest {
 
     @Test
     fun `使用情况访问没开是 DENIED —— currentPackage 没有降级路径`() = runBlocking {
-        // 批 48：未授权时 currentPackage 如实回 null（引导文案逐字承诺），
+        // 未授权时 currentPackage 如实回 null（引导文案逐字承诺），
         // 没有"降级着也能查"的中间态 —— 所以是 DENIED 不是 DEGRADED。
         val r = reader(FakeProbes(usageAccess = false))
         assertEquals(CapabilityState.DENIED, r.readSystemState(Capability.USAGE_ACCESS))
@@ -163,8 +163,8 @@ class AndroidSystemStateReaderTest {
         // (1) 新增 Capability 忘了给结论时，when 的穷尽性会在编译期拦住（这里再遍历一遍兜底）；
         // (2) 「被判 DENIED」是个**稀缺**结论 —— 它意味着 ensure 会直接拦人。
         //     出厂态（什么都没开）只有五种能力够格 DENIED：没有任何降级路径的无障碍、
-        //     被拒即静默丢弃的通知发送权限、探测不到就是没有的 root、（批 48）
-        //     未授权就查不到使用情况的使用情况访问，以及（批 61）三通道三选一之后
+        //     被拒即静默丢弃的通知发送权限、探测不到就是没有的 root、
+        //     未授权就查不到使用情况的使用情况访问，以及三通道三选一之后
         //     同样没有降级路径的 adb 输入。
         //     别的能力若哪天变成 DENIED，用户会在引导页开着开着发现某功能彻底用不了 —— 这条会红。
         val r = reader(FakeProbes())

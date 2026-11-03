@@ -8,7 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * 运行档案存储的**打开与一次性迁移**（§8.5；2026-10-11 批 102 P4）。
+ * 运行档案存储的**打开与一次性迁移**（§8.5）。
  *
  * 与 [IntentStoreWiring] / [TaskStoreWiring] **同一套口径**（三份存储一套纪律）：
  * 1. **迁移**（[migrate]）：老设备上已有 `run-archive.jsonl`。库为空且 jsonl 非空时把历史
@@ -38,7 +38,7 @@ object RunArchiveWiring {
         }
 
     /**
-     * **档案里的 runId 高水位**（2026-10-14 真机 bug）：已用过的最大 engineRunId，空档回 `0`。
+     * **档案里的 runId 高水位**（真机 bug）：已用过的最大 engineRunId，空档回 `0`。
      *
      * 装配期要在**引擎建出来之前**拿到它（`NodeEngineConfig.runIdHighWater` 是构造配置），
      * 而那条路径是同步的 —— 本口把「打开 + 迁移 + 读一次 + 关」收在一处，句柄当场还掉，

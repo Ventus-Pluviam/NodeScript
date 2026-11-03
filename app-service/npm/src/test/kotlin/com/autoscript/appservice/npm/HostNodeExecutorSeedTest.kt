@@ -11,7 +11,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * 播种工作目录时「项目缺 `package.json` 怎么办」（2026-10-17 用户口径
+ * 播种工作目录时「项目缺 `package.json` 怎么办」（
  * 「应该让它缺的时候自动创建呀」）。
  *
  * 修之前这里是一句 `require`：`项目 demo 缺 package.json（…），无法执行 npm install`
@@ -73,7 +73,7 @@ class HostNodeExecutorSeedTest {
     }
 
     /**
-     * 2026-10-29 修的核心不变量（宿主「真树进门」）：项目根有真实 `node_modules` 时，
+     * 修的核心不变量（宿主「真树进门」）：项目根有真实 `node_modules` 时，
      * `prepareWorkDir` 必须把它**整体搬进 workDir**（npm 要在真实依赖树上 reify，
      * 否则卸载对空树执行、写回锁键全带 `npmwork-<uuid>` 墓碑路径 —— 设备上那份
      * lockfile 的铁证）。

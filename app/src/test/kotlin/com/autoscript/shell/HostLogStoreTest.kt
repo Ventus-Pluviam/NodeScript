@@ -12,7 +12,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 /**
- * 系统日志落盘/回读（2026-10-17 用户令「系统日志不要每次进 app 都清除」）。
+ * 系统日志落盘/回读。
  *
  * 全部用 [TempDir]（禁写死宿主路径 —— 写死的路径在 CI 上不是 root，本机会真建出宿主目录）。
  */

@@ -10,7 +10,7 @@ import java.net.URISyntaxException
  * `canonicalRegistry`，规范化后才拼 packument URL）与界面（`:ui` 的输入校验，
  * 用户打错一个字母要当场被告知）。抄两份必然漂，而漂的方向恰好最坏：
  * 界面放行的串在缝边界被折成 `Unverifiable`，用户看到的是「校验不通过」而不是
- * 「你写的地址有问题」。批 82 的 `ScriptEnvKeys` 是同一条理由的先例。
+ * 「你写的地址有问题」。 `ScriptEnvKeys` 是同一条理由的先例。
  *
  * **本对象不依赖 `NpmRegistryVerifier`**：`OFFICIAL`/`MIRROR` 的**字面量**住这里，
  * 那边改成指向本对象的别名 —— 依赖方向只能是「实现 → 契约」，反过来就成环了。
@@ -21,7 +21,7 @@ import java.net.URISyntaxException
  */
 object NpmRegistryKeys {
 
-    /** 官方注册表（**出厂首选**，§18 第 7 项 2026-09-26 拍板；也是别家首选时的第二意见）。 */
+    /** 官方注册表（**出厂首选**，§18 第 7 项 拍板；也是别家首选时的第二意见）。 */
     const val OFFICIAL: String = "https://registry.npmjs.org"
 
     /** 镜像（国内实测存活；出厂时做**第二意见**，也可被用户提成首选）。 */

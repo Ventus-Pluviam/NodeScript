@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 /**
- * 兜底补位号的**归属过滤**（2026-10-16 用户报「运行的时候会执行上一次执行成功的脚本」）。
+ * 兜底补位号的**归属过滤**。
  *
  * 钉的是那条回归：补位号必须与窗的归属（`projectId` + 项目内 `relPath`）**全等**，
  * 不能拿全库最新的一条 —— 后者会让窗刚开时被补到上一次别的脚本的输出上，

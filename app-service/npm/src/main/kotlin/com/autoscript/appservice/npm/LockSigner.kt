@@ -48,7 +48,7 @@ class LockSigner(
     /**
      * 应用密钥接缝（Android Keystore / 测试用固定字节）。
      *
-     * **形状给的是 [SecretKey] 句柄，不是 `ByteArray`**（2026-10-01 拍板，backlog A1c）：
+     * **形状给的是 [SecretKey] 句柄，不是 `ByteArray`**（拍板，backlog A1c）：
      * Keystore 里的密钥材料**不出库**（`SecretKey.getEncoded()` 拿不到字节），签名只能在库内完成 ——
      * 原先那种「交出密钥字节」的形状**接不上** Keystore。给句柄则两边都成立：
      * Keystore 的 HMAC 密钥（`KeyProperties.KEY_ALGORITHM_HMAC_SHA256`，API 23+；minSdk 26 ✓）
@@ -65,7 +65,7 @@ class LockSigner(
     /**
      * 对项目 lockfile 签名（待签体含 projectId 与 lock 内容摘要，**能**验出跨项目搬锁）。
      *
-     * **「防跨项目搬锁」这个说法此前写在这里，它只对了一半**（2026-10-12 订正，外审 M9；
+     * **「防跨项目搬锁」这个说法此前写在这里，它只对了一半**（订正，外审 M9；
      * 本条经维护者裁定**不做**，这里只订正事实、不改行为）：待签体 `bodyOf` 确实带了
      * `projectId`，所以「拿 A 的 lock 去 B 项目验签」会**验不过** —— 这一点成立。
      * 但落盘只有**一个** `files/.ns/lock.sig`（路径里没有项目维度，见 [file]），

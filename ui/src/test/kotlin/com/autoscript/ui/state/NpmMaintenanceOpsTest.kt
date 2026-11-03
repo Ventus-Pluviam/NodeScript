@@ -40,9 +40,9 @@ class NpmMaintenanceOpsTest {
         NpmState.of(NpmPanelSnapshot(projects.toList()))
 
     /**
-     * 在途写回（2026-10-29 修）：提交那一瞬先置位、清账，别的交给挂起的执行协程。
+     * 在途写回（修）：提交那一瞬先置位、清账，别的交给挂起的执行协程。
      *
-     * 两条各钉一句：维护与回收的**专属位**置上（防连点的判据 2026-10-17 起就是
+     * 两条各钉一句：维护与回收的**专属位**置上（防连点的判据就是
      * `canReclaimCache`/`canInstall` 读的那几个位），旧账（上次动作的 opError/opNotice）
      * 一并清掉 —— 新动作的开局不该还挂着上一件事的回执。
      */
@@ -115,7 +115,7 @@ class NpmMaintenanceOpsTest {
                 runNpmMaintenanceOp(MaintenanceHost(), loaded(project()), action).opNotice
             }
         }
-        // 枚举仍是三个取值（界面 2026-10-17 只露两颗：`dedupe` 改走去重+提升那条路、
+        // 枚举仍是三个取值（界面只露两颗：`dedupe` 改走去重+提升那条路、
         // `ci` 整颗下线）—— 这条断的是**通用路本身**：谁被接回来，回执照样分得开。
         assertEquals(3, notices.toSet().size, "每个动作的回执必须各自可辨：$notices")
         assertTrue(notices[2]!!.contains("校验 lock 签名"), "ci 要先校验 lock 签名，回执得先说：${notices[2]}")
@@ -157,7 +157,7 @@ class NpmMaintenanceOpsTest {
         assertEquals("1 MB", next.sizeLabel, "回读的才是现状")
     }
 
-    // ═══ 去重 + 提升到全局（2026-10-17 用户口径「依赖去重执行后让它把依赖自动放进全局作用域中」） ═══
+    // ═══ 去重 + 提升到全局 ═══
 
     @Test
     fun `去重并提升：先 dedupe 当前作用域，再把它是谁提升上去`() = runBlocking {
@@ -266,7 +266,7 @@ class NpmMaintenanceOpsTest {
         assertFalse(next.reclaimingCache)
     }
 
-    // ═══ 日志大框那一段的取数（2026-10-17 用户令：最下面弄个显示日志的大框） ═══
+    // ═══ 日志大框那一段的取数 ═══
 
     @Test
     fun `现取读数时顺带把 npm 输出拉进日志框`() = runBlocking {

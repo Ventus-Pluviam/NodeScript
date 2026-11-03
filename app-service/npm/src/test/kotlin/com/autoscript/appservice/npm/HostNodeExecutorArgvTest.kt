@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * [HostNodeExecutor.npmArgv] 的不变量（§10.2；2026-10-09 批 83）。
+ * [HostNodeExecutor.npmArgv] 的不变量（§10.2）。
  *
  * 这一条是本批修掉的 bug 的**回归钉**：此前 argv 无条件带 `--registry <官方>`，
  * 而唯一的生产构造点从不传这个参数 —— 用户设的镜像源对真实安装毫无影响。

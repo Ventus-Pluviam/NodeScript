@@ -31,7 +31,7 @@ import kotlinx.coroutines.CancellationException
  * 回执按动作分别说清**接下来会发生什么**：这些动作都入队走安装会话（几十秒量级），
  * 回一句「已完成」会让用户以为已经好了 —— 那是这个页面最容易撒的谎。
  *
- * **本函数是"按枚举转手"的那条通用路**：2026-10-17 之后界面上只有「清理未声明依赖」
+ * **本函数是"按枚举转手"的那条通用路**：界面上只有「清理未声明依赖」
  * （`PRUNE`）走它 —— 「依赖去重」改走 [runDedupeAndPromoteOp]（它要做两件事），
  * 「按 lock 重装」整颗下线。枚举三个取值一个没少、这条路的用例也照测：
  * 将来哪颗按钮回来，接上就行，不必重新推一遍这段编排。
@@ -60,8 +60,7 @@ internal suspend fun runNpmMaintenanceOp(
 }
 
 /**
- * 「**去重并提升到全局**」（2026-10-17 用户口径：「依赖去重执行后让它把依赖自动放进全局
- * 作用域中」）—— 一次点击两件事，所以它有一条自己的入口，而不是给 [NpmMaintenanceAction]
+ * 「**去重并提升到全局**」—— 一次点击两件事，所以它有一条自己的入口，而不是给 [NpmMaintenanceAction]
  * 加第四个枚举值：那两步的产物落在**两个不同的作用域**上（先去重当前这棵，再把声明的依赖
  * 装一份到 `files/scripts/node_modules`），收成一个动作名会让"这颗按钮动的是谁"在枚举上
  * 读不出来。
@@ -147,7 +146,7 @@ private fun noticeFor(action: NpmMaintenanceAction): String = when (action) {
 }
 
 /**
- * 「维护动作发生」那一刻的在途写回（2026-10-29 修，与 [runNpmPanelCommand]
+ * 「维护动作发生」那一刻的在途写回（修，与 [runNpmPanelCommand]
  * 同一条账）：`runNpmMaintenance` 与安装是同一条挂起语义 —— `enqueueHeavy`
  * 协程内联、跑完才返回。提交时若不先把在途写回，三颗维护按钮会停留在可点状态、
  * 界面没有任何「在跑」的指示，连点就堆出一串排队会话。
@@ -157,7 +156,7 @@ internal fun NpmState.withMaintenanceInFlight(action: NpmMaintenanceAction): Npm
 ).withOpAccount(null, null)
 
 /**
- * 「回收缓存发生」那一刻的在途写回（2026-10-29 修）：回收虽然不占安装会话，
+ * 「回收缓存发生」那一刻的在途写回（修）：回收虽然不占安装会话，
  * 也一样是挂起调用 —— 提交时不置位，`canReclaimCache` 的防连点判据就永远
  * 不生效，「按下去没反应还能再按」。
  */
@@ -191,7 +190,7 @@ internal fun reclaimNotice(r: NpmCacheReclaimReport): String = buildString {
  * 拿不到那个字段。抽成这个纯函数后两边读的是同一份三落点口径 —— 复制的那份只做
  * 「调用读口 + 算下一份状态」，失败语义仍在 [NpmState.failed] 里（唯一一份）。
  *
- * **日志那一段跟着一起现取**（2026-10-17 用户令「最下面弄个显示日志的大框」）：
+ * **日志那一段跟着一起现取**：
  * 凡是"刷新一下这一屏"的路径（进页面 / 点刷新 / 安装轮询的每一跳 / 维护与回收之后）
  * 都走这里 —— 于是装依赖时那个框是**活的**：npm 说什么、什么时候说的，跟着进度条一起走。
  */

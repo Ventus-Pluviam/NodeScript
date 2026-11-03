@@ -80,7 +80,7 @@ class HostNodeNpmE2ETest {
         // 轻操作直读：list 应能看到 lodash（lockfile v3 被 LockfileReader 解析）
         assertTrue(c.list("e2e", 0).any { it.name == "lodash" && it.version == "4.17.21" })
 
-        // 控制台那条链在**真 npm** 上也成立（§10.9 第 3 条，2026-10-09 批 84）。
+        // 控制台那条链在**真 npm** 上也成立（§10.9 第 3 条）。
         // 安装走的是 install()，故没有 ECHO 行（那是用户敲的那行，只有控制台入口才落）；
         // 但 PHASE/OUTPUT/RESULT 三类必须有，且 OUTPUT 是 **npm 自己说的话** ——
         // 这一条正是 `HeavyOpOutcome.outputTail` 那条链的端到端证据：没有它，
@@ -111,7 +111,7 @@ class HostNodeNpmE2ETest {
     }
 
     /**
-     * 2026-10-29 修的实证切片：**卸载必须在真实树上生效**。
+     * 修的实证切片：**卸载必须在真实树上生效**。
      *
      * 修之前 npm 跑在每次新建的空 workDir 上，`uninstall` 对空树执行 —— 设备上
      * 的观测是「卸载输出 install 风格的 `added 1 package in 2s` 且锁纹丝不动」

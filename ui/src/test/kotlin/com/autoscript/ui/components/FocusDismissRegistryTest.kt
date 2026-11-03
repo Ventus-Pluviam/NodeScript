@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 跨窗口焦点清理登记的**两档分派**（2026-10-16 用户报「悬浮窗与应用的输入焦点互不收」）。
+ * 跨窗口焦点清理登记的**两档分派**。
  *
  * 钉的是那条纪律：**只清对方、不清自己**。
  * - [FocusDismissRegistry.clearSeparateWindows]（应用窗口收到触摸）只许动**独立窗口**

@@ -37,7 +37,7 @@ data class ConsoleLine(
 class ConsoleCollector(
     private val capacity: Int = DEFAULT_CAPACITY,
     /**
-     * 落盘缝（2026-10-13 执行日志持久化）：每行入队后在**锁外**调用一次。
+     * 落盘缝（执行日志持久化）：每行入队后在**锁外**调用一次。
      *
      * 锁外是刻意的：sink 做文件 IO，持收集器锁做 IO 会让桥 log 调用全部排队；
      * 抛异常由本类 `runCatching` 吞掉 —— 诊断面绝不掀翻桥的数据面（与
@@ -46,9 +46,9 @@ class ConsoleCollector(
      */
     private val lineSink: (ConsoleLine) -> Unit = {},
     /**
-     * 跨重启回放（2026-10-17）：构造时预置进环的那些行。
+     * 跨重启回放：构造时预置进环的那些行。
      *
-     * 用户令原文是「系统日志不要每次进 app 都清除」—— 系统日志（`runId == 0`）此前
+     * 系统日志（`runId == 0`）跨重启保留 —— 此前
      * 只活在内存里，进程一没就全没。落盘与回读由 `:app` 的 `HostLogStore` 做，
      * 本参数只问一件事："上一世的行，怎么进来"。
      *

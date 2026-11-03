@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * **每连接配额 + 并发闸**（批 107；外审 M2 的另一半）。
+ * **每连接配额 + 并发闸**（外审 M2 的另一半）。
  *
  * 与 [NewlineFrameServerByteQuotaTest]（全局字节闸）分家是因为它们验的是不同的性质：
  * 全局闸那条验「拒一条不连带整条连接」，本类验的是**「A 连接的配额不影响 B 连接」** ——

@@ -64,7 +64,7 @@ import kotlin.math.min
 /**
  * Telegram 式顶栏（`ActionBar`）：56dp 高、标题左对齐、副标题小一号次级色、右侧动作区。
  *
- * [title] 可空（批 47）：设置页的顶栏只留右上角菜单，`title = null` 即左侧不画标题 ——
+ * [title] 可空：设置页的顶栏只留右上角菜单，`title = null` 即左侧不画标题 ——
  * 其余屏照旧传标题，调用点不受影响。
  * 为什么顶栏自带 [subtitle] 这一档：TG 的 ActionBar 大量用副标题（在线人数、连接状态、
  * "正在输入…"），而副标题一多，"把状态塞进标题"的老写法就露馅了。这里给标题下方
@@ -75,7 +75,7 @@ import kotlin.math.min
  *
  * **底色可换**（[background]）：TG 的 `actionBarDefault` 本来就是逐屏可覆盖的键
  * （BaseFragment.createActionBar 统一上色，特殊页自己换底）—— 任务中心要跟
- * 页面同灰（批 41），其余屏不传就是原样，互不影响。
+ * 页面同灰，其余屏不传就是原样，互不影响。
  */
 @Composable
 fun ActionBar(
@@ -98,8 +98,8 @@ fun ActionBar(
      */
     titleStyle: TextStyle? = null,
     /**
-     * 顶栏底色覆盖（批 41：任务中心要跟页面同灰）。缺省 null = **与屏底同色**
-     * （[ThemeColors.background]：白 / 夜间 #161E27）—— 用户口径（批 68）要的就是
+     * 顶栏底色覆盖（任务中心要跟页面同灰）。缺省 null = **与屏底同色**
+     * （[ThemeColors.background]：白 / 夜间 #161E27）——
      * "顶栏、菜单、底栏与屏底一个黑"，所以缺省值不再取 [ThemeColors.surface]
      * （那是卡片色，夜间 0xFF232326，比屏底亮一档，留着就露一条"旧灰"）。
      * 传色即整栏（含状态栏那一条）换底；浅色档 `background` 与 `surface` 同为白，
@@ -155,7 +155,7 @@ fun ActionBar(
                 Spacer(Modifier.width(4.dp))
             }
             Column(Modifier.weight(1f)) {
-                // 标题可空（批 47 设置页：顶栏不挂标题，标识区在列表第 0 项里）。
+                // 标题可空（ 设置页：顶栏不挂标题，标识区在列表第 0 项里）。
                 // 空时整块文字不画，但这一列仍在（weight 占位）—— 右侧动作区的位置
                 // 因此与有标题的屏对齐，不因缺标题而挪动。
                 if (title != null) {
@@ -279,7 +279,7 @@ fun TabBar(
             .fillMaxWidth()
             // 先吃导航栏 inset、再离屏边 8dp（MAIN_TABS_MARGIN）：三键导航（三大金刚键）
             // 出现时整条胶囊抬到导航键之上；手势条那条 inset 很小，观感几乎不变。
-            // 批 21 赌过「inset 在胶囊下面」，被三键导航实测打脸（胶囊被键位盖住）——
+            //  赌过「inset 在胶囊下面」，被三键导航实测打脸（胶囊被键位盖住）——
             // 两态都挂 inset，才是「浮、又不被吃」的摆法。
             .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(horizontal = MainTabsMargin, vertical = MainTabsMargin),
@@ -317,7 +317,7 @@ fun TabBar(
                     // `setMeasuredDimension(l + paddingLeft + paddingRight, …)`）。
                     .width(with(density) { plan.capsuleWidthPx.toDp() })
                     .shadow(elevation = 10.dp, shape = MainTabsShape)
-                    // 胶囊底与屏底同色（批 68 用户口径）：浅色档本来就是"白胶囊贴白屏底"，
+                    // 胶囊底与屏底同色：浅色档本来就是"白胶囊贴白屏底"，
                     // 深色跟着一致 —— 分层靠 shadow(10dp) 与圆角，不靠第三档灰。
                     .background(palette.background, MainTabsShape)
                     // 内容离胶囊边 4dp（见 KDoc 第 2 条）。纵向同理：48 + 4×2 = 56。
@@ -401,7 +401,7 @@ val LocalTabBarHidden: ProvidableCompositionLocal<MutableState<Boolean>> =
  *
  * 胶囊外层吃掉多少 `navigationBars` inset（三键导航 ≈48dp、手势条更小甚至 0），整条
  * 胶囊就被抬高多少；列表末项、回顶钮若仍按固定 dp 让位，三键一出现就又被盖住
- * （批 21 的固定 72dp 就是这么被实测打脸的）。各屏让位一律走这里 —— 与胶囊消费
+ * （固定 72dp 就是这么被实测打脸的）。各屏让位一律走这里 —— 与胶囊消费
  * 同一份 inset，两态导航都成立；别在屏里抄数字。
  *
  * **底栏被收起时（[LocalTabBarHidden]）不再让出 [TabBarClearance]**：留着那份留白就是
@@ -463,7 +463,7 @@ private fun TabBarItem(
                 selected = selected,
                 interactionSource = null,
                 // TG 的页签没有波纹（`GlassTabView` 里零 ripple）—— 默认指示的矩形灰块
-                // 是"自加的"，批 25 用户点名过，这里显式关掉。
+                // 是"自加的"， 用户点名过，这里显式关掉。
                 indication = null,
                 role = Role.Tab,
                 onClick = onClick,

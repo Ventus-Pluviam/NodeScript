@@ -13,7 +13,7 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /**
- * T1 桥的**真 node** 层（§10.3 T1 下半段，2026-10-10 批 91）—— 不经过 npm。
+ * T1 桥的**真 node** 层（§10.3 T1 下半段）—— 不经过 npm。
  *
  * 这一层钉的是桥本身的四件事，每一件在纯 Kotlin 断言下都会「全绿地错」：
  * 1. shim 能被 `--require` 进去（变量名/`--require=` 形式/资源落位三者任一错就静默失效）；
@@ -141,7 +141,7 @@ class T1BridgeNodeTest {
 
     @Test
     fun `真 node：child 的 kill 经 kill 帧真杀子进程，exit 事件带信号名`() {
-        // 批 94：kill() 从「只置位」变成「发 kill 帧」。真 sleep 子进程被 SIGTERM 掉，
+        // kill() 从「只置位」变成「发 kill 帧」。真 sleep 子进程被 SIGTERM 掉，
         // exit 事件按真 child_process 口径是 (code=null, signal='SIGTERM') ——
         // 这条在纯 Kotlin 断言下验不到（要真帧往返 + 真进程死亡）。
         val s = openSession()

@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit
  *    副本绝不跟着临时目录被删，即使它可能已被 npm 半改；journal fail + 下次
  *    `ci --offline` 自愈，§10.4 那条通道原样保留），工作目录随后删尽。
  *
- * **2026-10-29 修**：此前的 work-prefix 模型在**空屋**里全量重建 —— workDir 每次
+ * **修**：此前的 work-prefix 模型在**空屋**里全量重建 —— workDir 每次
  * 新建、`node_modules` 从不带进，产物靠 stageDir 头一次物化。这把卸载弄成了
  * 「对着一棵空树执行」：永远命中不了真实包（设备上项目根锁里 `extraneous` 孤儿 +
  * `npmwork-<uuid>` 路径键就是那次设计留下的证据）；且 npm 12 在空屋里写出的锁
@@ -49,7 +49,7 @@ import java.util.concurrent.TimeUnit
  * `--ignore-scripts`（拒绝全部 lifecycle）+ `--no-audit --no-fund` +
  * `--cache <cacheDir>`。
  *
- * **2026-10-09 补上第二层（§10.12 末行「零 spawn 不变量漂移」）**：`--ignore-scripts`
+ * **补上第二层（§10.12 末行「零 spawn 不变量漂移」）**：`--ignore-scripts`
  * 只挡 lifecycle 脚本，挡不住**非脚本** spawn（npm 自己新增一条 `execFile` 路径、或某包
  * 直接 `require('child_process')`），那类漂移在本平台上的表现是**静默失败**。
  * [spawnGateFile] 非 null 时经 `NODE_OPTIONS=--require=<shim>` 把
@@ -63,7 +63,7 @@ class HostNodeExecutor(
     private val nodeBin: String = "node",
     private val env: Map<String, String> = emptyMap(),
     /**
-     * 显式钉死的注册表（argv 里的 `--registry`）。**缺省 null = 不注入**（2026-10-09 批 83）。
+     * 显式钉死的注册表（argv 里的 `--registry`）。**缺省 null = 不注入**。
      *
      * 此前这里缺省 `NpmRegistryVerifier.OFFICIAL` 且**唯一的生产构造点从不传它**，
      * 于是每次安装都被强制钉在官方源上：用户经 `setRegistry` 写的项目 `.npmrc`
@@ -96,7 +96,7 @@ class HostNodeExecutor(
     /**
      * noden 要 `dlopen` 的 `libnode.so` 绝对路径（设备 = `nativeLibraryDir/libnode.so`）。
      *
-     * `main.cpp` **必填**，缺则 exit 2（§7.8）—— 2026-10-17 设备实测 bug：这条路
+     * `main.cpp` **必填**，缺则 exit 2（§7.8）—— 设备实测 bug：这条路
      * 从来没注过它，于是设备上点安装得到的是一句 `:nodeN 缺 AUTOSCRIPT_LIBNODE`，
      * 而宿主 JVM 测试用的是系统 `node`（不读这个变量），复现不出。
      *
@@ -172,9 +172,9 @@ class HostNodeExecutor(
      * 播种工作目录：项目 `package.json`（**缺了就照 [ProjectManifest.minimal] 造一份**）
      * + 现有 lockfile（有则带上，保住已装依赖闭包）+ 项目 `.npmrc`（有则带上，见下方注释）。
      *
-     * **缺清单不再拒绝**（2026-10-17 用户口径「应该让它缺的时候自动创建呀」）：此前这里
+     * **缺清单不再拒绝**：此前这里
      * 一句 `require` 把"自己建的项目"整个挡在门外 —— 而"首页根层建文件夹 = 建项目"
-     * （2026-10-16 用户裁定）造出来的正是一**空目录**，于是用户看到的是
+     * （用户裁定）造出来的正是一**空目录**，于是用户看到的是
      * `项目 demo 缺 package.json（…）`，既不是他的错，他也无从下手。
      * 造出来的那份只落在 workDir，**跑完由 [harvest] 写回项目根**（与 npm 自己重写
      * manifest 走同一条路，不新开一条落盘路径）；本次操作失败则项目根**一个字都不变**
@@ -184,7 +184,7 @@ class HostNodeExecutor(
      * 「项目 `.npmrc` 到底有没有进 workDir」这条不变量最该被 `:app` 的装配测试钉住
      * （它一旦失守，`setRegistry` 就重新变成空转，而症状只在真机上表现为「装的还是官方源」）。
      *
-     * **2026-10-29 起开门先搬真树**：真实 `node_modules` 整体 ATOMIC_MOVE 进
+     * **开门先搬真树**：真实 `node_modules` 整体 ATOMIC_MOVE 进
      * workDir/nod_modules（同分区瞬时）——npm 在真实依赖树上增量 reify，卸载才
      * 命中真包、写回的锁键才锚定这颗树（类头 work-prefix 模型第 2 步）。会话期间
      * 项目根没有 node_modules；任何失败由 execute 的 finally 走 [rollbackTree] 移回。
@@ -196,7 +196,7 @@ class HostNodeExecutor(
         val pkgJson = op.projectRoot.resolve(ProjectManifest.FILE_NAME)
         workDir.toFile().deleteRecursively()
         Files.createDirectories(workDir)
-        // 真实树**搬**进 workDir（同分区瞬时 rename，2026-10-29 修）——npm 必须在
+        // 真实树**搬**进 workDir（同分区瞬时 rename，修）——npm 必须在
         // 真实依赖树上 reify，否则 `uninstall` 对着一棵"空树"执行（项目根锁里那些
         // extraneous 孤儿就是早期 `--no-save` 重装丢下的，卸载永远删不到真东西），
         // 且每把写回的锁都带着 `npmwork-<uuid>` 的临时目录路径、指着一批已删除的墓碑。
@@ -222,7 +222,7 @@ class HostNodeExecutor(
         if (Files.isRegularFile(lock)) {
             Files.copy(lock, workDir.resolve("package-lock.json"))
         }
-        // 项目 `.npmrc` 必须跟着走（2026-10-09 批 83）：`--prefix` 一旦给出，npm 的
+        // 项目 `.npmrc` 必须跟着走：`--prefix` 一旦给出，npm 的
         // 项目级配置就**只看 prefix/.npmrc**（cwd 不再参与，本机 npm 12.2.0 实测），
         // 而 workDir 就是 prefix。不拷的话项目 `.npmrc` 是死配置 ——
         // `setRegistry` 写得再对，npm 也一个字都读不到。
@@ -234,7 +234,7 @@ class HostNodeExecutor(
     }
 
     /**
-     * npm 会话进程的完整 argv（**纯函数**，2026-10-09 批 83 从 [runNpm] 提出来）。
+     * npm 会话进程的完整 argv（**纯函数**， 从 [runNpm] 提出来）。
      *
      * 为什么提出来：本类一构造就 `require(Files.isRegularFile(npmCliJs))`，
      * 于是「argv 里到底有没有 `--registry`」这条不变量此前**只能靠真起 node 才验得到**
@@ -259,7 +259,7 @@ class HostNodeExecutor(
     }
 
     /**
-     * 跑 npm 并**边读边报**（2026-10-10 批 90：真流式）。
+     * 跑 npm 并**边读边报**（真流式）。
      *
      * 为什么读流必须是**另一条线程**（而不是原来的「先 `readBytes()` 再 `waitFor`」）：
      * 那样写要等流到 EOF 才去看退出码，两者被串成一条线；而 stdout 管道写满会**反压**，
@@ -272,7 +272,7 @@ class HostNodeExecutor(
      * [OutputSink.line] 是**非挂起**且被 `runCatching` 包住的 —— 显示面出问题绝不能
      * 把读流线程打死（打死了管道就没人排空，一次界面故障会升级成一次安装超时）。
      *
-     * 返回值仍是**全量输出**（与批 84 之前逐字相同）：`failureOf` 要按门禁播报定位病因、
+     * 返回值仍是**全量输出**（与此前逐字相同）：`failureOf` 要按门禁播报定位病因、
      * `outputTail` 要取尾部 8000 字符。流是过程面，这个返回值是结果面，两条并存。
      */
     private fun runNpm(op: HeavyOp, workDir: Path, output: OutputSink): String {
@@ -353,7 +353,7 @@ class HostNodeExecutor(
      * 不写回则下次安装因 package.json 缺旧依赖而把已装包 prune 掉）。
      */
     private fun harvest(op: HeavyOp, workDir: Path) {
-        // 产物提升进 stageDir（§10.4 落位语义不变，2026-10-29 修后 stageDir 里装的是
+        // 产物提升进 stageDir（§10.4 落位语义不变，修后 stageDir 里装的是
         // 「真实树增量后的**新树全集**」）：prepareWorkDir 已把真实树搬进 workDir，
         // npm 在真树上增量 reify 完，stageDir 由 staging.commit 原子 rename 成
         // projectRoot/node_modules。npm 写的锁键此时锚定 workDir 内的真树
@@ -388,7 +388,7 @@ class HostNodeExecutor(
     }
 
     /**
-     * 失败/取消路径的真树回滚（2026-10-29 修，见 [harvest] 与类头 work-prefix 模型）：
+     * 失败/取消路径的真树回滚（修，见 [harvest] 与类头 work-prefix 模型）：
      *
      * prepareWorkDir 把真实 `node_modules` 搬进了 workDir —— 会话失败时它是**唯一副本**，
      * 绝不能跟着 `npmwork-<nonce>` 一起被 deleteRecursively 销毁。本函数只在

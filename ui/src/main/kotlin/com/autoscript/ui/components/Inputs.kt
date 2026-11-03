@@ -22,22 +22,22 @@ import androidx.compose.ui.unit.dp
 import com.autoscript.ui.theme.ThemeColors
 
 /**
- * 胶囊输入框 —— **全屏公用的一档输入版式**（2026-10-17 从 `ProjectScreen` 搬到 `components/`）。
+ * 胶囊输入框 —— **全屏公用的一档输入版式**（从 `ProjectScreen` 搬到 `components/`）。
  *
  * 灰底（[ThemeColors.fieldBackground]，白底压 5% 黑 —— 与任务中心那颗白药丸不是一个键）、
  * 圆角 20dp（40dp 高上 20dp 圆角 = 两端全圆）、高 40dp、槽内水平 12dp、文字与提示词 15sp
  * （[MaterialTheme.typography.bodyLarge]）、光标 [ThemeColors.cursor]（`groupcreate_cursor`，
  * 与强调色不是一个键）、**无投影**。
  *
- * **为什么搬到公共件**（2026-10-17 第二批）：第三个使用点出现了 —— 依赖管理页的「安装依赖」
- * 输入框，用户口径是「样式抄一下首页的搜索框」。本文件原先住在 `ProjectScreen` 里、
+ * **为什么搬到公共件**（第二批）：第三个使用点出现了 —— 依赖管理页的「安装依赖」
+ * 输入框，样式与首页搜索框同一份。本文件原先住在 `ProjectScreen` 里、
  * 由搜索框与新建对话框两处共用，那条 KDoc 自己写着「用户要的是"一样"，两份拷贝只能靠
  * "记得同步改两处"维持一样 —— 共用之后"一样"是结构上的事实」。第三个点出现在另一个
  * **屏**里，那份理由一点没变：`screens` 之间互相 import `private` 件做不到，于是它只能住
  * 到 `components`。搬的是位置，不是版式 —— 上面那几个数一个没动。
  *
  * 不用 M3 `TextField`：它自带的 56dp 最小高与大内边距塞不进 40dp 的行高里
- * （批 25 实机：hint 文字被上下裁掉一截），而这套输入用不上它的 label/indicator 装饰 ——
+ * （ 实机：hint 文字被上下裁掉一截），而这套输入用不上它的 label/indicator 装饰 ——
  * 直接 `BasicTextField` + 自己摆 `Row`，内边距就是版式要的那几个 dp。
  *
  * @param modifier 调用方给的外框（槽位内边距、宽度都在这里 —— 本件只定框本身的版式）。

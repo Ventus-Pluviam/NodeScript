@@ -3,13 +3,13 @@ package com.autoscript.platform.system.persist
 import com.autoscript.domain.scripts.RunState
 
 /**
- * 运行档案的 SQL 面（§8.5 归档入口；2026-10-11 批 102 P4 阶段 B）：
+ * 运行档案的 SQL 面（§8.5 归档入口）：
  * 建表 DDL + 逐操作的语句文本。
  *
  * **为什么照 [IntentStoreSql] 的架子抄一遍而不是复用它**：两者是**两份账**（键不同 ——
  * 意图日志按 `intentRunId`，档案按 `engineRunId`），合并成一个文件会让「只写一侧」的
  * 孤儿记录在格式上不可见 —— 分开存，孤儿才可被审计（这条已写在
- * `FileRunArchive` 的类 KDoc 里，批 96 之前的原文）。抄架子不抄语义：约束纪律各按各的。
+ * `FileRunArchive` 的类 KDoc 里，此前的原文）。抄架子不抄语义：约束纪律各按各的。
  *
  * **表形状**：
  * - `run_archive.engine_run_id INTEGER PRIMARY KEY AUTOINCREMENT` —— 与意图日志同一套

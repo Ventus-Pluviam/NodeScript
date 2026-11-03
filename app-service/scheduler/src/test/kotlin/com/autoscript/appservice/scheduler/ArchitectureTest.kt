@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
  * 注意 ArchUnit 的 com.autoscript.engine.. 并不匹配 com.autoscript.domain.engine（引擎 SPI），
  * 故 domain.engine 必须显式列出（设计 §6：scheduler 只许碰 RunRecord 等脚本模型）。
  *
- * **`domain.bridge..` 已撤（2026-09-30 审查步骤 6）**：`WorkManagerNamespaceHandler`
+ * **`domain.bridge..` 已撤（审查步骤 6）**：`WorkManagerNamespaceHandler`
  * 自 `:app` 迁入本模块后，桥转接面成为本模块的正常消费 —— 量化：仅
  * BridgeRequest / BridgeResponse / RpcNamespaceHandler 三型（handler 折信封），
  * 不进 `domain.engine`/`domain.automation`/平台/Android（那些仍在黑名单）。

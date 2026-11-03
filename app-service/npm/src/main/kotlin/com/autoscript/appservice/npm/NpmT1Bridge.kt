@@ -189,7 +189,7 @@ object NpmT1Bridge {
      * 故 abstract namespace 用它绑不上）。设备上要 abstract 得走 `android.net.LocalServerSocket`
      * —— 那条路由 `:app` 的装配层注入（本模块看不到 `android.*`），与本类无关。
      *
-     * ## 为什么"Android 上永不可达"要写成硬约束而不是愿望（2026-10-10 真机实测）
+     * ## 为什么"Android 上永不可达"要写成硬约束而不是愿望（真机实测）
      *
      * `java.net.UnixDomainSocketAddress` **在 android.jar 里根本不存在**（实查：整个
      * `java/net/` 下没有这个类；`StandardProtocolFamily.UNIX` 与
@@ -204,7 +204,7 @@ object NpmT1Bridge {
     fun fileSystemBinder(): SocketBinder = SocketBinder { name ->
         // `Paths.get` 而不是 `Path.of`：后者在 Android 上 since=34（`api-versions.xml` 实查），
         // 本模块是**纯 JVM 模块、没有 lint**，故这条纪律在这里没有门禁兜着 —— 只能靠这行注释
-        // 与真机验证。2026-10-10 真机实测（API 33）：`Path.of` 抛 NoSuchMethodError，
+        // 与真机验证。真机实测（API 33）：`Path.of` 抛 NoSuchMethodError，
         // 且它把**整个壳的装配**掀翻了（见 [fileSystemBinder] 的 KDoc）。
         val path = Paths.get(System.getProperty("java.io.tmpdir")).resolve("autoscript-t1-$name.sock")
         try {
@@ -249,7 +249,7 @@ object NpmT1Bridge {
  * 帧协议（newline 分隔的 JSON，字段名与 shim 逐字对应）：
  * - 会话 → 宿主：`{"t":"hello","v":1,"token":"<64hex>"}`、
  *   `{"t":"spawn","id":N,"cmd":..,"args":[..],"opts":{..}}`、`{"t":"in","id":N,"data":"<b64>"}`、
- *   `{"t":"kill","id":N,"signal":"SIGTERM"|"SIGKILL"}`（批 94：单条子进程的取消）
+ *   `{"t":"kill","id":N,"signal":"SIGTERM"|"SIGKILL"}`（单条子进程的取消）
  * - 宿主 → 会话：`{"t":"helloAck","v":1}` / `{"t":"helloErr","code":..,"detail":..}`、
  *   `{"t":"out","id":N,"fd":1|2,"data":"<b64>"}`、`{"t":"exit","id":N,"code":N,"signal":..}`、
  *   `{"t":"err","id":N,"code":..,"detail":..}`
@@ -533,7 +533,7 @@ class SocketT1Sessions(
 /**
  * `SocketChannel` → [InputStream]，**刻意不用 `Channels.newInputStream`**。
  *
- * ## 为什么不用 JDK 那个（2026-10-10 批 91 实测，这条是本桥最贵的一课）
+ * ## 为什么不用 JDK 那个（ 实测，这条是本桥最贵的一课）
  *
  * `Channels.newInputStream(ch)` 与 `Channels.newOutputStream(ch)` 会**共用同一个锁**
  * （`ch.blockingLock()`），而 `ChannelInputStream.read` 是**抱着那把锁阻塞**的。于是

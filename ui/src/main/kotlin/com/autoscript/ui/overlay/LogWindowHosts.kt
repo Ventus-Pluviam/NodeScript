@@ -25,10 +25,10 @@ import com.autoscript.ui.state.ConsoleLineState
 import kotlinx.coroutines.delay
 
 /**
- * 执行日志悬浮窗的**两个宿主**（2026-10-13 用户令）。
+ * 执行日志悬浮窗的**两个宿主**。
  *
  * - **[LogWindowInAppHost]**：`MainShell` 里 ToastHost 旁的 Box 浮层（pager 外，
- *   过导航存活；无权限时的兜底）。**也跟手拖**（2026-10-13 用户反馈"不跟手"）：
+ *   过导航存活；无权限时的兜底）。**也跟手拖**（用户反馈"不跟手"）：
  *   它是"窗"不是"面板"，位置与系统窗共用同一份状态（`LogWindowState.x/y`），
  *   切宿主不跳位。边界取它自己量到的 Box 尺寸（应用内容区，不是屏幕）。
  * - **[SystemWindowSync]**：无 UI 的效应 —— `controller.state` 非空且走系统窗时，
@@ -62,7 +62,7 @@ fun LogWindowPoll(
  * 位置：紧凑态 = 左上起算的 `state.x/y`（**可拖**，跟手）；全屏态 = 铺满内容区。
  * 让位与夹取同一套坐标：外层先让出顶栏与底栏/导航栏，位置与边界都算在让完位的内容区里
  * （与 toast 同一条让位口径）。内容与系统窗同一份 `LogWindowContent`。
- * **复制不由宿主接**（2026-10-15 起）：日志块包在 `SelectionContainer` 里，
+ * **复制不由宿主接**（起）：日志块包在 `SelectionContainer` 里，
  * 复制走系统的选择菜单 —— 两个宿主因此都不需要剪贴板回调。
  */
 @Composable
@@ -80,18 +80,18 @@ fun LogWindowInAppHost(
      * 夹取由状态层做（它才知道窗多宽）—— 两边各答一半，谁都不抄对方的数。
      */
     onDrag: (dx: Float, dy: Float, boundsW: Float, boundsH: Float) -> Unit,
-    /** 底部输入框的草稿变更 / 送行（2026-10-16；两个宿主都往同一份状态写）。 */
+    /** 底部输入框的草稿变更 / 送行（；两个宿主都往同一份状态写）。 */
     onInputDraft: (String) -> Unit,
     onSendInput: () -> Unit,
     /** 输入框焦点变化（系统窗要靠它开输入法；in-app 宿主只转发，见 `LogWindowContent` 的 KDoc）。 */
     onImeFocusChange: (Boolean) -> Unit,
-    /** 顶栏「结束脚本」（2026-10-16 用户令；两个宿主同一份动作）。 */
+    /** 顶栏「结束脚本」（两个宿主同一份动作）。 */
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shown = state.visible(lines)
     val density = LocalDensity.current
-    // 兜底窗也**跟手**（2026-10-13 用户反馈"不跟手"）：它是"窗"不是"面板"，
+    // 兜底窗也**跟手**（用户反馈"不跟手"）：它是"窗"不是"面板"，
     // 无权限时用户同样要能把它挪开。
     //
     // **让位与夹取用同一个坐标系**：外层 Box 先让出状态栏与底栏/导航栏
@@ -159,14 +159,14 @@ fun LogWindowInAppHost(
 /**
  * 系统窗同步效应（无 UI）：state 非空 + 走系统窗 → `show` 同一份内容。
  *
- * **`show` 只在「开窗」与「改画态」时跑，日志行刷新不再经过它**（2026-10-14
+ * **`show` 只在「开窗」与「改画态」时跑，日志行刷新不再经过它**（
  * 「点执行就闪退」）：`show` 对已存在的 view 走的是 `ComposeView.setContent`，
  * 而轮询 400ms 一轮、每轮 `ConsoleState.of` 都产出**新的 `List` 实例** —— 把它
  * 算进效应键就等于每 400ms 重建一次离屏组合（`setContent` 期间抛出的任何东西
  * 都会从组合作用域冒到进程）。行数据改走 `controller.lines`（Compose 状态，
  * 窗内**现读**），刷新是普通重组，`setContent` 的执行次数 = 开窗次数。
  *
- * **位置与内容分两条效应**（2026-10-13）：拖动只改 `x/y`，那条只调
+ * **位置与内容分两条效应**：拖动只改 `x/y`，那条只调
  * `updateViewLayout`；若把位置也算进内容键，拖动每一帧都会重跑一遍 `setContent`
  * （整列日志白重组一次）—— 窗越大越卡，表现为"拖起来一顿一顿"。
  *
@@ -179,12 +179,12 @@ fun LogWindowInAppHost(
 fun SystemWindowSync(
     controller: LogWindowController,
     onFirstAction: () -> Unit,
-    /** 底部输入框的草稿变更 / 送行（2026-10-16 用户令；离屏窗里同样是这一份状态）。 */
+    /** 底部输入框的草稿变更 / 送行（离屏窗里同样是这一份状态）。 */
     onInputDraft: (String) -> Unit,
     onSendInput: () -> Unit,
     /** 输入框焦点变化（离屏窗靠它摘掉 `FLAG_NOT_FOCUSABLE`，否则输入法不起来）。 */
     onImeFocusChange: (Boolean) -> Unit,
-    /** 顶栏「结束脚本」（2026-10-16 用户令；离屏窗里同样是这一份动作）。 */
+    /** 顶栏「结束脚本」（离屏窗里同样是这一份动作）。 */
     onStop: () -> Unit,
 ) {
     val state = controller.state
@@ -207,7 +207,7 @@ fun SystemWindowSync(
                 // **窗内现读**（不是把本轮的行快照喂进来）：`lines` 是 Compose 状态，
                 // 轮询推新值时这里自动重组 —— 于是 `show` 只需在开窗/改画态时跑一次。
                 //
-                // **`state` 也必须现读**（2026-10-15 用户报「执行完毕暂停键没变执行键」）：
+                // **`state` 也必须现读**：
                 // 外面那个 `val state` 是**捕获值**，只在上面那条效应的**键变了**时才会更新
                 // —— 而「脚本跑完」恰好一个键都不变（`boundRunId` 结算不解绑、
                 // `paused`/`watermarkSeq`/`fullscreen` 都不动），于是离屏窗永远停在旧态：

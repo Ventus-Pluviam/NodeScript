@@ -93,7 +93,7 @@ internal suspend fun loadConsoleCmd(host: HostSummary?, previous: ConsoleCmdStat
 }
 
 /**
- * 命令跑着的时候**自己拉**（2026-10-10 批 90：真流式那条链的消费侧）。
+ * 命令跑着的时候**自己拉**（真流式那条链的消费侧）。
  *
  * 为什么必须由界面来拉：宿主是**入队即返回**的，而 npm 的输出是边跑边产生的
  * （`HostNodeExecutor` 读一行报一行）—— 没有这条循环，用户敲完 `npm install axios`
@@ -104,7 +104,7 @@ internal suspend fun loadConsoleCmd(host: HostSummary?, previous: ConsoleCmdStat
  * 有界见 [pollWhile]。跑完那一轮**必然**多拉一次（`shouldContinue` 在循环体之前判，
  * 而 `running` 变成 false 正是最后一轮拉回来的），故终态行不会漏。
  *
- * **逐轮写回靠 [onStep]**（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：
+ * **逐轮写回靠 [onStep]**（修，见 `LivePoll.pollWhile` 的账）：
  * 中间态每轮进组合状态，输出才是一行行长的；返回终值只是兜底。
  */
 internal suspend fun pollConsoleWhileRunning(
@@ -183,13 +183,13 @@ internal suspend fun runConsoleCmd(
         return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
     }
     return try {
-        // 记历史在**派发点**（2026-10-10 批 90）：这里手上有用户敲的原文，而执行入口
+        // 记历史在**派发点**：这里手上有用户敲的原文，而执行入口
         // 拿到的是已定形的东西（shell 面那条只收得到剥掉入口词的正文 —— `su id`
         // 记成 `id`，再点一次就会在默认模式里被当成 npm bin 解析）。
         // 拒收与进/退模式在上面各自 return 了，故"哪些进历史"是**自然结果**，不是特判。
         host.recordConsoleHistory(projectId, state.draft)
         dispatch(host, projectId, parsed, state.draft)
-        // 发出去之后**接着拉到它跑完**（批 90）：`dispatch` 对重操作是入队即返回，
+        // 发出去之后**接着拉到它跑完**：`dispatch` 对重操作是入队即返回，
         // 只拉一次的话用户看到的是「排队中」然后一片静止 —— 而输出正在产生。
         // 轻操作与 shell 面是同步现取，第一轮 `running` 就是 false，这条循环即刻返回。
         val polled = pollConsoleWhileRunning(
@@ -209,7 +209,7 @@ internal suspend fun runConsoleCmd(
 }
 
 /**
- * 停掉该项目在跑的控制台命令（2026-10-11 批 94：控制台「停止」按钮）。
+ * 停掉该项目在跑的控制台命令（控制台「停止」按钮）。
  *
  * 回执不替宿主宣布结果（同 [runConsoleCmd] 的 `noticeFor` 纪律）：「已请求停止」+
  * 进程回收是异步的，终态行由页面轮询随后拉回来。`false`（没有在跑的）也如实说 ——
@@ -273,7 +273,7 @@ internal fun modeLabel(mode: ShellConsoleMode): String = when (mode) {
  * 执行成功后的回执（**不替用户宣布结果** —— 结果在输出环里，这里只说"这一行去了哪"）。
  *
  * 三条路各自说清"接下来会发生什么"：轻操作当场出结果；重操作入队等安装会话；
- * `npm run`/`npx` 走 T1 执行面（判据在解析层，不需要审批 —— 2026-10-10 裁定）。
+ * `npm run`/`npx` 走 T1 执行面（判据在解析层，不需要审批 —— 裁定）。
  */
 private fun noticeFor(cmd: NpmConsoleCommand): String = when (cmd) {
     is NpmConsoleCommand.Npm ->

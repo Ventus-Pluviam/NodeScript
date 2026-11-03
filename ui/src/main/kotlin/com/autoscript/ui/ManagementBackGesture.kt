@@ -18,7 +18,7 @@ import kotlinx.coroutines.CancellationException
  * （`LaunchActivity.OnBackAnimationCallback` → `ActionBarLayout.onBackStarted` /
  * `onBackProgress` / `draw`，v12.10.6）。
  *
- * 用户 2026-10-12 口径：要**跟手**（手指滑动过程中窗口就变小），不是松手后才播动画。
+ * 要**跟手**（手指滑动过程中窗口就变小），不是松手后才播动画。
  *
  * ## 抄的数
  *

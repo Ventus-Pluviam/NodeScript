@@ -95,7 +95,7 @@ class ConsoleCmdOpsTest {
             return com.autoscript.domain.host.ShellConsoleResult(0, "ok", null)
         }
 
-        /** 停止面的调用账（批 94）：停了哪个项目、宿主怎么答。 */
+        /** 停止面的调用账：停了哪个项目、宿主怎么答。 */
         val stopped = mutableListOf<String>()
         var cancelResult: Boolean = true
         var failCancel: Exception? = null
@@ -276,7 +276,7 @@ class ConsoleCmdOpsTest {
         assertEquals("p2 早先的输出", onP2.lines.single().text, "归 0 才取得到 seq 更小的那些行")
     }
 
-    // ── 命令历史（2026-10-10 批 90）────────────────────────────────────────
+    // ── 命令历史────────────────────────────────────────
 
     @Test
     fun `现取一轮就带上历史；换项目跟着换`() = runBlocking {
@@ -334,7 +334,7 @@ class ConsoleCmdOpsTest {
         assertEquals(listOf("npm install axios"), done.history)
     }
 
-    // ── 停止（2026-10-11 批 94）───────────────────────────────────────────
+    // ── 停止───────────────────────────────────────────
 
     @Test
     fun `停止：交给宿主句柄账，回执不替宿主宣布结果`() = runBlocking {
@@ -366,7 +366,7 @@ class ConsoleCmdOpsTest {
     }
 
     /**
-     * 轮询**整段**的写回纪律（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：
+     * 轮询**整段**的写回纪律（修，见 `LivePoll.pollWhile` 的账）：
      * 中间态逐轮进 [onStep]，而不是攒到协程结束一口涌出 —— npm 边跑边说的
      * 那些行从此一行行进组合状态。这里让宿主**每次拉完补一行**（模拟 npm
      * 边跑边说），钉三件事：行数逐轮长、每行长出的那轮都到过 [onStep]、

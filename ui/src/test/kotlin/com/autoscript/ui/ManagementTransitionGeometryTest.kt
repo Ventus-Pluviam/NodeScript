@@ -52,7 +52,7 @@ class ManagementTransitionGeometryTest {
 
     @Test
     fun `右缘滑时窗口往左滑出`() {
-        // 2026-10-13 口径。TG 只有右一个方向（`:1571` 恒 `setTranslationX(+dx)`），
+        // TG 只有右一个方向（`:1571` 恒 `setTranslationX(+dx)`），
         // 这里是本项目有意加的镜像。
         assertTrue(netLayerX(400f, density, fromLeft = false) < 0f)
     }
@@ -155,7 +155,7 @@ class ManagementTransitionGeometryTest {
     fun `跟手刚开始就有遮罩——widthOffset 取 innerTranslationX 不是净位移`() {
         // TG `:1192` 的 `widthOffset = width - translationX`，`translationX` ≡
         // `innerTranslationX`，跟手期间已经是正的。取净位移的话这一项会是 0，
-        // 遮罩要等松手后才出现（用户 2026-10-13 报的那个现象）。
+        // 遮罩要等松手后才出现。
         val opacity = scrimOpacity(innerTranslationX = full, viewportWidth = width)
         assertTrue(opacity > 0f, "刚跟手就该有遮罩，实际 $opacity")
     }

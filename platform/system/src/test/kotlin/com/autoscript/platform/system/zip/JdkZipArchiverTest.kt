@@ -245,7 +245,7 @@ class JdkZipArchiverTest {
 }
 
 /**
- * 外审 M7（2026-10-11 批 99）：zip 面的三条 —— 条目数闸、`.tmp` 不自含、
+ * 外审 M7：zip 面的三条 —— 条目数闸、`.tmp` 不自含、
  * `walk` 的 `UncheckedIOException` 不再让 `.tmp` 残留。
  *
  * 三个判据各自独立：① 零字节条目绕过字节闸（**计数与字节正交**，必须单独设闸）；

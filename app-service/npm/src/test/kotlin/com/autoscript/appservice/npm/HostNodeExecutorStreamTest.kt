@@ -12,7 +12,7 @@ import java.nio.file.attribute.PosixFilePermission
 import java.util.Collections
 
 /**
- * [HostNodeExecutor] 交给控制台的**过程面**：真流式 stdout（§10.9 第 3 条，2026-10-10 批 90）。
+ * [HostNodeExecutor] 交给控制台的**过程面**：真流式 stdout（§10.9 第 3 条）。
  *
  * 与 [HostNodeExecutorOutcomeTest] 的分工：那条钉的是**结果面**（跑完之后 `outputTail`
  * 里有没有 npm 说的那段话），这条钉的是**过程面** —— 输出是**边跑边到**的，

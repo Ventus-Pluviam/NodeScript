@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test
 
 /**
  * `dialogs` 契约锚定 + 校验测试（§9.4，`extras.ts` 的 Kotlin 对偶）——
- * 2026-09-30 审查步骤 6 拆分：shell/device/floatingWindow 面随契约迁
- * `:platform:system`（`ShellContractsTest`/`DeviceContractsTest`/`FloatingWindowContractsTest`（2026-10-01 D3 前是同名的 `SystemHostContractsTest`）），对话框面留 `:domain`
+ * 拆分：shell/device/floatingWindow 面随契约迁
+ * `:platform:system`（`ShellContractsTest`/`DeviceContractsTest`/`FloatingWindowContractsTest`（D3 前是同名的 `SystemHostContractsTest`）），对话框面留 `:domain`
  * （`DialogHost` 是装配层 `PlatformWiring` 生产读面的反例，grep 判定见步骤 6 提交信息）。
  *
  * 守两件事：

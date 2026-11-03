@@ -51,7 +51,7 @@ class AppShellTaskOpsTest {
 
     /**
      * 意图日志替身（§8.5）：`intentStore` 是 `assemble` 的必填参数（无缺省 —— 那条
-     * 「不给就自建 jsonl」的回落 2026-10-08 已删）。用例之间天然隔离（JUnit 每例新实例化本类）。
+     * 「不给就自建 jsonl」的回落已删）。用例之间天然隔离（JUnit 每例新实例化本类）。
      */
     private val intentStoreState = InMemoryIntentStore.State()
     private val intentStore: IntentStore = InMemoryIntentStore(intentStoreState)

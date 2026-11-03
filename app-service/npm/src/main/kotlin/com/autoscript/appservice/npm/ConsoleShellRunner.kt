@@ -10,7 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 控制台 **shell 面**的执行与渲染（2026-10-09 用户口径：控制台要能执行 shell）。
+ * 控制台 **shell 面**的执行与渲染。
  *
  * 为什么从 [InstallCoordinator] 里拆出来：这条链与依赖树**无关** —— 不建事务、
  * 不占安装会话、不碰项目锁（敲一条 `ls` 不该占住全局安装会话）。而协调器那八百行

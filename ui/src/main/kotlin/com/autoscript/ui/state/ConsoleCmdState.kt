@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter
 /**
  * 控制台（命令面）呈现态（纯数据，Compose 之外可 JVM 测；§10.9 第 3 条）。
  *
- * **控制台不是日志查看器**（2026-10-09 用户口径）：它是用来**执行命令**的面 ——
+ * **控制台不是日志查看器**：它是用来**执行命令**的面 ——
  * npm 子命令、以及装好的依赖提供的命令。日志（宿主事件与脚本输出）整体搬去
  * `LogManagementScreen`，本页从此与「系统日志」彻底分家。
  *
@@ -68,7 +68,7 @@ data class ConsoleCmdState(
      */
     val history: List<String> = emptyList(),
     /**
-     * 控制台**此刻**的特权模式（2026-10-09）。
+     * 控制台**此刻**的特权模式。
      *
      * 它只改一件事：**裸首词是什么意思** —— [ShellConsoleMode.DEFAULT] 下裸首词 = npm bin
      * （装好的依赖提供的命令），[ShellConsoleMode.ROOT]/[ShellConsoleMode.ADB] 下裸首词 =

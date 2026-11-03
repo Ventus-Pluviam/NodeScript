@@ -35,8 +35,8 @@ import com.autoscript.ui.theme.ThemeColors
  *   （深色下比 `background` 亮一档），写死就会在深色下露出一条比卡更暗的头。
  *   按压遮罩照旧（`pressable` 的 overlay 画在底之上，不需要头自己有不透明底）。
  *
- * **2026-10-17 从 `TaskCenterScreen` 的私有 `GroupHeader` 提出来**：依赖管理页的
- * 「已装依赖」要的是同一条（用户口径「参考任务中心的列表，点下可以伸展开」），
+ * **自 `TaskCenterScreen` 的私有 `GroupHeader` 提出来**：依赖管理页的
+ * 「已装依赖」要的是同一条，
  * 抄第二份就会长出第二种几何。原处那条关于**空组**的语义（"组头是开关不是内容指示器，
  * 空组照样有三角、照样能收放"）留在调用点，不属于这条几何。
  *

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 崩溃病因**进控制台**（2026-10-16 用户报「有不支持的函数应该在悬浮窗里输出报错」）。
+ * 崩溃病因**进控制台**。
  *
  * 钉的是那条：脚本抛错（`ReferenceError: prompt is not defined` 这类）时，
  * stderr 尾部必须按 error 档写一行、**归属仍是这次 runId** —— 否则悬浮窗画的是

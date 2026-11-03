@@ -9,7 +9,7 @@ package com.autoscript.appservice.npm
  * 这个约定就是为「被信号杀死」这一档存在的。
  *
  * **它为什么留在本模块而不跟着 [com.autoscript.platform.process.TreeOps] 一起走**
- * （批 105 合并两份 `ProcOps` 时刻意分开的）：信号名表是 **T1 的 exit 帧契约**（这一层
+ * （ 合并两份 `ProcOps` 时刻意分开的）：信号名表是 **T1 的 exit 帧契约**（这一层
  * 要把退出码翻成信号名给脚本看），而 `/proc` + `kill` 是**收尸的执行面**。前者没有第二个
  * 调用方 —— 通用进程模块不该替调用方决定退出码怎么呈现。
  */

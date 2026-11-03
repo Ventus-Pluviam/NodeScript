@@ -86,7 +86,7 @@ data class Colors(
      * 拿一套主题的数当"TG 的未选中色"抄进另一套，就是下面那个 [tabSelected] 踩过的坑。
      *
      * 这里刻意**没有**「选中线」这个 token：TG 那条 2dp 线是**顶栏**文件夹页签的下划线，
-     * 底栏的选中语法是**整格染色**，2026-10-02 重做底栏时一并删掉了照抄过来的
+     * 底栏的选中语法是**整格染色**，照抄过来的
      * `tabIndicator` —— 留一个没有调用方的颜色只会让下一个人以为底栏该有线。
      */
     val tabUnselected: Color,
@@ -126,7 +126,7 @@ data class Colors(
      *
      * 存的是**合成本屏底之后的实色**（TG 那边是 alpha 色叠在顶栏上，本仓的搜索栏不在
      * 顶栏里，叠的是屏底）：浅色 = 5% 的 `0xFF1A1D21` 叠白 → `0xFFF4F4F4`；
-     * 深色 = 7% 的白叠 [background]（批 67 起 `0xFF161E27`）→ `0xFF262E36`。
+     * 深色 = 7% 的白叠 [background]（ `0xFF161E27`）→ `0xFF262E36`。
      * **深色下它比屏底亮**，浅色下才比屏底暗一档 —— 原先两套都写成"比 [surface] 深"
      * 是把深色那半抄反了（TG 的 tint 是白，叠上去只会更亮）。
      */
@@ -224,7 +224,7 @@ data class Colors(
     val toastText: Color,
 
     /**
-     * 编辑器右下那颗"去最底/最顶"圆钮的底（**用户口径：白色**，深浅同值）。
+     * 编辑器右下那颗"去最底/最顶"圆钮的底（**白色**，深浅同值）。
      *
      * **这一组是本仓自定义的**（`Colors` 里少数几个不来自 TG 的键，故单列一段）：TG 没有
      * 代码编辑器，没有可抄的键。白底 + 淡灰描边是为了让它从**两种主题的正文里**都浮起来 ——
@@ -232,7 +232,7 @@ data class Colors(
      * 用户明确要求"白色"，故深色也保持白（不跟着主题翻成深底），只让描边跟着主题走。
      */
     val editorChipBackground: Color,
-    /** 上面那颗圆钮的描边（用户口径"淡淡的灰边"）：浅色 `0xFFDCDCDC`、深色 `0xFF4A5563`。 */
+    /** 上面那颗圆钮的描边：浅色 `0xFFDCDCDC`、深色 `0xFF4A5563`。 */
     val editorChipBorder: Color,
     /** 上面那颗圆钮的图标色：底恒为白，故**深浅同值**取深灰（不能跟着 [text] 走）。 */
     val editorChipIcon: Color,
@@ -314,13 +314,13 @@ val LightColors = Colors(
 
 /** 深色（`night.attheme`）。 */
 val DarkColors = Colors(
-    // **用户指定的屏底**（2026-10-06 批 67）：#161E27，带一点蓝的深灰 —— 这是本仓
+    // **用户指定的屏底**：#161E27，带一点蓝的深灰 —— 这是本仓
     // **故意偏离** TG night 的 `windowBackground`（0xFF181819，中性深灰）的一处，
-    // 用户口径优先。改它的连带面见下面 [surfaceMuted] 与 [fieldBackground]。
+    // 改它的连带面见下面 [surfaceMuted] 与 [fieldBackground]。
     background = Color(0xFF161E27),
     surface = Color(0xFF232326),
     // 设置/管理/任务中心三屏的**屏底**（TG 的 `windowBackgroundGray`，night = 纯黑）：
-    // 与 [background] 同值 —— 它俩在深色下本来就是"同一块底"的两种叫法。用户口径把
+    // 与 [background] 同值 —— 它俩在深色下本来就是"同一块底"的两种叫法。
     // "夜间的黑"统一定成 #161E27 之后，这里再留纯黑就会出现"设置页比首页更黑"的断层。
     surfaceMuted = Color(0xFF161E27),
     divider = Color(0xFF000000),
@@ -342,7 +342,7 @@ val DarkColors = Colors(
     tabSelected = Color(0xFF229AF0),
     tabSelectedText = Color(0xFF229AF0),
     pressedOverlay = Color(0x16FFFFFF),
-    // 白 7% 叠 [background]（0xFF161E27）→ 0xFF262E36。批 67 换屏底时**跟着重算**：
+    // 白 7% 叠 [background]（0xFF161E27）→ 0xFF262E36。 换屏底时**跟着重算**：
     // 这两个键在 TG 里本来就是一"配方"关系（见 [Colors.fieldBackground] 的 KDoc），
     // 底换了而配方不换，那个"比屏底亮一档"的结论就不成立了。
     // 与下面 menuBackground 同值纯属巧合（TG 的深色子菜单底也是"比底亮一档的深灰"），
@@ -350,7 +350,7 @@ val DarkColors = Colors(
     fieldBackground = Color(0xFF262E36),
     graySection = Color(0xFF0B0B0C),
     graySectionText = Color(0xFF838384),
-    // 这三个键 night.attheme 都设了 —— 但**用户口径**（2026-10-06 批 68）把"夜间的黑"
+    // 这三个键 night.attheme 都设了 —— 而"夜间的黑"
     // 统一定成 #161E27：顶栏 / 菜单（子菜单底）/ 底部页签胶囊三处都换成它。
     // 菜单底与屏底同值 = 菜单"贴"在屏底上，靠投影 + 圆角分层 —— 浅色档本来就是
     // 白菜单贴白屏底（见 [LightColors]），深色跟着一致，不另立第三档灰。
@@ -379,7 +379,7 @@ val DarkColors = Colors(
     // 上抬到 [surface] 那一档（见 [Colors.toastBackground] 的说明）。
     toastBackground = Color(0xF5232326),
     toastText = Color(0xFFFFFFFF),
-    // 编辑器右下那颗圆钮：白底（用户口径，深色也不翻）+ 深一档的灰边。
+    // 编辑器右下那颗圆钮：白底+ 深一档的灰边。
     editorChipBackground = Color(0xFFFFFFFF),
     editorChipBorder = Color(0xFF4A5563),
     editorChipIcon = Color(0xFF5A6672),

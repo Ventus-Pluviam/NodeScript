@@ -105,7 +105,7 @@ enum class GlyphKind {
     /** 展开/收起三角（TG `arrow_more`：CollapseTextCell 右侧的下尖 chevron）。 */
     CHEVRON,
 
-    /** 使用情况访问权限（批 48）：三根高低不同的柱子 —— 「哪个应用用了多久」就是这么读的。 */
+    /** 使用情况访问权限：三根高低不同的柱子 —— 「哪个应用用了多久」就是这么读的。 */
     CHART,
 
     /** 「更多」（文件/文件夹行尾的溢出钮）：三个竖排实心点（TG `ic_ab_other`）。 */
@@ -224,7 +224,7 @@ private val P_FILE_GENERIC_SIDE = arrayOf(0.58f to 0.28f, 0.84f to 0.42f, 0.84f 
 private val P_BELL_BODY = arrayOf(0.50f to 0.14f, 0.22f to 0.42f, 0.22f to 0.68f, 0.78f to 0.68f, 0.78f to 0.42f, 0.50f to 0.14f)
 /** 铃铛：底部小舌。 */
 private val P_BELL_CLAPPER = arrayOf(0.42f to 0.82f, 0.58f to 0.82f)
-/** 文件夹：背板 + 标签突起（闭合 —— 底边那一横不能少，批 25 定案）。 */
+/** 文件夹：背板 + 标签突起（闭合 —— 底边那一横不能少， 定案）。 */
 private val P_FOLDER_BODY = arrayOf(0.10f to 0.74f, 0.10f to 0.30f, 0.36f to 0.30f, 0.44f to 0.38f, 0.90f to 0.38f, 0.90f to 0.74f)
 /** 铅笔：斜杆。 */
 private val P_PENCIL_SHAFT = arrayOf(0.24f to 0.76f, 0.24f to 0.62f, 0.66f to 0.20f, 0.80f to 0.34f, 0.38f to 0.76f)
@@ -364,9 +364,9 @@ private class GlyphScratch {
  *   加粗就是这一档语言里的"实心"（TG 底栏选中项也是靠视觉重量拉开，不是靠颜色一条）。
  *   实心字形（[GlyphKind.MORE_VERT]）没有线宽可加，它缩放的是**点半径**（见那一格）。
  *
- * ## 为什么画的时候要自己拿一个池子（2026-10-18）
+ * ## 为什么画的时候要自己拿一个池子
  *
- * 用户口径「依赖列表滑动起来帧率怎么只有60」。查下来这条绘制链路上**确有一处每帧分配**：
+ * 这条绘制链路上**确有一处每帧分配**：
  * `Canvas` 的绘制 lambda **每一帧都会重跑一遍**（列表滚动时可见行每帧都要重画），而原来的
  * `path(...)` 是 `Path().apply { … }` —— **每画一笔就新建一个 `Path`**。Compose 的 `Path`
  * 背后是一个 Skia 原生对象，于是每一个可见字形、每一帧都在造 1~4 个原生对象再丢掉
@@ -381,7 +381,7 @@ private class GlyphScratch {
  * ② 池子按 `remember` 挂在**这一个** Canvas 节点上，不与别的字形共用；
  * ③ 绘制 lambda 在 UI 线程录制期跑，改的是自己上一步刚 reset 的那条 Path。
  *
- * ## 第二刀（2026-10-28）：坐标提成常量，绘制期零分配
+ * ## 第二刀：坐标提成常量，绘制期零分配
  *
  * 池子只去掉了 `Path` 与 `Stroke` 的每帧分配，坐标那一路还漏着：`path(0.19f to 0.36f, …)`
  * 的 vararg 数组、`Pair` 与装箱的 `Float` 是**在调用点**现造的 —— 而 `when (kind)` 整段
@@ -540,7 +540,7 @@ fun Glyph(
 
             // 文件夹：折角文件夹（TG menu_folder_add 的轮廓读法：背板 + 标签突起）。
             // 首尾闭合（close）—— 底边那一条横线不能少：开放路径在 24dp 下读起来就是
-            // "没合上的文件夹"（批 25 实机截图定案的形状修正）。
+            // "没合上的文件夹"（ 实机截图定案的形状修正）。
             GlyphKind.FOLDER -> {
                 drawPath(path(P_FOLDER_BODY).apply { close() }, tint, style = stroke)
             }
@@ -752,7 +752,7 @@ fun Glyph(
  * 顶栏那颗「更多」（⋮）的画布边长：**全仓最粗的一档三点**。
  *
  * 与 [ROW_MORE_DOTS_SIZE] / [ROW_MORE_DOTS_WEIGHT] 那组一起，构成两档粗细
- * （用户口径：顶栏最粗、列表行尾细一点）。两处都是 `Glyph(GlyphKind.MORE_VERT, …)`
+ * 。两处都是 `Glyph(GlyphKind.MORE_VERT, …)`
  * 加这组参数，**没有各自的包装函数** —— 一层的包装只是把同一个 `Glyph` 调用的实参
  * 藏起来，读的人反而要跳一层才知道粗细是多少。
  *
@@ -766,7 +766,7 @@ fun Glyph(
  */
 internal val BarMoreDotsSize = 24.dp
 
-/** 顶栏三点的粗细倍率：最粗的一档（见 [BarMoreDotsSize]；2026-10-07 用户口径「粗细降低一点点」：1.3 → 1.15）。 */
+/** 顶栏三点的粗细倍率：最粗的一档（见 [BarMoreDotsSize]；：1.3 → 1.15）。 */
 internal const val BAR_MORE_DOTS_WEIGHT = 1.15f
 
 /** 行尾三点的画布边长：比顶栏小一号（它住在 48dp 触控目标里，右边还要留 4dp 呼吸位）。 */

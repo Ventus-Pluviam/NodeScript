@@ -187,10 +187,10 @@ class ProjectStateTest {
 
     @Test
     fun `时刻一个格式走到底_两位年月日加时分（用户口径）`() {
-        // 用户给的那个例子（2026-06-24 22:32 CST）：年月日两位 + 时分，中间一个空格。
+        // 用户给的那个例子（22:32 CST）：年月日两位 + 时分，中间一个空格。
         val example = java.time.LocalDateTime.of(2026, 6, 24, 22, 32).atZone(zone).toInstant().toEpochMilli()
         assertEquals("26-06-24 22:32", ScriptFileRowUi.formatTime(example, zone))
-        // 锚点那一行（2026-10-03 10:00）—— **不再**因为"今天"退化成只有时分。
+        // 锚点那一行（10:00）—— **不再**因为"今天"退化成只有时分。
         assertEquals("26-10-03 10:00", ScriptFileRowUi.formatTime(now, zone))
         // 跨年也一样：年份取两位，不换粒度。
         val lastYear = java.time.LocalDateTime.of(2025, 3, 2, 8, 0).atZone(zone).toInstant().toEpochMilli()
@@ -224,7 +224,7 @@ class ProjectStateTest {
     }
 
     /**
-     * 根层条目（`files/scripts/` 本层，`projectId` = [ProjectId.ROOT]）—— 2026-10-16 用户裁定
+     * 根层条目（`files/scripts/` 本层，`projectId` = [ProjectId.ROOT]）——
      * 「根层可写」之后才有。`relPath` 就是它自己的名字（没有项目段），故在它们身上
      * `childrenOf` 的判据（去掉尾随 `/` 之后还有没有斜杠）与项目内的行逐字同形。
      */
@@ -312,7 +312,7 @@ class ProjectStateTest {
     }
 
     /**
-     * 批量删除的目标清单（选择模式顶栏那格「删除」；2026-10-17 用户口径「顺带做上」）。
+     * 批量删除的目标清单（选择模式顶栏那格「删除」）。
      *
      * 两条规矩都在这里钉住：**父子同选只留父**（搜索态的池子是整棵树，先删父再删子会让
      * 子项那一下撞"条目不存在"假报失败）、**深度降序**。

@@ -1,7 +1,7 @@
 package com.autoscript.domain.host
 
 /**
- * 脚本输出日志的**文件列表**（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+ * 脚本输出日志的**文件列表**（日志管理页「脚本输出」tab）。
  *
  * 一条 = **一次执行**（不是一个脚本）：同一脚本跑几回就有几行，由
  * `filesDir/.ns/script-logs/` 的 `index.jsonl`（`ScriptLogStore` 写）+ 每个

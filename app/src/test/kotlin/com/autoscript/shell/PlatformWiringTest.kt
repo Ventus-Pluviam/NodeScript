@@ -460,7 +460,7 @@ class PlatformWiringTest {
     }
 
     /**
-     * 控制台 shell 面的接线（2026-10-09）：**ADB 档必须走 Shizuku，其余走平台 shell**。
+     * 控制台 shell 面的接线：**ADB 档必须走 Shizuku，其余走平台 shell**。
      *
      * 这条用例守的是一个**只在真机上才会暴露**的错接：`ConsoleShellExecutor` 若把
      * `ShellConsoleMode.ADB` 也转给 `platform.exec`，JVM 单测与编译全都绿，而真机上
@@ -697,7 +697,7 @@ class PlatformWiringTest {
         Unit
     }
 
-    // ── 跨命名空间帧表（§18-8(b)；2026-09-30 自 capabilities ImagesNamespaceHandlerTest 迁入：
+    // ── 跨命名空间帧表（§18-8(b)；自 capabilities ImagesNamespaceHandlerTest 迁入：
     // images handler 已随步骤 6 迁 :platform:system，跨 system×capabilities 的互认测试只有
     // 同时依赖两者的 :app 能住 —— 生产侧也正是 PlatformWiring 把同一个 analyzer 同时喂给两边) ──
 

@@ -1,7 +1,7 @@
 package com.autoscript.domain.scripts
 
 /**
- * **为什么搬进 `:domain`**（2026-10-11 批 102，P4 jsonl→SQLite）：SQLite 实现必须住
+ * **为什么搬进 `:domain`**（P4 jsonl→SQLite）：SQLite 实现必须住
  * `:platform:system`（`android.database.sqlite` 是 Android 面），而依赖铁律是
  * `:platform:* → :domain` —— 所以 SPI 与它的载荷形状（[ScheduledTask]）都得在 `:domain`，
  * 与 `IntentStore`/`RunArchive` 同一处规矩。

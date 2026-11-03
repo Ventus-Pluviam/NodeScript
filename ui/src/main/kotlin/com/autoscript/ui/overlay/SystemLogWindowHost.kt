@@ -23,7 +23,7 @@ import com.autoscript.ui.theme.Theme
 import com.autoscript.ui.theme.ThemeMode
 
 /**
- * 执行日志悬浮窗的**系统窗宿主**（2026-10-13 用户令；住 `:ui`，不复用脚本侧链）。
+ * 执行日志悬浮窗的**系统窗宿主**（住 `:ui`，不复用脚本侧链）。
  *
  * 为什么不走 `platform/system/.../floatingWindow` 那条链：它是脚本
  * `auto.floatingWindow.*` 的契约（`FloatingWindowSpec` + `HandleRef` +
@@ -78,7 +78,7 @@ class SystemLogWindowHost(
      * 弹系统窗（已开则只换内容）。[content] 是 `LogWindowContent` 那一份
      * （`Theme` 由本类自己包 —— 窗外没有 MainActivity 的主题链）。
      *
-     * **两条分支都不许把异常放出去**（2026-10-14「点执行就闪退」）：`setContent`
+     * **两条分支都不许把异常放出去**（「点执行就闪退」）：`setContent`
      * 在离屏 `ComposeView` 上跑的是**组合**，组合期抛出的任何东西都会顺着调用栈
      * 冒到调用方 —— 而调用方是 `SystemWindowSync` 的 `LaunchedEffect`，那里的异常
      * 没有接收者，直接终结进程。重喂那条此前是裸调，首建那条才有 `catch`。
@@ -161,7 +161,7 @@ class SystemLogWindowHost(
     }
 
     /**
-     * **输入焦点开关**（2026-10-16 用户令：悬浮窗底部输入框要能打字）。
+     * **输入焦点开关**。
      *
      * 病：本窗全程带 `FLAG_NOT_FOCUSABLE`（见类 KDoc —— 悬浮窗是"贴在旁边看"的，
      * 抢焦点会把用户正在操作的输入法顶掉），而**不可聚焦的窗口拿不到输入法**

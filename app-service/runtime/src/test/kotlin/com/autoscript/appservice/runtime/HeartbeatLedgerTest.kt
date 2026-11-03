@@ -123,7 +123,7 @@ class HeartbeatLedgerTest {
     }
 
     /**
-     * rebase（2026-10-13 暂停恢复）：时钟拨到现在、序号不动、无条目 no-op。
+     * rebase（暂停恢复）：时钟拨到现在、序号不动、无条目 no-op。
      */
     @org.junit.jupiter.api.Test
     fun `rebase 把时钟拨到现在且序号不动`() {

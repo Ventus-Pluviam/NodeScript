@@ -72,7 +72,7 @@ class HeartbeatLedger(
     }
 
     /**
-     * 把该 run 的心跳时钟拨到现在（2026-10-13 执行暂停：`resumeRun` 的落点）。
+     * 把该 run 的心跳时钟拨到现在（执行暂停：`resumeRun` 的落点）。
      *
      * 暂停期间引擎 frozen、心跳停在冻住那一刻 —— `sinceLastBeat` 停在那里不动；
      * 暂停几分钟后恢复，首跳还没到就被判"失联 N 分钟"当场误杀。rebase 把账拨到

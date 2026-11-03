@@ -5,13 +5,13 @@ import com.autoscript.bridge.PerConnectionLimits
 import com.autoscript.domain.scripts.ScriptRuntimeLimits
 
 /**
- * 用户设的**每连接配额** → 桥侧闸的推送（批 107；§8.1 脚本资源限额 + §7 桥面三闸）。
+ * 用户设的**每连接配额** → 桥侧闸的推送（§8.1 脚本资源限额 + §7 桥面三闸）。
  *
  * **它为什么是 `:app` 根包里一个独立小类**，而不是 `AppShellApplication` 的一个私有方法
  * （这是本类存在的全部理由，不是分层洁癖）：
  *
  * `:app` 的 `ArchitectureTest.桥只许装配包碰` 规定「除 `com.autoscript.shell` 装配包外，
- * 根包不许碰 `com.autoscript.bridge..`」。批 107 要在**保存限额**与**装填期**各推一次闸，
+ * 根包不许碰 `com.autoscript.bridge..`」。 要在**保存限额**与**装填期**各推一次闸，
  * 那两个调用点都在 `AppShellApplication`（根包）。三条出路：
  *
  * 1. 把那条门整个对 `:app` 打开 —— 省事，但把一条边界一笔勾销，**不做**；

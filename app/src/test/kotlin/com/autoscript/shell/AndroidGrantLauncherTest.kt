@@ -32,13 +32,13 @@ class AndroidGrantLauncherTest {
         assertEquals(GrantPage.NOTIFICATIONS, AndroidGrantLauncher.pageFor(Capability.NOTIFICATION))
         assertEquals(GrantPage.NOTIFICATIONS, AndroidGrantLauncher.pageFor(Capability.POST_NOTIFICATIONS))
         assertEquals(GrantPage.EXACT_ALARM, AndroidGrantLauncher.pageFor(Capability.SCHEDULE_EXACT_ALARM))
-        // 批 79：屏幕采集的去向是**投屏同意对话框**（不是设置页）—— 它的 GRANTED 定义
+        // 屏幕采集的去向是**投屏同意对话框**（不是设置页）—— 它的 GRANTED 定义
         // 是"会话已激活"，唯一能推进它的动作就是同意一次投屏。
         assertEquals(GrantPage.PROJECTION_CONSENT, AndroidGrantLauncher.pageFor(Capability.SCREEN_CAPTURE))
         // 没有专门授权页的两个：一律送应用详情页，不编造快捷入口。
         assertEquals(GrantPage.APP_DETAILS, AndroidGrantLauncher.pageFor(Capability.ROOT))
         assertEquals(GrantPage.APP_DETAILS, AndroidGrantLauncher.pageFor(Capability.ADB_INPUT))
-        // 批 48：使用情况访问有专页（特殊访问权限列表），不落应用详情。
+        // 使用情况访问有专页（特殊访问权限列表），不落应用详情。
         assertEquals(GrantPage.USAGE_ACCESS, AndroidGrantLauncher.pageFor(Capability.USAGE_ACCESS))
     }
 

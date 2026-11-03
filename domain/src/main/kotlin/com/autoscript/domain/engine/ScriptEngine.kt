@@ -27,7 +27,7 @@ interface ScriptEngine {
     suspend fun kill(): KillCause
 
     /**
-     * OS 级冻结这次执行（2026-10-13 执行暂停；悬浮窗「暂停执行」按钮的落点）。
+     * OS 级冻结这次执行（执行暂停；悬浮窗「暂停执行」按钮的落点）。
      *
      * **不是**优雅停：进程原地冻住（SIGSTOP）、心跳与输出都停，[resume] 后从
      * 冻住那一行继续。暂停期间看门狗照常看不到心跳 —— 看门狗排除、宽限与
@@ -44,8 +44,7 @@ interface ScriptEngine {
     suspend fun resume(): Boolean = false
 
     /**
-     * 往这次执行的**脚本进程 stdin 送一行**（2026-10-16 用户令：悬浮窗底部输入框 →
-     * 脚本的 `process.stdin`；缺省实现回 false）。
+     * 往这次执行的**脚本进程 stdin 送一行**（缺省实现回 false）。
      *
      * 语义边界三条：
      * - **送一行**：实现负责补行尾（`\n`）—— 调用方给的是"用户敲的那一行"，不是字节流；
@@ -61,7 +60,7 @@ interface ScriptEngine {
     suspend fun sendInput(line: String): Boolean = false
 
     /**
-     * **关掉这次执行的 stdin 写端**（发 EOF；2026-10-16 用户令「答完自己退」；
+     * **关掉这次执行的 stdin 写端**（发 EOF；
      * 缺省实现回 false）。
      *
      * 语义 = 终端的 Ctrl-D，不是"停这次执行"（那是 [stop]/[kill]）：管道读端收到流结束，

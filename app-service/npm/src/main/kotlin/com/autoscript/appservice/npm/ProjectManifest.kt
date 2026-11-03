@@ -5,11 +5,11 @@ import com.autoscript.domain.json.DomainJson
 /**
  * 项目 `package.json`：文件名、缺省骨架、以及 npm 那套**包名判据**的落点。
  *
- * **为什么要造一份骨架**（2026-10-17 用户口径：「应该让它缺的时候自动创建呀」）：
+ * **为什么要造一份骨架**：
  * 重操作的执行体（[HostNodeExecutor.prepareWorkDir]）要把项目根那份 `package.json` 拷进
  * workDir 当 prefix（npm 的 `--prefix` 只认那里），跑完再把 npm 重写过的那份 harvest 回
  * 项目根 —— **没有它这一步就没法开始**，而项目此前只有**模板部署**才长得出它：
- * 「首页根层建文件夹 = 建项目」（2026-10-16 用户裁定）造出来的是一**空目录**，
+ * 「首页根层建文件夹 = 建项目」（用户裁定）造出来的是一**空目录**，
  * 于是"自己建的项目装不了依赖"，且报的是 `项目 demo 缺 package.json（…）` 这种
  * 既不是用户的错、用户也无从下手的一句。
  *
@@ -53,7 +53,7 @@ internal object ProjectManifest {
     /**
      * 项目号 → 一个 npm **认**的包名。
      *
-     * 为什么非洗不可：项目号判据（`ScriptPaths.PROJECT_ID`）2026-10-16 放宽成
+     * 为什么非洗不可：项目号判据（`ScriptPaths.PROJECT_ID`）放宽成了
      * "拒分隔符与点"，**中文、大写、空格、`@` 都合法**；而 npm 的包名只认小写
      * URL-safe 字符，撞上不合法的名字它会直接 `EINVALIDPACKAGENAME` 退出来 ——
      * 那等于把"缺清单"换成"清单里名字不合法"，用户照样装不上，且更难看出病因。

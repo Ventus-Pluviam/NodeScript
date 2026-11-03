@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test
  * 本模块不出桥实现层（§12.2「分两层」）。
  * `HandleRef` 等挂载缝类型住 `:domain`，依赖它不等于依赖桥实现层。
  *
- * `:platform:process`（进程/`/proc` 收尸面，批 105）**逐字点名放行**：shell 收尸那份
+ * `:platform:process`（进程/`/proc` 收尸面）**逐字点名放行**：shell 收尸那份
  * `ProcOps` 副本合并进去了。其余 `:platform:system..` 同级模块仍零依赖。
  */
 class ArchitectureTest {

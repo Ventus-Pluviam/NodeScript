@@ -55,7 +55,7 @@ internal object NpmrcFile {
 /**
  * 全局 npm 配置（§10.2 registry 三层链的 `files/.npmrc` = **userconfig** 那一层）。
  *
- * 这一层是 2026-10-09 批 83 新落的：此前全仓只有 [NpmProjectLayout.npmrc] 一个路径函数，
+ * 这一层是  新落的：此前全仓只有 [NpmProjectLayout.npmrc] 一个路径函数，
  * userconfig 层**零实现** —— 于是「镜像源」无处可存，管理面板那一行只能是个 toast 占位。
  *
  * 生产里它同时扮演两个角色，**两个角色不能互相顶掉**：
@@ -63,8 +63,8 @@ internal object NpmrcFile {
  *   proxy、cache 等键都靠这条通路；
  * - 本类读写的 `registry=` 键：解析链的第二层（项目 `.npmrc` → 全局 → 出厂官方）。
  *
- * **粒度是全局一份**（用户 2026-10-09 裁定）：所有项目共用一个缺省镜像，
- * 项目 `.npmrc` 仍可按项目覆盖（那一层一直存在，只是批 83 之前没被 npm 读到）。
+ * **粒度是全局一份**（用户 裁定）：所有项目共用一个缺省镜像，
+ * 项目 `.npmrc` 仍可按项目覆盖（那一层一直存在，只是此前没被 npm 读到）。
  */
 class NpmGlobalConfig(private val filesDir: Path) {
 

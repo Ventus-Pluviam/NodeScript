@@ -6,7 +6,7 @@ import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
 
 /**
- * 运行档案的 SQLite 实现（§8.2 归档 + §8.5 归档入口；2026-10-11 批 102 P4 阶段 B）。
+ * 运行档案的 SQLite 实现（§8.2 归档 + §8.5 归档入口）。
  *
  * 语义与 `FileRunArchive`（jsonl）**逐条等价** —— 两者共用同一套契约测试
  * （`RunArchiveContract`，见 `:domain` 的 testFixtures）。

@@ -9,7 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * 磁盘探针的取数口（2026-10-17 设备实测：`Files.getFileStore` 在 Android 上抛
+ * 磁盘探针的取数口（设备实测：`Files.getFileStore` 在 Android 上抛
  * `UnsupportedOperationException("getFileStore")`，装依赖整个走不通 —— 见 [FreeSpace] 的类 KDoc）。
  *
  * **本机测不到"Android 那格没实现"这件事**（宿主 JVM 的 `getFileStore` 是好的），所以这里

@@ -692,7 +692,7 @@ class EnginesNamespaceHandlerTest {
     }
 
     /**
-     * `stdinIdle`（2026-10-16 用户令「答完自己退」）：脚本侧 `stdin-idle.ts` 判出
+     * `stdinIdle`：脚本侧 `stdin-idle.ts` 判出
      * "这次执行的 stdin 上没有读者了"之后报上来的那一下 —— handler 把它落成
      * "关掉**调用方自己**那条执行的写端（发 EOF）"。
      *

@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * T1 子进程那一层（[T1Child]）的确定性用例（2026-10-10 批 91）。
+ * T1 子进程那一层（[T1Child]）的确定性用例。
  *
  * 走 [T1ProcessRunner] 替身 —— 那条缝的 KDoc 写的就是「真能起真进程由 E2E 钉，起了之后的
  * 四件（泵输出 / 等退出 / 两侧各拒一次 / 杀树）用替身跑成确定性用例」。本类就是那个承诺的
@@ -287,7 +287,7 @@ class T1ProcessTest {
     @Test
     fun `没人点名但 128+n：按 shell 惯例反查信号名（批 95 补的那半）`() {
         // OOM killer / 别人 kill -TERM —— 没有 kill 帧，JVM 只给 128+15=143。
-        // 批 94 之前这一档恒 null；批 95 起按 POSIX 惯例反查（143 → SIGTERM）。
+        // 此前这一档恒 null；按 POSIX 惯例反查（143 → SIGTERM）。
         val frames = Frames()
         child(DoneProcess(exitCode = 143), frames).run()
 
@@ -356,9 +356,9 @@ class T1ProcessTest {
     }
 
     /**
-     * 真 /proc + 真 `kill` 的进程树收尸（批 95 的生产路径，唯一一条不走替身的用例）。
+     * 真 /proc + 真 `kill` 的进程树收尸（生产路径，唯一一条不走替身的用例）。
      *
-     * 起一棵真树（sh → 后台 sleep），reap 之后**孙子必须也没了** —— 这正是批 91 那版
+     * 起一棵真树（sh → 后台 sleep），reap 之后**孙子必须也没了** —— 这正是 那版
      * 在设备上静默失效的那一段（ProcessHandle 缺席 → 后代恒空）。判据借的是**自己这棵
      * 树**的 pid（/proc 里查还在不在），不是宿主的任何既有进程 —— 与"借宿主 /proc 判死"
      * 那条教训不冲突。

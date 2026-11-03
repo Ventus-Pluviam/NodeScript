@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test
  * 依赖方向守护（docs §6 模块表 `:platform:process` 行）：进程/`/proc` 面是**叶子模块**，
  * 连 `:domain` 都不依赖（只用 std），因此除 Android/桌面 UI 外的一切 `com.autoscript..`
  * 包都是泄漏 —— 任何一条依赖边都会把「进程面」与某个上层绑死，那正是本模块存在的理由
- * 被绕开的那条路（批 105 的两个前身各自被依赖方向逼着留一份副本）。
+ * 被绕开的那条路（两个前身各自被依赖方向逼着留一份副本）。
  *
  * `com.autoscript.build`（[ArchGate] 自身）不在黑名单里：各模块的 [ArchGate] 都依赖它。
  */

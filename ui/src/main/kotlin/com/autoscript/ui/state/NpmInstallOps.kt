@@ -7,7 +7,7 @@ import com.autoscript.domain.npm.NpmConsoleKeys
 import kotlinx.coroutines.CancellationException
 
 /**
- * 依赖面板的**变更半边**（§10.9 第 1 条的安装输入行 + 旗标 + 阶段进度条，2026-10-09 批 87）。
+ * 依赖面板的**变更半边**（§10.9 第 1 条的安装输入行 + 旗标 + 阶段进度条）。
  *
  * 搬出 `MainActivity` 的理由与 [loadRegistry]/[runNpmMaintenanceOp] 逐字相同：
  * Activity 的函数数贴着 detekt 的 `TooManyFunctions` 线，且这几段是"拿读口算下一份状态"
@@ -31,8 +31,7 @@ private const val INSTALL_DRAFT_MAX = 200
 /**
  * 面板提交的每一条安装命令都带上的旗标。
  *
- * **`--prefer-offline` 从 2026-10-17 起是缺省**（用户口径「去掉开发依赖，和离线优先。
- * 默认开启离线优先」）：界面上那两颗旗标整排下线，其中「离线优先」不再是一个选项，
+ * **`--prefer-offline` 从 是缺省**：界面上那两颗旗标整排下线，其中「离线优先」不再是一个选项，
  * 而是**这一屏安装的一贯行为** —— 装上几十个包时先翻本地缓存的收益最明显，而它的代价
  * （可能拿到略微陈旧的元数据）在"依赖面板"这个场景里没有对象。
  *
@@ -42,7 +41,7 @@ private const val INSTALL_DRAFT_MAX = 200
 private const val INSTALL_FLAGS = " --prefer-offline"
 
 /**
- * 「提交动作发生」那一刻的在途写回（2026-10-29 修 —— 见 [runPanelCommand] 的 KDoc）。
+ * 「提交动作发生」那一刻的在途写回（修 —— 见 [runPanelCommand] 的 KDoc）。
  *
  * 三个安装/卸载/重装入口在 **launch 之前**先同步写回这一份：宿主侧 `runNpmPanelCommand`
  * 是**入队即返回**的假设已经过时 —— `enqueueHeavy` 是协程内联执行，调用要挂到会话
@@ -71,7 +70,7 @@ internal fun NpmState.withInstallInFlight(): NpmState = copy(
  * 旗标**追加在包名之后**（`npm install axios --prefer-offline`）：npm 两种位置都认，
  * 而后置的形态在用户眼里就是「装了 axios，带这些旗标」。
  *
- * 2026-10-17 前这里还有 `dev`/`offline` 两个入参（对应界面上那两颗勾选框）—— 两颗都
+ * 这里曾经有 `dev`/`offline` 两个入参（对应界面上两颗勾选框）—— 两颗都
  * 下线了，见 [INSTALL_FLAGS] 的说明。
  */
 internal fun buildInstallCommand(draft: String): String? {
@@ -84,7 +83,7 @@ internal fun buildInstallCommand(draft: String): String? {
 internal fun buildRemoveCommand(name: String): String = "npm uninstall $name"
 
 /**
- * **重装某一个包**（2026-10-17 用户口径：「在依赖列表里，加一个重装的图标按钮」）。
+ * **重装某一个包**。
  *
  * `npm install <包名>@<版本> --no-save`，三条各自有理由：
  * - **带版本**：清单里那个版本就是宿主读 lockfile 读出来的"现在装的应该是哪一个"，
@@ -176,7 +175,7 @@ private suspend fun runPanelCommand(
     val busy = state.withInstallInFlight()
     return try {
         host.runNpmPanelCommand(projectId, line)
-        // 挂起返回之后**再拉到它跑完**（2026-10-10 批 90；2026-10-29 把话说准：
+        // 挂起返回之后**再拉到它跑完**（ 把话说准：
         // `enqueueHeavy` 是协程内联执行，这一行其实要**挂到会话跑完才返回** —
         // 阶段条实时走的那一路是」在途写回之后 [NpmScreen] 的兜底轮询
         // （`LaunchedEffect(page, npmState.installing)`）拉着的。本条只是再追一遍，
@@ -198,7 +197,7 @@ private suspend fun runPanelCommand(
 }
 
 /**
- * 安装跑着的时候**自己拉**（2026-10-10 批 90：阶段条不再停在 `QUEUED`）。
+ * 安装跑着的时候**自己拉**（阶段条不再停在 `QUEUED`）。
  *
  * 停的条件是**宿主给的** [NpmState.installing]（句柄账 / 事件里的 `Finished`），
  * 不是界面猜的；有界见 [pollWhile]。每一轮都同时取**事件**（阶段条）与**快照**
@@ -208,7 +207,7 @@ private suspend fun runPanelCommand(
  * **与 [pollInstallEvents] 的分工**：那个是"拉一次"（刷新按钮、进页面），
  * 这个是"拉到跑完"（提交之后）。两者共用同一个读口，不另开取数路径。
  *
- * **两处写回时机**（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：[onStep]
+ * **两处写回时机**（修，见 `LivePoll.pollWhile` 的账）：[onStep]
  * 逐轮把中间态写回组合状态 —— 阶段条逐格走、日志逐行长都是这条链路给的；
  * 返回值只是兜底（`runPanelCommand` 在轮询结束后还要基于终态拼回执）。
  * **首轮不等那 400ms**：`pollWhile` 的节奏是"先等一拍再拉"，而安装会话本身
@@ -250,8 +249,7 @@ internal suspend fun pollInstallWhileRunning(
 }
 
 /**
- * 轮询版的事件拉取 —— **逐格步进**（2026-10-29 用户口径「进度条只显示排队中，
- * 直到完成才一次性出现」）。
+ * 轮询版的事件拉取 —— **逐格步进**。
  *
  * 一根：[pollInstallEvents] 是"拉一次"（进页面/刷新），它整批折叠 —— 那是对的，现取
  * 要的就是"此刻宿主报到哪一步"。但轮询循环若也整批折，观感就成了另一个东西：
@@ -328,7 +326,7 @@ internal suspend fun pollInstallEvents(host: HostSummary, state: NpmState, proje
     return try {
         val batch = host.npmInstallEvents(projectId, since, INSTALL_EVENT_PAGE)
         val folded = foldProgress(state.installProgress, batch.events.map { it.event })
-        // **游标没动、阶段也没变 → 原样返回这一份**（2026-10-28）：等值重建照样
+        // **游标没动、阶段也没变 → 原样返回这一份**：等值重建照样
         // 让展开的可见行重组合一次 —— LazyColumn 的 item lambda 捕获的是 state
         // **引用**，换一份等值的也是换。安装长跑在安静的阶段（写入 node_modules
         // 那种没有事件可报的窗口）时，每 400ms 一 tick 全是白重画。
@@ -390,7 +388,7 @@ internal const val INSTALL_EVENT_PAGE = 64
  * 提交后的回执（**动作已完成的那一句** —— `runPanelCommand` 等到宿主挂起返回才构造它，
  * `enqueueHeavy` 是协程内联执行，这一行从回执构造那一刻起说的就是结果，不是"刚提交"）。
  *
- * 第十七批第 41 条改口：原文案「已提交 npm uninstall：安装会话在跑」是批 90「入队即返回」
+ * 第十七批第 41 条改口：原文案「已提交 npm uninstall：安装会话在跑」是「入队即返回」
  * 假设时代的措辞 —— 宿主早已同步执行到跑完才回来，回执却还在说"在跑"，用户把"卸载完成"
  * 读成"刚提交、东西还在装"，正是「卸载没生效」观感的一半来源。改成**动作名 + 对象 + 结果**
  * 的完成句式：卸载说「已卸载 xx」，安装/重装说「已安装 xx」。对象取命令里的**第一个包名**

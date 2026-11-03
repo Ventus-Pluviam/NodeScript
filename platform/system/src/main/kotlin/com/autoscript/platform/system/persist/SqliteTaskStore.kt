@@ -8,14 +8,14 @@ import com.autoscript.domain.scripts.TimedSchedule
 import java.time.ZoneId
 
 /**
- * 任务注册表的 SQLite 实现（§8.6；2026-10-11 批 102 P4 阶段 C）。
+ * 任务注册表的 SQLite 实现（§8.6）。
  *
  * 语义与 `FileTaskStore`（jsonl）**逐条等价** —— 两者共用同一套契约测试
  * （`TaskStoreContract`，见 `:domain` 的 testFixtures）。
  *
  * **为什么住 `:platform:system`**：`android.database.sqlite` 是 Android 面（依赖铁律
  * `:platform:* → :domain`），SPI（[TaskStore]）与它的载荷形状（`ScheduledTask` /
- * `TimedSchedule` / `ScreenGuarantee`）在批 102 阶段 A 一并搬进了 `:domain`。
+ * `TimedSchedule` / `ScreenGuarantee`）在 阶段 A 一并搬进了 `:domain`。
  *
  * **SQL 不在本类里拼**：全部语句由 [TaskStoreSql] 生成（纯函数、零 Android），本机拿
  * **同一个 `sqlite3` 引擎**跑真语句（见 `SqliteTaskStoreContractTest`）。本类只剩

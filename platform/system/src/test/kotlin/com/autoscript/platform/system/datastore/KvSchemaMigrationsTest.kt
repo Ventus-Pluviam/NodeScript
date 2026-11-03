@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * kv 升版策略（2026-10-11 批 97，外审 M8）。
+ * kv 升版策略（外审 M8）。
  *
  * 钉的是三条口径，其中前两条是**反**口径 —— 它们防的正是原来的行为：
  * 1. **不静默丢数据**：找不到 old → new 的路径必须抛，不能「DROP 重建」；

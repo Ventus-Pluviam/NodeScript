@@ -12,8 +12,8 @@ package com.autoscript.domain.scripts
  * 反向依赖它。`:domain` 零文件 IO（本包无一处 `java.nio.file`），故**接口在此、实现在
  * `:app-service:script-repo`**（[ScriptEnvStore] 与 [IntentStore] 同形）。
  *
- * **全局一份，不按项目分级**（2026-10-09 裁定）：这是"环境"而不是"项目配置"，
- * 用户口径就是全局。要按项目分级得先有项目级元数据面（今天没有）。
+ * **全局一份，不按项目分级**（裁定）：这是"环境"而不是"项目配置"，
+ * 环境变量是全局的。要按项目分级得先有项目级元数据面（今天没有）。
  */
 interface ScriptEnvStore {
 

@@ -17,11 +17,11 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 依赖面板变更半边的用例（§10.9 第 1 条，2026-10-09 批 87）。
+ * 依赖面板变更半边的用例（§10.9 第 1 条）。
  *
  * 断的是「界面会拼出什么、会不会冒充」，不是 npm 的行为：
  *
- * - **拼装**：包名在前，`--prefer-offline` **写死**（2026-10-17 起不再是可勾的旗标），
+ * - **拼装**：包名在前，`--prefer-offline` **写死**（起不再是可勾的旗标），
  *   `-D` 再也不拼；
  * - **门禁强度不取决于入口**：面板拼出来的一行走的是与控制台**同一条**宿主口
  *   （`runNpmPanelCommand`），故宿主侧的判据原样生效 —— 界面侧不判第二遍；
@@ -89,7 +89,7 @@ class NpmInstallOpsTest {
         assertEquals("npm install axios --prefer-offline", buildInstallCommand(" axios "), "两端空白要吃掉")
         assertEquals("npm install axios@1.7.0 --prefer-offline", buildInstallCommand("axios@1.7.0"))
 
-        // 两条**防回潮**断言（2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」）：
+        // 两条**防回潮**断言：
         // `-D` 与"可关掉的离线优先"都不许再出现在拼装结果里。旗标一整行下线之后，
         // 这两样一旦回来就是**新增的**行为，而用户要的是"没有开关"。
         assertFalse(buildInstallCommand("axios")!!.contains("-D"), "开发依赖已下线")
@@ -108,7 +108,7 @@ class NpmInstallOpsTest {
     }
 
     /**
-     * 重装那一行（2026-10-17 用户口径「在依赖列表里，加一个重装的图标按钮」）。
+     * 重装那一行。
      *
      * 三处刻意都在断言里钉住：
      * - **锁版本**（`name@version`）：不带版本就是 `npm install <name>`，那会按 `package.json`
@@ -153,7 +153,7 @@ class NpmInstallOpsTest {
      * 回执那两句（第十七批第 41 条改口）：
      *
      * `runPanelCommand` 等到宿主**挂起返回**才构造回执（enqueueHeavy 协程内联执行，
-     * 跑完才回），文案却说「已提交…在跑」—— 批 90「入队即返回」时代的措辞，把"卸载完成"
+     * 跑完才回），文案却说「已提交…在跑」—— 「入队即返回」时代的措辞，把"卸载完成"
      * 说成"刚提交、还在装"，正是「卸载没生效」观感的一半来源。这里把「动作名 + 对象 +
      * 结果」钉成完成句式，且**不再出现"在跑"**。
      */
@@ -221,7 +221,7 @@ class NpmInstallOpsTest {
     /**
      * 作用域选「全局」时，命令落在空串哨兵上 —— **不是**被当成"没选项目"。
      *
-     * 这一条钉的是 2026-10-17 那次判据放宽：`NpmConsoleKeys.rejectProjectId("")` 从前
+     * 这一条钉的是判据放宽：`NpmConsoleKeys.rejectProjectId("")` 从前
      * 是拒收的，而全局作用域的编码恰好就是那个空串 —— 放宽之前，界面上选「全局」按下
      * 执行会拿到一句「项目号不合法（不能为空）」，而用户手里根本没有一个叫这个名字的
      * 项目可选，他只会以为"全局"这个选项是坏的。
@@ -284,7 +284,7 @@ class NpmInstallOpsTest {
     // ── 进度：阶段不是百分比 ─────────────────────────────────────────────────
 
     /**
-     * 逐格桥（2026-10-29 用户口径「进度条只显示排队中，直到完成才一次性出现」）：
+     * 逐格桥：
      * 宿主一条协程里毫秒级发完整串事件，轮询一次端回整批 —— 不节流的话整批折完，
      * 阶段条从「排队中」直接跳「完成」。这里钉的是节奏闸本身：**一个 tick 只放一条**，
      * 批里剩下的进缓冲，且**缓冲没放完就不再去拉新的**。
@@ -335,7 +335,7 @@ class NpmInstallOpsTest {
         assertEquals(0, host.polls)
     }
 
-    /** 缓冲放完、宿主没有新事件时引用原样复用（与单次版同一条 2026-10-28 纪律）。 */
+    /** 缓冲放完、宿主没有新事件时引用原样复用（与单次版同一条纪律）。 */
     @Test
     fun `轮询逐格：无缓冲且无新事件时原样返回同一份，轮询期不白重画`() = runBlocking {
         val host = PanelHost(events = listOf(InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY)))
@@ -352,7 +352,7 @@ class NpmInstallOpsTest {
     }
 
     /**
-     * 轮询**整段**的两条新纪律（2026-10-30 修，见 `LivePoll.pollWhile` 的账）：
+     * 轮询**整段**的两条新纪律（修，见 `LivePoll.pollWhile` 的账）：
      * 首拉**不等那 400ms**（安装会话以秒计，等一拍回来整批已齐）；中间态**逐轮
      * 进 [onStep]** —— 两条合起来才是「逐格步进真的在屏幕上走」的链路。旧实现
      * 把全部推进攒在轮询协程局部、结束才一口写回：逐格桥的返回值测试全绿，
@@ -460,7 +460,7 @@ class NpmInstallOpsTest {
     }
 
     /**
-     * 「指针没动就原样复用」（2026-10-28）：安装轮询每 400ms 一 tick，安静的阶段
+     * 「指针没动就原样复用」：安装轮询每 400ms 一 tick，安静的阶段
      * （写入 node_modules 那种没有事件可报的窗口）里每一 tick 都是等值重建 ——
      * LazyColumn 的 item lambda 捕获的是 state **引用**，换一份等值的也会让
      * 展开的可见行重组合一次。`===` 断的是引用不变，不是值相等。

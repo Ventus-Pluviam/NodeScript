@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * T1 脚本执行体：**起一次 npm 会话进程，把它的 `child_process` 接到 [NpmT1Bridge]**
- * （docs §10.3 T1 的执行侧，2026-10-10 批 91）。
+ * （docs §10.3 T1 的执行侧）。
  *
  * 与 [HostNodeExecutor] 的分工是**两条通道**（协调器那边讲得很清楚：lifecycle 脚本不做
  * reify，走事务链会凭空造 stageDir 与 commit 记录）：
@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
  * | 工作目录 | `stageDir` 旁的 `npmwork-<nonce>` | **项目根**（脚本就该在项目里跑） |
  * | spawn 门禁 | `npm-spawn-gate.cjs`（**一律拒**） | `npm-t1-bridge.cjs`（**经桥放行**） |
  * | 放行判据 | 无（重操作即脚本的判据） | 解析层白名单（脚本可跑性，无人工审批） |
- * | 输出 | 落控制台环 + `outputTail` | 落控制台环（真流式，批 94）+ 失败详情带尾部 |
+ * | 输出 | 落控制台环 + `outputTail` | 落控制台环（真流式）+ 失败详情带尾部 |
  *
  * **两条 shim 是互斥的**，不是叠加：安装会话要的是"零 spawn"，T1 会话要的恰恰是
  * "spawn 走桥"。把门禁 shim 也注进去，T1 的每一次 spawn 都会先撞门禁 —— 那不是安全，
@@ -41,10 +41,10 @@ import java.util.concurrent.TimeUnit
  * - **不做最小 CapabilityMask**（§10.5-4）：脚本进程与 App 同 UID。设备上没有可用的隔离
  *   手段（沙箱已裁），故"最小能力"这一条现在只能靠"宿主只跑认得的那条命令"来近似。
  *
- * ## 输出与取消（2026-10-11 批 94 补齐）
+ * ## 输出与取消（ 补齐）
  *
  * - **真流式**：npm 会话进程的 stdout（= npm 自己的播报 + 它捕获的脚本输出，`npm run`
- *   对子进程是 stdio 继承）由读流线程**边读边 [OutputSink.line]**，与批 90 安装会话那条
+ *   对子进程是 stdio 继承）由读流线程**边读边 [OutputSink.line]**，与 安装会话那条
  *   逐字同纪律（空行跳过；报过流则失败异常**不再重复尾部**，防同一段文本出现两遍）。
  * - **取消可杀**：`waitFor` 改**切片轮询**（[CANCEL_POLL_SLICE_MILLIS] 一片），间隙查
  *   [ScriptOp.cancelSignal] —— 置位即 `destroyForcibly` + 关会话（桥侧子进程随
@@ -98,7 +98,7 @@ class NpmScriptExecutor(
                 sink.emit(InstallEvent.Progress(op.projectId, op.handleId, InstallEvent.Phase.QUEUED))
                 val outcome = runNpm(op, session, output)
                 if (outcome.exitCode != 0) {
-                    // 报过流就不重复尾部（批 94，与批 90「报了流就不再补 outputTail」同纪律）：
+                    // 报过流就不重复尾部（与「报了流就不再补 outputTail」同纪律）：
                     // 那些行已经在控制台里逐行出现过，异常里再贴一遍 = 同一段文本两处。
                     // **[OutputSink.None] 例外**：那是调用方显式说「这边没人看流」——
                     // 尾部就成了失败详情的唯一输出来源，必须兜底（判据在调用方的选型上，
@@ -132,7 +132,7 @@ class NpmScriptExecutor(
      * 把 npm 的项目级配置也一并挪走（`.npmrc` 只看 prefix）。脚本就该在项目里跑，
      * 所以这里既不给 `--prefix` 也不另建 workDir。
      *
-     * 输出**边读边报 + 攒尾部**（批 94）：流喂控制台（尽力而为），尾部进失败详情
+     * 输出**边读边报 + 攒尾部**：流喂控制台（尽力而为），尾部进失败详情
      * （报过流就不带，见 [execute]）。
      */
     private fun runNpm(op: ScriptOp, session: T1SessionHandle, output: OutputSink): Outcome {
@@ -162,7 +162,7 @@ class NpmScriptExecutor(
                 try {
                     proc.inputStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
                         lines.forEach { line ->
-                            // 空行跳过（批 90 同款理由）：真实 npm 输出以空行结尾，环里塞空行
+                            // 空行跳过（ 同款理由）：真实 npm 输出以空行结尾，环里塞空行
                             // 是在用户屏幕上画一条空白。
                             if (line.isNotEmpty()) {
                                 streamed = true
@@ -186,7 +186,7 @@ class NpmScriptExecutor(
             isDaemon = true
             start()
         }
-        // 切片轮询（批 94）：一片内 `waitFor` 是真阻塞（不让空转烧 CPU），片间查取消与墙钟。
+        // 切片轮询：一片内 `waitFor` 是真阻塞（不让空转烧 CPU），片间查取消与墙钟。
         // 原先的单发 `waitFor(timeout)` 看不到取消 —— 「停止」按下后 npm 会话照跑到底，
         // TTL 契约里"合作式响应取消"那句在这里落不了地。
         val deadlineNanos = System.nanoTime() + op.timeoutMillis * 1_000_000

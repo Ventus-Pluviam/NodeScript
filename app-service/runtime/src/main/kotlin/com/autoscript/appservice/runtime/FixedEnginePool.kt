@@ -16,7 +16,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * 定容引擎进程池（docs §8.2 进程池决议）。
  *
- * ## 唯一真源：**空闲槽位队列**（2026-10-12 批 103 P2 重构；外审 B2 的彻底解）
+ * ## 唯一真源：**空闲槽位队列**（ 重构；外审 B2 的彻底解）
  *
  * 原实现有两套靠手拿同步的记账 —— `Semaphore permits`（计**数**）与 `PoolSlot.state`
  * （计**状态**）。两套的一致性全靠「取/还都要记得另一半」，于是四种失真全是「忘了还
@@ -31,7 +31,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * lease 的 CAS 保证，于是上面前三种失真在**结构上**不再可能（第四种由「先 quiesce 后归还」
  * 保证，见 [PoolLease.release]）。
  *
- * ## 并发约定（批 96 定，本批未改）
+ * ## 并发约定（ 定，本批未改）
  *
  * 排队等槽可能挂到 `waitTimeoutMillis`（调度链路 60–120s），所以**不得**把它圈进调用方
  * （`RuntimeController`）的锁里 —— 那是外审 B1 的病灶（实测 `stop(A)` 挡 2927ms）。
@@ -153,7 +153,7 @@ class FixedEnginePool(
 
     /**
      * 产一份 lease 并登记；它的回队回调是**唯一的槽位回队口**（[PoolLease] 只管「谁有权
-     * 归还」，具体怎么还由本类给 —— 与批 95/99 的 `T1TreeOps`/`TreeOps` 同一分工）。
+     * 归还」，具体怎么还由本类给 —— 与/99 的 `T1TreeOps`/`TreeOps` 同一分工）。
      */
     private fun newLease(slot: PoolSlot): PoolLease {
         val lease = PoolLease(slot) { returnedSlot ->

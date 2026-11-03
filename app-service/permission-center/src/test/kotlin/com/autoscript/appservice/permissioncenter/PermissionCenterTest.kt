@@ -147,7 +147,7 @@ class PermissionCenterTest {
 
     @Test
     fun `ADB 输入文案不承诺降级 —— 三通道三选一之后没有降级链`() {
-        // 批 61（§9.3）把输入面改成三条平级通道 + 显式选路：指定 adb 而该通道不可用
+        // （§9.3）把输入面改成三条平级通道 + 显式选路：指定 adb 而该通道不可用
         // 就是 ERR_PERMISSION_DENIED，绝不改用别的通道。旧文案那句「未就绪时输入走
         // 无障碍手势」描述的路已经不存在了，留着就是对用户的假承诺。
         val text = PermissionCenter.guideText(Capability.ADB_INPUT)

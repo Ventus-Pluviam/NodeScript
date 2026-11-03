@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
  * "管道写满会不会死锁""超时到底杀没杀进程"这类与真实 IO 语义绑定的事，
  * mock 会把它们正好抽象掉。
  *
- * **替身的强度决定测试的强度**（2026-10-01 的教训，见 `docs/backlog.md` A2）：
+ * **替身的强度决定测试的强度**（的教训，见 `docs/backlog.md` A2）：
  * 原先两条读流都是 `ByteArrayInputStream`（**立刻 EOF**），于是"读流不可取消会把
  * 超时路径挂死"这条真机病灶在测试里根本不存在 —— 四条超时/取消用例全绿，
  * 而真机上 `su -c` 把管道写端交给孙进程时是「设 1s 超时、实际卡 100s 且没杀」。
@@ -144,7 +144,7 @@ class AndroidShellExecutorTest {
         assertTrue(e is IllegalArgumentException, "0 超时应当场拒绝，实际 $e")
     }
 
-    // ── 读流不可取消（2026-10-01 回归：写端被孙进程持有）─────────────
+    // ── 读流不可取消（回归：写端被孙进程持有）─────────────
     // 病灶：超时/取消抛出后 coroutineScope 要等两条 readBytes 子协程结束才传播，
     // 而 destroyForcibly() 在那个作用域**外**的 finally 里 —— 读流不 EOF 就永远
     // 等不到，进程也没杀。下面三条用 [HeldStream] 把那个形态钉住。
@@ -223,7 +223,7 @@ class AndroidShellExecutorTest {
         assertEquals("err", r.stderr)
     }
 
-    // ── 捕获上限（2026-10-02，backlog A2b）────────────────────────────
+    // ── 捕获上限（backlog A2b）────────────────────────────
     // 口径：静默截断 + 显式日志 Warning + 返回截断标志（design-decisions 第 21 项）。
     // 这里钉三件容易做漏的事：**到顶后仍在读**（否则子进程憋死在满管道上）、
     // **两条流各自计数**、**没超限就一个字节都不许多**（截断不能变成常态损耗）。
@@ -445,7 +445,7 @@ class AndroidShellExecutorTest {
 }
 
 /**
- * 外审 M6（2026-10-11 批 99）：shell 面的两条 —— **杀树**与 **stdin 关闭**。
+ * 外审 M6：shell 面的两条 —— **杀树**与 **stdin 关闭**。
  *
  * 两条各自的现场：
  * - 杀树：`destroyForcibly()` 只杀 `sh`/`su` 直接子进程，孙进程（`sh -c "sleep 300 &"`）
@@ -558,7 +558,7 @@ class AndroidShellExecutorReapingTest {
     }
 
     /**
-     * 真 `/proc` + 真 `kill` 的那条（批 99 唯一一条不走替身的用例）—— 与批 95 npm 那侧
+     * 真 `/proc` + 真 `kill` 的那条（ 唯一一条不走替身的用例）—— 与 npm 那侧
      * 「真进程树」用例同款分工：替身钉**顺序与点名**（[RecordingTreeOps]），
      * 这一条钉**`/proc` 面真的能数出孙子**。
      *

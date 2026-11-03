@@ -19,7 +19,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * T1 spawn 桥的**真端到端**（§10.3 T1 下半段，2026-10-10 批 91）。
+ * T1 spawn 桥的**真端到端**（§10.3 T1 下半段）。
  *
  * 链上每一节都是真的：真 `node` 起真 npm CLI → npm 真发 `spawn("sh", ["-c", body])`
  * → shim 经真 unix socket 把帧报给宿主 → 宿主真起子进程 → stdout 经假管道回填 →
@@ -30,7 +30,7 @@ import java.nio.file.Path
  * （与 `NpmSpawnGateTest` 真起 node 同一条理由）。而它们在生产里的表现都是
  * 「脚本好像跑了，但什么都没发生」。
  *
- * **不设 `assumeTrue`**（同 [NpmSpawnGateTest] / [T1BridgeNodeTest]，2026-10-10 批 91 定）：
+ * **不设 `assumeTrue`**（同 [NpmSpawnGateTest] / [T1BridgeNodeTest]， 定）：
  * 本仓 jvm-tests 的**前置步骤**就是 `npm --prefix bridge/js ci`（`:app` 的随包任务硬依赖
  * tsc 产物），所以"宿主没有 npm-cli.js"= 环境坏了，不是"诚实跳过"该盖住的情形。
  *
@@ -128,7 +128,7 @@ class T1BridgeE2ETest {
             mapOf("boom" to "node -e \"console.error('BRIDGE-FAILURE-MARK'); process.exit(3)\""),
         )
         val e = assertThrows(AutojsException::class.java) {
-            // OutputSink.None = 没报过流 → 尾部必须进失败详情（老路径，批 94 保留）。
+            // OutputSink.None = 没报过流 → 尾部必须进失败详情（老路径， 保留）。
             runBlocking { executor().execute(op("p3", root, "boom"), ProgressSink {}, OutputSink.None) }
         }
         val msg = e.message ?: ""

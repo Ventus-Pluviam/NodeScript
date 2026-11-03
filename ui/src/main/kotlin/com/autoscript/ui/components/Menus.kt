@@ -202,7 +202,7 @@ private const val MenuGapShadowAlpha = 14f / 255f
 /**
  * 菜单容器**四周**的内边距（`ActionBarPopupWindowLayout` 的 `setPadding(dp(8), …)`）。
  *
- * 自建壳后不再有 M3 自带的 `DropdownMenuVerticalPadding` 可搭车（批 37 借的是它，
+ * 自建壳后不再有 M3 自带的 `DropdownMenuVerticalPadding` 可搭车（ 借的是它，
  * 现在还回来了）：四边都是这同一个数。
  */
 private val MenuSidePadding = 8.dp
@@ -377,7 +377,7 @@ internal fun LayoutCoordinates.centerInRoot(): Offset =
  * @property enabled 挂起中（操作在途）时置 false —— 与行里那些胶囊**同一条口径**，
  *   否则会出现"胶囊灰着、菜单里还能点"的漏口。
  * @property dismissOnClick 点完是否收起菜单（缺省 true）。主题切换那一格是 false ——
- *   切完菜单留着（用户口径）：这一格点下去只是换个配色，菜单里其余的项还得能接着点，
+ *   切完菜单留着：这一格点下去只是换个配色，菜单里其余的项还得能接着点，
  *   收掉会逼用户为"再选一次排序"重开一遍菜单。
  */
 data class MenuAction(
@@ -417,7 +417,7 @@ fun rememberLongPressFeedback(): () -> Unit {
 /**
  * 浮层提示（TG `Bulletin` 的**底部条**那一档：复制回执、操作回执、失败原文都走它）。
  *
- * **为什么要有这个口**（批 44）：此前这些回执是**列表里的一行** —— 它占的正是搜索框
+ * **为什么要有这个口**：此前这些回执是**列表里的一行** —— 它占的正是搜索框
  * 底下那一段，弹一条就把第一张卡往下推一次，读列表时整块在跳。TG 的做法从来不是
  * "插一行"，而是浮在内容之上、自己消失（`Bulletin` 挂在 fragment 的容器里，列表不动）。
  *
@@ -535,7 +535,7 @@ fun ToastNotice(action: ToastAction, modifier: Modifier = Modifier) {
  * 系统里是静默的 —— 没有回执，用户只能靠粘贴来确认自己点没点中。TG 的做法也是弹一句
  * "已复制"再自己消失，这里照那个节奏（1.6s）。
  *
- * **回执画在哪**：批 44 起统一画在外壳的浮层上（[ToastHost]）—— 此前是列表里的一行，
+ * **回执画在哪**：统一画在外壳的浮层上（[ToastHost]）—— 此前是列表里的一行，
  * 弹一条就把列表往下推一次。外壳没装浮层（单测/预览）时 [copy] 静默跳过回执，
  * 剪贴板照写。
  */

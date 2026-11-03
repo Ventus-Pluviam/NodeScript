@@ -13,7 +13,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 
 /**
- * 脚本资源限额的落盘实现（批 107；docs §8.1 · `files/.ns/script-limits.json`）。
+ * 脚本资源限额的落盘实现（docs §8.1 · `files/.ns/script-limits.json`）。
  *
  * **与 [FileScriptEnvStore] 的分工**：那份是 **append-only 账**（用户点出来的历史，
  * 追加 + `force(true)` + replay 收敛），本类是**当前值**（一份覆盖写的单对象）。

@@ -20,7 +20,7 @@ import java.io.OutputStream
  * **对端该连的串是 `"\0" + name`**：Node 的 `net.connect({path})` 见到 NUL 前缀即走
  * abstract namespace（与 `main.cpp` 的 `sun_path[0]=0` 同一手法，§7.8）。
  *
- * **但这个串**不能**经 env 给对端**（2026-10-11 实测缺陷）：JVM 的
+ * **但这个串**不能**经 env 给对端**（实测缺陷）：JVM 的
  * `ProcessBuilder.start()` 在环境变量值里见 NUL 就抛 `Invalid environment variable value`
  * （execve 的 envp 以 NUL 结尾，值里带 NUL 无意义），而 `connectTarget` 正是经
  * [com.autoscript.appservice.npm.NpmT1Bridge.applyEnv] 注入 `AUTOSCRIPT_T1_SOCKET` 的

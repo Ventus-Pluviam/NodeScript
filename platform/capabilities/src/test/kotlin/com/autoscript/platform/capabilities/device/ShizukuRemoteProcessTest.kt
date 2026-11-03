@@ -17,7 +17,7 @@ import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.Test
 
 /**
- * 远端进程那一半的反射面（2026-10-09 真机 bug 的回归用例）。
+ * 远端进程那一半的反射面（真机 bug 的回归用例）。
  *
  * **这些用例为什么非有不可**：真机上 adb 档 100% 不可用，而病因是「从 `process.javaClass`
  * 取方法」—— 正确的写法（从公开接口取）与错法在源码上只差一个表达式，编译、detekt、
@@ -121,7 +121,7 @@ class ShizukuRemoteProcessTest {
 
     @Test
     fun `超时的错误码是 ERR_TIMEOUT，不是 ERR_PERMISSION_DENIED`() {
-        // 2026-10-10 外审第 1 条：超时折成权限码，脚本侧按 `e.error` 分类时会读成
+        // 超时折成权限码，脚本侧按 `e.error` 分类时会读成
         // 「能力未授权或被降级」，进而做出「换通道 / 去能力中心」的错误处置 ——
         // 而超时是「命令发出去了、到点还没回来」，与授权无关。
         val e = assertThrows<AutojsException> {

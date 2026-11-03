@@ -9,7 +9,7 @@ package com.autoscript.domain.npm
  *
  * 信任分级（§10.5）：
  * - [runScript]/[exec]（P1）**不需要审批**：控制台与依赖面板都是**宿主自己的界面**，
- *   敲下这一行的人就是用户本人（2026-10-10 裁定，原「人机分离」审批面已删 —— 见
+ *   敲下这一行的人就是用户本人（裁定，原「人机分离」审批面已删 —— 见
  *   `docs/design-decisions.md`）。判据仍在解析层：纯 JS bin 白名单、路径不许逃出包目录。
  */
 
@@ -332,8 +332,7 @@ interface PackageManagerFacade {
 
     // —— 轻操作（:main Kotlin 直读，零 Node 进程）——
     /**
-     * 把一个项目**声明的**依赖装一份到全局作用域（2026-10-17 用户口径：「依赖去重执行后
-     * 让它把依赖自动放进全局作用域中」）。
+     * 把一个项目**声明的**依赖装一份到全局作用域。
      *
      * 三条刻意：
      * - **取的是项目 `package.json` 里声明的那几条**（`dependencies` + `devDependencies`），
@@ -366,7 +365,7 @@ interface PackageManagerFacade {
 
     /**
      * npm 缓存体积读数（§10.9 第 5 条「per-project `node_modules` + `npm-cache` 尺寸」的
-     * 后半截，2026-10-09 批 87）。
+     * 后半截）。
      *
      * **为什么与 [storage] 分开而不是并进去**：两者的**键空间不同**。`storage()` 是
      * 「每个项目各占多大」（`Map<projectId, …>`），而缓存按内容寻址、**全机只有一份**
@@ -391,7 +390,7 @@ interface PackageManagerFacade {
     /**
      * 按 lock 闭包**回收** npm 缓存（§10.9 第 5 条「包大小管理页」的 cache clean 那颗按钮）。
      *
-     * **不是 `npm cache clean --force`**（用户 2026-10-09 裁定）：§10 整卷的离线能力
+     * **不是 `npm cache clean --force`**（用户 裁定）：§10 整卷的离线能力
      * （`--prefer-offline`、精选种子首装、`offlineGap` 体检）全建在这个缓存上，全清等于把
      * 紧挨着的「按 lock 重装」那颗按钮变成**必须联网**。本口删的是「没有任何项目 lock
      * 需要的那些」，保留集 = **全部项目** lock 闭包的并集（只按当前项目算会删掉别的项目
@@ -447,7 +446,7 @@ interface PackageManagerFacade {
         )
 
     /**
-     * 停掉该项目此刻还在跑的控制台命令（2026-10-11 批 94：控制台「停止」按钮的宿主面）。
+     * 停掉该项目此刻还在跑的控制台命令（控制台「停止」按钮的宿主面）。
      *
      * 回 `true` = 确实取消到了东西；`false` = 没有在跑的（按钮多按一次是 no-op，不是错误）。
      *
@@ -465,7 +464,7 @@ interface PackageManagerFacade {
         )
 
     /**
-     * 控制台 **shell 面**：跑一条 shell 命令（2026-10-09 用户口径：控制台要能执行 shell）。
+     * 控制台 **shell 面**：跑一条 shell 命令。
      *
      * 与 [runConsoleCommand] 并列的第二条执行面，**不走 npm 那条链**：不建事务、不占安装
      * 会话、不碰项目锁 —— shell 命令与依赖树无关。结果同步返回（与轻操作同形），
@@ -496,7 +495,7 @@ interface PackageManagerFacade {
         NpmConsoleSnapshot(firstSeq = sinceSeq, lastSeq = sinceSeq, lines = emptyList(), running = false)
 
     /**
-     * 控制台**命令历史**读数（§10.9 第 3 条，2026-10-10 批 90）：[projectId] 下最近敲过的
+     * 控制台**命令历史**读数（§10.9 第 3 条）：[projectId] 下最近敲过的
      * 若干条，最近的在最前、已按整行去重。
      *
      * 与 [consoleOutput] 是两件事：**那个是环、这个是盘**。环随进程消失，而"关掉控制台
@@ -505,7 +504,7 @@ interface PackageManagerFacade {
      * **按项目分开**：控制台的命令跑在某个项目上（顶部先选项目），历史跟着同一个
      * 作用域走 —— 在 A 项目敲的 `npm install axios` 翻到 B 项目去点，落的是 B 的
      * `node_modules`，而按钮上那行字一模一样。本口问的是"我在这个项目里敲过什么"；
-     * "这个宿主发生过什么"（一次操作的最终结局）2026-10-17 起由系统日志那条去向承载
+     * "这个宿主发生过什么"（一次操作的最终结局）由系统日志那条去向承载
      * （见 `:app-service:npm` 的 `OpLogSink`），不再是这个门面上的一个读口。
      *
      * 缺省实现回空表：未接线的替身零改动即可编译。空表 = "没有历史可补"，
@@ -515,7 +514,7 @@ interface PackageManagerFacade {
     suspend fun consoleHistory(projectId: String): List<String> = emptyList()
 
     /**
-     * 记一条控制台命令历史（写口，2026-10-10 批 90）。
+     * 记一条控制台命令历史（写口）。
      *
      * **写口在调用方而不是执行入口**：历史要记的是**用户敲的那行原文**，而执行入口
      * 拿到的是已定形的东西（shell 面那条只收得到剥掉入口词的正文）。详见
@@ -556,7 +555,7 @@ interface PackageManagerFacade {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 呈现面只读快照（`:ui` 依赖面板；2026-10-09 批 81）
+// 呈现面只读快照（`:ui` 依赖面板）
 //
 // 为什么住 `:domain` 而不是让 `:ui` 直接读 facade：`:ui` 只依赖 `:domain`，
 // 而 `PackageManagerFacade` 的实现住 `:app-service:npm` —— 呈现层够不到实现类。
@@ -594,7 +593,7 @@ data class NpmPanelSnapshot(
  *   两个数字来自不同时刻，而用户看的就是它们之间的关系。
  *   **它不是本项目的**：缓存按内容寻址、跨项目共享（§10.2），故这里给的是同一份全局读数，
  *   呈现层也照这个口径写文案（写「本项目的缓存」是撒谎）。
- * **2026-10-17 起本项目 DTO 里没有配额**（用户口径「取消 512MB 限制」「取消上限设置吧」）：
+ * **本项目 DTO 里没有配额**：
  * 此前这里带 `quotaBytes` / `quotaWarnRatio` 两个字段与 `overQuota` / `quotaWarned` /
  * `quotaFraction` 三个派生量，源头是 `InstallConfig` 里那份 512MB 硬编码。现在**唯一还会
  * 拒安装的资源闸是设备磁盘**（`InstallConfig.minFreeBytes` 那道预检），故这份读数只说

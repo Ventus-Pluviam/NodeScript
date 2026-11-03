@@ -21,11 +21,11 @@ import java.nio.file.StandardCopyOption
  *    `AtomicDeployer` + `InstallCoordinator` 的职责，它们有 sha256/journal/审批链路）。
  *    这里的补法只有一条判据 —— 「目标不存在就写」。因此**已存在的文件内容本类不做校验**：
  *    用户手改过的脚本、旧版本残留，一律原样留着（宁可跑旧版，也不静默覆盖用户的东西）。
- * 2. **没有清单就是没得补**。`sources` 是"项目号 → (项目内相对路径 → 字节)"（批 109 起
+ * 2. **没有清单就是没得补**。`sources` 是"项目号 → (项目内相对路径 → 字节)"（
  * 键与内层键分别是 [ProjectId] 与 [RelPath]，**类型即判据**：装不进这张表的条目在构造期
  * 就被拒，本类运行期不再判形态），
  *    而框架**没有内置脚本模板机制**（没有脚手架/生成器；assets 下有多少 `scripts/<id>/`
- *    就有多少，2026-10-02 起随包一个示例 `scripts/demo/`，是给人照抄的样本不是模板系统）。
+ *    就有多少，随包一个示例 `scripts/demo/`，是给人照抄的样本不是模板系统）。
  *    调用方给空映射 = 本次没补任何东西；[deployed] 会如实是 0，**不粉饰成"已恢复"**。
  *    `script-repo` 的 `AndroidAssetsSource` 是 `sources` 的生产提供方之一（首批内置脚本），
  *    但补部署的判据与它无关 —— 谁来喂、喂多少，本类都只做同一件事。
@@ -51,7 +51,7 @@ class ScriptDeployRecovery(
     /**
      * 一个补上的文件。
      *
-     * **两个字段都带类型**（批 109）：到这一步它们已经过了判据 —— [relPath] 尤其要紧，
+     * **两个字段都带类型**：到这一步它们已经过了判据 —— [relPath] 尤其要紧，
      * 因为它刚刚被拿去拼过目标路径。
      */
     data class Deployed(val projectId: ProjectId, val relPath: RelPath, val target: Path)
@@ -100,7 +100,7 @@ class ScriptDeployRecovery(
     /**
      * 目标路径。
      *
-     * **批 109 起不再有 `Path?` 这一支**：非法相对路径在 [RelPath] 的构造期就被拒了，
+     * **不再有 `Path?` 这一支**：非法相对路径在 [RelPath] 的构造期就被拒了，
      * 而 [sources] 的键类型要求元素**已经是** [RelPath] —— 类型把「一个坏条目」这个状态
      * 从「运行时才判断」挪到了「装不进这张表」。装配层要喂非法条目，得在**构造 sources 时**
      * 就被拒，那正是该拒的地方（见 [AppShellKit] 侧的接线）。

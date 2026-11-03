@@ -34,7 +34,7 @@ interface ForegroundOps {
      * 只有 Application 有（见 [ForegroundServiceBase] 的 KDoc），Intent 是唯一通道。
      * 而契约缺任何一项，服务侧只能**拒收**（不许凭空编一个 token 去记账），代价是那条
      * `startForegroundService` 的窗口没人认领 —— **系统会连整个进程一起杀掉**
-     * （2026-10-02 真机实测：界面在前台、进程 30 秒后被 ActivityManager 带下，日志
+     * （真机实测：界面在前台、进程 30 秒后被 ActivityManager 带下，日志
      * `Bringing down service while still waiting for start foreground`）。
      * 所以这两个参数是保活能否成立的前提，不是可选装饰。
      *
@@ -97,7 +97,7 @@ object ForegroundHost {
  *
  * **先 `startForeground` 再记账**（顺序不可反）：`startForegroundService` 拉起服务后，
  * 系统给 5 秒窗口要求服务进入前台，超时即 **ANR/连进程一起杀**（不是"服务起不来"这么轻
- * —— 2026-10-02 真机实测：界面在前台，30 秒后进程消失）。所以本类**任何**一条
+ * —— 真机实测：界面在前台，30 秒后进程消失）。所以本类**任何**一条
  * ACTION_START 分支都要走到 `activateForeground()`，包括契约不完整那条（保命优先，
  * 记账另说）。而记账（取 wakelock）是本地操作、
  * 不会失败在这个窗口上；反过来先记账再进前台，一旦进前台失败就会留下"账上说保活、
@@ -117,7 +117,7 @@ abstract class ForegroundServiceBase : Service() {
                 // 期限三态，别压成一个布尔：**-1 = extra 压根没来**（契约不完整）；
                 // **0 = 无期限**（框架 token 的形态）；>0 = 到期时刻。`WakeLockLedger.hold`
                 // 只接受 null 或 >0，把"无期限"错判成非法会让框架保活永远起不来 ——
-                // 而"永远起不来"正是本类 2026-10-02 之前的状态。
+                // 不轮询的话它就是"永远起不来"。
                 val timeout = intent.getLongExtra(
                     ForegroundKeeper.EXTRA_TIMEOUT_MILLIS,
                     ForegroundKeeper.TIMEOUT_MISSING,

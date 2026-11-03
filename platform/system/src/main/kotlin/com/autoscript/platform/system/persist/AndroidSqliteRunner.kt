@@ -33,7 +33,7 @@ import android.database.sqlite.SQLiteOpenHelper
 class AndroidSqliteRunner(
     context: Context,
     /**
-     * 库文件名（**构造参数**，批 102 P4 阶段 B 加）。
+     * 库文件名（**构造参数**， 加）。
      *
      * 原来是硬编码 `autoscript-intent-log.db`。两份存储（意图日志 / 运行档案 / 任务注册表）
      * 共用这一个执行体，而**共用同一个库文件是最难查的一类错** —— 它们会互相看到对方的表，
@@ -125,13 +125,13 @@ class AndroidSqliteRunner(
     }
 
     companion object {
-        /** 意图日志库（缺省，保持批 78 以来既有文件名不变 —— 改它会让老设备重开空库）。 */
+        /** 意图日志库（缺省，保持 以来既有文件名不变 —— 改它会让老设备重开空库）。 */
         const val DB_NAME_INTENT_LOG: String = "autoscript-intent-log.db"
 
-        /** 运行档案库（批 102 阶段 B 新增，与意图日志分文件）。 */
+        /** 运行档案库（ 阶段 B 新增，与意图日志分文件）。 */
         const val DB_NAME_RUN_ARCHIVE: String = "autoscript-run-archive.db"
 
-        /** 任务注册表库（批 102 阶段 C 新增，与前两者分文件）。 */
+        /** 任务注册表库（ 阶段 C 新增，与前两者分文件）。 */
         const val DB_NAME_TASK_REGISTRY: String = "autoscript-tasks.db"
 
         private const val DB_VERSION = 1

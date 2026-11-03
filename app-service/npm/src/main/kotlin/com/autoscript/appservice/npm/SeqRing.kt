@@ -1,7 +1,7 @@
 package com.autoscript.appservice.npm
 
 /**
- * 有界 seq 环（2026-10-01 D7 自 `InstallCoordinator.kt` 原样外迁）：它不碰协调器的
+ * 有界 seq 环（D7 自 `InstallCoordinator.kt` 原样外迁）：它不碰协调器的
  * 任何状态，是纯数据结构；三条纪律（seq 单调递增、超界丢最旧、空洞可见）见类 KDoc。
  *
  * `A11yEventRing` 是同一形状的另一份（那边服务 a11y 拉取面），两者各自持有自己的

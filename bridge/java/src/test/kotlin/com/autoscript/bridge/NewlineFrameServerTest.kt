@@ -244,7 +244,7 @@ class NewlineFrameServerTest {
         server.close()
     }
 
-    // ── 每连接一个 InputChannelSession（2026-10-06，§9.3） ─────────────
+    // ── 每连接一个 InputChannelSession（§9.3） ─────────────
     //
     // 会话级状态（当前输入通道）必须**按连接**隔离：handler 是全局单例、所有脚本共用
     // 一条桥连接池，字段级会话态会让一个脚本设的通道漏给另一个 —— 静默的跨脚本串扰。
@@ -293,8 +293,8 @@ class NewlineFrameServerTest {
             ).join()
             awaitFrame(b)
             assertTrue(a.toString(StandardCharsets.UTF_8.name()).contains("ADB"))
-            // 新连接是**没设过**（NO_SESSION），不是"缺省 AUTO" —— 通道无缺省（2026-10-06
-            // 用户口径「必须显式传」），会话没设过时调用方必须自己给 channel。
+            // 新连接是**没设过**（NO_SESSION），不是"缺省 AUTO" —— 通道无缺省（
+            //「必须显式传」），会话没设过时调用方必须自己给 channel。
             assertTrue(
                 b.toString(StandardCharsets.UTF_8.name()).contains("NO_SESSION"),
                 "新连接不该继承上一个连接的通道，也不该凭空有个缺省：$b",
@@ -306,7 +306,7 @@ class NewlineFrameServerTest {
 }
 
 /**
- * 外审 M3（2026-10-11 批 98）：**accept 遇瞬时故障不得收掉整条桥**。
+ * 外审 M3：**accept 遇瞬时故障不得收掉整条桥**。
  *
  * 与 `app` 侧 `BridgeSocketListenerAcceptRetryTest` 同一纪律的两个实现面（设备 LocalServerSocket
  * 与本机 TCP）—— 各钉一次，因为它们是**两份独立实现**，修一份不修另一份同样静默死亡。
@@ -368,11 +368,11 @@ class NewlineFrameServerAcceptRetryTest {
 }
 
 /**
- * 外审 M2（2026-10-11 批 100）：在途请求的**字节**闸。
+ * 外审 M2：在途请求的**字节**闸。
  *
  * 病灶：只��**条数**闸（256）。一条请求可以是 8 MiB（`maxFrameBytes`），256 条满配就是
  * 2 GiB 堆 —— 在 minSdk 26 的设备上直接 OOM，而现场看不出是哪条面干的。
- * **条数与字节正交**，必须各设一闸（与批 99 给 zip 加 `MAX_ENTRIES` 同一条纪律）。
+ * **条数与字节正交**，必须各设一闸（与 给 zip 加 `MAX_ENTRIES` 同一条纪律）。
  *
  * 判据：被字节闸拒的那条请求**收到一帧错误**（不是静默丢 —— 静默丢的话脚本只会干等到
  * TTL 超时），而**连接继续服务**后续小请求（拒一条 ≠ 断整条）。

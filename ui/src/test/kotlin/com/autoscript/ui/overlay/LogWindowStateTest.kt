@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 悬浮窗纯状态（2026-10-13）：绑定 / 水位 / 标题归一。
+ * 悬浮窗纯状态：绑定 / 水位 / 标题归一。
  *
  * 钉的是"窗里看到的是谁" —— 绑错 run 等于把 A 脚本的输出说成 B 的，
  * 水位倒退等于"清空了又回来"，都是静默地不对。
@@ -36,7 +36,7 @@ class LogWindowStateTest {
     }
 
     /**
-     * 根层条目（`projectId` = 空串哨兵，2026-10-16 用户裁定「根层可写」）：标题不能渲染成
+     * 根层条目（`projectId` = 空串哨兵，根层可写）：标题不能渲染成
      * `//x.js`。归属过滤仍按 `(projectId, relPath)` 全等 —— 空串照样是**一个**项目号值，
      * 于是根层的执行只跟根层的行对上（不会和某个项目里的同名文件串味）。
      */
@@ -75,7 +75,7 @@ class LogWindowStateTest {
     }
 
     /**
-     * 2026-10-15 用户令「有时点执行日志不显示在悬浮窗上」：**起跑即结算的快速脚本**。
+     * **起跑即结算的快速脚本**。
      *
      * 脚本整个生命周期落在两轮轮询（400ms）之间 —— 在途表从开窗起一次都没见过它，
      * 「结算不解绑」救不到（它从没绑上过）。兜底补绑从行里摘归属：[fallbackRunId]
@@ -88,7 +88,7 @@ class LogWindowStateTest {
         assertEquals(12L, bound.boundRunId, "行里摘出的归属补位，窗口不落空态")
         assertFalse(bound.running, "补绑不代表在途")
         assertFalse(bound.paused)
-        // 补绑后同归属行照常可见；标题**只写路径**（2026-10-15 用户令去掉「· 已结束」）。
+        // 补绑后同归属行照常可见；标题**只写路径**。
         val lines = listOf(line(seq = 1L, runId = 12L), line(seq = 2L, runId = 12L))
         assertEquals(listOf(1L, 2L), bound.visible(lines).map { it.seq })
         assertEquals("/demo/data/test.js", bound.titleText)
@@ -130,7 +130,7 @@ class LogWindowStateTest {
     }
 
     /**
-     * 2026-10-15 用户令「脚本执行完不要自动清理输出」：**结算不解绑**。
+     * **结算不解绑**。
      *
      * 在途表是"正在跑的"这一句 —— run 跑完离开在途表是执行完成，不是「没有这回事」；
      * 一结算就把窗口切回「本次执行未开始」空态，等于把刚跑完的日志在用户眼前自动清掉。
@@ -154,7 +154,7 @@ class LogWindowStateTest {
         // 有行照常可见（水位之上）；没有同归属也不画空态。
         val lines = listOf(line(seq = 1L, runId = 7L), line(seq = 2L, runId = 7L))
         assertEquals(listOf(1L, 2L), done.visible(lines).map { it.seq })
-        // 标题**恒为路径**（2026-10-15 用户令）：跑完/在途/未开始三种态标题一样 ——
+        // 标题**恒为路径**：跑完/在途/未开始三种态标题一样 ——
         // 「在不在跑」由第一颗钮（暂停/继续/重跑三态）自己说，不在路径栏重复。
         assertEquals("/demo/data/test.js", done.titleText)
         assertEquals("/demo/data/test.js", s.titleText)
@@ -202,7 +202,7 @@ class LogWindowStateTest {
     }
 
     /**
-     * 行流归并（2026-10-16 用户报「输入框输进去的数字也没有显示在悬浮窗里」）：
+     * 行流归并：
      * 脚本输出 + 用户输入回显，回显按 `atSeq` 插在**送出那一刻的最后一行**之后。
      *
      * 位置是这条用例的全部意义 —— 回显要是一律缀在末尾，「提示语 → 脚本结果 →
@@ -269,7 +269,7 @@ class LogWindowStateTest {
     }
 
     /**
-     * 拖动：位移相加 + 夹取（2026-10-13 用户报"不跟手"时补的）。
+     * 拖动：位移相加 + 夹取。
      *
      * 钉的是**夹取后不许把窗推出可视区** —— 拖丢了标题栏就再也拖不回来，
      * 而窗外没有任何补救入口。

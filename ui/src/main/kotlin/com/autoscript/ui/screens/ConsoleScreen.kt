@@ -50,12 +50,12 @@ import kotlinx.coroutines.launch
 /**
  * 管理面板内的控制台子页：**命令面**（§10.9 第 3 条「npm 终端视图」）。
  *
- * 2026-10-09 用户口径：「控制台不是放系统日志的地方，是用来执行命令的，比如 npm。
+ * 「控制台不是放系统日志的地方，是用来执行命令的，比如 npm。
  * 或者装的一些依赖会有命令。」此前它是个只读日志查看器 —— 那些日志现在整体搬去了
  * **日志管理**（系统日志 / 脚本输出 / 任务日志三段），控制台只做一件事：**跑命令**。
  *
  * 三条边界写在这一屏上，因为用户在这里最容易误解：
- * - **shell 要显式进模式**（2026-10-09 用户口径：控制台要能执行 shell）：敲 `su` 进
+ * - **shell 要显式进模式**：敲 `su` 进
  *   root（`su -c`）或 `shizuku` 进 adb（Shizuku，身份由 Shizuku 服务进程决定），`exit` 退出。默认模式下
  *   裸命令按**依赖提供的命令**解析（`tsc` / `eslint`…），与 shell 面不混；
  *   模式徽标常驻可见 —— 用户不该在以为敲的是 npm 时把命令送进 root shell；
@@ -71,7 +71,7 @@ import kotlinx.coroutines.launch
  * - 丢包（环容量满丢最老）非零**不藏**：用户看到的不是全部，得知道；
  * - 本批拉满提示可继续拉 —— 措辞是「可能还有」，拉满不等于确实还有；
  * - **在跑就禁用输入行**：重操作会挂起在安装会话上，灰按钮说明「现在不能敲」，
- *   而按下去没反应什么都说明不了。跑动中「执行」位换成「停止」（批 94）——
+ *   而按下去没反应什么都说明不了。跑动中「执行」位换成「停止」——
  *   灰着的这段时间里用户唯一想按的就是它。
  *
  * 游标与累积在 [ConsoleCmdState]（MainActivity 经 `reloadConsoleCmd` 驱动），本屏只画。
@@ -87,7 +87,7 @@ fun ConsoleScreen(
     onSelectProject: (String) -> Unit,
     onDraft: (String) -> Unit,
     onRun: () -> Unit,
-    /** 停掉在跑的命令（2026-10-11 批 94：`state.running` 时「执行」换成「停止」）。 */
+    /** 停掉在跑的命令（`state.running` 时「执行」换成「停止」）。 */
     onStop: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -217,7 +217,7 @@ private fun OutputList(
  *
  * 跑动中（[ConsoleCmdState.canRun] 为 false）整行禁用：见类 KDoc 那条 ——
  * 灰按钮说明「现在不能敲」，按下去没反应什么都说明不了。
- * 但**跑动中「执行」换成「停止」**（2026-10-11 批 94）：一整段时间只有一个可按的键，
+ * 但**跑动中「执行」换成「停止」**：一整段时间只有一个可按的键，
  * 而那时用户最可能想按的是「停」—— 灰掉执行、旁边却没有任何出路，等于把人晾着。
  */
 @Composable
@@ -229,7 +229,7 @@ private fun InputRow(
     history: List<String>,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-        // 历史补全（2026-10-10 批 90）：**草稿为空时**才画 —— 已经在敲字的时候把
+        // 历史补全：**草稿为空时**才画 —— 已经在敲字的时候把
         // 历史顶上来，会把人正在写的那行挤走。点一下 = 把它填进输入框（不直接执行：
         // 历史里那条多半要改一改再跑，直接执行等于替用户按了回车）。
         if (history.isNotEmpty() && state.draft.isEmpty()) {
@@ -251,7 +251,7 @@ private fun InputRow(
                 PillButton("执行", selected = false, enabled = state.canRun, onClick = onRun)
             }
         }
-        // 特权模式徽标（2026-10-09）：**进了模式必须一眼看得见** —— 否则用户以为自己在
+        // 特权模式徽标：**进了模式必须一眼看得见** —— 否则用户以为自己在
         // 默认模式里敲 npm，实际每条都在往 root shell 送（§9.3「三通道必须显式指定」）。
         if (state.mode != ShellConsoleMode.DEFAULT) {
             ToneText(

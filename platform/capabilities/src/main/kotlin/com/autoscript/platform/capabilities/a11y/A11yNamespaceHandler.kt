@@ -61,10 +61,10 @@ import com.autoscript.platform.capabilities.screen.InMemoryInputProvider
  *   非法手势 → ERR_INVALID_PARAM，绝不发往系统服务）；
  * - `canPerformGestures`：无参 → Ok `"true"/"false"`（**按当前会话通道问**，见下）。
  *
- * **输入通道选路（2026-10-06，§9.3；判据见 `design-decisions.md`）**：
+ * **输入通道选路（§9.3；判据见 `design-decisions.md`）**：
  * - `setInputChannel`：payload `{channel:"auto"|"adb"|"root"}` → Ok `"true"`，设**本连接**的
  *   会话通道（`InputChannelSession`，随 [kotlin.coroutines.CoroutineContext] 传播，见其 KDoc）；
- * - **必须显式**（2026-10-06 用户口径「必须显式传，无默认」）：`gesture`/`click`/`longClick`/
+ * - **必须显式**：`gesture`/`click`/`longClick`/
  *   `scroll`/`canPerformGestures` 的 payload **必须**带 `channel`，或先 `setInputChannel` 设过
  *   会话值；**两者都没有 → `ERR_INVALID_PARAM`**。刻意不设 `auto` 缺省：预置缺省等于
  *   「什么都没说 = 走了无障碍」，而三者可观测后果不同（见 [InputChannel] 的 KDoc）。
@@ -75,7 +75,7 @@ import com.autoscript.platform.capabilities.screen.InMemoryInputProvider
  *   等于让脚本作者以为在测 A 实际在测 B。
  * - `click`/`longClick`/`scroll` 在 `auto` 通道走**节点语义动作**（`ACTION_CLICK` 等）；
  *   在 `adb`/`root` 通道**没有节点语义可用**，改为解出节点 bounds 再按坐标注入
- *   （`tap` 中心 / 按方向滑一条）。**这条映射未在真机上验过**（设备道 2026-10-06 已裁，
+ *   （`tap` 中心 / 按方向滑一条）。**这条映射未在真机上验过**（设备道已裁，
  *   见 backlog B3/E3）—— 语义上是「点这个控件所在的位置」，不是「对这个控件发 action」。
  */
 class A11yNamespaceHandler(
@@ -262,7 +262,7 @@ class A11yNamespaceHandler(
      * 本次调用的通道：payload 的 `channel`（单次覆盖）→ 会话当前值（`setInputChannel` 设的）
      * → **两者都没有就抛**（`IllegalArgumentException` → `ERR_INVALID_PARAM`）。
      *
-     * **没有缺省**（2026-10-06 用户口径「必须显式传，无默认」）：本仓别处的「不传即用缺省」
+     * **没有缺省**：本仓别处的「不传即用缺省」
      * 在这里**刻意不成立** —— 三者可观测后果不同（见 [InputChannel] 的 KDoc），
      * 静默落 `auto` 等于替脚本决定「这次走无障碍」。会话值是**显式选择的一种**
      * （`setInputChannel` 是脚本自己发的帧），所以它算「说过」；**从没说过**才报错。
@@ -325,7 +325,7 @@ class A11yNamespaceHandler(
      * ACTION_SCROLL_FORWARD 就是「看后面的内容」）。起止点各留 1/4 边距，避免从节点边缘
      * 起划被相邻控件吃掉。
      *
-     * **未真机验证**：设备道 2026-10-06 已裁（backlog B3/E3），这条映射是照惯例写的，
+     * **未真机验证**：设备道已裁（backlog B3/E3），这条映射是照惯例写的，
      * 真机上第一次用就该拿它跟 auto 通道的行为对一遍。
      */
     private suspend fun swipeNode(ref: HandleRef, direction: ScrollDirection, channel: InputChannel): Boolean {

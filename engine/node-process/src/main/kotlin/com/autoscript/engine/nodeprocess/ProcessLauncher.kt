@@ -42,7 +42,7 @@ interface SpawnedProcess {
     fun destroyForcibly()
 
     /**
-     * OS 级冻结（SIGSTOP；2026-10-13 执行暂停）：进程原地停住，可被 [resumeExecution] 解冻。
+     * OS 级冻结（SIGSTOP）：进程原地停住，可被 [resumeExecution] 解冻。
      *
      * 信号走 `kill` 二进制（toybox，`ProcOps` 同手法）—— JVM 没有"按 pid 发信号"的 API
      * （`ProcessHandle` 不在 android.jar 桩面），本模块又禁依赖 `:platform:*`
@@ -55,8 +55,7 @@ interface SpawnedProcess {
     fun resumeExecution(): Boolean = false
 
     /**
-     * 往子进程 **stdin 写一行**（2026-10-16 用户令：悬浮窗底部输入框 → 脚本的
-     * `process.stdin`）。自动补一个 `\n` —— 调用方的语义是"送一行"，行边界只在这里定。
+     * 往子进程 **stdin 写一行**。自动补一个 `\n` —— 调用方的语义是"送一行"，行边界只在这里定。
      *
      * **为什么走 OS 管道而不是桥**：脚本读输入的原生写法就是 `process.stdin`
      * （`readline`/`on('data')` 都建在它上面），宿主替它另开一条面等于让脚本改写法。
@@ -72,7 +71,7 @@ interface SpawnedProcess {
     fun writeStdin(line: String): Boolean = false
 
     /**
-     * **关掉子进程 stdin 的写端**（发 EOF；2026-10-16 用户令「答完自己退」）。
+     * **关掉子进程 stdin 的写端**（发 EOF）。
      *
      * 语义就是终端的 Ctrl-D：管道读端（脚本的 `process.stdin`）收到流结束 ——
      * `readline` 随之发 `'close'`、脚本里 `process.stdin.on('end')` 也照常触发，
@@ -125,8 +124,8 @@ private val jdkProcessPidMethod: java.lang.reflect.Method? = try {
 }
 
 /**
- * 私有字段 `pid` 的反射查找（2026-10-11 批 97，外审 M5 的**第二级阶梯**；
- * 2026-10-15 方向订正 —— 见下）。
+ * 私有字段 `pid` 的反射查找（外审 M5 的**第二级阶梯**；
+ * 方向见下）。
  *
  * 为什么加这一级：`pid()` 方法**不在 Android 平台 API 表里**（`api-versions.xml` 实查，
  * android-36 的 `java/lang/Process` 仍只有 destroy/isAlive/waitFor 那几个），minSdk 26 ——
@@ -135,14 +134,14 @@ private val jdkProcessPidMethod: java.lang.reflect.Method? = try {
  * （`peerPid != null && spawn.pid != null` 两条件），**悬浮窗「暂停」也恒回 false**
  * （`pauseExecution` 第一句就是 `val target = pid ?: return false`）。
  *
- * **方向订正（2026-10-15，设备实测）**：原实现从 `Process::class.java` 起步、每轮
+ * **方向订正（设备实测）**：原实现从 `Process::class.java` 起步、每轮
  * `cls.superclass` 往上走 —— 而 `getDeclaredField` **只看该类自己声明的成员**，
  * 于是这条循环走的是 `Process → Object`，**永远够不着子类**。设备 libcore 的真实形状是
  * 字段声明在**子类**上（Android 13 `core-oj.jar` 反编译实证：`java.lang.UNIXProcess`
  * 有 `private final int pid`，而 `java.lang.Process` 一个字段都没有；
  * 桌面 JDK 同形 —— `java.lang.ProcessImpl.pid`），所以这条阶梯**从来没生效过**。
- * 与批 95 的 `ProcOps.pidOf` 同一手法（那处从**运行时类** `process.javaClass` 起步，
- * 方向本来就是对的）—— 批 105 起那处住 `:platform:process`（两份副本合并），
+ * 与 `ProcOps.pidOf` 同一手法（那处从**运行时类** `process.javaClass` 起步，
+ * 方向本来就是对的）—— 那处住 `:platform:process`（两份副本合并），
  * 本模块这份**仍留**：`:platform:*` 是引擎的下层，引擎不得反向依赖它
  * （§6 + 本模块 ArchitectureTest 黑名单），一份纯反射阶梯的拷贝比那条越界依赖便宜。
  *
@@ -264,7 +263,7 @@ class ProcessBuilderLauncher : ProcessLauncher {
         }
 
         /**
-         * `kill -STOP <pid>`（2026-10-13）：pid 为 null（旧 API 反射拿不到）或
+         * `kill -STOP <pid>`：pid 为 null（旧 API 反射拿不到）或
          * `kill` 二进制缺席时回 false —— 冻不住就如实说，不猜。`waitFor` 等信号送达：
          * exit 0 才算送到（toybox 的 kill 对不存在的 pid 非 0，如实回 false）。
          */
@@ -399,10 +398,10 @@ private class StderrTail(
 /**
  * 取子进程 pid（两级反射阶梯：方法 → 私有字段）。
  *
- * 与 `:platform:process` 的 `ProcOps.pidOf`（批 105 的合并落点）同一手法、同一理由，
+ * 与 `:platform:process` 的 `ProcOps.pidOf`（合并落点）同一手法、同一理由，
  * 仍抄一份在本地：**两处抽不出共享模块** —— 引擎在 `:platform` 之上，反向依赖即破 §6 依赖
  * 方向（本模块 ArchitectureTest 把 `com.autoscript.platform..` 钉在黑名单里）。
- * **两份的方向都对**（都从运行时类起步）；引擎这份 2026-10-15 才改对，`ProcOps` 那份一直是对的
+ * **两份的方向一致**（都从运行时类起步）。
  * —— 这正说明"手法同款、代码两份"的真实代价：**一处抄漏一行，另一处不会红**。
  *
  * @return null = 运行时两个 tier 都探不到（诚实 noPid，**绝不给 0/自身**）。

@@ -36,7 +36,7 @@ class PoolSlot internal constructor(
      * 占位代次（docs §7.4 generation 纪律）：每次夺槽 / kill 收归都 +1。
      *
      * **这段 KDoc 曾经写着「[PoolHandle] 获取时记下代次；release 时对不上即过期句柄」，
-     * 那两句现在都不成立**（2026-10-12 订正，批 103 P2 之后）：[PoolHandle] 根本不再
+     * 那两句现在都不成立**（订正， 之后）：[PoolHandle] 根本不再
      * 持有代次，而 release 也**不再拿它判过期** —— 过期判据换成了 [PoolLease] 的 CAS
      * 归还权（归还恰好一次），过期句柄在**物理上**到不了本槽位。
      *
@@ -97,7 +97,7 @@ class PoolSlot internal constructor(
     }
 
     /**
-     * **归还**（2026-10-12 批 103 P2）：队列化之后，槽回到空闲队列**之前**由 lease 调它。
+     * **归还**：队列化之后，槽回到空闲队列**之前**由 lease 调它。
      *
      * **为什么单独一个方法而不是复用 [reuse]**：[reuse] 会走状态机（按 [cause] 归类到
      * STOPPED/CRASHED 再回收 IDLE），那是**归档**语义（看门狗 kill 之后的归因）；
@@ -112,7 +112,7 @@ class PoolSlot internal constructor(
         state = SlotState.FREE
         busySinceMillis = 0L
         // 归还时状态机必在 STOPPED/CRASHED：`release` 走 quiesce、其余走 forceFree，
-        // 两条都先把它落到终态。**这条断言是有意的探测器**（批 103 首跑就抓到「启动失败那条
+        // 两条都先把它落到终态。**这条断言是有意的探测器**（ 首跑就抓到「启动失败那条
         // 归还路径漏了 reuse」）—— 若某天某条归还路径忘了，症状会是「下一个持有者拿到一个
         // 状态机还悬着的槽」，而这里当场响亮。
         check(statusMachine.status == EngineStatus.STOPPED || statusMachine.status == EngineStatus.CRASHED) {

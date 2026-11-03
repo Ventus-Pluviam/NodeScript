@@ -57,7 +57,7 @@ import kotlin.math.min
  * 右缘滑 → 锚点 `rect.left + dp(82)`（靠左）→ **右边**留缝。
  *
  * **只有松手后的飞出阶段**净位移才真正起作用（`translationX > dp(56)`），本文件按你
- * 2026-10-13 的口径给它加上方向：**左缘滑往右飞出、右缘滑往左飞出**（TG 恒往右，
+ * 方向是定死的：**左缘滑往右飞出、右缘滑往左飞出**（TG 恒往右，
  * 见「有意不等于 TG」第 3 条）。方向由 [netLayerX] 的符号给出，底层的裁剪区间与
  * 灰罩宽度随之镜像。
  *
@@ -106,7 +106,7 @@ import kotlin.math.min
  * 1. **插值用 Bezier 近似**而非 `DecelerateInterpolator(1.5f)` 本身 —— View 体系的
  *    `Interpolator` 在 Compose 侧无对等物，`(0f, 0f, 0.2f, 1f)` 是它的三次曲线近似。
  * 2. **不做 TG 的逐帧 `dt` 钳制**（`:1824-1828`）。那是 View 体系手搓动画循环时的保护。
- * 3. **飞出方向按手指那一侧镜像**（2026-10-13 你给的口径：「手势在左边时，窗口往右边
+ * 3. **飞出方向按手指那一侧镜像**（你给的口径：「手势在左边时，窗口往右边
  *    滑动消失；手势在右边时，窗口往左边滑动消失」）。TG 只有右一个方向 —— 它恒
  *    `setTranslationX(+dx)`（`:1571`），右缘滑也往右退。跟手阶段两者一致（净位移恒 0），
  *    只有松手后的飞出阶段不同。
@@ -240,7 +240,7 @@ internal fun <T> ManagementTransition(
                     // 「滑出屏幕」消失的，不是「淡出」消失的。
                     //
                     // 上一版两条一起跑、alpha 又写成 `progress * (1 - dismiss)`，等于透明度
-                    // 被折了两次 —— 视觉上就是「消失得太快」（用户 2026-10-13 报的那个）。
+                    // 被折了两次 —— 视觉上就是「消失得太快」（）。
                     // 顺带一提：`progress` 若在这段归零，`layerScale` / `backClipRight`
                     // 也会跟着走偏，而 TG 那两路在这段是**冻结**的。
                     dismiss.snapTo(0f)
@@ -350,7 +350,7 @@ internal fun <T> ManagementTransition(
         // 灰罩只跟**露出那一段**走，且 TG 的整块（`:1180`）有 `translationX != 0` 的门：
         // 切出已经结束（`top` 归位前那一瞬 `innerTranslationX` 归 0）就不该再压暗。
         val scrimOn = predictive || innerTranslationX != 0f
-        // **稳态剥壳（2026-10-28 第十四批）**：`top` 完全就位（progress == 1、手势与飞出
+        // **稳态剥壳（第十四批）**：`top` 完全就位（progress == 1、手势与飞出
         // 都归零）时，顶层内容**裸直绘** —— 不挂 `alpha`/`graphicsLayer`/圆角 `clip` 这三层
         // 包装。它们在稳态全是恒等变换（alpha=1/scale=1/translation=0，Compose 1.7 下恒等
         // 值不建离屏层），但 `Modifier.clip` 那层**每帧**都在给整屏滚动内容重做一次圆角
@@ -404,7 +404,7 @@ internal fun <T> ManagementTransition(
         }
         top?.let { over ->
             if (settled) {
-                // **稳态：裸直绘**（2026-10-28，见上面 `settled` 的 KDoc）—— 与首页同构的
+                // **稳态：裸直绘**（见上面 `settled` 的 KDoc）—— 与首页同构的
                 // 一条链路：内容直接落屏幕，没有 alpha/graphicsLayer/圆角 clip 任何一层。
                 // `claimPointerHits` 留在两路里：它是**功能**（挡住触穿到下层面板），
                 // 不是动画。
@@ -437,8 +437,7 @@ internal fun <T> ManagementTransition(
                         }
                     }
                     .matchParentSize()
-                    // **子页在前台时，面板那层不该再收得到触摸**（2026-10-16 用户报
-                    // 「日志管理页点空白进入依赖管理，退出来日志管理退不出来」）：
+                    // **子页在前台时，面板那层不该再收得到触摸**：
                     // 子页的空白处没有手势管，同一坐标在面板层恰是「依赖管理」入口行，
                     // 触摸穿透下去就把它点了 —— 状态机于是被推出两层设计（日志管理
                     // 被顶进 under、依赖管理当了 top），退出路径随之中断。
@@ -600,7 +599,7 @@ private const val SLIDE_DP = 48
  * 驱动的是裁剪 / 遮罩 / 缩放（`:1110` 那道 `translationX != 0` 的门）。
  * 之前把进出场也塞进来，进场第一帧 `innerTranslationX = 48dp ≠ 0` 就把底层裁了、
  * 盖上灰罩、还给窗口套上非手势那条缩放 —— 看着就是「进入时闪一下」（用户
- * 2026-10-13 报的那个）。
+ * 的那类）。
  *
  * 飞出那一项的终点是 `屏宽 + dp(56)`：TG 的 `animateBackEndAnimation(false)` 把
  * `innerTranslationX` 送到 `measuredWidth`、同时把 `containerView` 自己的
@@ -626,7 +625,7 @@ internal fun topLayerX(
  *
  * 手势期间 `translationX ≤ dp(56)`，所以幅度恒为 **0** —— 跟手时窗口不左右动，只缩放
  * （与 TG 一致）。切出飞行阶段 `translationX > dp(56)`，幅度才增长，符号把它送向手指
- * 那一侧：**左缘滑 → 往右滑出屏；右缘滑 → 往左滑出屏**（用户 2026-10-13 口径）。
+ * 那一侧：**左缘滑 → 往右滑出屏；右缘滑 → 往左滑出屏**。
  *
  * TG 只有一个方向 —— 它恒 `setTranslationX(+dx)`（`:1571`），右缘滑也一样往右退；
  * 那是 TG 自己的取舍。见文件头「有意不等于 TG」第 3 条。

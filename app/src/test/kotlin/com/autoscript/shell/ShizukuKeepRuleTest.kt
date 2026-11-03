@@ -8,13 +8,13 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * Shizuku 反射面 ↔ R8 keep 规则的对齐门（backlog 外审第 6 条，2026-10-10）。
+ * Shizuku 反射面 ↔ R8 keep 规则的对齐门（backlog 外审第 6 条）。
  *
  * **它挡的是什么**：`ShizukuInput` 全程按**字符串**找类、找方法（`Class.forName` /
  * `getMethod`），R8 看不见这些引用 —— release 包上名字一改，表现是「能力静默失效」
  * （不崩、不报错，只是永远走不通那条分支），而 debug 包不过 R8，**本机全绿**。
  * 两条规则分居两个模块（反射面在 `:platform:capabilities`，keep 规则在 `:app`），
- * 谁都不知道对方改了没有 —— 2026-10-09 那次真机 bug 正是这个形态的变体：
+ * 谁都不知道对方改了没有 —— 真机 bug 正是这个形态的变体：
  * keep 里保的是 `rikka.shizuku.ShizukuRemoteProcess.waitForTimeout(long, TimeUnit)`，
  * 而真跑的那条路径反射的是 `moe.shizuku.server.IRemoteProcess.waitForTimeout(long, String)`
  * —— 保错的那条**正好掩盖了**跑错的那条。

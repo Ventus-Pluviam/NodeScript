@@ -52,7 +52,7 @@ class ControllerRunDispatcher(
     /** 分级表（§8.6 铁律 3）；测试注入小值，避免为了验边界真等十几秒。 */
     private val queueTimeoutFor: (TriggerSource) -> Long = DEFAULT_QUEUE_TIMEOUTS,
     /**
-     * 崩溃行出口（2026-10-16 用户报「有不支持的函数应该在悬浮窗里输出报错」）。
+     * 崩溃行出口。
      *
      * 病：脚本抛错（`ReferenceError: prompt is not defined` 这类）的**唯一**去处是
      * `RunSummary.stderrTail` —— 它进档案的 `crashSummary`（任务日志/日志管理看得见），

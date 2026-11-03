@@ -67,7 +67,7 @@ class RunIdentityRegistryTest {
             val dead = registry.issue(EngineId(0), 3, testProject, snapshot()).also { it.confirmSpawn(null) { false } }
             assertThrows(AutojsException::class.java) { runBlocking { registry.authenticate(dead.token, null, 3, {}, {}) } }
             assertEquals(0, registry.size())
-            // 外审 M5（批 97）：上面那组里 `4 to null` 那次 = 「宿主 pid 不可得 ⇒ 本次没做
+            // 外审 M5：上面那组里 `4 to null` 那次 = 「宿主 pid 不可得 ⇒ 本次没做
             // pid 绑定」。计数是它唯一的可见信号（静默跳过与度量通过在返回类型上长得一样）。
             assertEquals(1, registry.pidUnavailable, "peer 有 pid 而宿主无 pid 应记一次「未绑定」")
         }
@@ -223,7 +223,7 @@ class RunIdentityRegistryTest {
             assertEquals(TrustTierMasks.UNKNOWN_DEFAULT, mask, "缺来源 = 最保守档（UNKNOWN），不升级成全量")
             assertFalse(mask.contains(BridgeCapability.CROSS_SCRIPT_CONTROL))
             assertFalse(mask.contains(BridgeCapability.CROSS_SCRIPT_OBSERVE))
-            // 批 78：SCHEDULER_WRITE 已从保守档放回 —— 脚本可自建定时任务
+            // SCHEDULER_WRITE 已从保守档放回 —— 脚本可自建定时任务
             // （`workManager` 是 §14 P0 闭环；跨脚本那一位仍由 authorizeCreate 的
             //  authorizeStart 单独拦着，不靠这一位）。
             assertTrue(mask.contains(BridgeCapability.SCHEDULER_WRITE))

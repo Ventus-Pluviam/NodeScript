@@ -7,7 +7,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 /**
- * 脚本执行的**输出日志持久化**（2026-10-13 用户令；`filesDir/.ns/script-logs/`）。
+ * 脚本执行的**输出日志持久化**（`filesDir/.ns/script-logs/`）。
  *
  * 用户要的是两件事：脚本跑的时候有个悬浮窗实时看日志；跑完（或中途）去日志管理页
  * 「脚本输出」那一栏按**每次执行**找到这次的输出 —— 控制台那份内存里的
@@ -100,7 +100,7 @@ class ScriptLogStore(
          * JSON 字符串字面量：**两端补引号** + 转义（引号/反斜杠/控制字符）。
          *
          * 名字与形状都跟 `ConsoleHistory.q` / `InstallJournal.q` 对齐（那两份都是
-         * 「补引号 + 转义」）—— 2026-10-14 之前这里只转义、不补引号，writer 于是写出
+         * 「补引号 + 转义」）—— 只转义、不补引号的话 writer 会写出
          * `{"run":7,"project":demo,...}`：**不是合法 JSON**，读侧 `stringField`
          * 找 `"project":"` 恒落空 → 每一行 index 都解析失败、列表恒空（CI 上 6 条全红）。
          *

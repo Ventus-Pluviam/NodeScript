@@ -274,7 +274,7 @@ class NodeProcessEngineRealSpawnTest {
     private fun outOf(args: List<String>): Path = Path.of(args[0])
 
     /**
-     * stdin 送行（2026-10-16 用户令：悬浮窗底部输入框 → 脚本的 `process.stdin`）。
+     * stdin 送行。
      *
      * 钉三件，都是**真管道**上的事实（假缝钉不了 —— `SpawnedProcess.writeStdin` 的
      * 全部内容就是"往那个 OutputStream 写并 flush"）：

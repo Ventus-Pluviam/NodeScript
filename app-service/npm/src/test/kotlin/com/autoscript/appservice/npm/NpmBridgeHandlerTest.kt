@@ -209,7 +209,7 @@ class NpmBridgeHandlerTest {
             "p1",
             """{"lockfileVersion":3,"packages":{"":{},"node_modules/a":{"version":"1.0.0","integrity":"sha512-x"}}}""",
         )
-        // 已装清单是「声明 ∩ 锁」的直接依赖视界（2026-10-29）：声明段是清单的全量闸，
+        // 已装清单是「声明 ∩ 锁」的直接依赖视界：声明段是清单的全量闸，
         // bridge 层这条也走同一视界，故这里先有锁、再有声明。
         Files.write(
             layout.projectRoot(ProjectId("p1")).resolve("package.json"),

@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * [FileScriptLimitsStore] 的持久化契约（批 107；docs §8.1「脚本资源限额」）。
+ * [FileScriptLimitsStore] 的持久化契约（docs §8.1「脚本资源限额」）。
  *
  * 这份与 [FileScriptEnvStoreTest] 是**不同族**的测试：那份验的是 append-only 账
  * （重放收敛 / 半行容忍），本份验的是**当前值**的三件 —— 覆盖写、缺省回填、形状不对响亮失败。

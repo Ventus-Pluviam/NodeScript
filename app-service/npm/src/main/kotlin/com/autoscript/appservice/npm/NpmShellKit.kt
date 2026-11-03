@@ -55,10 +55,10 @@ object NpmShellKit {
         executor: HeavyOpExecutor = HeavyOpExecutor.Unavailable,
         /** T1 lifecycle 执行体（spawn 桥接上后注入；缺省即"门禁过但跑不起来"）。 */
         scriptExecutor: ScriptOpExecutor = ScriptOpExecutor.Unavailable,
-        /** 控制台 **shell 面**的执行缝（2026-10-09）。缺省 = 未接线 → 如实 ERR_NOT_IMPLEMENTED。 */
+        /** 控制台 **shell 面**的执行缝。缺省 = 未接线 → 如实 ERR_NOT_IMPLEMENTED。 */
         shellExecutor: ShellOpExecutor = ShellOpExecutor.Unavailable,
         /**
-         * 控制台 shell 命令的 TTL（2026-10-09）。缺省与 [InstallCoordinator] 同值；
+         * 控制台 shell 命令的 TTL。缺省与 [InstallCoordinator] 同值；
          * 装配层要改就改这里 —— 参数从这里穿过去，本对象不另存一份判断。
          */
         consoleShellTimeoutMillis: Long = InstallCoordinator.DEFAULT_CONSOLE_SHELL_TIMEOUT_MILLIS,
@@ -72,7 +72,7 @@ object NpmShellKit {
          * **必须由调用方给**：本模块是纯 JVM，够不着 `android.util.Log`，而
          * 「操作事实进系统日志」的生产实现（`HostLog`）住 `:app`。缺省
          * [OpLogSink.None] 是给测试替身留的（与其余缝同形），生产装配**不许**用缺省
-         * —— 用了的表现是「装完了什么都没留下」，而那正是 2026-10-17 用户令要的东西。
+         * —— 用了的表现是「装完了什么都没留下」。
          */
         opLog: OpLogSink = OpLogSink.None,
     ): NpmBridgeHandler {
@@ -89,7 +89,7 @@ object NpmShellKit {
             journal = InstallJournal(nsDir),
             staging = InstallStaging(layout),
             opLog = opLog,
-            // 控制台命令历史（2026-10-10 批 90）：**可修剪**的便利缓存
+            // 控制台命令历史：**可修剪**的便利缓存
             // （见 ConsoleHistory 的类 KDoc）—— 与操作事实那条去向是两回事：
             // 前者落盘、有保留策略；后者只交出去，落不落、落哪儿由去向定。
             consoleHistory = ConsoleHistory(nsDir),
@@ -106,13 +106,13 @@ object NpmShellKit {
                 scriptExecutor = scriptExecutor,
                 shellExecutor = shellExecutor,
                 consoleShellTimeoutMillis = consoleShellTimeoutMillis,
-                // 全局镜像源（§10.2 userconfig 层，2026-10-09 批 83）：与喂给 npm 的
+                // 全局镜像源（§10.2 userconfig 层）：与喂给 npm 的
                 // `--userconfig` 是**同一个文件** —— 解析链读到的与 npm 读到的必须是同一份，
                 // 否则「界面显示生效了」与「npm 真去哪家」又会分家。
                 globalConfig = NpmGlobalConfig(filesDir),
                 // 离线 bundle 导入的落点此前是第三个目录（协调器的 projectsRoot 同级兜底）：
                 // 导入说「合入缓存了」、`ci --offline` 却查 `cacheDir/npm-cache` —— 两处都
-                // 不报错，只是不命中。这里把同一份判据喂进去（2026-10-09 批 86）。
+                // 不报错，只是不命中。这里把同一份判据喂进去。
                 npmCacheDir = NpmCacheSeedDeployer.cacheRoot(cacheDir),
                 freeSpaceProbe = freeSpaceProbe,
             ),
@@ -121,7 +121,7 @@ object NpmShellKit {
 
     /** 缺省磁盘探针：项目目录在 install 前本来就不存在（不判存在会读出 0），退到 filesDir ——
      * 同分区同答案（§10.2 磁盘预检问的是分区余量，不是"项目目录在不在"）。
-     * **读法本身在 [FreeSpace]**（那里记着 2026-10-17 设备实测：`Files.getFileStore` 在
+     * **读法本身在 [FreeSpace]**（那里记着 设备实测：`Files.getFileStore` 在
      * Android 上抛 `UnsupportedOperationException("getFileStore")`，整条装依赖路走不通）。
      * 可注入覆盖：单测 @TempDir 落在 tmpfs 上（CI/沙箱 /tmp 常被占满），真探会让"重操作诚实
      * ERR_NOT_IMPLEMENTED"的用例先撞 ERR_DISK_FULL —— 探针是环境敏感缝，测试固定值。 */

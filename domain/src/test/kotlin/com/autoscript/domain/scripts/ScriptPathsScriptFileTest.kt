@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * [ScriptPaths.scriptFile] 的读侧判据（外审 M1 收口，2026-10-12）。
+ * [ScriptPaths.scriptFile] 的读侧判据（外审 M1 收口）。
  *
  * 为什么这些用例值得单独钉：改之前这个方法**一个字都不校验**，
  * `scriptFile(d, "p", "../../databases/app.db")` 返回的就是那条真实路径 —— 而
@@ -19,7 +19,7 @@ class ScriptPathsScriptFileTest {
 
     /**
      * 收 [RelPath] —— 构造失败即「判据拒了这条路径」，与判据在 `ScriptPaths.scriptFile`
-     * 里是同一套（批 109 起它就在 [RelPath] 的 `init` 里，故本 helper 抛的正是同一个 IAE）。
+     * 里是同一套（它就在 [RelPath] 的 `init` 里，故本 helper 抛的正是同一个 IAE）。
      * 下面那些「被拒」用例测的是**判据本身**，不再测拼装处还有没有第二道闸。
      */
     private fun f(filesDir: Path, p: String): Path =
@@ -66,7 +66,7 @@ class ScriptPathsScriptFileTest {
     }
 
     /**
-     * 非法路径**在构造期**就被拒（批 109 把判据搬进了值类的 `init`）：这里断言的是
+     * 非法路径**在构造期**就被拒（ 把判据搬进了值类的 `init`）：这里断言的是
      * [RelPath] 的构造，而不是 `scriptFile` 里还有没有闸 —— 同一个 IAE，位置换了。
      */
     @Test
@@ -77,7 +77,7 @@ class ScriptPathsScriptFileTest {
         assertThrows(IllegalArgumentException::class.java) {
             ScriptPaths.scriptFile(filesDir, ProjectId("p.1"), RelPath("main.js"))
         }
-        // 样本自 2026-10-16 起从 `p 1`（含空格，现在合法了）换成 `p\\1`（反斜杠仍非法）。
+        // 样本从 `p 1`（含空格，现在合法了）换成 `p\\1`（反斜杠仍非法）。
         assertThrows(IllegalArgumentException::class.java) {
             ScriptPaths.scriptFile(filesDir, ProjectId("p\\1"), RelPath("main.js"))
         }

@@ -75,9 +75,9 @@ import kotlinx.coroutines.launch
  * - **系统日志**：宿主自己的行（`runId == 0`，即 [ConsoleLineState.external]）——
  *   装配、恢复、闹钟与保活事件；
  * - **脚本输出**：脚本进程的 console 输出（`runId != 0`）**+ 在途执行块置顶**（带「停止」）。
- *   这一段原先是控制台的全部内容 —— 2026-10-09 用户口径「日志搬去日志管理」，
+ *   这一段是控制台的全部内容搬过来的 ——
  *   控制台改做命令面（§10.9 第 3 条），日志一行不少地落到这里；
- * - **任务日志**：全部项目的终态执行历史（原先项目页里的「历史」子页，2026-10-07 用户口径
+ * - **任务日志**：全部项目的终态执行历史（原先项目页里的「历史」子页 ——
  *   搬到这里，并从「某个项目」改成「全部项目」—— 每行带 `项目 / 脚本`）。
  *
  * **日志归属**：脚本桥连接认证后绑定 engineRunId，console 输出按执行归属显示；
@@ -87,7 +87,7 @@ import kotlinx.coroutines.launch
  * 读取与刷新由外壳驱动（进入本页/回前台/手动刷新）；本屏只画，状态原样来自 [ConsoleState]
  * 与 [TaskLogState]（控制台游标与累积行与本页共用一份，读失败保留已读到的行）。
  *
- * 「停止」回执走外壳浮层（批 44 的三态判读 [stopToastMessage]）：此前它是控制台列表顶上
+ * 「停止」回执走外壳浮层（三态判读 [stopToastMessage]）：此前它是控制台列表顶上
  * 插的一行，插进来会把日志整体往下推一次。判读是纯层、可 JVM 测。
  */
 @Composable
@@ -112,7 +112,7 @@ fun LogManagementScreen(
             else -> onRefreshConsole()
         }
     }
-    // 停止三态走外壳浮层（批 44）：键是**解析出的那一句** —— 同一句连着出现不重弹，
+    // 停止三态走外壳浮层：键是**解析出的那一句** —— 同一句连着出现不重弹，
     // 换了一句才弹。停止的回执与读账分开（停失败不清已读到的行）。
     val toast = LocalToast.current
     val stopToast = stopToastMessage(consoleState.stopError, consoleState.stopNotice, consoleState.stopInFlight)
@@ -213,7 +213,7 @@ private fun SystemLogList(state: ConsoleState, lines: List<ConsoleLineState>, mo
 }
 
 /**
- * 「脚本输出」段（2026-10-13 用户令）：**按执行一条**的日志文件列表 + 在途执行块置顶。
+ * 「脚本输出」段：**按执行一条**的日志文件列表 + 在途执行块置顶。
  *
  * 一条 = 一次执行（标题 `/<project>/<path>`，左文件类型图标，右启动时间 + 大小；
  * 还在跑画「运行中」）。点一行进详情（该次执行的落盘全文，`LogLineRow` 同款行）。
@@ -443,7 +443,7 @@ private fun TaskLogRow(run: TaskLogRowState, onCopy: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Text(
-            // 根层条目没有项目段：`projectLabel` 把它显示成「根目录」（2026-10-16）。
+            // 根层条目没有项目段：`projectLabel` 把它显示成「根目录」。
             "${ScriptPaths.projectLabel(run.projectId)} / ${run.scriptPath}",
             style = MaterialTheme.typography.titleMedium,
             color = ThemeColors.text,
@@ -458,7 +458,7 @@ private fun TaskLogRow(run: TaskLogRowState, onCopy: () -> Unit) {
 }
 
 /**
- * 一次执行的日志条目（一行 = 一次执行；2026-10-13 用户令）。
+ * 一次执行的日志条目（一行 = 一次执行）。
  *
  * 版式 = 文件行：左 44dp 文件类型图标（与任务头像同档，TG 联系人行那一格），
  * 中标题 + 启动时间，右大小 / 运行中。点行进详情（`onClick`）。
@@ -502,7 +502,7 @@ private fun ScriptLogEntryRow(
 }
 
 /**
- * 一次执行的日志详情（点列表行进来；2026-10-13 用户令）。
+ * 一次执行的日志详情（点列表行进来）。
  *
  * 内容经 [onReadScriptLog] 挂起拉取（`HostSummary.scriptLogContent`，
  * 截尾 2000 行）。三落点：未读 → 空态；失败 → 原因（保留上次读到的行）；
@@ -517,11 +517,11 @@ private fun ScriptLogDetail(
     modifier: Modifier = Modifier,
 ) {
     val copy = rememberCopyAction()
-    // **load 与行内容都不放进 rememberSaveable**（2026-10-15 真机闪退）：`LoadState` 的
+    // **load 与行内容都不放进 rememberSaveable**（真机闪退）：`LoadState` 的
     // 三态是 `data object`/`data class`（`NotLoaded`/`Loaded` 是单例对象、`Failed` 是数据类），
     // **都不是 Bundle 认得的类型**（不是 Serializable/Parcelable）—— 详情一组合，saveable
     // 注册表对现值做 canBeSaved 直接拒（`requireCanBeSaved` 抛 IllegalArgumentException），
-    // 异常冒到进程 →「日志管理 → 脚本输出 → 点一行」必闪退（用户报）。
+    // 异常冒到进程 →「日志管理 → 脚本输出 → 点一行」必闪退。
     // 详情是**屏内局部现值**（返回即弃），不跨配置存活 —— 两个都改 `remember`：
     // 配置重建重新拉一次，成本只是一次本地文件读。`LoadState` 注释里那句
     // "界面不自己 when"的纪律不受影响（三态仍在屏内）。

@@ -1,7 +1,7 @@
 package com.autoscript.domain.scripts
 
 /**
- * 项目号与项目内相对路径的值类（2026-10-12，批 109；外审「typed ids」那条建议）。
+ * 项目号与项目内相对路径的值类（外审「typed ids」那条建议）。
  *
  * ## 这一项要解决的是什么
  *
@@ -12,7 +12,7 @@ package com.autoscript.domain.scripts
  * 因为拼出来的路径恰好还在项目根之下（`a/b` 既是合法的多段相对路径，也是「项目 `a` 的子目录
  * `b`」）。值类把这条区分搬到**编译期**：构造出来的 [ProjectId] 按定义就不含 `/`。
  *
- * ## 边界收口，不铺开（维护者 2026-10-12 裁断）
+ * ## 边界收口，不铺开
  *
  * 值类只用在**两端**：不可信输入**进**来的那一步、拼路径**出**去的那一步。中间的 DTO 字段
  * （`InstallEvent.projectId`、`RunRecord.scriptPath`、`ScheduledTask.projectId` …）**仍是
@@ -31,7 +31,7 @@ package com.autoscript.domain.scripts
  *   `ScriptPaths.scriptFile` 内联的那份、以及 `ScriptDeployRecovery` 的**私有副本**
  *   （它当初刻意重写，是因为架构门禁禁止 scheduler 依赖同级 app-service 模块）；
  * - 项目号：`ScriptPaths.PROJECT_ID` 与 `FsProjectStore.idPattern`
- *   （后者收 `.` 且限长 64，与前者**不同** —— 批 109 按维护者裁断统一到前者）。
+ *   （后者收 `.` 且限长 64，与前者**不同** ——  按维护者裁断统一到前者）。
  *
  * 三份判据抄在一起，漂的方向最坏：放行的一侧比拒收的一侧宽，于是「界面能敲出来的项目号
  * 落盘时被 `require` 拒」，用户看到的是「执行失败」而不是「这个项目号不合法」。
@@ -45,7 +45,7 @@ package com.autoscript.domain.scripts
  * 就是那个 `require` 在。读回侧要构造 [ProjectId] 就得先过判据 —— 判不过就响亮地抛，
  * 这是本仓一贯的纪律（见 `PackSpec` 的「响亮失败」），不是本批新立的规矩。
  *
- * ## 空串 = 根层哨兵（2026-10-16）
+ * ## 空串 = 根层哨兵
  *
  * [ROOT] 是本类**唯一的例外**：空串不是项目号（[ScriptPaths.isValidProjectId] 对它回
  * false），它是"**没有项目**"的编码 —— `files/scripts/` 本层那些条目（`files/scripts/x.js`）。
@@ -69,7 +69,7 @@ value class ProjectId(val value: String) {
      * 判据收 [ScriptPaths.PROJECT_ID]（唯一一份，见本文件 KDoc），**外加空串这一个哨兵**。
      *
      * 注意判据里**没有 `.`**：原正则 `[A-Za-z0-9._-]+` 收 `.` 与 `..`，而
-     * `projectsRoot.resolve("..")` 正好跳出项目根。批 84 已把它收掉，2026-10-16 放宽
+     * `projectsRoot.resolve("..")` 正好跳出项目根，已把它收掉；放宽
      * 字符集（允许中文等）时**仍然保留** —— 放宽的从来不是防逃逸那一条。
      *
      * 空串放行**只为本类自己的 [ROOT]**：写法上仍推荐用具名常量而不是 `ProjectId("")`

@@ -3,10 +3,10 @@ package com.autoscript.platform.system.shell
 import java.util.logging.Logger
 
 /**
- * shell 捕获输出上限（§9.6）。**2026-10-02 拍板：静默截断 + 显式日志 Warning + 返回截断标志**
+ * shell 捕获输出上限（§9.6）。**拍板：静默截断 + 显式日志 Warning + 返回截断标志**
  *（口径见 `docs/design-decisions.md` 第 21 项）。
  *
- * **病灶**（backlog A2b，2026-10-01 外部审查露出）：`AndroidShellExecutor.PipeReader`
+ * **病灶**（backlog A2b）：`AndroidShellExecutor.PipeReader`
  * 把 stdout/stderr 全量读进内存，`cat` 一个大文件就能把宿主撑爆。加 cap 是**契约口径**
  * 变更 —— 「超限报错」与「截断」两条路都合法、代价不同：前者让合法的大输出直接失败，
  * 后者有损但可用。拍板取后者。

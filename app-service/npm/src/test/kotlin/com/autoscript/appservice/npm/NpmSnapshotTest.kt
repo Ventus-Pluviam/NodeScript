@@ -47,7 +47,7 @@ class NpmSnapshotTest {
         Files.write(nm.resolve("esbuild/package.json"), ("""{"name":"esbuild","scripts":{"postinstall":"node install.js"}}""").toByteArray())
         Files.write(nm.resolve("esbuild/bin.js"), ("console.log(1)\n").toByteArray())
         // ledger 那份要在：导出须一并带上（§10.5-2）。
-        // **审计账不在了**（2026-10-17 用户令「去掉审计」）：`install-history.jsonl`
+        // **审计账不在了**：`install-history.jsonl`
         // 与它的页面一起下线，导出内容里也不该再有它 —— 由下面那条断言钉住。
         Files.createDirectories(ledgerDir)
         Files.write(ledgerDir.resolve("approve-ledger.jsonl"), ("""{"op":"submit","requestId":"apr-1","projectId":"p1","pkg":"esbuild","versionHash":"h","action":"INSTALL_SCRIPT","at":1}""" + "\n").toByteArray())

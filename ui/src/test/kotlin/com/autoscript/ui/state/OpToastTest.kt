@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 /**
- * [opToastMessage]/[stopToastMessage] 的判读规则（批 44 回执搬进浮层后独立出来的一层）。
+ * [opToastMessage]/[stopToastMessage] 的判读规则（ 回执搬进浮层后独立出来的一层）。
  *
  * 守两件事：**文案逐字**（搬家不是改写 —— 与搬走前的 `FeedbackLine` 行一致）与
  * **优先级**（失败压回执、回执压挂起）。
