@@ -48,8 +48,8 @@ class NpmInstallOpsTest {
         storage = null,
     )
 
-    /** 记录被提交的那一行，并可按需失败 / 按需回一批事件。 */
-    private class PanelHost(
+    /** 记录被提交的那一行，并可按需失败 / 按需回一批事件（open：整段轮询用例要覆写快照）。 */
+    private open class PanelHost(
         private val fail: Throwable? = null,
         private val events: List<InstallEvent> = emptyList(),
     ) : FakeHost() {

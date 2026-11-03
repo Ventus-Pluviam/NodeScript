@@ -22,8 +22,8 @@ import org.junit.jupiter.api.Test
  */
 class ConsoleCmdOpsTest {
 
-    /** 只实现控制台那几条的替身；其余成员继承 [FakeHost] 的响亮失败。 */
-    private class CmdHost(
+    /** 只实现控制台那几条的替身；其余成员继承 [FakeHost] 的响亮失败（open：整段轮询用例要覆写输出面）。 */
+    private open class CmdHost(
         private val projects: List<String> = listOf("p1"),
         private val failSnapshot: Exception? = null,
         private val failOutput: Exception? = null,
