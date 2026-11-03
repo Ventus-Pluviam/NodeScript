@@ -49,15 +49,14 @@ import java.util.concurrent.atomic.AtomicLong
  * 安装协调器（docs §10.2 InstallCoordinator）：全局唯一安装调度器。
  *
  * P0 边界（诚实口径）：
- * - **门禁/队列/事务/journal/轻操作** 全部落地且 JVM 可测（审批 2026-10-11 拆除）；
+ * - **门禁/队列/事务/journal/轻操作** 全部落地且 JVM 可测（没有审批环节）；
  * - **重操作执行**（vendored npm CLI 进安装会话）依赖引擎进程存在：本实现把执行体抽象为
  *   [HeavyOpExecutor] 接缝——真引擎未接前默认实现走「门禁 + journal + staging 编排 +
  *   ERR_NOT_IMPLEMENTED 如实失败」，绝不假装装上了（§1 诚实原则）。
  *
  * 门禁（§10.2）：per-project 互斥锁 + 全局会话互斥 + 磁盘 free≥[minFreeBytes] 预检 +
- * git: 依赖入口即拒（ERR_NOT_SUPPORTED）。**项目配额那一档 2026-10-17 摘除**（用户口径
- * 「取消 512MB 限制」「取消上限设置吧」）：磁盘预检成了唯一还会拒安装的资源闸，
- * `FREE_WARN_HEADROOM` 那条黄警改锚在它上面。
+ * git: 依赖入口即拒（ERR_NOT_SUPPORTED）。**没有项目配额**：磁盘预检是唯一还会
+ * 拒安装的资源闸，`FREE_WARN_HEADROOM` 那条黄警锚在它上面。
  */
 class InstallCoordinator(
     private val services: NpmServices,
@@ -68,13 +67,13 @@ class InstallCoordinator(
      */
     private val scriptExecutor: ScriptOpExecutor = ScriptOpExecutor.Unavailable,
     /**
-     * 控制台 **shell 面**的执行缝（2026-10-09）。缺省 [ShellOpExecutor.Unavailable] =
+     * 控制台 **shell 面**的执行缝。缺省 [ShellOpExecutor.Unavailable] =
      * 未接线 → 如实 ERR_NOT_IMPLEMENTED。真实现由 `:app` 的 `PlatformWiring` 注入
      * （见 [ShellOpExecutor] 的 KDoc：本模块看不到 `:platform:*`）。
      */
     private val shellExecutor: ShellOpExecutor = ShellOpExecutor.Unavailable,
     /**
-     * 控制台 shell 命令的 TTL（毫秒，2026-10-09）。
+     * 控制台 shell 命令的 TTL（毫秒）。
      *
      * **为什么做成构造参数而不是常量**：`install`/`ci` 那条重操作链要 120 秒级
      * （[HeavyOp.timeoutMillis]），而 shell 命令 30 秒就该掐 —— 但**掐多少是宿主策略，
@@ -89,7 +88,7 @@ class InstallCoordinator(
      */
     registryOf: ((String) -> String?)? = null,
     /**
-     * 全局镜像源（§10.2 registry 三层链的 userconfig 层，2026-10-09 批 83）。
+     * 全局镜像源（§10.2 registry 三层链的 userconfig 层）。
      *
      * null = 未接线 → [resolveRegistry] 只读项目 `.npmrc`，再退到出厂官方。
      * 与 [registryOf] 同为「解析来源」，故并列在构造面上而**不进 [NpmServices]** ——
@@ -128,8 +127,7 @@ class InstallCoordinator(
     /**
      * 操作事实的去向（[NpmServices.opLog]）。
      *
-     * 2026-10-17 用户令「去掉审计、改打系统日志」：这里原先是 `services.history`
-     * （一本落盘账）。现在协调器只把**事实**交出去（[OpLogSink]），去哪儿由装配层定。
+     * 协调器只把**事实**交出去（[OpLogSink]），落到哪儿（系统日志）由装配层定。
      */
     private val opLog: OpLogSink = services.opLog
     private val lockSigner: LockSigner? = services.lockSigner
@@ -145,9 +143,8 @@ class InstallCoordinator(
      * 返回 null 不是「永远不知道」，而是「两层都没设」—— 调用方（校验器）据此用出厂官方，
      * 与 `HostNodeExecutor` 不注入 `--registry` 时 npm 自己解析到的**同一家**。
      *
-     * **这一条链就是批 83 的交付物**：此前项目 `.npmrc` 只被校验器读到、没被 npm 读到
-     * （`HostNodeExecutor` 无条件注入 `--registry` 官方 + workDir 里没有 `.npmrc`），
-     * 于是「校验的首选」与「实际安装的那家」可以不是同一家。
+     * 这条链保证「校验的首选」与「实际安装的那家」是同一家：项目 `.npmrc` 既被
+     * 校验器读到，也随 workDir 被 npm 读到（见 `HostNodeExecutor`）。
      */
     private fun resolveRegistry(projectId: String): String? =
         readRegistryFromNpmrc(projectId) ?: globalConfig?.readRegistry()
@@ -190,7 +187,7 @@ class InstallCoordinator(
     // 桥没有主动推面，脚本只能带游标来取 —— 环与 Flow 在同一批投递点一起写）。
     private val installEventRing = SeqRing<InstallEvent>(capacity = RING_CAPACITY)
     /**
-     * 控制台输出环（§10.9 第 3 条，2026-10-09 批 84）。
+     * 控制台输出环（§10.9 第 3 条）。
      *
      * **与 [installEventRing] 分开而不是复用它**：事件环装的是 [InstallEvent]（脚本侧的
      * 契约形状，`bridge/js` 逐字对齐），控制台还要显示**不是事件**的东西 ——
@@ -202,7 +199,7 @@ class InstallCoordinator(
      */
     private val consoleRing = SeqRing<NpmConsoleLine>(capacity = RING_CAPACITY)
     /**
-     * 控制台 shell 面的执行与渲染（2026-10-09 拆出，见 [ConsoleShellRunner]）。
+     * 控制台 shell 面的执行与渲染（见 [ConsoleShellRunner]）。
      *
      * 与依赖树无关的那条链（不建事务、不占安装会话、不碰项目锁）**整体**住在那一个类里：
      * 留在这里会让「敲一条 `ls`」看起来像是走了 npm 的编排。
@@ -214,9 +211,9 @@ class InstallCoordinator(
     /**
      * 逐包尺寸（键 = projectId → 包名 → 字节），[SIZE_CACHE_TTL_MILLIS] 内直接复用。
      *
-     * 2026-10-17 新增（用户口径：「依赖列表显示一下各个依赖占用的空间大小」）。不缓存的话，
-     * 依赖管理页每 400ms 一次的续拉都会把**每个作用域**的 node_modules 整棵再走一遍 ——
-     * 那正是 2026-10-17 那次「依赖装多了，一查看就闪退」的形态（当时的 `snapshot()` 已经在
+     * 不缓存的话，依赖管理页每 400ms 一次的续拉都会把**每个作用域**的
+     * node_modules 整棵再走一遍 —— 依赖装多了之后，一进页面就卡在整树遍历上
+     * （`snapshot()` 已经在
      * 落 IO，但那是"不阻塞主线程"，不是"可以无限次重算"）。
      *
      * 与 [sizeCache] **分开两张表**而不是合成一张：那张只回答"这个作用域一共多大"，
@@ -238,8 +235,8 @@ class InstallCoordinator(
         @Volatile var cancelled: Boolean = false,
         @Volatile var done: Boolean = false,
     ) : OpCancelSignal {
-        // 执行体经 ScriptOp.cancelSignal 读的就是这一位（批 94：「停止」按下去 → 这里置位
-        // → 执行体在 waitFor 切片间隙看到 → 杀进程树）。
+        // 执行体经 ScriptOp.cancelSignal 读的就是这一位：「停止」按下去 → 这里置位
+        // → 执行体在 waitFor 切片间隙看到 → 杀进程树。
         override fun isCancelled(): Boolean = cancelled
     }
 
@@ -279,7 +276,7 @@ class InstallCoordinator(
      * [IllegalArgumentException]（包名形态非法）不在这层兜：调用方拿它当 ERR_INVALID_PARAM
      * （§7），与 git: 依赖的入口即拒同一路径。
      *
-     * **取 packument 必须离开调用线程**（2026-10-17 设备实测的 `NetworkOnMainThreadException`）：
+     * **取 packument 必须离开调用线程**（同步阻塞在主线程上会抛 `NetworkOnMainThreadException`）：
      * [NpmRegistryVerifier.verify] 是**同步阻塞**的 `HttpURLConnection`（每个包两趟 packument，
      * 5s + 8s 超时），而这条链从界面/控制台一路 suspend 下来 —— suspend 只给"可挂起"的许可，
      * **不搬线程**。界面那条协程是 `MainActivity` 的 `rememberCoroutineScope()`（= Main），
@@ -434,7 +431,7 @@ class InstallCoordinator(
     }
 
     /**
-     * 控制台「停止」（批 94）：取消该项目此刻全部未终态句柄。
+     * 控制台「停止」：取消该项目此刻全部未终态句柄。
      *
      * 快照 values 再逐个 [cancel] —— `cancel` 会把句柄从 [handles] 摘掉（`finish()`），
      * 边遍历边摘会漏。覆盖面（T1 真杀 / 重操作弃结果）见 facade 方法的 KDoc，
@@ -481,8 +478,7 @@ class InstallCoordinator(
     /**
      * 已装清单（§10.9.1）：lockfile v3 的 `packages` 段逐键读出来的**平铺闭包**，再按
      * `package.json` 的**声明**（[NpmScriptResolver.declaredNames]，dependencies +
-     * devDependencies 两段）滤成**直接依赖视界** ——
-     * 2026-10-29 用户口径「依赖列表不要展示闭包依赖」：axios 会拉进 follow-redirects、
+     * devDependencies 两段）滤成**直接依赖视界**：axios 会拉进 follow-redirects、
      * proxy-from-env…，那棵传递闭包里的每一项都不是用户声明过的，逐行画出来只有噪音
      * （卸载时也不该出现在清单上 —— `npm uninstall` 认的是用户声明的名字）。
      *
@@ -490,7 +486,7 @@ class InstallCoordinator(
      * 声明里有、lock 里读不到（还没装过 / 锁被清过）的自然也不出现 ——
      * 清单回答的是"我声明且装上了什么"，不是"盘上有什么"。
      *
-     * **按 (name, version) 归一**（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：
+     * **按 (name, version) 归一**（lock 里同名同版本落多个位置时界面会因行键重复而崩）：
      * lock v3 的键是**安装位置**（`node_modules/c`、`node_modules/a/node_modules/c`…），不是包的
      * 身份 —— 同一个包同一个版本可以在不同父级各落一份（peer 冲突时最常见：根上是 c@2，
      * a 与 b 各嵌一份 c@1）。不归一的后果不是"多画一行"那么轻：依赖管理页的清单用
@@ -588,24 +584,23 @@ class InstallCoordinator(
      * 「装了依赖但还没落 lock」的项目也要出现在面板上（它有一棵 node_modules 要管），
      * 而只有 lock 的项目反倒没有可管的东西。两者取并集是过度设计 —— 目录是超集。
      *
-     * **2026-10-17 起多一条：全局作用域**（用户口径「项目选择改成依赖作用域，然后下拉框加个
-     * 全局」）。它**排在最后**，不是随手：面板缺省选中的是第一条（[NpmState.of]），把它插在
+     * 清单里多拼一条**全局作用域**。它**排在最后**，不是随手：面板缺省选中的是第一条
+     * （[NpmState.of]），把它插在
      * 最前面会把所有人打开这一页的缺省作用域从"第一个项目"悄悄换成"全局"——那是个没人要求过的
      * 行为变更，而"全局排在项目后面"在语义上也对（先看具体的，再看兜底的）。
      *
      * 全局那条**永远在**（哪怕 `files/scripts/node_modules` 还没建）：作用域下拉里得先有这一项，
      * 用户才谈得上"往全局装"。
      *
-     * **2026-10-17 第二批：`storage` 不再因为目录不存在而给 `null`。** 用户看到的现象是
-     * 「全局作用域下没有 node_modules 那一行」—— 原因是全局那条走了"没量到就不画"这条档，
-     * 而**项目**那条永远不会：`storage()` 给每个项目都构造一份 `NodeModulesStats`，
+     * **`storage` 不因为目录不存在而给 `null`**：目录不存在时 `totalBytes` 就是 0，
+     * 与项目那条同款 —— 界面画「node_modules 0 B」，而不是整行消失。
      * 目录不存在时 `totalBytes` 就是 0，界面照样画一行「node_modules 0 B」。
      * 同一个物理事实（这棵 node_modules 还没建）在两档作用域上画出了两种界面，
      * 而"缺省作用域"正要改成全局（见 [NpmState.of]）—— 那时这一页一进来就少一行，
      * 读起来像坏了。现在两档**同口径**：都给 `storage`，没建就是 0 字节。
      */
     override suspend fun snapshot(): NpmPanelSnapshot =
-        // 整趟落 IO（2026-10-17 设备实测「依赖装多了，查看的时候容易闪退」）：这一趟是
+        // 整趟落 IO（主线程上跑这一趟会卡死界面）：这一趟是
         // 「全项目目录遍历 + 每项目两份 lock 解析 + 每棵 node_modules 全树算尺寸 + 缓存目录遍历」，
         // 全在**同一次调用**里；而进这一页、点刷新、以及安装期间每 400ms 一次的续拉，
         // 都是主线程那条协程直接 await 它的。依赖装到几十上百个包时，这就是主线程上一次
@@ -631,7 +626,7 @@ class InstallCoordinator(
      * 全局作用域那一条（[NpmTargetScope.GLOBAL]），**永远返回一条**（见 [snapshot] 的 KDoc）。
      *
      * 三个字段各自"量不到就是空"，不含糊：
-     * - `storage`：**恒非 null**（2026-10-17 第二批改的口径，理由见 [snapshot] 的 KDoc）——
+     * - `storage`：**恒非 null**（理由见 [snapshot] 的 KDoc）——
      *   `files/scripts/node_modules` 还没建时 `totalBytes` 就是 0，与项目那条同款：
      *   界面画「node_modules 0 B」，而不是整行消失；
      * - `installed` / `offlineGap`：读的是全局那份 `package-lock.json`，没装过就是空的
@@ -669,7 +664,7 @@ class InstallCoordinator(
      * 东西**，静默失败会让用户以为清了其实没清（下一次点才发现还是满的）。
      */
     override suspend fun reclaimCache(): NpmCacheReclaimReport =
-        // 落 IO 的理由与 [snapshot] 同族（2026-10-17）：这一趟要遍历全部项目的 lock、
+        // 落 IO 的理由与 [snapshot] 同族：这一趟要遍历全部项目的 lock、
         // 遍历整个缓存目录并真删文件，而这颗按钮是**主线程那条协程**直接 await 的
         // （`reclaimNpmCacheOp`）。包一层 `withContext` 是"做阻塞调用的那一层自己声明它是 IO"
         // 在别处（[cacheStorage]）已有的写法。
@@ -677,7 +672,7 @@ class InstallCoordinator(
             val cacheDir = resolveCacheDir()
             val keep = LinkedHashSet<String>()
             val unreadable = ArrayList<String>()
-            // 全局那份 lock 先算进来（2026-10-17，见 [NpmTargetScope]）：全局依赖装在
+            // 全局那份 lock 先算进来（见 [NpmTargetScope]）：全局依赖装在
             // `files/scripts/node_modules`，而它的 lock 是**项目根下的一个文件**，
             // 下面那个按目录扫的循环看不见它 —— 漏掉的话，凡是"只被全局依赖用着"的包
             // 都会被当成没人要的删掉，全局那份离线重装当场失效，而用户在点这一下时
@@ -742,13 +737,13 @@ class InstallCoordinator(
         }
 
     override suspend fun storage(): Map<String, NodeModulesStats> =
-        // 落 IO 的理由与 [snapshot] 同族（2026-10-17）：这一趟逐项目算 node_modules 全树尺寸。
+        // 落 IO 的理由与 [snapshot] 同族：这一趟逐项目算 node_modules 全树尺寸。
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             // 盘上的项目目录名先收成一个 list：`Files.list` 的 `use` 块里**调不了挂起函数**
             // （`Stream.forEach` 收的是 Java 的 `Consumer`，不是内联 lambda），而下面那一趟
             // 尺寸（挂起、自己落 IO）必须按项目逐个走。收名字这一步只是一次目录列举。
             //
-            // **保留名过滤在 [NpmProjectLayout.projectIds] 里**（2026-10-17）：项目根本层现在
+            // **保留名过滤在 [NpmProjectLayout.projectIds] 里**：项目根本层
             // 多了一个 `node_modules`（全局依赖的家，见 [NpmTargetScope]），它过得了项目号判据，
             // 不排掉就会在这里变成一个叫 node_modules 的"项目"。判据收一处，三个枚举点共用。
             val ids = layout.projectIds()
@@ -764,7 +759,7 @@ class InstallCoordinator(
         }
 
     /**
-     * npm 缓存体积（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）。
+     * npm 缓存体积（§10.9 第 5 条的 `npm-cache` 尺寸栏）。
      *
      * 量的是 `content-v2`（[CacacheIndex.contentBytes]）而不是整个缓存目录：这个数字的
      * 用途是回答「回收缓存能腾出多少」，而回收动的正是 content-v2 —— 把 `index-v5`
@@ -778,7 +773,7 @@ class InstallCoordinator(
             NodeModulesStats(projectId = "", pkgCount = 0, totalBytes = cacheIndex.contentBytes(), cacheBytes = 0)
         }
 
-    // ══════════ 控制台命令面（§10.9 第 3 条，2026-10-09 批 84） ══════════
+    // ══════════ 控制台命令面（§10.9 第 3 条） ══════════
 
     /**
      * 在控制台执行一行命令。
@@ -871,7 +866,7 @@ class InstallCoordinator(
     }
 
     /**
-     * 命令历史读数（§10.9 第 3 条，2026-10-10 批 90）：[projectId] 下最近敲过的若干条。
+     * 命令历史读数（§10.9 第 3 条）：[projectId] 下最近敲过的若干条。
      *
      * 与 [consoleOutput] 的差别不只是"另一份数据"：**那个是环、这个是盘** ——
      * 环随进程消失，历史要跨重启还在（这正是它存在的理由）。
@@ -883,7 +878,7 @@ class InstallCoordinator(
         services.consoleHistory?.recent(projectId) ?: emptyList()
 
     /**
-     * 记一条命令历史（写口，2026-10-10 批 90）。
+     * 记一条命令历史（写口）。
      *
      * **为什么写口在调用方（`:ui` 的派发点）而不在本类的执行入口**：历史要记的是
      * **用户敲的那行原文**，而执行入口拿到的是**已经定形**的东西 —— shell 面那条
@@ -925,7 +920,7 @@ class InstallCoordinator(
             )
             return
         }
-        // 取数的两档都落 IO（2026-10-17）：`ls`/`list` 是"读整份 lock 再解析"，`audit` 是
+        // 取数的两档都落 IO：`ls`/`list` 是"读整份 lock 再解析"，`audit` 是
         // "读整份 lock 再查 OSV 库" —— 控制台那一屏同样是主线程在 await 这条链。
         // 两行 consoleLine 留在**外面**发：`SeqRing` 本身任意线程可用（见其 KDoc），
         // 但"取数在 IO、投递回调用线程"让这段的顺序仍然只有一处说了算。
@@ -954,7 +949,7 @@ class InstallCoordinator(
     }
 
     /**
-     * 控制台的 **shell 面**（2026-10-09 用户口径：控制台要能执行 shell）。
+     * 控制台的 **shell 面**。
      *
      * 与 [runLightConsoleCommand] 同形：**同步现取**、跑完才返回，结果渲染成
      * OUTPUT（stdout/stderr）+ RESULT（退出码）两行。**不建事务、不占安装会话、不碰项目锁**
@@ -1016,8 +1011,8 @@ class InstallCoordinator(
     /**
      * T1 的**执行**（§10.3 T1）。
      *
-     * **没有审批**（2026-10-10 裁定，原「人机分离」门禁已删 —— 见
-     * `docs/design-decisions.md`）。判据在**解析层**：`NpmScriptResolver` 的纯 JS bin
+     * **没有审批**（裁定见 `docs/design-decisions.md`）。判据在**解析层**：
+     * `NpmScriptResolver` 的纯 JS bin
      * 白名单、路径不许逃出包目录、同名 bin 多包声明即拒 —— 那几条是「这条命令能不能跑」
      * 的真判据，与「谁点的」无关。控制台与依赖面板都是**宿主自己的界面**，敲下这一行的
      * 人就是用户本人；要拦的是**脚本自己发起**的路径，而桥面根本没有 `runScript`/`exec`
@@ -1055,7 +1050,7 @@ class InstallCoordinator(
             npmArgs = npmArgs,
             versionHash = versionHash,
             timeoutMillis = SCRIPT_TIMEOUT_MILLIS,
-            // 批 94：执行体经它看到「停止」—— 句柄账在协调器手里，这是唯一的观测缝。
+            // 执行体经它看到「停止」—— 句柄账在协调器手里，这是唯一的观测缝。
             cancelSignal = tracked,
         )
         handles[handle.id] = tracked
@@ -1065,7 +1060,7 @@ class InstallCoordinator(
                     emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.QUEUED))
                     try {
                         if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "脚本执行已取消")
-                        // 批 94：脚本会话的输出真流式 —— 执行体边读边报，这里逐行落控制台环
+                        // 脚本会话的输出真流式 —— 执行体边读边报，这里逐行落控制台环
                         // （与 runHeavy 的那条缝同形；失败详情里要不要重复尾部由执行体判，
                         // 见 NpmScriptExecutor.execute 的注释）。
                         val summary = withTimeoutOrNull(op.timeoutMillis) {
@@ -1171,7 +1166,7 @@ class InstallCoordinator(
     }
 
     /**
-     * 已装清单，每条带上它**实际占的字节数**（`PkgNode.sizeBytes`，2026-10-17 新增）。
+     * 已装清单，每条带上它**实际占的字节数**（`PkgNode.sizeBytes`）。
      *
      * 两件事分开取，因为它们本来就是两件事：条目来自 [list]（读 lockfile，权威是 manifest），
      * 尺寸来自 [packageSizes]（走一遍 node_modules，权威是磁盘）。名字对不上的（lock 里有、
@@ -1179,7 +1174,7 @@ class InstallCoordinator(
      * 与"这个包不在盘上"是两句话。
      */
     /**
-     * 已装清单 + 每包尺寸（2026-10-17 用户口径「依赖列表显示一下各个依赖占用的空间大小」）。
+     * 已装清单 + 每包尺寸。
      *
      * 量尺寸那一段住在 [NpmPackageSizes.kt]（`packageSizesOf`）：那是它自己一个算法
      * —— 怎么把字节分摊到包头上、TTL 多长 —— 与"快照怎么拼"不是一件事。
@@ -1191,7 +1186,7 @@ class InstallCoordinator(
         return list(projectId, depth = 0).map { it.copy(sizeBytes = sizes[it.name] ?: 0L) }
     }
 
-    // ══════════ 提升到全局（2026-10-17，「去重并提升到全局」那条路的后半） ══════════
+    // ══════════ 提升到全局（「去重并提升到全局」那条路的后半） ══════════
 
     /**
      * 把一个项目**声明的**依赖装一份到全局作用域（语义与三条刻意见
@@ -1227,16 +1222,15 @@ class InstallCoordinator(
         val free = freeSpaceProbe(root)
         if (free < config.minFreeBytes) {
             val why = "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装"
-            // 预检拒绝也记一条（2026-10-09 批 85）：日志要能回答「用户当时看到成功了吗」，
+            // 预检拒绝也记一条：日志要能回答「用户当时看到成功了吗」，
             // 而「被配额/磁盘挡住」正是最该被看见的那类失败 —— 它不留痕的话，用户在系统日志
             // 里看到的是「什么都没发生」，与他屏幕上那句报错对不上。与 `crossCheckRegistry`
             // 的预检拒绝同一条口径（那条一直在记，这两条是漏的）。
             opLog.log(opName(args), projectId, false, why)
             throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
         }
-        // 黄警（**2026-10-17 起锚在磁盘上**，不再是 node_modules 配额）：可用空间进了预检
-        // 下限的 1.25 倍以内就发一条，**不拦** —— 理由与原那条 80% 黄逐字同款：
-        // 「下一次安装就要被拒了」值得在**被拒之前**说一次。配额那一档已按用户口径整个摘掉
+        // 黄警（锚在磁盘上）：可用空间进了预检下限的 1.25 倍以内就发一条，**不拦** ——
+        // 「下一次安装就要被拒了」值得在**被拒之前**说一次。
         // （见 `InstallConfig` 的 KDoc），故 `DISK_QUOTA` 这个事件名留用、判据换锚。
         val freeWarned = free < (config.minFreeBytes * FREE_WARN_HEADROOM).toLong()
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
@@ -1282,9 +1276,9 @@ class InstallCoordinator(
         journal.begin(nonce, projectId, stageDir.fileName.toString())
         tracked.journalStarted = true
         staging.begin(projectId, nonce)
-        // 2026-10-29 起 stageDir 不再是空屋里的产物母体：执行体把真实树搬进 workDir
-        // 才跑 npm（prepareWorkDir），stage 装的是「真树增量后的新树全集」，commit 照旧
-        // 原子落位（见 HostNodeExecutor 类头 work-prefix 模型第 4 步）。
+        // stageDir 装的是「真树增量后的新树全集」：执行体先把真实树搬进 workDir
+        // 才跑 npm（prepareWorkDir），commit 照旧原子落位
+        // （见 HostNodeExecutor 类头 work-prefix 模型第 4 步）。
         try {
             if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "安装已取消")
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.RESOLVE))
@@ -1298,17 +1292,17 @@ class InstallCoordinator(
             val outcome = withTimeoutOrNull(timeoutMillis) {
                 executor.execute(
                     HeavyOp(nonce, projectId, args, layout.projectRoot(ProjectId(projectId)), stageDir, timeoutMillis),
-                    // 执行体报的阶段**必须经 `emit`**（2026-10-10 批 90 修）：
-                    // 原来这里是 `events.tryEmit(ev)` —— 只喂了那条 SharedFlow，
-                    // 而 `installEventRing`（`drainEvents` 读的就是它）与 `consoleRing`
+                    // 执行体报的阶段**必须经 `emit`**：只 `events.tryEmit(ev)` 的话
+                    // 只喂了那条 SharedFlow，而 `installEventRing`（`drainEvents` 读的
+                    // 就是它）与 `consoleRing`
                     // 只在 `emit` 里写。后果是执行体独有的 DOWNLOAD/REIFY 两格
                     // **生产里从来没亮过**：脚本侧 `onProgress` 收不到，控制台阶段条
                     // 也停在 RESOLVE。这与 `emit` 自己的 KDoc（"全部阶段都经这里"）
                     // 直接矛盾，是记账与实现对不上，不是设计。
                     { ev -> emit(ev) },
-                    // 真流式（2026-10-10 批 90）：执行体边读边报，这里逐行落控制台环。
+                    // 真流式：执行体边读边报，这里逐行落控制台环。
                     // 与 `emit` 那条路分开 —— 那些是**事件**（脚本侧契约形状），
-                    // 这条是 npm 吐的原文（只喂控制台）。批 90 之前这条数据是被丢掉的：
+                    // 这条是 npm 吐的原文（只喂控制台）：
                     // 执行体经 ProgressSink 报的阶段**从来不进事件环**（环只由 emit 写），
                     // 于是控制台的 DOWNLOAD/REIFY 两格在生产里永远不亮。
                     { text ->
@@ -1340,11 +1334,11 @@ class InstallCoordinator(
                     "lock 签名失败（应用密钥不可用？§10.5-1 安全降级须显式）：${e.message}",
                 )
             }
-            // 命令自己的输出尾部先进控制台环（§10.9 第 3 条，2026-10-09 批 84），再发终态：
+            // 命令自己的输出尾部先进控制台环（§10.9 第 3 条），再发终态：
             // 顺序反了会看到「完成」压在输出上面。执行体给不出（null）时**如实说**，
             // 不拿摘要冒充输出。
             //
-            // **报了流就不再补这一行**（2026-10-10 批 90）：`outputTail` 是「整条流的最后
+            // **报了流就不再补这一行**：`outputTail` 是「整条流的最后
             // 8000 字符」，而流已经把它逐行报过了 —— 再补一遍就是同一段话在控制台里出现
             // 两次，用户会以为 npm 跑了两遍。没报过流（老执行体 / [OutputSink.None] /
             // 输出为空）时才走这条老路：那时它是**唯一**的输出来源。
@@ -1388,7 +1382,7 @@ class InstallCoordinator(
      * preuninstall/uninstall，prepare/preparePack）。只读顶层（深度 1 的 node_modules/＊）
      * —— 传递依赖同属这些包自己的声明，按顶层包汇总即可覆盖。
      *
-     * **与 `child_process` 门禁（[NpmSpawnGate]，2026-10-09）是两件事，别合并**：本警告管
+     * **与 `child_process` 门禁（[NpmSpawnGate]）是两件事，别合并**：本警告管
      * 「本该跑却没跑的 lifecycle 脚本」（信息面，不阻塞安装）；门禁管「**任何** spawn 入口
      * 一律拒绝」（不变量面，硬失败）。前者对 `--ignore-scripts` 的后果负责，后者对
      * 「npm 或某个包在背地里起进程而没人知道」负责 —— 两者覆盖的失败模式不重叠。
@@ -1428,9 +1422,9 @@ class InstallCoordinator(
      * `<projectsRoot>/../../cache/npm-cache` 在 `files/scripts` 布局下才对，一旦 projectsRoot
      * 不在这棵树下（测试/非常规布局）就静默指错地方。故仍保留 [npmCacheDir] 注入点。
      *
-     * **生产装配已接上（2026-10-09 批 86）**：`NpmShellKit` 传
-     * `NpmCacheSeedDeployer.cacheRoot(cacheDir)` —— 此前不传，于是「喂给 npm 的 `--cache`」
-     * 与「bundle 导入落点」是两个目录，导入完 `ci --offline` 照样不命中（两边都不报错）。
+     * 生产装配：`NpmShellKit` 传 `NpmCacheSeedDeployer.cacheRoot(cacheDir)` ——
+     * 「喂给 npm 的 `--cache`」与「bundle 导入落点」必须是同一个目录，
+     * 否则导入完 `ci --offline` 照样不命中（两边都不报错）。
      * 缺省（未注入）仍退到 projectsRoot 同级的 `.npm-cache`（可预测、测试可断言）。
      */
     private fun resolveCacheDir(): Path =
@@ -1458,7 +1452,7 @@ class InstallCoordinator(
         // 先落环再进 Flow：两条路是同一批事件的两个视图（拉取侧有界重放、订阅侧即收即走），
         // 顺序反了会出现「Flow 已发、环还没记」的窗口 —— 拉取方在同一刻会拿到旧批次。
         installEventRing.push(e.projectId, e)
-        // 控制台投影在**唯一一处**（2026-10-09 批 84）：runHeavy 与 runScriptOps 的全部
+        // 控制台投影在**唯一一处**：runHeavy 与 runScriptOps 的全部
         // 阶段/警告/终态都经这里，两条执行路径不必各写一遍，也就不会有一条忘了投影。
         consoleLine(e.projectId, projectConsoleLine(e))
         events.emit(e)
@@ -1508,7 +1502,7 @@ class InstallCoordinator(
 
     companion object {
         /**
-         * 磁盘黄警的余量倍数（2026-10-17 新增）：可用空间不足 `minFreeBytes × 本值` 就发一条
+         * 磁盘黄警的余量倍数：可用空间不足 `minFreeBytes × 本值` 就发一条
          * `DISK_QUOTA` 警告，**不拦**。取 1.25 是给「再装一个包还撑得住、再装几个就撞墙」
          * 留出一档可行动的距离 —— 与原先那档「配额的 80% 黄」是同一种分寸，只是锚点换成了
          * 真正会拒人的那道预检（见 [enqueueHeavy]）。
