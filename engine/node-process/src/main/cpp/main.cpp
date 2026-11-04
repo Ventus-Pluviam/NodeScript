@@ -371,6 +371,14 @@ int main(int argc, char** argv) {
   // 不会以 `-` 开头；脚本自己的参数即便以 `-` 开头也在 `--` 之后，照旧安全。
   int first_positional = argc;   // 第一个位置参数的下标；== argc = 一个都没有
   for (int i = 1; i < argc; ++i) {
+    // 裸 `--` 是**调用方给的分隔符**（usage 广告的 `noden [--] <script>` 形态），不是
+    // node 选项：原样转发会与我们自己补的那个 `--` 凑成一对 —— node 遇第一个 `--` 收手
+    // 后把**第二个**当成脚本的第一个位置参数（`MODULE_NOT_FOUND '--'`）。本 exe 自己负责
+    // 补 `--`，调用方这份在这里消化掉。
+    if (std::strcmp(argv[i], "--") == 0) {
+      first_positional = i + 1;
+      break;
+    }
     if (argv[i][0] == '-') {
       node_argv.push_back(argv[i]);
     } else {
