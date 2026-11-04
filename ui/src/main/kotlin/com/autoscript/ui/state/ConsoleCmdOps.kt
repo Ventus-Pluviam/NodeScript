@@ -95,10 +95,11 @@ internal suspend fun loadConsoleCmd(host: HostSummary?, previous: ConsoleCmdStat
 /**
  * 命令跑着的时候**自己拉**（真流式那条链的消费侧）。
  *
- * 为什么必须由界面来拉：宿主是**入队即返回**的，而 npm 的输出是边跑边产生的
- * （`HostNodeExecutor` 读一行报一行）—— 没有这条循环，用户敲完 `npm install axios`
- * 之后屏幕上什么都不会动，直到他手动点「刷新」，而那时命令多半已经跑完。
- * 那不叫流式，叫事后倒带。
+ * 为什么必须由界面来拉：派发的调用是**协程内联执行**的（挂到会话跑完才返回），
+ * 调用方那条协程挂起期间它自己一个字也拉不了；而 npm 的输出是边跑边产生的
+ * （`HostNodeExecutor` 读一行报一行）—— 没有这条独立循环，用户敲完
+ * `npm install axios` 之后屏幕上什么都不会动，直到整条命令跑完。那不叫流式，
+ * 叫事后倒带。
  *
  * 停的条件是**宿主给的** [ConsoleCmdState.running]（句柄账），不是界面猜的；
  * 有界见 [pollWhile]。跑完那一轮**必然**多拉一次（`shouldContinue` 在循环体之前判，
@@ -189,9 +190,9 @@ internal suspend fun runConsoleCmd(
         // 拒收与进/退模式在上面各自 return 了，故"哪些进历史"是**自然结果**，不是特判。
         host.recordConsoleHistory(projectId, state.draft)
         dispatch(host, projectId, parsed, state.draft)
-        // 发出去之后**接着拉到它跑完**：`dispatch` 对重操作是入队即返回，
-        // 只拉一次的话用户看到的是「排队中」然后一片静止 —— 而输出正在产生。
-        // 轻操作与 shell 面是同步现取，第一轮 `running` 就是 false，这条循环即刻返回。
+        // 发出去之后**再追一轮**：`dispatch` 是协程内联执行（挂到会话跑完才返回），
+        // 挂起返回时输出环里通常已端齐 —— 这一轮兜住「返回那一刻句柄账还没摘」的
+        // 窗口；轻操作与 shell 面是同步现取，第一轮 `running` 就是 false，即刻返回。
         val polled = pollConsoleWhileRunning(
             host,
             loadConsoleCmd(host, state.copy(draft = "", opError = null, opNotice = null)),
@@ -272,17 +273,20 @@ internal fun modeLabel(mode: ShellConsoleMode): String = when (mode) {
 /**
  * 执行成功后的回执（**不替用户宣布结果** —— 结果在输出环里，这里只说"这一行去了哪"）。
  *
- * 三条路各自说清"接下来会发生什么"：轻操作当场出结果；重操作入队等安装会话；
- * `npm run`/`npx` 走 T1 执行面（判据在解析层，不需要审批 —— 裁定）。
+ * 回执一律说**完成式**：`dispatch` 是协程内联执行（`enqueueHeavy`/`runScriptOps`
+ * 都挂到会话跑完才返回），构造这句回执时动作**已经结束了** —— 说「在跑」就是
+ * 「入队即返回」假设时代的遗留话术（批 17-41 在依赖面板那侧改口过同一处病，
+ * `NpmInstallOps.noticeForPanel` 的 KDoc 有完整账）。`npm run`/`npx` 走 T1 执行面
+ * （判据在解析层，不需要审批 —— 裁定），同样是跑完才回来。
  */
 private fun noticeFor(cmd: NpmConsoleCommand): String = when (cmd) {
     is NpmConsoleCommand.Npm ->
         if (cmd.sub in NpmConsoleKeys.LIGHT_SUBCOMMANDS) "已执行 npm ${cmd.sub}：结果见上方"
-        else "已入队 npm ${cmd.sub}：安装会话在跑，输出见上方（完成前输入行停用）"
+        else "已完成 npm ${cmd.sub}：输出见上方"
     is NpmConsoleCommand.Run ->
-        "已提交 npm run ${cmd.script}：结果见上方"
+        "已完成 npm run ${cmd.script}：输出见上方"
     is NpmConsoleCommand.Exec ->
-        "已提交 npx ${cmd.bin}：结果见上方"
+        "已完成 npx ${cmd.bin}：输出见上方"
     is NpmConsoleCommand.Shell ->
         "已执行（${modeLabel(cmd.mode)}）：结果见上方"
     is NpmConsoleCommand.EnterMode -> "已进入 ${modeLabel(cmd.mode)}"   // 到不了这里（上面已 return）

@@ -97,15 +97,15 @@ class NpmMaintenanceOpsTest {
     // ═══ 三颗维护按钮 ═══
 
     @Test
-    fun `成功：动作落到选中项目，回执只说「已入队」不说「已完成」`() = runBlocking {
+    fun `成功：动作落到选中项目，回执说完成式（返回时动作已跑完）`() = runBlocking {
         val host = MaintenanceHost()
         val next = runNpmMaintenanceOp(host, loaded(project("demo")), NpmMaintenanceAction.PRUNE)
 
         assertEquals(listOf("demo" to NpmMaintenanceAction.PRUNE), host.calls)
         assertNull(next.maintenance, "跑完必须把忙碌标记清掉，否则按钮永远转圈")
         assertNull(next.opError)
-        assertTrue(next.opNotice!!.contains("已入队"), "入队 ≠ 完成：${next.opNotice}")
-        assertFalse(next.opNotice!!.contains("已完成"), "不许替用户宣布结果：${next.opNotice}")
+        assertTrue(next.opNotice!!.contains("已完成"), "调用返回时动作已跑完，完成式才是实话：${next.opNotice}")
+        assertFalse(next.opNotice!!.contains("已入队"), "「入队即返回」假设已过时，不许说它还在跑：${next.opNotice}")
     }
 
     @Test
@@ -118,7 +118,7 @@ class NpmMaintenanceOpsTest {
         // 枚举仍是三个取值（界面只露两颗：`dedupe` 改走去重+提升那条路、
         // `ci` 整颗下线）—— 这条断的是**通用路本身**：谁被接回来，回执照样分得开。
         assertEquals(3, notices.toSet().size, "每个动作的回执必须各自可辨：$notices")
-        assertTrue(notices[2]!!.contains("校验 lock 签名"), "ci 要先校验 lock 签名，回执得先说：${notices[2]}")
+        assertTrue(notices[2]!!.contains("lock 签名已校验"), "ci 先校验 lock 签名这件事，回执得说：${notices[2]}")
     }
 
     @Test
@@ -171,7 +171,8 @@ class NpmMaintenanceOpsTest {
         val n = next.opNotice!!
         assertTrue(n.contains("dedupe"), "第一段干了什么要说：$n")
         assertTrue(n.contains("已提升"), "第二段干了什么更要说 —— 那是这颗按钮的意思：$n")
-        assertFalse(n.contains("已完成"), "入队 ≠ 完成：不许替用户宣布结果：$n")
+        assertTrue(n.contains("dedupe 已完成"), "第一段也是完成式（调用返回时已跑完）：$n")
+        assertFalse(n.contains("已入队"), "「入队即返回」假设已过时，不许说它还在跑：$n")
     }
 
     @Test

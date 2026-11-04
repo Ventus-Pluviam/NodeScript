@@ -312,7 +312,8 @@ internal suspend fun pollInstallEventsStepped(
  *
  * **为什么只拉一次而不是轮询到终态**：`:ui` 的每个读口都是"进页面/手动刷新时现取一次"
  * （见 `ConsoleCmdState` 的同款纪律），没有常驻轮询循环 ——
- * 而 `runNpmPanelCommand` 是**入队即返回**的，拉一次拿到的多半只是 `QUEUED`。
+ * 而提交路径是**协程内联执行**的（挂在会话上），提交后的实时推进另有
+ * `pollInstallWhileRunning` 逐格拉 —— 单次现取服务的是进页面与手动刷新。
  * 这不是缺陷也不是假装：**阶段条显示的是"这一刻宿主报到哪一步"**，
  * 用户点刷新（或重新进页面）会再取一次；等宿主把常驻轮询那件事做了，
  * 这个函数就是它的单次实现，不必改形状。
@@ -408,9 +409,9 @@ private fun noticeForPanel(cmd: NpmConsoleCommand): String = when (cmd) {
         else "已安装 ${target ?: "所选依赖"}：清单已更新"
     }
     is NpmConsoleCommand.Run ->
-        "已提交 npm run ${cmd.script}：结果见上方"
+        "已完成 npm run ${cmd.script}：输出见上方"
     is NpmConsoleCommand.Exec ->
-        "已提交 npx ${cmd.bin}：结果见上方"
+        "已完成 npx ${cmd.bin}：输出见上方"
     // 下面三类**到不了这里**（依赖面板的输入行不解析 shell/模式命令，上面已拦），
     // 穷尽 when 而已 —— 但话术不糊弄：真走到这里说明界面的拦截漏了。
     is NpmConsoleCommand.Shell -> "依赖面板不执行 shell 命令：请到控制台用 su/shizuku 模式"

@@ -348,7 +348,7 @@ interface PackageManagerFacade {
      * 项目没有 `package.json`（或里面一条依赖都没声明）时**抛**：那是"没有可提升的东西"，
      * 返回一个空句柄会让界面显示"已提升"而磁盘上什么也没发生。
      *
-     * 返回 [InstallHandle] 与 [install] 同形（入队即返回）。
+     * 返回 [InstallHandle] 与 [install] 同形（协程内联执行、挂到会话跑完才返回）。
      *
      * 缺省实现抛 `ERR_NOT_IMPLEMENTED`：未接线的替身零改动即可编译，但不静默。
      */
@@ -433,8 +433,8 @@ interface PackageManagerFacade {
      * 在控制台执行一行命令（§10.9 第 3 条）。
      *
      * 解析不过**抛** [IllegalArgumentException]（原文点名，判据的唯一一份在
-     * [NpmConsoleKeys.parse]）；项目号不合法同样抛。合法时立刻返回句柄 ——
-     * 重操作是**入队即返回**（与 [install] 同语义），输出走 [consoleOutput] 拉。
+     * [NpmConsoleKeys.parse]）；项目号不合法同样抛。重操作**协程内联执行**
+     * （与 [install] 同语义：挂到会话跑完才返回句柄），输出走 [consoleOutput] 拉。
      *
      * 缺省实现如实抛 [com.autoscript.domain.core.AutojsException] `ERR_NOT_IMPLEMENTED`：
      * 未接线的替身**不假装跑过**，也不返回一个永远没有输出的句柄。
