@@ -21,6 +21,9 @@ class FakeEngine(
 
     val executed = mutableListOf<EngineRunRequest>()
     var stopResult: StopResult = StopResult.Clean
+
+    /** stop() 改抛这个（非 null 优先）：收尾抛错那条归还路径的判据用（kill 兜底/容量不缩水）。 */
+    var stopThrowable: Throwable? = null
     var failOnExecute = false
     var killCalls = 0
     var stopCalls = 0
@@ -62,6 +65,7 @@ class FakeEngine(
 
     override suspend fun stop(): StopResult {
         stopCalls++
+        stopThrowable?.let { throw it }
         statusToReturn = when (stopResult) {
             StopResult.Clean -> EngineStatus.STOPPED
             else -> EngineStatus.QUIESCING
