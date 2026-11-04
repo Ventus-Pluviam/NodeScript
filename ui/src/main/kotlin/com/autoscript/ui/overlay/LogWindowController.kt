@@ -9,7 +9,7 @@ import com.autoscript.ui.state.ConsoleLineState
 import java.util.HashSet
 
 /**
- * 执行日志悬浮窗的**控制器**（2026-10-13 用户令；Activity `remember` 一份）。
+ * 执行日志悬浮窗的**控制器**（Activity `remember` 一份）。
  *
  * 只管状态机，不管画：开（先开窗再跑 —— 跑起来之前窗里是空态）、关、
  * 清空（推水位，不删文件）、暂停/继续（问宿主，false 如实 toast）、绑定刷新。
@@ -110,7 +110,7 @@ class LogWindowController(
     }
 
     /**
-     * 重跑（已结算态第一颗钮；2026-10-15 用户令「执行完变重跑图标」）。
+     * 重跑（已结算态第一颗钮）。
      *
      * 只**换到重跑态**，真跑由调用方触发（`MainActivity.windowFirstAction` 走
      * `runScriptFileOp`，与开窗同一条执行链；会把这个窗切到新归属）。跑起来后轮询的
@@ -125,7 +125,7 @@ class LogWindowController(
     /**
      * 窗内日志行的**事实源**（`consoleState.lines` 的现值；调用方每次拉取后 [updateLines]）。
      *
-     * 为什么行数据住控制器而不是"由调用方当参数喂进系统窗内容"（2026-10-14「点执行就闪退」）：
+     * 为什么行数据住控制器而不是"由调用方当参数喂进系统窗内容"（「点执行就闪退」）：
      * 参数喂进去的代价是**每喂一次就要重跑一次 `setContent`**（`SystemWindowSync` 的效应
      * 以它为键），而轮询 400ms 一轮、每轮 `ConsoleState.of` 都产出一个新的 `List` 实例 ——
      * 于是窗一开就每 400ms 重建一次离屏组合。住这里之后，窗内容**现读**这份状态，
@@ -148,10 +148,10 @@ class LogWindowController(
     /**
      * 在途表现值 → 绑定（每次 `reloadConsole` 后调用；现值现取）。
      *
-     * 结算**不解绑**（用户令「执行完不要自动清理输出」）：绑定 run 跑完离开在途表后
+     * 结算**不解绑**：绑定 run 跑完离开在途表后
      * 窗口仍绑在它上面、输出照常可见（详见 `LogWindowState.bind` 的 KDoc）。
      *
-     * [fallbackRunId] 是快速脚本的兜底补绑（用户令「有时点执行日志不显示在悬浮窗上」）：
+     * [fallbackRunId] 是快速脚本的兜底补绑：
      * 起跑即结算的脚本在途表一次都没见过 → 从行里摘出归属补绑。兜底补位号（结算为
      * false 的 runId）**不进 [settledRunIds]** —— 那只是"还没在途过"的补位，不是被
      * 摘走的事实。
@@ -163,7 +163,7 @@ class LogWindowController(
         state = next
         // 被在途表摘走的号（结算/被停/崩溃）记进账：之后任何宿主读口按它查都是"不在途"
         // （走 `RuntimeController` 的都在途表里）—— 暂停按钮据此**静默早退**，不再把
-        // 「已结算」翻译成「该执行不支持暂停」那句给用户看（2026-10-15 用户令）。
+        // 「已结算」翻译成「该执行不支持暂停」那句给用户看。
         //
         // 判据：**仍绑着（boundRunId 没变）但不再 running** —— 结算不解绑，正是这个
         // 形状：run 离开在途表时绑定保持、running 回 false。反例都不记：
@@ -179,12 +179,12 @@ class LogWindowController(
 
     /**
      * 清空日志（**只推水位，不删文件**）：`watermarkSeq` 推到当前可见最大 seq ——
-     * 窗里旧行消失、新行照进；详情页重开全文仍在（用户令"清空日志"是清窗，不是删档）。
+     * 窗里旧行消失、新行照进；详情页重开全文仍在。
      */
     fun clearLogs(visibleMaxSeq: Long) {
         val current = state ?: return
         if (visibleMaxSeq > current.watermarkSeq || current.echoes.isNotEmpty()) {
-            // 回显跟着一起清（2026-10-16）：它们是窗里那本流水的一部分 —— 只推水位会留下
+            // 回显跟着一起清：它们是窗里那本流水的一部分 —— 只推水位会留下
             // 几条"上一轮对话的我说的话"浮在空窗里。水位仍只进不退（`maxOf`）。
             state = current.copy(
                 watermarkSeq = maxOf(visibleMaxSeq, current.watermarkSeq),
@@ -202,7 +202,7 @@ class LogWindowController(
     }
 
     /**
-     * 底部输入框拿到/失去焦点 → 系统窗的输入法开关（2026-10-16）。
+     * 底部输入框拿到/失去焦点 → 系统窗的输入法开关。
      *
      * 只在走系统窗时往下传：in-app 兜底窗是普通 Compose 树（在 Activity 窗口里），
      * 输入法本来就能用；往下传等于给一个不需要它的宿主发指令。
@@ -220,7 +220,7 @@ class LogWindowController(
     }
 
     /**
-     * 把输入框那一行送进脚本进程的 stdin（底部那颗蓝色箭头；2026-10-16 用户令）。
+     * 把输入框那一行送进脚本进程的 stdin（底部那颗蓝色箭头）。
      *
      * 四件事按序：
      * 1. **空行不发**（trim 后为空就早退）：敲一下空格再点箭头不该在脚本那头造出一个
@@ -261,8 +261,7 @@ class LogWindowController(
             // 推过新 state（`running`/`paused`/绑定都变）—— 拿挂起前那份 `current` 去
             // `copy` 会把那一轮的结果抹掉（本仓反复踩过的"捕获值 vs 现读"）。
             //
-            // 同时**把这一行回显进窗**（2026-10-16 用户报「输入框输进去的数字也没有显示在
-            // 悬浮窗里」）：引擎里脚本的 stdin/stdout 都是管道，`readline` 的 `terminal`
+            // 同时**把这一行回显进窗**：引擎里脚本的 stdin/stdout 都是管道，`readline` 的 `terminal`
             // 恒为 false —— "敲什么屏幕上就有什么"那份回显本来是 TTY 驱动做的，脚本侧没有
             // 等价物（见 `LogWindowState.echoes` 的 KDoc）。窗口就是这里的终端。
             //
@@ -283,7 +282,7 @@ class LogWindowController(
     }
 
     /**
-     * **结束脚本**（悬浮窗顶栏「结束脚本」钮；2026-10-16 用户令）。
+     * **结束脚本**（悬浮窗顶栏「结束脚本」钮）。
      *
      * 与 [togglePause] 同一条"在途才动"口径：没绑上（`boundRunId` null）或已结算
      * （[settledRunIds] 里有它）一律**静默早退** —— 那颗钮的可用态按 `state.running` 画，
@@ -327,7 +326,7 @@ class LogWindowController(
      * **已结算（[settledRunIds] 里有它）→ 静默早退**：暂停钮的可用态按 `state.running`
      * 画，但轮询 400ms 一轮，用户点击可以落在"最后一轮还见它在途、这一下已结算"的窗口
      * 里 —— 按钮此刻仍可点，宿主一查就 false。把那个 false 翻译成「该执行不支持暂停」
-     * 是撒谎（2026-10-15 用户令）：它已经**结束**了，不是"不支持"，结算本来就是暂停的
+     * 是撒谎：它已经**结束**了，不是"不支持"，结算本来就是暂停的
      * 终态。静默早退让按钮在这几帧里点了等于没点；下一轮 `running` 回 false、钮置灰，
      * 没有误导性的话术。
      *

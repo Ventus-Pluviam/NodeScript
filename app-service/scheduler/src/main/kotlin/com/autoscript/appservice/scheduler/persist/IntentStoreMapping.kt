@@ -7,7 +7,7 @@ import com.autoscript.appservice.scheduler.core.TriggerSource
 import com.autoscript.domain.scripts.IntentStore
 
 /**
- * 存储行 ↔ 运行态映射（2026-10-08 自 `IntentStore.kt` 原样拆出）。
+ * 存储行 ↔ 运行态映射（自 `IntentStore.kt` 原样拆出）。
  *
  * **为什么这两个函数不跟着接口搬去 `:domain`**：[IntentStore] 是 SPI，已搬去
  * `:domain`（`SqliteIntentStore` 住 `:platform:system`，靠依赖铁律 `:platform:*` →

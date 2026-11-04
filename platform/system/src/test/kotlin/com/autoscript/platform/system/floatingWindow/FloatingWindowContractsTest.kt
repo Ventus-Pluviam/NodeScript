@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test
  * `require` 的边界在下方逐条钉住，handler 据此折叠 ERR_INVALID_PARAM。
  *
  * **来历**：原 `SystemHostContractsTest`（shell/device/floatingWindow 三面合一份，
- * 2026-09-30 审查步骤 6 自 `:domain` `SystemContractsTest` 拆入本模块）在
- * 2026-10-01 D3 里按命名空间子包拆开，跟各自契约同包。
+ * 自 `:domain` `SystemContractsTest` 拆入本模块）在
+ * 按命名空间子包拆开，跟各自契约同包。
  */
 class FloatingWindowContractsTest {
 

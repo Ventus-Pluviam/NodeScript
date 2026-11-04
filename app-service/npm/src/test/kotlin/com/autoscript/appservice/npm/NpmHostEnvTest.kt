@@ -14,9 +14,9 @@ import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
 
 /**
- * `AUTOSCRIPT_LIBNODE` 这条必填件的回归闸（2026-10-17 设备实测 bug）。
+ * `AUTOSCRIPT_LIBNODE` 这条必填件的回归闸（设备实测 bug）。
  *
- * **病**（用户报的原文）：`npm 退出码 2: :nodeN 缺 AUTOSCRIPT_LIBNODE (libnode.so 绝对路径)`。
+ * **病的原文**：`npm 退出码 2: :nodeN 缺 AUTOSCRIPT_LIBNODE (libnode.so 绝对路径)`。
  * 脚本引擎那条路（`NodeProcessEngine`）一直把这条注下去，npm 这条路
  * （[HostNodeExecutor] / [NpmScriptExecutor]）**从来没注过** —— 两者 spawn 的是同一个
  * `noden`，而 `main.cpp` 头一件事就是读它去 `dlopen`。

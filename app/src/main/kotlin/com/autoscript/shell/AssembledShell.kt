@@ -24,7 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 
 /**
- * 装壳产物与壳自己的协程域（2026-10-01 D7 自 `AppShellKit.kt` 原样外迁：它们与
+ * 装壳产物与壳自己的协程域（D7 自 `AppShellKit.kt` 原样外迁：它们与
  * 「怎么装壳」是两件事 —— `AppShellKit` 的 `assemble` 是配方，这里是被装出来的
  * 那个东西与它的收口责任。语义逐字未改）。
  */
@@ -108,7 +108,7 @@ class AssembledShell internal constructor(
      */
     val npmSpawnGate: java.nio.file.Path? = null,
     /**
-     * npm 门面本体（呈现面读口用：依赖面板，§10.9.1 —— 审批卡已拆，2026-10-11）。
+     * npm 门面本体（呈现面读口用：依赖面板，§10.9.1 —— 审批卡已拆）。
      *
      * 为什么单列一个字段而不是让 `:app` 从 [npmHandler] 里再挖：呈现层要的是
      * `snapshot()` 这条**不经桥**的口，而 [npmHandler] 是
@@ -274,7 +274,7 @@ class AssembledShell internal constructor(
      * **挂起到本次执行结算**（与 [runTaskNow] 逐字同一条口径）—— 调用方据此禁用那颗 ▶。
      * 成败不由本口回报：结局在意图日志/控制台，调用方文案不得把"返回了"说成"跑成功了"。
      *
-     * **两种路径形状在此收口**（2026-10-13）：本口收文件清单形状（首段 = 项目名），
+     * **两种路径形状在此收口**：本口收文件清单形状（首段 = 项目名），
      * 往下（调度器/意图日志/在途表/引擎）一律项目内形状 —— 转换与判据都在
      * [ScriptPaths.projectInternalOrNull]，这一层只负责"削不出就拒"。
      */
@@ -282,7 +282,7 @@ class AssembledShell internal constructor(
         require(ScriptRunnability.isRunnable(relPath)) {
             "这个文件不能被引擎执行（引擎起的是 node，只认 ${ScriptRunnability.EXECUTABLE_EXTENSIONS.joinToString("/") { ".$it" }}）：$relPath"
         }
-        // **形状转换在这一层收口**（2026-10-13 修）：本口收的是文件清单那条 relPath
+        // **形状转换在这一层收口**：本口收的是文件清单那条 relPath
         // （`files/scripts/` 之下，首段 = 项目名 —— 与 `readScriptFile` 同一个形状，
         // 见 `HostSummary.runScriptFile` 的 @param），而调度器与引擎按**项目内**路径说。
         // 直接透传的后果是引擎把 `demo/data/test.js` 拼成
@@ -290,7 +290,7 @@ class AssembledShell internal constructor(
         // 且**编译期毫无迹象**。削不出（首段不是本项目）当场拒，不静默当项目内路径跑。
         val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath)
         // 根层（projectId 空串）不是"某个项目"，那句"不在项目 x 下"对它读起来是错的
-        // —— 两种形状各说各的错（2026-10-16 根层可写时分开写）。
+        // —— 两种形状各说各的错（根层可写时分开写）。
         require(internalPath != null) {
             if (projectId.isEmpty()) {
                 "relPath 与根层不一致：$relPath 不是 files/scripts/ 本层的文件" +
@@ -319,7 +319,7 @@ class AssembledShell internal constructor(
     }
 
     /**
-     * 冻住/解冻一次在途执行（`HostSummary.pauseRun`/`resumeRun` 的装配实现；2026-10-13）。
+     * 冻住/解冻一次在途执行（`HostSummary.pauseRun`/`resumeRun` 的装配实现）。
      *
      * 与 [stopRun] 同一条"在途表精确命中"口径：false = 已结算/从未存在，或引擎冻不住
      * （pid 拿不到 / `kill` 二进制缺席）—— 调用方（悬浮窗按钮）按 false 反馈
@@ -332,7 +332,7 @@ class AssembledShell internal constructor(
 
     /**
      * 往一次在途执行的脚本进程 stdin 送一行（`HostSummary.sendInput` 的装配实现；
-     * 2026-10-16 悬浮窗底部输入框）。
+     * 悬浮窗底部输入框）。
      *
      * 与 [pauseRun] 同一条"在途表精确命中"口径：false = 已结算/从未存在，或管道
      * 已随进程关闭 —— 调用方（悬浮窗）按 false 如实报，不抛。

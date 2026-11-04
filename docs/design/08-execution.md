@@ -43,7 +43,7 @@ interface EnginePool {                                // 实现在 :app-service:
 自停请求可能被自身撤销取消，controller 必须在不可取消收尾区域完成已有的有界停止/强杀及回池，
 不承诺被关闭的连接还能收到 stop 成功 ACK。
 
-**脚本执行环境变量（全局一份，批 82 落地）**：管理面板「环境变量」编一组 KV，
+**脚本执行环境变量（全局一份，落地）**：管理面板「环境变量」编一组 KV，
 **所有脚本执行时注入脚本进程的 `process.env`**。契约住 `:domain`
 （`com.autoscript.domain.scripts.ScriptEnvStore` / `ScriptEnvEntry` / `ScriptEnvKeys`），
 落盘实现在 `:app-service:script-repo`（`core/FileScriptEnvStore`，jsonl 追加 + replay 收敛，
@@ -71,7 +71,7 @@ interface EnginePool {                                // 实现在 :app-service:
 **不注入 npm 安装会话进程**：`HostNodeExecutor` spawn 的 npm CLI 是宿主工具进程、不是用户脚本，
 零 spawn 门禁（§11）的注入面越窄越好 —— 这份表只进用户脚本的 `NodeProcessEngine` 路径。
 
-**脚本资源限额（全局一份，批 107 落地）**：设置页「脚本设置」编五项，
+**脚本资源限额（全局一份，落地）**：设置页「脚本设置」编五项，
 **限的是两类不同资源** —— 这个区分是本节的全部要点：
 
 | 档 | 字段 | 限的是谁 | 生效手段 |
@@ -155,7 +155,7 @@ interface EnginePool {                                // 实现在 :app-service:
 ### 8.5 崩溃恢复与幂等（checkpoint 意图日志）
 - `:main` 的 scheduler 持久化 **意图日志（intent log）**：`RUN_START(projectId, entry, runNonce, scheduledAt) → …execute… → COMMIT(result)` append-only（SQLite，启动即回放）。
 
-> **2026-10-08 批 78 修订**：本条的「生产实现 = jsonl + SQLite 双轨、打不开回落 jsonl」已作废 ——
+> **修订**：本条的「生产实现 = jsonl + SQLite 双轨、打不开回落 jsonl」已作废 ——
 > **生产只有 `SqliteIntentStore` 一条路**，SQLite 打不开即装配失败（fail closed），不回落。
 > 理由与口径见 [`../design-decisions.md`](../design-decisions.md) 第 47 项①：jsonl 那份的 `runId`
 > 分配（`max+1`）与「锁内先查后写」锚点**以单写者为前提**，回落会连带失去幂等锚点 ——
@@ -179,7 +179,7 @@ interface EnginePool {                                // 实现在 :app-service:
 **进程边界诊断（`RunRecord.exitCode` / `RunRecord.crashSummary`，backlog B11 落地）**：引擎宿主的排水线程不再对子进程 stderr「读即弃」——
 `ProcessBuilderLauncher` **不做** `redirectErrorStream(true)`（合流会丢失「这是 stderr 写的」的分辨，而病因几乎全在 stderr），
 stdout 那条通道**仍然只排空、不存内容**（它存在的唯一目的是防管道写满反压；脚本侧的
-裸 `console.log` 因此自 2026-10-15 起改由引导期包装走桥 —— 见 §7.3/§12.1，
+裸 `console.log` 因此自那时起改由引导期包装走桥 —— 见 §7.3/§12.1，
 `process.stdout.write` 与五档之外的 console 方法仍落这条排空通道），stderr 在排空时顺带写入**有界环形尾 buffer**
 （字节级、上限 `RunSummary.MAX_DETAIL` = 4096、满了丢最老、取快照时才整体 UTF-8 解码，故跨 read 的多字节字符不会撕裂）。
 摘要经 `ScriptEngine.lastRunSummary(): RunSummary?`（`:domain` 契约，缺省实现回 null）取出，**只在 `status()` 判出「自然退出」时填充**
@@ -201,7 +201,7 @@ stdout 那条通道**仍然只排空、不存内容**（它存在的唯一目的
 ### 8.7 保活与电源
 - `:main` 持 **specialUse FGS**（`onCreate` 启动，`TYPE_SPECIAL_USE` 勾选 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE="automation"`，无超时）。
 - 电池优化白名单、精确闹钟、开机启动、后台 Activity 启动豁免(**BAL**：仅允许 overlay 可见窗口路径/notification 触发路径)、自启动被 ROM 关闭——**全部入 PermissionCenter 三态门禁**（未授权=黄，被 ROM 杀=红且给跳转指引）。
-- 长跑脚本自身需要**WakeLock** 时用 `power_manager`（引擎进程请求 → `:main` 对应 FGS 加唤醒锁的 acquire/release，配套超时自动释放）——**已落地（2026-09-24；2026-09-30 步骤 6d handler 与账本同批迁 `:platform:system`）**：`PowerManagerNamespaceHandler`（`acquire`/`release`/`status` 三方法，直驱同模块 `WakeLockLedger`，账本语义零改；
+- 长跑脚本自身需要**WakeLock** 时用 `power_manager`（引擎进程请求 → `:main` 对应 FGS 加唤醒锁的 acquire/release，配套超时自动释放）——**已落地（2026-09-24；步骤 6d handler 与账本同批迁 `:platform:system`）**：`PowerManagerNamespaceHandler`（`acquire`/`release`/`status` 三方法，直驱同模块 `WakeLockLedger`，账本语义零改；
   keepalive 走 `:domain` `KeepAliveRenew` 窄缝）+ `AppShell.assemble` 的 `powerManagerHandler` **独立缝**（生产经 `PlatformWiring.powerManagerHandler(keeper)` 造）（与 datastore/zip/settings/notification/clipboard 同形，不入 `systemHandlers` 束）+ `AppShellApplication.installWithFiles` 现建喂缝 + `bridge/js` 的 `power.ts`（`acquire`/`release`/`status`）与 `power.test.cjs` 双侧契约。
 **实现注记已外迁**：`:main` 侧 FGS + 真唤醒锁（`WakeLockOps`/`WakeLockLedger`、`ForegroundOps`/`ForegroundKeeper`、屏幕门禁收口、`ShellSummary.keepAliveActive`）逐字见 [`design-status.md` §8.7 实现注记](../design-status.md#实现注记自各分卷外迁逐字保留)。
   诚实口径三条：脚本锁必须限时（无期限只属框架 token）、token 服务端分配（脚本自带会互撞/互释）、取不到锁回 `ERR_SERVICE_DISABLED` 且未记账（门禁据此拒绝 `SCREEN_ON`）；直驱账本不走 `ForegroundKeeper.start(token)`（那个单槽只属框架，调两次互踩 `frameworkToken`）。

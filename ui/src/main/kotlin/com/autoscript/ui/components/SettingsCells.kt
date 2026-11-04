@@ -31,9 +31,9 @@ import com.autoscript.ui.theme.isDarkTheme
  *
  * 相邻行合进同一张卡，裁剪包住整组，首尾行按压时也守住圆角。
  * 设置页与管理面板共用这份几何，权限到图标/颜色的映射仍由设置页自己持有。
- * **卡内不画分隔线**（批 47）：TG 的 `SettingCell` 走 `Factory.bindView` 时压根不传
- * divider；用户口径「分组那不需要横线分隔」同向。
- * 批 49 起设置页顶页的两组行**连图标与副标题都没有**（纯文字，见 [SettingsCellRow]）。
+ * **卡内不画分隔线**：TG 的 `SettingCell` 走 `Factory.bindView` 时压根不传
+ * divider；分组之间不画横线。
+ * 设置页顶页的两组行**连图标与副标题都没有**（纯文字，见 [SettingsCellRow]）。
  */
 @Composable
 internal fun SettingsCard(content: @Composable () -> Unit) {
@@ -83,7 +83,7 @@ internal fun SettingIconBlock(colors: SettingIconColors, glyph: GlyphKind) {
  * 行间不画分隔线 —— 分隔线是调用方的事，两屏都选择不画（见 [SettingsCard]）。
  *
  * @param colors 图标块渐变色对，**null = 这行没有图标块**（标题从 18dp 起）。
- *   批 49 起设置页顶页三组全纯文字（用户口径「都不需要图标，还有标题下面的小字」），
+ *   设置页顶页三组全纯文字，
  *   图标块是管理面板与权限子页那一档。
  * @param glyph 图标字形，与 [colors] 同进同出（都非空才画块）。
  * @param trailing 行尾槽位（设置页子页放三态值；没有就不传，不占位）。

@@ -57,14 +57,14 @@ enum class TrustTier {
 /**
  * 来源分级 → 掩码的默认矩阵（A5，§11）。
  *
- * ## 已裁定：无来源证据档的缺省掩码（2026-10-08）
+ * ## 已裁定：无来源证据档的缺省掩码
  *
- * 维护者 2026-10-08 拍板：**[TrustTier.UNKNOWN] 的缺省掩码 = 保守档 A**，即
+ * 维护者 拍板：**[TrustTier.UNKNOWN] 的缺省掩码 = 保守档 A**，即
  * [CapabilityMask.ALL] 减去 `CROSS_SCRIPT_CONTROL`、`CROSS_SCRIPT_OBSERVE` 两位，
  * 其余命名空间保持全量。这就是 [UNKNOWN_DEFAULT]。
  *
- * **2026-10-08 批 78 修订：`SCHEDULER_WRITE` 从保守档里放回去了**（原三位减成两位）。
- * 理由：批 76 已裁定**来源分级不做**（`design-decisions.md` 第 45 项），而这一位当初
+ * ** 修订：`SCHEDULER_WRITE` 从保守档里放回去了**（原三位减成两位）。
+ * 理由： 已裁定**来源分级不做**（`design-decisions.md` 第 45 项），而这一位当初
  * 收走的理由与第 45 项自己写的「同 UID 脚本绕开桥直接往注册表追加一行即可绕过」**逐字
  * 相同** —— 它挡不住恶意脚本，只挡老实脚本。留一个「待来源元数据接入后恢复」的口子，
  * 而恢复它的那条路已被关掉，等于挂一句永远兑现不了的承诺。跨脚本那两位**不动**：
@@ -74,20 +74,20 @@ enum class TrustTier {
  * ## 本批真正发生的行为变化（准确口径，别读成"保持现行行为"）
  *
  * 本批**没有**来源元数据，所以生产装配落 [TrustTier.UNKNOWN] 这一档。
- * 相对批 74 的现行行为，变化是：
+ * 相对现行行为，变化是：
  *
- * | 面 | 批 74（全量） | 本批缺省档 |
+ * | 面 | （全量） | 本批缺省档 |
  * |---|---|---|
  * | a11y / screen / dialogs / floatingWindow / shell / device / app | 可用 | **仍可用**（不动） |
  * | notification / clipboard / sensors / settings / power_manager | 可用 | **仍可用**（不动） |
  * | datastore / zip / images / npm | 可用 | **仍可用**（不动） |
  * | `engines.status` / `engines.poolStats`（观察其他执行） | 可用 | **拒** `ERR_PERMISSION_DENIED` |
  * | `engines.stop` / `engines.exec`（控制其他执行、拉起新执行） | 可用 | **拒** |
- * | `workManager.create/cancel/list`（脚本建/删定时任务） | 可用 | **仍可用**（批 78 起） |
+ * | `workManager.create/cancel/list`（脚本建/删定时任务） | 可用 | **仍可用** |
  * | `console.*` / `engines.heartbeat` / `engines.channel*` | 可用 | **仍可用**（`NONE` 要求） |
  *
- * 第四行**曾经**是功能回退（批 75 收走、批 78 放回）：缺来源元数据时脚本**可以**自建
- * 定时任务，与批 74 的现行行为一致。若将来真接了来源元数据、要按来源收窄这一位，
+ * 第四行**曾经**是功能回退（ 收走、 放回）：缺来源元数据时脚本**可以**自建
+ * 定时任务，与现行行为一致。若将来真接了来源元数据、要按来源收窄这一位，
  * 由**装配层注入**一个带 [ScriptAuthorizationPolicy] 的策略（按项目给档），或者显式给
  * `capabilityMask` 覆盖 —— 不要用全局开关把整批授权绕过去。
  *
@@ -106,14 +106,14 @@ object TrustTierMasks {
 
     /**
      * 无来源元数据（[TrustTier.UNKNOWN]）的缺省档 = 已裁定的「保守档 A」：**排除跨脚本面**，
-     * 其余全量（含排期写入 —— 批 78 放回 `SCHEDULER_WRITE`）。
+     * 其余全量（含排期写入 ——  放回 `SCHEDULER_WRITE`）。
      *
      * 收走的两位各有理由：
      * - `CROSS_SCRIPT_CONTROL` / `CROSS_SCRIPT_OBSERVE`：§11 与 §16 风险表点名
      *   「RuntimeChannel 按来源分级过滤；低信任不得控制高信任引擎」—— 这正是 A5 的目标。
      *
-     * **`SCHEDULER_WRITE` 不在其中（批 78 放回）**：批 75 曾把它一并收走，理由是「改宿主
-     * 任务注册表是持久副作用」；但那条理由与批 76 裁定来源分级不做时写下的
+     * **`SCHEDULER_WRITE` 不在其中（ 放回）**： 曾把它一并收走，理由是「改宿主
+     * 任务注册表是持久副作用」；但那条理由与 裁定来源分级不做时写下的
      * 「同 UID 脚本直接往注册表追加一行即可绕过」是同一条事实 —— 掩码收窄挡不住它。
      * 留着这一位 = 拿一个挡不住恶意的判据去罚老实脚本（脚本再也建不了定时任务，
      * 而 `workManager` 是 §14 P0 用户故事明写的闭环之一）。
@@ -125,7 +125,7 @@ object TrustTierMasks {
     /**
      * 矩阵本体（来源 → 掩码）。
      *
-     * 逐档依据见 [TrustTierMasks] 的 KDoc：只有 [UNKNOWN_DEFAULT] 是 2026-10-08 裁定的
+     * 逐档依据见 [TrustTierMasks] 的 KDoc：只有 [UNKNOWN_DEFAULT] 是 裁定的
      * 缺省；其余三档照搬 §11 冻结矩阵（不是安全性论断），[TrustTier.PACKAGED] fail closed。
      */
     fun maskFor(tier: TrustTier): CapabilityMask = when (tier) {

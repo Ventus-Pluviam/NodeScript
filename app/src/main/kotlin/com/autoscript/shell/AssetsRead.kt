@@ -8,7 +8,7 @@ import com.autoscript.appservice.npm.AssetTreeCliSource
 import com.autoscript.appservice.scriptrepo.assets.AndroidAssetsSource
 
 /**
- * APK 资产的四条读口（2026-10-07 backlog D7 自 `AppShellApplication` 外迁）。
+ * APK 资产的四条读口（backlog D7 自 `AppShellApplication` 外迁）。
  *
  * **为什么单独一个文件**：四条读法各自带一条**降级口径**（枚举失败算不算"没货"、
  * 读失败与缺件同不同形），那是判断不是搬运 —— 埋在 `AppShellKit.assemble` 那个九十行的

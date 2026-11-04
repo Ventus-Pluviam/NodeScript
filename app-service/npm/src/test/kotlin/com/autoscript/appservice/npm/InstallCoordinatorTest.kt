@@ -54,7 +54,7 @@ class InstallCoordinatorTest {
 
     /** 假执行体：在暂存目录写包内容，模拟 reify 产物。 */
     /**
-     * 记录型去向缝（原 `InstallHistory` 的替身；2026-10-17 用户令「去掉审计、改打系统日志」
+     * 记录型去向缝（原 `InstallHistory` 的替身
      * 之后这本"账"不再存在，事实只交给注入进去的缝，故替身就是这条缝本身）。
      *
      * **刻意不带时间戳**：时刻由去向侧盖（生产是 `HostLog` 自己取
@@ -166,7 +166,7 @@ class InstallCoordinatorTest {
         globalConfig: NpmGlobalConfig? = null,
         /** 控制台 shell 面执行缝；null = 缺省 [ShellOpExecutor.Unavailable]（未接线）。 */
         shell: ShellOpExecutor? = null,
-        /** 控制台命令历史（2026-10-10 批 90）；null = 未接线（不记也不读，老用例零改动）。 */
+        /** 控制台命令历史；null = 未接线（不记也不读，老用例零改动）。 */
         consoleHistory: ConsoleHistory? = null,
     ) = InstallCoordinator(
         services = NpmServices(
@@ -420,7 +420,7 @@ class InstallCoordinatorTest {
         assertEquals(1, peak.get(), "同一项目出现并行安装：per-project 锁没生效")
     }
 
-    // ═══ 操作事实的去向（§10.2；原「审计史」，2026-10-17 改打系统日志） ═══
+    // ═══ 操作事实的去向（§10.2；改打系统日志） ═══
 
     @Test
     fun `带 install 脚本的包装完发 SCRIPTS_SKIPPED 显式警告（禁止静默）`() = runBlocking {
@@ -592,7 +592,7 @@ class InstallCoordinatorTest {
         assertTrue(e.detail?.contains("registry=https://registry.npmjs.org") == true, "明细须含键值：${e.detail}")
     }
 
-    // ═══ 全局镜像源（§10.9 第 8 条；2026-10-09 批 83） ═══
+    // ═══ 全局镜像源（§10.9 第 8 条） ═══
 
     @Test
     fun `全局镜像源未接线时如实回出厂缺省`() = runBlocking {
@@ -948,11 +948,54 @@ class InstallCoordinatorTest {
 
     @Test
     fun `list 直读 lockfile v3`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0","dayjs":"^1.11.0"}}""")
         writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0","integrity":"sha512-x"},"node_modules/dayjs":{"version":"1.11.0"}}}""")
         val c = coordinator()
         val list = c.list("p1", 0)
         assertEquals(setOf("axios", "dayjs"), list.map { it.name }.toSet())
         assertEquals("1.7.0", list.first { it.name == "axios" }.version)
+    }
+
+    /**
+     * 直接依赖视界：清单只画
+     * `package.json` 声明过的名字，lock 闭包里的传递项（axios → follow-redirects /
+     * proxy-from-env…）没有座次 —— 那是依赖解析器的账本，不是"用户装了什么"。
+     */
+    @Test
+    fun `list 只画直接依赖：声明两个包，闭包五个包，清单只有那两个`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0","dayjs":"^1.11.0"}}""")
+        writeLock(
+            "p1",
+            """{"lockfileVersion":3,"packages":{"":{},
+                "node_modules/axios":{"version":"1.7.9","integrity":"sha512-a"},
+                "node_modules/follow-redirects":{"version":"1.15.9","integrity":"sha512-f"},
+                "node_modules/proxy-from-env":{"version":"1.1.0","integrity":"sha512-p"},
+                "node_modules/form-data":{"version":"4.0.1","integrity":"sha512-fo"},
+                "node_modules/dayjs":{"version":"1.11.13","integrity":"sha512-d"},
+                "node_modules/axios/node_modules/follow-redirects":{"version":"1.15.8"}}}""",
+        )
+        val list = coordinator().list("p1", 0)
+        assertEquals(
+            listOf("axios", "dayjs"),
+            list.map { it.name },
+            "声明外的 follow-redirects / proxy-from-env / form-data 一律不出现，连嵌套的那份也不出现",
+        )
+        assertEquals("1.7.9", list.first { it.name == "axios" }.version)
+    }
+
+    /** 声明里有、lock 里读不到（还没装过 / 锁被清过）的自然不出现 —— 清单回答"声明且装上了什么"。 */
+    @Test
+    fun `list 声明过但 lock 没有的包不出现（也不凭空给个版本）`() = runBlocking {
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0","todo":"^2.0.0"}}""")
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0"}}}""")
+        assertEquals(listOf("axios"), coordinator().list("p1", 0).map { it.name })
+    }
+
+    /** 没有 package.json（还没装过/目录坏了）→ 空清单，不是把 lock 全文端上来。 */
+    @Test
+    fun `list 声明文件都没有时是空清单`() = runBlocking {
+        writeLock("p1", """{"lockfileVersion":3,"packages":{"":{},"node_modules/axios":{"version":"1.7.0"}}}""")
+        assertTrue(coordinator().list("p1", 0).isEmpty(), "没声明 = 清单没有可画的条目")
     }
 
     @Test
@@ -961,10 +1004,11 @@ class InstallCoordinatorTest {
         // a 与 b 各嵌一份 c@1（`node_modules/a/node_modules/c` 与 `node_modules/b/node_modules/c`
         // 是同名同版的两份）。依赖管理页用 `items(key = "<name>@<version>")` 铺这份清单，
         // 键重复时 Compose **当场抛**（`Key "c@1.0.0" was already used`）——
-        // 2026-10-17 设备实测的「依赖装多了，查看的时候容易闪退」。
+        // 设备实测的「依赖装多了，查看的时候容易闪退」。
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"a":"1.0.0","b":"1.0.0","c":"2.0.0"}}""")
         writeLock(
             "p1",
-            """{"lockfileVersion":3,"packages":{"":{"dependencies":{"a":"1.0.0"}},
+            """{"lockfileVersion":3,"packages":{"":{},
                 "node_modules/a":{"version":"1.0.0"},
                 "node_modules/b":{"version":"1.0.0"},
                 "node_modules/c":{"version":"2.0.0"},
@@ -984,7 +1028,7 @@ class InstallCoordinatorTest {
         )
     }
 
-    // ═══ 读口不许把阻塞落在调用线程上（2026-10-17 设备实测「依赖装多了查看时闪退」） ═══
+    // ═══ 读口不许把阻塞落在调用线程上（设备实测「依赖装多了查看时闪退」） ═══
 
     @Test
     fun `快照读取不落在调用线程上（依赖装多了 = 主线程上一趟全树遍历）`() = runBlocking {
@@ -1046,8 +1090,8 @@ class InstallCoordinatorTest {
     /**
      * 可用空间进不了「预检下限 × 1.25」的余量 → 发 `DISK_QUOTA` 黄警，**不拦**。
      *
-     * **2026-10-17 换锚**：此前这条黄是「node_modules 用掉配额的 80%」，而项目配额那一档
-     * 已按用户口径整个摘掉（「取消 512MB 限制」「取消上限设置吧」）—— 现在唯一还会拒安装的
+     * **锚在磁盘上**：项目配额已整个摘掉 ——那一档
+     * 现在唯一还会拒安装的
      * 资源闸是磁盘预检，故黄警也锚在它上面（600MB 过得了 500MB 的下限，但进不了 625MB 的余量）。
      */
     @Test
@@ -1072,7 +1116,7 @@ class InstallCoordinatorTest {
         assertEquals(ErrorCode.ERR_DISK_FULL, ex.error)
     }
 
-    // ═══ 操作事实的去向（原「审计史」；2026-10-17 改打系统日志，§10.5-2） ═══
+    // ═══ 操作事实的去向（改打系统日志，§10.5-2） ═══
 
     @Test
     fun `操作事实按写入序交给去向，全局变更的 projectId 是空串`() = runBlocking {
@@ -1112,7 +1156,7 @@ class InstallCoordinatorTest {
         assertEquals("npm 挂了", execFail.detail, "失败原因是原文，不是重编的一句话")
 
         // ② 磁盘**预检**拒绝（在 handle 存在之前就抛，与 crossCheckRegistry 同一条口径）。
-        // 探针注一个小数即可 —— 2026-10-17 配额摘了之后，撑满 node_modules 已不再触发任何拒绝。
+        // 探针注一个小数即可 —— 配额摘了之后，撑满 node_modules 已不再触发任何拒绝。
         val gateLog = RecordingOpLog()
         val tight = coordinator(free = 10L * 1024 * 1024, opLog = gateLog)
         assertThrows(AutojsException::class.java) {
@@ -1124,7 +1168,7 @@ class InstallCoordinatorTest {
         assertTrue(gateFail.detail!!.contains("磁盘"), "预检拒绝也要说清为什么（实为 ${gateFail.detail}）")
     }
 
-    // ═══ 缓存回收（§10.9 第 5 条的动作半边，2026-10-09 批 86） ═══
+    // ═══ 缓存回收（§10.9 第 5 条的动作半边） ═══
 
     /**
      * 往协调器真正会读的那个目录里放一份 content，返回 integrity。
@@ -1253,7 +1297,7 @@ class InstallCoordinatorTest {
         assertFalse(r.indexRebuilt)
     }
 
-    // ═══ 全局作用域（2026-10-17「项目选择改成依赖作用域，下拉框加个全局」） ═══
+    // ═══ 全局作用域（） ═══
 
     /**
      * 全局依赖的家就是 `files/scripts/node_modules` —— 它的名字**过得了项目号判据**
@@ -1279,7 +1323,7 @@ class InstallCoordinatorTest {
      * 作用域下拉里**永远有「全局」这一项**（哪怕一次都没装过）—— 没有它，用户就无从
      * "往全局装第一包"。
      *
-     * **`storage` 恒非 null**（2026-10-17 第二批改的口径）：用户看到的现象是"全局作用域下
+     * **`storage` 恒非 null**（第二批改的口径）：用户看到的现象是"全局作用域下
      * 没有 node_modules 那一行"。原因是全局那条走了"没量到就不画"，而**项目**那条永远
      * 不会 —— `storage()` 给每个项目都构造一份读数，目录不存在时 `totalBytes` 就是 0，
      * 界面照样画一行「node_modules 0 B」。同一个物理事实在两档作用域上画出两种界面。
@@ -1308,6 +1352,7 @@ class InstallCoordinatorTest {
     fun `全局装了之后快照里那条带上尺寸与清单`() = runBlocking {
         val pkg = Files.createDirectories(layout.globalNodeModules.resolve("axios"))
         Files.write(pkg.resolve("index.js"), ByteArray(2048))
+        writeManifest(NpmTargetScope.GLOBAL, """{"name":"scripts","version":"1.0.0","dependencies":{"axios":"^1.7.0"}}""")
         seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
 
         val global = coordinator().snapshot().projects.single { it.projectId == NpmTargetScope.GLOBAL }
@@ -1356,6 +1401,8 @@ class InstallCoordinatorTest {
      */
     @Test
     fun `全局作用域读的是 files-scripts 那棵的 lock，与项目不串`() = runBlocking {
+        writeManifest(NpmTargetScope.GLOBAL, """{"name":"scripts","version":"1.0.0","dependencies":{"axios":"^1.7.0"}}""")
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"left-pad":"^1.3.0"}}""")
         seedProjectLock(NpmTargetScope.GLOBAL, "axios" to null)
         seedProjectLock("p1", "left-pad" to null)
         val c = coordinator()
@@ -1703,12 +1750,12 @@ class InstallCoordinatorTest {
         assertTrue(asked.isEmpty(), "非法输入连请求都不该发出：$asked")
     }
 
-    // ═══ 控制台命令面（§10.9 第 3 条，2026-10-09 批 84） ═══
+    // ═══ 控制台命令面（§10.9 第 3 条） ═══
 
     @Test
     fun `控制台拒收：抛原文且不排队（不落句柄、不写输出环）`() = runBlocking {
         val c = coordinator()
-        // `ls -la` 自 2026-10-09 起**不再**是拒收行：默认模式下它是 npm bin
+        // `ls -la` **不是**拒收行：默认模式下它是 npm bin
         // （`Exec("ls")`），走的是「node_modules 里没有这个 bin」那条 ERR_NOT_FOUND。
         for (line in listOf("", "   ", "npm publish", "npm run", "npm install git+https://x.git")) {
             val ex = assertThrows(IllegalArgumentException::class.java) {
@@ -2029,7 +2076,7 @@ class InstallCoordinatorTest {
     }
 
     /**
-     * 缓存体积读数 + 它进依赖面板快照（§10.9 第 5 条的 `npm-cache` 尺寸栏，批 87）。
+     * 缓存体积读数 + 它进依赖面板快照（§10.9 第 5 条的 `npm-cache` 尺寸栏）。
      *
      * 两条一起断，因为它们是一件事的两半：量到了却进不了快照，界面上那栏就永远是 0
      * （而那看起来与"缓存真的是空的"一模一样）。
@@ -2066,7 +2113,7 @@ class InstallCoordinatorTest {
         assertEquals(0L, c.cacheStorage().totalBytes)
     }
 
-    // ═══ 声明的依赖 → 提升到全局（2026-10-17「依赖去重执行后让它把依赖自动放进全局作用域中」） ═══
+    // ═══ 声明的依赖 → 提升到全局 ═══
 
     /**
      * 取的是**声明的**依赖（`dependencies` + `devDependencies`），不是 lock 的闭包。
@@ -2156,7 +2203,7 @@ class InstallCoordinatorTest {
         assertTrue(exec.calls.isEmpty(), "两次都不该排队")
     }
 
-    // ═══ 每行尺寸（2026-10-17「依赖列表显示一下各个依赖占用的空间大小」） ═══
+    // ═══ 每行尺寸 ═══
 
     /**
      * 字节按**顶层那一段**分摊 —— 判据见 `InstallCoordinator.topLevelPkgOf`。
@@ -2186,6 +2233,7 @@ class InstallCoordinatorTest {
             ByteArray(10),
         )
         seedProjectLock("p1", "esbuild" to null, "@babel/core" to null, "not-on-disk" to null)
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"esbuild":"^0.21.5","@babel/core":"^7.24.0","not-on-disk":"^1.0.0"}}""")
 
         val p1 = coordinator().snapshot().projects.single { it.projectId == "p1" }
 
@@ -2222,6 +2270,7 @@ class InstallCoordinatorTest {
         val pkg = Files.createDirectories(nm.resolve("esbuild"))
         Files.write(pkg.resolve("index.js"), ByteArray(1000))
         seedProjectLock("p1", "esbuild" to null)
+        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"esbuild":"^0.21.5"}}""")
 
         // `projects` 里还有一条全局作用域（`snapshot()` 最后那条永远在），故按 id 挑。
         suspend fun p1() = c.snapshot().projects.single { it.projectId == "p1" }.installed.single().sizeBytes

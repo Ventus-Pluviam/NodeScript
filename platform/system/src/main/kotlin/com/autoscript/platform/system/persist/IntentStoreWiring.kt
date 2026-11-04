@@ -15,7 +15,7 @@ import java.nio.file.Path
  *
  * 1. **迁移**（[migrate]）：老设备上已有 `intent-log.jsonl`。SQLite 库为空且 jsonl 非空时
  *    把历史**带着原 runId** 导进去，然后把 jsonl 改名归档（`intent-log.jsonl.migrated`）。
- * 2. **打开**（[open]）：Android 生产开 SQLite。**没有回落**（2026-10-08 裁定）——
+ * 2. **打开**（[open]）：Android 生产开 SQLite。**没有回落**（裁定）——
  *    打开失败就是失败，异常原样抛给装配层（`AppShellApplication.installWithFiles` 的
  *    失败分支：记日志、壳保持未就绪、闹钟走漏投记账）。原先那条「打不开就回落 jsonl」
  *    已删：回落目标的 runId 分配与幂等锚点都靠单写者假设撑着，那不是降级，是

@@ -9,23 +9,23 @@ import java.nio.file.Paths
  *
  * ## 来历：两份逐字同款的重复合并到一处
  *
- * 2026-10-11 批 95（`:app-service:npm` 的 T1 杀树）与批 99（`:platform:system` 的 shell
+ * （`:app-service:npm` 的 T1 杀树）与（`:platform:system` 的 shell
  * 收尸）各自落了一份 `ProcOps`，**手法逐字同款**（`/proc` ppid 图 + `kill` 二进制 + pid
  * 两级反射阶梯），**代码两份**。当时两边 KDoc 互相点名、明确写下「被依赖方向逼的」：
  * npm 与 platform 两个模块都只依赖 `:domain`，而 `ProcOps` 属于进程/文件系统面，
  * 塞进 `:domain` 等于让领域层知道 `/proc`。**改一处时另一处必须跟着看** —— 那不是维护性，
- * 是欠了债。批 105 抽本模块把债还掉，两侧现在各留一句「已合并」的指针。
+ * 是欠了债。 抽本模块把债还掉，两侧现在各留一句「已合并」的指针。
  *
  * 本模块**零模块依赖**（连 `:domain` 都不需要）：只用 `java.nio` 与 `Process` 桩面。
  *
  * ## 为什么不用 `java.lang.ProcessHandle`
  *
- * **那整类不在 android.jar 里**（批 95 已实查：`platforms/android-35/data/api-versions.xml`
+ * **那整类不在 android.jar 里**（ 已实查：`platforms/android-35/data/api-versions.xml`
  * 无条目、jar 无 class、`Process` 桩面无 `toHandle()`/`pid()`）—— 桌面 JDK 编译放行、
  * 设备上 `NoSuchMethodError`/`NoClassDefFoundError` 被吞成**静默空转**：后代集合恒空 →
  * 杀树退化成只杀主进程，**且没有任何报错**。这正是 `ProcessLauncher` KDoc 记的「看着能用」
  * 错觉的来源（javac 按桌面 JDK 放行，npm/platform 两模块是纯 JVM 模块、没有 lint 的
- * `NewApi` 兜着）。用户设备 Android 13 上，批 91 记的「孙子被 reparent 后链断」
+ * `NewApi` 兜着）。用户设备 Android 13 上， 记的「孙子被 reparent 后链断」
  * 其实从未成为主要问题 —— **整条后代链在设备上都不存在**。
  *
  * ## `/proc` 版的三个要点
@@ -79,7 +79,7 @@ class ProcOps(
      * 两级反射阶梯（`:engine:node-process` 的 `ProcessLauncher` 同手法、同理由，那处是
      * 为身份绑定，这里为杀树）：`pid()` 方法（桌面 JDK 有；**Android 平台 API 表里没有**
      * —— android-36 的 `api-versions.xml` 实查）→ 私有字段 `pid`，**从运行时类起步往上走**
-     * （2026-10-15 订正措辞：字段住**子类**上 —— Android 13 libcore 是
+     * （订正措辞：字段住**子类**上 —— Android 13 libcore 是
      * `java.lang.UNIXProcess.pid`，桌面 JDK 是 `java.lang.ProcessImpl.pid`；
      * 那处引擎副本原先从 `Process::class.java` 起步，够不着子类，已同批修正）。
      * 本模块是纯 JVM 模块，编译按桌面 JDK 放行，直调 `process.pid()` 在设备桩面上根本不存在。
@@ -127,7 +127,7 @@ class ProcOps(
      * `prctl(PR_SET_NAME)` 改自己，里面可以带空格与 `)`）—— 唯一稳的切法是找**最后一个**
      * `)`：它之后才是定长字段区（state 第一个，ppid 第二个）。
      *
-     * [entry] 是 `/proc/<pid>` 那个**目录**（stat 是它里面的文件）。批 95 在 npm 那侧
+     * [entry] 是 `/proc/<pid>` 那个**目录**（stat 是它里面的文件）。 在 npm 那侧
      * 踩过这个坑：第一版读成了目录本身，全部条目 "Is a directory" 被跳过 → 后代恒空集，
      * 而症状与设备上「静默空转」同形 —— 是那条真进程用例抓到的。
      */

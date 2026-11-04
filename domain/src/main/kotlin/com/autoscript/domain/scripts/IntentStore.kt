@@ -11,7 +11,7 @@ package com.autoscript.domain.scripts
  * - [InMemoryIntentStore]（本模块 `testFixtures`）—— 零 IO 的测试替身，
  *   跑同一套契约用例。**它不是生产实现**：不落盘 = 崩溃恢复在它上面不成立。
  *
- * **生产没有第二条路，也没有回落**（2026-10-08 裁定）：SQLite 打不开 = 装配失败，
+ * **生产没有第二条路，也没有回落**（裁定）：SQLite 打不开 = 装配失败，
  * 壳保持未就绪、闹钟走漏投记账（`AppShellApplication.installWithFiles` 的失败分支）。
  * 原先「打不开就回落 jsonl」的那条路已删 —— 回落目标（jsonl 追加式存储）的
  * 「runId 不复用」与「幂等锚点原子」两条都靠单写者假设撑着（`max+1` 发号、锁内先查后写），

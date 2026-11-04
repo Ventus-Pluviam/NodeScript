@@ -28,7 +28,7 @@ enum class ErrorCode(val code: String, val summary: String) {
     ERR_NPM_LOWMEM("ERR_NPM_LOWMEM", "安装会话内存不足"),
     ERR_IO("ERR_IO", "文件系统/归档读写失败"),
     /**
-     * 宿主内部错误（2026-10-11 批 97，外审 M4）：**代码有 bug**，不是调用方参数错。
+     * 宿主内部错误（外审 M4）：**代码有 bug**，不是调用方参数错。
      *
      * 为什么必须有这一档：此前桥路由把任何未预料的 `Exception` 折成
      * `ERR_INVALID_PARAM` —— 脚本 `catch (e) { e.is('ERR_INVALID_PARAM') }` 会把

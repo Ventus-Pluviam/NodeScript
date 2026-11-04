@@ -14,7 +14,7 @@ import com.autoscript.domain.core.ErrorCode
  * **未知异常**：本基类**确实不接**（照旧穿出）；但**穿出不等于「裸奔到 wire」** ——
  * `:bridge:java` 的 `BridgeRouter` 在更外层还有一档 `catch (e: Exception)`，把它折成
  * `ERR_INTERNAL`。所以对写 handler 的人：**未知异常最终会变成 `ERR_INTERNAL` 回到脚本，
- * 而不是进程炸、也不是 `ERR_INVALID_PARAM`**（后者是批 97 之前的旧行为，已订正）。
+ * 而不是进程炸、也不是 `ERR_INVALID_PARAM`**（后者是此前的旧行为，已订正）。
  *
  * **本基类为什么还要留着这两档而不是全交给 Router**：子类调用栈深，中途穿出的
  * `AutojsException` 会被自己的 `try`/`catch` 误捕或变形；就地收口让「这个 handler 的

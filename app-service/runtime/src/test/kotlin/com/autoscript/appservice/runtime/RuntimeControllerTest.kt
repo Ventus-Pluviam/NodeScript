@@ -570,7 +570,7 @@ class RuntimeControllerCancellationTest {
     }
 
     /**
-     * 落盘口（2026-10-13）：start 成功即记 index 一次，参数取这次请求的归属。
+     * 落盘口：start 成功即记 index 一次，参数取这次请求的归属。
      */
     @Test
     fun `start 成功调 onRunStarted 一次 参数是这次请求的归属`() = runBlocking {
@@ -597,7 +597,7 @@ class RuntimeControllerCancellationTest {
     }
 
     /**
-     * 暂停账（2026-10-13）：`pauseRun` 冻住 → 锚点排除 + `RunStatus.paused`；
+     * 暂停账：`pauseRun` 冻住 → 锚点排除 + `RunStatus.paused`；
      * `resumeRun` 解冻 → 锚点回来 + startedAt 刷新（宽限与期限顺延）。
      *
      * FakeEngine 的 pause()/resume() 缺省 false（= 冻不住）—— 这里把两个开关打开，
@@ -655,7 +655,7 @@ class RuntimeControllerCancellationTest {
     }
 
     /**
-     * stdin 送行（2026-10-16）：`sendInput` 与 `pauseRun` 同一条"在途表精确命中"口径 ——
+     * stdin 送行：`sendInput` 与 `pauseRun` 同一条"在途表精确命中"口径 ——
      * 在途才转给引擎、不在途直接 false 不问引擎、引擎说写不进也如实 false。
      *
      * 三条都要钉：窗里的 `boundRunId` **结算后仍留着**（结算不解绑），那时用户敲进
@@ -686,7 +686,7 @@ class RuntimeControllerCancellationTest {
     }
 
     /**
-     * stdin 关写端（2026-10-16 用户令「答完自己退」）：`closeStdin` 与 [sendInput] 同一条
+     * stdin 关写端：`closeStdin` 与 [sendInput] 同一条
      * "在途表精确命中"口径 —— 在途才转给引擎、不在途直接 false 不问引擎、引擎说关不了
      * 也如实 false（幂等：写端只能关一次，第二次当然是 false，但那不是错误）。
      *

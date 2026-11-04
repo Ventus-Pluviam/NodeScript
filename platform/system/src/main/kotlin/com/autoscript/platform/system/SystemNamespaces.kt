@@ -29,7 +29,7 @@ import com.autoscript.platform.system.zip.ZipNamespaceHandler
  * 系统面十一个命名空间的 handler **工厂束**（§4.1/§6/§9.4/§9.6/§12.2；装配收拢：
  * `PlatformWiring` 不逐个 import handler 类）。
  *
- * **2026-10-01（D3）子包按命名空间对齐后本文件只剩工厂**：本对象无逻辑 —— 不解释
+ * **（D3）子包按命名空间对齐后本文件只剩工厂**：本对象无逻辑 —— 不解释
  * payload、不吞错误、不改错误码（§7 桥侧只透传），只做「SPI 参数 → handler 实例」的
  * 构造收拢。四个原本内联在此的 handler（`Shell`/`Device`/`App`/`FloatingWindow`）已
  * 拆到各自子包，与 capabilities 的 `a11y/A11yNamespaceHandler` 同形 ——
@@ -44,7 +44,7 @@ import com.autoscript.platform.system.zip.ZipNamespaceHandler
  *
  * **各子包的四件同住一处**：每个命名空间子包里**契约 + ops 缝 + Android 实现 + handler**
  * 同住（`shell/` `device/` `app/` `floatingWindow/` 四面的契约原是一份
- * `SystemHostContracts.kt`，2026-10-01 D3 按面拆开；它们的 handler 原本是**本文件的内联
+ * `SystemHostContracts.kt` 按面拆开；它们的 handler 原本是**本文件的内联
  * 四件**，同批拆出）。拆分的理由是「按命名空间对齐」而不是「按层对齐」——同一次改动要动的
  * 四件挨在一起，跨层跳文件的开销大于分层带来的秩序。各子包文件不再重复这段沿革。
  *

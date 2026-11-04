@@ -27,7 +27,7 @@ import java.util.zip.ZipFile
  * 真实威胁面（用户文件不可信），不做等于给任意写。只接受**常规文件**条目，
  * 目录/符号链接形态一律忽略（cacache 不需要链接即成）。
  *
- * **资源上限（2026-10-06 补，backlog B12）**：两道闸，[MAX_BUNDLE_BYTES]（整包）与
+ * **资源上限（补，backlog B12）**：两道闸，[MAX_BUNDLE_BYTES]（整包）与
  * [MAX_ENTRY_BYTES]（单条目）。这是同 `:platform:system` 的 `ShellCaptureLimit` 一类的
  * 账 —— 那条是「宿主自己读回来的输出」，这条是「用户递进来的外部文件」，
  * 都是**在被撑爆之前先兜住**。为什么必须有：这条路径的调用方是 SAF 选进来的文件，
@@ -215,7 +215,7 @@ object NpmOfflineBundleImporter {
     /**
      * zip slip 检疫：`..` 段、绝对路径、盘符形态一律拒（cacheDir 之外一字节都不写）。
      *
-     * **2026-10-06 修**：KDoc 一直写着「盘符形态」，实现却只查了前两类 —— 注释承诺 >
+     * **修**：KDoc 一直写着「盘符形态」，实现却只查了前两类 —— 注释承诺 >
      * 实现。第三类补上 `[DRIVE_LETTER]`。危害本来就不大（本导入器从不把条目名当路径用，
      * 落点由 integrity 十六进制经 [NpmCacheSeedDeployer.contentPath] 反推，见 import()），
      * 但「注释说的比代码做的多」在安全面上是会误导下一个改这里的人的，按实现补齐注释或

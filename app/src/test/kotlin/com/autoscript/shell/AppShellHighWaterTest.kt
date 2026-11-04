@@ -82,7 +82,7 @@ private object HighWaterProvider : SchedulerProvider {
 }
 
 /**
- * 2026-10-14 真机 bug「终态记录不可改写」的**装配层回归**：装配根从档案读到高水位后，
+ * 真机 bug「终态记录不可改写」的**装配层回归**：装配根从档案读到高水位后，
  * 必须在引擎第一次 execute 之前把它送进每个引擎实例（生产经 `NodeEngineConfig.runIdHighWater`，
  * 构造即站在历史之后）—— 这样"重启后的第一次执行"拿到的是历史之后的号，归档不再撞
  * 上一进程留下的终态行。

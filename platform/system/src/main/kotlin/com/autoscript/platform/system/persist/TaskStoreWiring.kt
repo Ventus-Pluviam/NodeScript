@@ -9,7 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * 任务注册表存储的**打开与一次性迁移**（§8.6；2026-10-11 批 102 P4 阶段 C）。
+ * 任务注册表存储的**打开与一次性迁移**（§8.6）。
  *
  * 与 [IntentStoreWiring] **同一套口径**（不发明第二种迁移纪律）：
  * 1. **迁移**（[migrate]）：老设备上已有 `tasks.jsonl`。库为空且 jsonl 非空时把历史导进去

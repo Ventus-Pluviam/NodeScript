@@ -10,7 +10,7 @@ import com.autoscript.domain.json.DomainJson
  * 「这个文件该不该导」。把解析与裁定都放这里，两边共用同一份口径，且它是纯函数
  * （零 Android、零 IO），本机 JVM 可测。
  *
- * **格式**：与**已退役的 jsonl 意图存储**（`JournalFileStore`，2026-10-08 删除）
+ * **格式**：与**已退役的 jsonl 意图存储**（`JournalFileStore`，删除）
  * 的落盘形态逐字一致 —— 这里读的正是老设备上那些文件，格式冻结不动：
  * ```
  * {"op":"start","runId":N,"projectId":…,"scriptPath":…,"runNonce":…,"trigger":…,

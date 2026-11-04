@@ -22,7 +22,7 @@ import com.autoscript.ui.theme.ThemeColors
  * 底色 = 扩展名哈希取色表槽位（同一扩展名恒同色），字 = 扩展名（最多 4 字符），
  * JS/HTML/SH/MD 等常见类型换专属字形（白线画在色底上）。
  *
- * 2026-10-13 自 `ProjectScreen` 上提为共享组件（原先 private 钉死 52dp，
+ * 自 `ProjectScreen` 上提为共享组件（原先 private 钉死 52dp，
  * 任务中心抄了第二份 44dp 的 `TaskAvatar` —— 两份必然漂）。调用方只给尺寸，
  * 图标/字号按比例派生（52dp 档 = 项目页文件行，44dp 档 = TG 联系人行/日志列表行）。
  */

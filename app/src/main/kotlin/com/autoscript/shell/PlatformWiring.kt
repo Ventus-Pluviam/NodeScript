@@ -111,7 +111,7 @@ object PlatformWiring {
          */
         val projectionSessions: MediaProjectionSessions? = null,
         /**
-         * 控制台 shell 面的执行体（2026-10-09）。
+         * 控制台 shell 面的执行体。
          *
          * **为什么要有这一条**：控制台挂在 npm 模块上，而 `:app-service:npm` 的
          * `ArchitectureTest` 禁 `com.autoscript.platform..` —— 它编译期看不到
@@ -184,7 +184,7 @@ object PlatformWiring {
     /**
      * a11y 装配（[CapabilityNamespaces.a11y] 形状转接；实现在 :platform:capabilities）。
      *
-     * **三通道登记（§9.3，2026-10-06）**：`auto` 恒在（无障碍原生）；`root` 与 `adb`
+     * **三通道登记（§9.3）**：`auto` 恒在（无障碍原生）；`root` 与 `adb`
      * **各自按可用性接线**，不可用就**不登记** —— 调用方指定它时拿到 handler 的
      * `ERR_PERMISSION_DENIED` + 引导文案，而不是「命令跑不起来」。这不是降级：
      * 登记与否只决定「这条通道现在有没有」，**绝不改变调用方选的那条**。
@@ -254,7 +254,7 @@ object PlatformWiring {
      * 并在此之前做一次性迁移（老设备的 `intent-log.jsonl` → SQLite，带原 runId、
      * 幂等可重入 —— 理由见 [IntentStoreWiring] 的 KDoc）。
      *
-     * **打不开就是失败，不回落**（2026-10-08 裁定）：异常原样抛给调用方
+     * **打不开就是失败，不回落**（裁定）：异常原样抛给调用方
      * （`AppShellApplication.installWithFiles` 的失败分支 —— 记日志、壳保持未就绪、
      * 闹钟走漏投记账）。原先那条「打不开就回落 jsonl」已删：回落目标的 runId 分配
      * （`max+1`）与幂等锚点（锁内先查后写）都靠单写者假设撑着，那不是降级，
@@ -268,7 +268,7 @@ object PlatformWiring {
         IntentStoreWiring.open(context.applicationContext, nsDir)
 
     /**
-     * **其余两份存储的生产打开**（批 102 P4；§8.5 运行档案 + §8.6 任务注册表）：
+     * **其余两份存储的生产打开**（§8.5 运行档案 + §8.6 任务注册表）：
      * 各开 SQLite 并在之前做一次性 jsonl 迁移。
      *
      * **为什么合成一个入口**：它们是同一件事的两面（同一 `.ns` 目录、同一套迁移纪律、
@@ -343,7 +343,7 @@ object PlatformWiring {
                     // `rememberCoroutineScope()`），不切就是拿 UI 线程陪跑到超时
                     // —— 整个窗口在这段时间里画不出帧、也处理不了输入。
                     //
-                    // 这条链**就是**「`input tap` 挂 30s」的成因 —— 2026-10-10 真机 ANR
+                    // 这条链**就是**「`input tap` 挂 30s」的成因 —— 真机 ANR
                     // 实证：`ANR in com.autoscript … Input dispatching timed out
                     // （Waited 5005ms for KeyEvent … ENTER(66)）`，主线程栈为
                     // `MainActivity$ManagementSubPageHost$4$1$1.invokeSuspend(MainActivity.kt:618)`
@@ -353,12 +353,12 @@ object PlatformWiring {
                     // `input`（WAIT_FOR_FINISH）只好陪等到 30s 超时 —— 所以**每一条**
                     // 都挂（实测修复前连续 6 条全 32s），不是「只有冷置后的第 1 条」。
                     // 目标窗口不属于本进程时不受影响：`input tap 5 5`（状态栏）实测 2.6s。
-                    // 2026-10-10 外审第 1 条。
+                    //
                     val r = withContext(Dispatchers.IO) { ShizukuInput.exec(command, timeoutMillis) }
                     // 逐字段转接（`:platform:capabilities` 看不到 `:platform:system` 的
                     // `ShellResult`，两边各有一个同形 DTO）。**`truncated` 必须一起搬**：
                     // 漏掉它，adb 档的输出被截到上限时控制台不会打那句「已截断」——
-                    // 那是「悄悄丢字节」，正是 §9.6 截断口径要防的事（2026-10-09 补）。
+                    // 那是「悄悄丢字节」，正是 §9.6 截断口径要防的事（补）。
                     ShellResult(
                         code = r.code,
                         stdout = r.stdout,
@@ -401,7 +401,7 @@ object PlatformWiring {
 }
 
 /**
- * 档案里的 runId 高水位（2026-10-14 真机 bug）：已用过的最大 engineRunId，空档回 `0`。
+ * 档案里的 runId 高水位（真机 bug）：已用过的最大 engineRunId，空档回 `0`。
  *
  * 顶到顶层而不是 `PlatformWiring` 成员：**时序上**水位必须在引擎建出来之前拿到，而引擎在
  * 装配期 eager 建（`FixedEnginePool` 构造），那条路径是同步的 —— 本口是全仓唯一能在同步

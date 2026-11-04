@@ -31,7 +31,7 @@ import com.autoscript.platform.capabilities.device.ShizukuInput
  * 第一条走共享 [ArchGate]；第二、三条是复合规则（`and().resideOutsideOfPackage`），形状不通用，
  * 留在本文件自写 —— 共享门只收「最通用的一条」，不硬塞变体。
  *
- * **第三条（2026-10-09）**：设备面里**只许 [ShizukuInput] 反射 Shizuku**。守的是一个
+ * **第三条**：设备面里**只许 [ShizukuInput] 反射 Shizuku**。守的是一个
  * 真机上才暴露的坑：`newProcess` 的返回值是**包内可见**的 AIDL proxy，从它上面
  * `getMethod` 要么找不到签名、要么 `invoke` 抛 `IllegalAccessException` —— 而正确的写法
  * （从公开接口取）与错误的写法在源码上长得几乎一样。这条规则把"谁能碰 Shizuku"收成一处，
@@ -143,7 +143,7 @@ class ArchitectureTest {
          * - 点分（`rikka.shizuku`）—— `Class.forName("…")` 的字符串常量；
          * - 斜杠（`rikka/shizuku`）—— 类型描述符（`Lrikka/shizuku/Shizuku;`）与 import 出来的引用。
          *
-         * 2026-10-09 实测教训：只找斜杠形态时，一个只写 `Class.forName("rikka.shizuku.Shizuku")`
+         * 实测教训：只找斜杠形态时，一个只写 `Class.forName("rikka.shizuku.Shizuku")`
          * 的新类**照样绿**（那正是这条门要拦的东西）—— 门必须先自己红一次才算立住。
          */
         val NEEDLES: List<ByteArray> = listOf("rikka.shizuku", "rikka/shizuku", "moe.shizuku", "moe/shizuku")

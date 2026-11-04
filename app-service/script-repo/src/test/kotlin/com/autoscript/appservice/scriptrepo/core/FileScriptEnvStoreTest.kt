@@ -120,7 +120,7 @@ class FileScriptEnvStoreTest {
         assertThrows(java.io.IOException::class.java) { FileScriptEnvStore(dir) }
     }
 
-    // ── 压实（外审 B3 的「无压缩」那半，批 106）───────────────────────────────
+    // ── 压实（外审 B3 的「无压缩」那半）───────────────────────────────
 
     /**
      * 小阈值替身（2 KiB）：压实判据走的是**真代码**，测试不去凑 256 KiB。

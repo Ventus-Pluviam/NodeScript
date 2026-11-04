@@ -68,7 +68,7 @@ object NpmCacheSeedDeployer {
     /**
      * npm 缓存根（`cacheDir/npm-cache`，§10.2）—— content 在 `<root>/_cacache/content-v2` 下。
      *
-     * **这是「npm 的缓存在哪」的唯一一份**（2026-10-09 批 86）：这个根被四处读 ——
+     * **这是「npm 的缓存在哪」的唯一一份**：这个根被四处读 ——
      * 喂给 npm 的 `--cache`、[CacacheIndex] 的查询根、[NpmCacheReclaim] 的回收根、
      * 离线 bundle 导入的落点。此前四处各拼各的，实测（`grep -rn "npm-cache"`）对不上：
      * `--cache` 拿到的是 `cacheDir` 本身、[CacacheIndex] 读的是 `cacheDir/npm-cache`、

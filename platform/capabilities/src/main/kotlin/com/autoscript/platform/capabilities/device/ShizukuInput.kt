@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  * —— Shizuku 就是那个服务（用户装 Shizuku、用 `adb shell sh /sdcard/…/start.sh` 起它、
  * 再授权本应用）。**子进程的身份 = Shizuku 服务进程的身份**：服务以 adb 启动时是
  * shell uid（2000），以 root 启动时是 root（0）—— 故本文件不承诺具体 uid
- * （2026-10-10 外审第 3 条：原先写死「shell uid」，在 root 启动的 Shizuku 上是错的）。
+ * （外审第 3 条：原先写死「shell uid」，在 root 启动的 Shizuku 上是错的）。
  *
  * **为什么本文件不 import `rikka.shizuku.*`**：那是**冻结文件**（`gradle/libs.versions.toml`）
  * 里的新依赖，且该依赖只在**真机**上有意义（JVM 单测跑在 mock android.jar 上，碰
@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
  * 折成 `ERR_PERMISSION_DENIED`**：「Shizuku 没装」与「Shizuku 版本不兼容」对用户是同一句话
  * —— 去装/去更新。
  *
- * **远端进程那一半同样是反射面，且必须从公开接口取**（2026-10-09 真机定位）：
+ * **远端进程那一半同样是反射面，且必须从公开接口取**（真机定位）：
  * `newProcess` 的**返回值**一度用了与 `newProcess` 本身同一个错法（从运行时类取方法），
  * 真机上表现为 adb 档 100% 不可用 —— 机理与判据见 [RemoteProcessApi] 的 KDoc，
  * 读那一段的代码在 [ShizukuProcessReader]。同一台机器上 ROOT 档同一条命令正常，
@@ -74,7 +74,7 @@ object ShizukuInput {
     }
 
     /**
-     * 跑一条命令并**同时**取回两条流（2026-10-09 新增：控制台的 shell 面要用 stdout）。
+     * 跑一条命令并**同时**取回两条流（新增：控制台的 shell 面要用 stdout）。
      *
      * 与 [run] 的差别只有一个，但那个差别决定它能不能服务控制台：[run] 只为**输入注入**
      * 服务（`input tap` 没有 stdout），故只留 stderr 尾部用于报错；控制台敲
@@ -105,7 +105,7 @@ object ShizukuInput {
      * 而是被 [step] 折成同一句拒绝 —— 症状是 adb 通道**永远不可用**，且没有任何提示
      * 指向真因）。在**公开接口**上取同一个方法签名则声明类可见，invoke 正常分派到实现类。
      *
-     * **同一个坑在返回值那一侧也有一份**（2026-10-09 真机定位）：`newProcess` 返回的
+     * **同一个坑在返回值那一侧也有一份**（真机定位）：`newProcess` 返回的
      * `IRemoteProcess` 同样是包内可见的 proxy，读它的方法也一律从公开接口取 —— 见
      * [RemoteProcessApi]。
      */
@@ -131,7 +131,7 @@ object ShizukuInput {
      * 抽出来是为了让 [newProcess] 读起来是一条直线（每一步一行），也把「哪一步失败了」的
      * 措辞收在一处 —— 用户看到的是一句话，不该是一串 `InvocationTargetException`。
      *
-     * `InvocationTargetException` 要**剥开**（2026-10-09，外审第 5 条）：它的 `message`
+     * `InvocationTargetException` 要**剥开**（外审第 5 条）：它的 `message`
      * 是 null，直接折进去只剩一句「反射失败」，而真病因（远端 `RemoteException`、
      * `IllegalArgumentException`…）全在 `targetException` 里 —— 那正是排查时唯一有用的
      * 那半个字。
@@ -173,7 +173,7 @@ object ShizukuInput {
      * - `ClassNotFoundException`：类不在（没装，或 R8 把名字改了 —— 见 `proguard-rules.pro`）；
      * - `LinkageError`（`NoClassDefFoundError` / `ExceptionInInitializerError`）：类在但
      *   **初始化失败**（静态初始化依赖的 `android.*` 在 JVM 单测里是 mock、真机上也可能
-     *   因版本不符炸）。2026-10-09 实测：JVM 单测跑 ADB 档时抛的正是
+     *   因版本不符炸）。实测：JVM 单测跑 ADB 档时抛的正是
      *   `NoClassDefFoundError: Could not initialize class rikka.shizuku.Shizuku`，
      *   而它**不是** Exception —— 原来只接 `ClassNotFoundException` 会让这条路径
      *   越过 `AutojsException` 直穿到调用方，用户拿到的是一个栈而不是一句「去装 Shizuku」。
@@ -198,7 +198,7 @@ object ShizukuInput {
 
     /**
      * 超时的失败话术：**码是 `ERR_TIMEOUT`，不是 `ERR_PERMISSION_DENIED`**
-     * （2026-10-10 外审第 1 条）。
+     * （外审第 1 条）。
      *
      * 本通道的其余失败（没装 / 没启动 / 版本不符）确实是权限面，但**超时不是** ——
      * 它是「命令发出去了、到点还没回来」。折成权限码，脚本侧按 `e.error` 分类时会把它
@@ -333,9 +333,9 @@ internal object ShizukuProcessReader {
     }
 
     /**
-     * 取一条流。**形状不符就炸，绝不静默当成「没有流」**（2026-10-09，外审第 3 条）。
+     * 取一条流。**形状不符就炸，绝不静默当成「没有流」**（外审第 3 条）。
      *
-     * 2026-10-09 之前的写法是 `… as? InputStream`，而 AIDL 的 `getInputStream`/
+     * 直接 `… as? InputStream` 不行 —— AIDL 的 `getInputStream`/
      * `getErrorStream` 返回的是 `android.os.ParcelFileDescriptor` —— `as?` 于是**静默**
      * 得 `null`，两条流永远读不到一个字节。那种「安静的空」正是这个 bug 能藏住的原因：
      * 症状是「输出栏什么都没有」，而不是任何一条报错。所以这里只放过**真为 null**
@@ -388,7 +388,7 @@ internal object ShizukuProcessReader {
  * `ParcelFileDescriptor` → `InputStream` 的缝。
  *
  * 真机 = `ParcelFileDescriptor.AutoCloseInputStream`（与 `rikka.shizuku.ShizukuRemoteProcess`
- * 内部的做法逐字相同 —— 2026-10-09 反汇编核实：它也是
+ * 内部的做法逐字相同（反汇编核实过）：它也是
  * `new AutoCloseInputStream(remote.getInputStream())`，只是那个包装类本应用拿不到）。
  *
  * **为什么做成缝**：mockable `android.jar` 的 `ParcelFileDescriptor` **造不出可读的 fd**
@@ -403,7 +403,7 @@ internal fun interface ProcessStreamOpener {
 /**
  * `IRemoteProcess` 的反射面：**每一个方法都从公开接口取**，绝不从 `process.javaClass` 取。
  *
- * 为什么（2026-10-09 真机定位，症状是 adb 档 100% 不可用）：`IShizukuService.newProcess`
+ * 为什么（真机定位，症状是 adb 档 100% 不可用）：`IShizukuService.newProcess`
  * 的运行时返回类型是 AIDL 生成的 `moe.shizuku.server.IRemoteProcess$Stub$Proxy` ——
  * 一个**包内可见**的类（`javap` 可见 `class moe.shizuku.server.IRemoteProcess$Stub$Proxy`，
  * 无 `public`），且它**自己 override 了接口的每一个方法**。在它上面 `getMethod` 有两个坑，
@@ -438,7 +438,7 @@ private object RemoteProcessApi {
      * `waitForTimeout` 第二个参数要传的单位名。
      *
      * AIDL 上那个参数是 `String`（不是 `TimeUnit`），服务端做的是 `TimeUnit.valueOf(unit)`
-     * （2026-10-09 从设备上 Shizuku 13.6.0 的 `classes.dex` 反汇编核实：`invoke-static {v0},
+     * （从设备上 Shizuku 13.6.0 的 `classes.dex` 反汇编核实：`invoke-static {v0},
      * Ljava/util/concurrent/TimeUnit;.valueOf`），所以必须是**枚举常量名本身**，
      * `"5s"` 之类会抛 `IllegalArgumentException`。`rikka.shizuku.ShizukuRemoteProcess`
      * （本应用拿不到的那个包装类）传的也是 `TimeUnit.toString()`，两者同值。
@@ -530,7 +530,7 @@ private class StreamTail(private val stream: InputStream?, private val limitChar
  * 出共享契约）。转接发生在 `:app` 的装配侧（`PlatformWiring`），那是唯一同时看得见
  * 两个模块的地方。
  *
- * [truncated] 的语义与 `ShellResult.truncated` 对齐（2026-10-09 补齐，此前是**已知缺口**：
+ * [truncated] 的语义与 `ShellResult.truncated` 对齐（补齐，此前是**已知缺口**：
  * adb 档截到上限时控制台不打那句「输出超过上限，已截断」，因为本 DTO 没有这个字段）：
  * **至少一条流被截断**，且**不进 `isSuccess` 的判据** —— `code` 是子进程的真实退出码，
  * 截断是宿主侧的捕获策略，两者正交。

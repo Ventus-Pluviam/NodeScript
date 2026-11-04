@@ -8,7 +8,7 @@ import java.nio.file.Path
 /**
  * npm 会话宿主的**必填环境**（`AUTOSCRIPT_LIBNODE`，§7.8）。
  *
- * **为什么需要这一件**（2026-10-17 设备实测 bug）：脚本引擎那条路（`NodeProcessEngine`）
+ * **为什么需要这一件**（设备实测 bug）：脚本引擎那条路（`NodeProcessEngine`）
  * 与 npm 这条路（[HostNodeExecutor] / [NpmScriptExecutor]）spawn 的是**同一个** noden
  * 宿主（`nativeLibraryDir/libnoden.so`），而 `main.cpp` 头一件事就是读 `AUTOSCRIPT_LIBNODE`
  * 去 `dlopen` libnode.so —— 缺了直接 `exit 2`，stderr 只有一行

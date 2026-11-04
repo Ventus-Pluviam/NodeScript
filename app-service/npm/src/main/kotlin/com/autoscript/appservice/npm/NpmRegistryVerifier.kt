@@ -170,7 +170,7 @@ class NpmRegistryVerifier(
         /**
          * 规整化 registry 基址：去尾斜杠、限 https。
          *
-         * **实现委托 [NpmRegistryKeys.canonicalize]**（2026-10-09 批 83）：判据的消费方
+         * **实现委托 [NpmRegistryKeys.canonicalize]**：判据的消费方
          * 有两个 —— 这里的缝边界（规范化后才拼 packument URL）与 `:ui` 的输入校验，
          * 而 `:ui` 只依赖 `:domain`、够不着本类。口径只有一份，两处不可能漂。
          *

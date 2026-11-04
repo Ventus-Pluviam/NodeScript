@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test
 import java.time.ZoneId
 
 /**
- * 脚本输出文件列表呈现态（2026-10-13）：标题归一 / 大小格式化 / 运行中让位。
+ * 脚本输出文件列表呈现态：标题归一 / 大小格式化 / 运行中让位。
  */
 class ScriptLogStateTest {
 

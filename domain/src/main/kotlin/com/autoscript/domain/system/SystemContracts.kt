@@ -5,7 +5,7 @@ import com.autoscript.domain.bridge.HandleRef
 /**
  * `dialogs` 命名空间的契约 DTO/SPI（§9.4；`extras.ts` 的 Kotlin 对偶）——
  * shell/device/app/floatingWindow 的契约随 handler 迁去 `:platform:system`
- * （2026-10-01 D3 起按命名空间拆为 `shell/ShellContracts.kt`、`device/DeviceContracts.kt`、`app/AppContracts.kt`、`floatingWindow/FloatingWindowContracts.kt`；此前是同名的 `SystemHostContracts.kt`），DialogHost 留 `:domain` —— 装配层（`:app`
+ * （D3 起按命名空间拆为 `shell/ShellContracts.kt`、`device/DeviceContracts.kt`、`app/AppContracts.kt`、`floatingWindow/FloatingWindowContracts.kt`；此前是同名的 `SystemHostContracts.kt`），DialogHost 留 `:domain` —— 装配层（`:app`
  * `PlatformWiring`）生产读面引用它（这正是它留在 `:domain` 的判据）。
  *
  * **非法即拒**：构造期 `require`（空 title/空选项），handler 据此折叠 ERR_INVALID_PARAM。

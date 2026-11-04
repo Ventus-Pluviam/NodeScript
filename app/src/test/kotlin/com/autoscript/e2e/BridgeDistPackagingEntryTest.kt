@@ -17,7 +17,7 @@ import org.junit.jupiter.api.io.TempDir
  * 2. `auto.bridge.installed == true`（kBootstrap 调了 `attachNative({addon})` →
  *    runtimeBridge 装上 handler —— 这正是"打包入口接线"本身）；
  * 3. addon 的 `setup` 被调（TSF 结算面先就位的装配顺序在真 require 下走通）；
- * 4. **全局 `console.*` 已接到桥上**（2026-10-15 用户令「js 的语法都要和原来的调用方式
+ * 4. **全局 `console.*` 已接到桥上**（
  *    一样」）：`kBootstrap` 在 `require(真脚本)` 之前调 `installConsoleBridge()`，
  *    于是脚本里裸 `console.log('x')` 经桥出、**不再出现在 stdout**。最后那条断言是本测
  *    唯一能证伪「包装没接上」的观察点：包装缺席时裸 console.log 仍写 stdout，

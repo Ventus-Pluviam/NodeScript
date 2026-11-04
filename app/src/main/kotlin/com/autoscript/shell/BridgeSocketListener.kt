@@ -73,7 +73,7 @@ class BridgeSocketListener private constructor(
     /** 本端 uid（Android = `Process.myUid()`）：对端必须等于它才放行。 */
     private val myUid: Int,
     /**
-     * accept 瞬时故障的诊断回执（外审 M3，批 98）。
+     * accept 瞬时故障的诊断回执（外审 M3）。
      *
      * 为什么要有缝：原实现对 [IOException] 静默 `break`，一次 `EMFILE` 就让**整条桥对
      * 所有未来脚本静默死亡**且**没有任何痕迹**。现口径改成「退避重试」，于是必须有一条
@@ -154,7 +154,7 @@ class BridgeSocketListener private constructor(
     }
 
     /**
-     * accept 循环（外审 M3，2026-10-11 批 98 修订）。
+     * accept 循环（外审 M3， 修订）。
      *
      * **原口径**：任何 [IOException] 都收循环。`IOException` 是个**家族** —— 本端
      * [close] 顶醒 accept 是「该停了」，而 `EMFILE`（fd 用尽）/`ECONNABORTED`（内核踢掉
@@ -248,7 +248,7 @@ class BridgeSocketListener private constructor(
             binder.bind(socketName)?.let { BridgeSocketListener(socketName, it, myUid) }
 
         /**
-         * 可观测/可测的 bind 变体（外审 M3，批 98）：多两个诊断缝，生产 [bind] 走缺省。
+         * 可观测/可测的 bind 变体（外审 M3）：多两个诊断缝，生产 [bind] 走缺省。
          *
          * 收口面用 [bind] 是因为它「要么绑上要么回 null」的形状最干净；可观测性与退避时长
          * 属诊断/测试需求，不值得让生产路径的每个调用点都传两个参数。

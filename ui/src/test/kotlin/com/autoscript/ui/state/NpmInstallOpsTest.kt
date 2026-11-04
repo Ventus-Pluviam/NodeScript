@@ -17,11 +17,11 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 依赖面板变更半边的用例（§10.9 第 1 条，2026-10-09 批 87）。
+ * 依赖面板变更半边的用例（§10.9 第 1 条）。
  *
  * 断的是「界面会拼出什么、会不会冒充」，不是 npm 的行为：
  *
- * - **拼装**：包名在前，`--prefer-offline` **写死**（2026-10-17 起不再是可勾的旗标），
+ * - **拼装**：包名在前，`--prefer-offline` **写死**（起不再是可勾的旗标），
  *   `-D` 再也不拼；
  * - **门禁强度不取决于入口**：面板拼出来的一行走的是与控制台**同一条**宿主口
  *   （`runNpmPanelCommand`），故宿主侧的判据原样生效 —— 界面侧不判第二遍；
@@ -48,8 +48,8 @@ class NpmInstallOpsTest {
         storage = null,
     )
 
-    /** 记录被提交的那一行，并可按需失败 / 按需回一批事件。 */
-    private class PanelHost(
+    /** 记录被提交的那一行，并可按需失败 / 按需回一批事件（open：整段轮询用例要覆写快照）。 */
+    private open class PanelHost(
         private val fail: Throwable? = null,
         private val events: List<InstallEvent> = emptyList(),
     ) : FakeHost() {
@@ -89,7 +89,7 @@ class NpmInstallOpsTest {
         assertEquals("npm install axios --prefer-offline", buildInstallCommand(" axios "), "两端空白要吃掉")
         assertEquals("npm install axios@1.7.0 --prefer-offline", buildInstallCommand("axios@1.7.0"))
 
-        // 两条**防回潮**断言（2026-10-17 用户口径「去掉开发依赖，和离线优先。默认开启离线优先」）：
+        // 两条**防回潮**断言：
         // `-D` 与"可关掉的离线优先"都不许再出现在拼装结果里。旗标一整行下线之后，
         // 这两样一旦回来就是**新增的**行为，而用户要的是"没有开关"。
         assertFalse(buildInstallCommand("axios")!!.contains("-D"), "开发依赖已下线")
@@ -108,7 +108,7 @@ class NpmInstallOpsTest {
     }
 
     /**
-     * 重装那一行（2026-10-17 用户口径「在依赖列表里，加一个重装的图标按钮」）。
+     * 重装那一行。
      *
      * 三处刻意都在断言里钉住：
      * - **锁版本**（`name@version`）：不带版本就是 `npm install <name>`，那会按 `package.json`
@@ -149,6 +149,28 @@ class NpmInstallOpsTest {
         assertTrue(state.opError!!.contains("还没有选中的项目"), "实为 ${state.opError}")
     }
 
+    /**
+     * 回执那两句（第十七批第 41 条改口）：
+     *
+     * `runPanelCommand` 等到宿主**挂起返回**才构造回执（enqueueHeavy 协程内联执行，
+     * 跑完才回），文案却说「已提交…在跑」—— 「入队即返回」时代的措辞，把"卸载完成"
+     * 说成"刚提交、还在装"，正是「卸载没生效」观感的一半来源。这里把「动作名 + 对象 +
+     * 结果」钉成完成句式，且**不再出现"在跑"**。
+     */
+    @Test
+    fun `回执：卸载说「已卸载」带包名，安装重装说「已安装」带说明符`() = runBlocking {
+        val host = PanelHost()
+        val removed = removeInstalled(host, loaded(project("demo")), "esbuild")
+        assertEquals("已卸载 esbuild：清单已更新", removed.opNotice)
+        assertFalse(removed.opNotice!!.contains("在跑"), "宿主已同步执行完，回执不能再把完成说成已提交")
+
+        val reinstalled = reinstallInstalled(host, loaded(project("demo")), "axios", "1.7.9")
+        assertEquals("已安装 axios@1.7.9：清单已更新", reinstalled.opNotice, "重装也是安装动作，回执说安装")
+
+        val submitted = submitInstall(host, loaded(project("demo")).copy(installDraft = "esbuild"))
+        assertEquals("已安装 esbuild：清单已更新", submitted.opNotice)
+    }
+
     // ── 提交 ────────────────────────────────────────────────────────────────
 
     @Test
@@ -177,6 +199,17 @@ class NpmInstallOpsTest {
     }
 
     @Test
+    fun `在途写回：安装位置上，阶段条从 QUEUED 起，旧账清掉`() {
+        val busy = loaded(project("demo")).copy(opError = "旧的失败", opNotice = "旧的回执")
+        val inFlight = busy.withInstallInFlight()
+        assertTrue(inFlight.installing, "launch 前同步置位：兜底轮询的键、按钮置灰的判据都看它")
+        assertEquals(InstallEvent.Phase.QUEUED, inFlight.installProgress!!.phase, "阶段条从入队那一格起")
+        assertNull(inFlight.opError, "新动作开局不许挂着上一件事的账")
+        assertNull(inFlight.opNotice)
+        assertFalse(inFlight.canInstall, "在途 → 输入行与三颗按钮立即禁用")
+    }
+
+    @Test
     fun `提交：没有选中项目时不发，且说的是"没选项目"而不是"安装失败"`() = runBlocking {
         val host = PanelHost()
         val empty = NpmState.NOT_LOADED.copy(installDraft = "axios")
@@ -188,7 +221,7 @@ class NpmInstallOpsTest {
     /**
      * 作用域选「全局」时，命令落在空串哨兵上 —— **不是**被当成"没选项目"。
      *
-     * 这一条钉的是 2026-10-17 那次判据放宽：`NpmConsoleKeys.rejectProjectId("")` 从前
+     * 这一条钉的是判据放宽：`NpmConsoleKeys.rejectProjectId("")` 从前
      * 是拒收的，而全局作用域的编码恰好就是那个空串 —— 放宽之前，界面上选「全局」按下
      * 执行会拿到一句「项目号不合法（不能为空）」，而用户手里根本没有一个叫这个名字的
      * 项目可选，他只会以为"全局"这个选项是坏的。
@@ -250,6 +283,125 @@ class NpmInstallOpsTest {
 
     // ── 进度：阶段不是百分比 ─────────────────────────────────────────────────
 
+    /**
+     * 逐格桥：
+     * 宿主一条协程里毫秒级发完整串事件，轮询一次端回整批 —— 不节流的话整批折完，
+     * 阶段条从「排队中」直接跳「完成」。这里钉的是节奏闸本身：**一个 tick 只放一条**，
+     * 批里剩下的进缓冲，且**缓冲没放完就不再去拉新的**。
+     */
+    @Test
+    fun `轮询逐格：一批六个事件分 tick 逐格走完，缓冲放完前不重拉`() = runBlocking {
+        val host = PanelHost(
+            events = listOf(
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.QUEUED),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.RESOLVE),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.DOWNLOAD),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.POST_CHECK),
+                InstallEvent.Finished("demo", "h1", success = true, detail = "npm install 完成"),
+            ),
+        )
+        var s: NpmState = loaded(project("demo")).copy(
+            installing = true,
+            installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+        )
+        val phases = mutableListOf<String>()
+        val dones = mutableListOf<Boolean>()
+        repeat(6) {
+            s = pollInstallEventsStepped(host, s, "demo")
+            phases += s.installProgress!!.label
+            dones += s.installProgress!!.done
+        }
+        assertEquals(
+            listOf("排队中", "解析依赖", "下载", "写入 node_modules", "收尾校验", "收尾校验"),
+            phases,
+            "六个事件六个 tick，一格一格走完，不许一次跳到终态",
+        )
+        assertEquals(listOf(false, false, false, false, false, true), dones, "最后一格才收条")
+        assertFalse(s.installing, "Finished 折入那格跟着落「在途」")
+        assertEquals(1, host.polls, "只拉了一次：缓冲没放完之前不停回来问宿主")
+        assertEquals(0L, host.lastSince, "游标在拉批那拍推进到批尾（6），展示慢是节奏不是重放")
+        assertEquals(6L, s.installSeq)
+        assertTrue(s.pendingProgressEvents.isEmpty(), "六格放完缓冲清空")
+    }
+
+    /** 阶段条还没就位（`installProgress == null`）时不拉也不动 —— 那不是这次拉取的职责。 */
+    @Test
+    fun `轮询逐格：阶段条没就位时原样返回`() = runBlocking {
+        val host = PanelHost(events = listOf(InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY)))
+        val before = loaded(project("demo"))
+        val after = pollInstallEventsStepped(host, before, "demo")
+        assertEquals(before, after)
+        assertEquals(0, host.polls)
+    }
+
+    /** 缓冲放完、宿主没有新事件时引用原样复用（与单次版同一条纪律）。 */
+    @Test
+    fun `轮询逐格：无缓冲且无新事件时原样返回同一份，轮询期不白重画`() = runBlocking {
+        val host = PanelHost(events = listOf(InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY)))
+        var s = loaded(project("demo")).copy(
+            installing = true,
+            installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+        )
+        s = pollInstallEventsStepped(host, s, "demo")   // 拉批 + 放那一格（缓冲随即空）
+        // 此后宿主只剩空增量：每一 tick 都必须原样复用上一份，LazyColumn 才不会白重组合。
+        val quiet = pollInstallEventsStepped(host, s, "demo")
+        assertTrue(quiet === s, "空批的 tick 必须引用不变：${quiet === s}")
+        assertTrue(pollInstallEventsStepped(host, quiet, "demo") === quiet, "持续空批必须一路同一份")
+        assertEquals(1L, host.lastSince, "游标推进到批尾（1）之后停在原地，不重拉已消费过的")
+    }
+
+    /**
+     * 轮询**整段**的两条新纪律（修，见 `LivePoll.pollWhile` 的账）：
+     * 首拉**不等那 400ms**（安装会话以秒计，等一拍回来整批已齐）；中间态**逐轮
+     * 进 [onStep]** —— 两条合起来才是「逐格步进真的在屏幕上走」的链路。旧实现
+     * 把全部推进攒在轮询协程局部、结束才一口写回：逐格桥的返回值测试全绿，
+     * 屏幕上一个字不动 —— 单 tick 函数断的是节奏，这条断的是节奏**到达组合**。
+     */
+    @Test
+    fun `轮询整段：首拉不等拍、格格进 onStep、终态轮也在内`() = runBlocking {
+        val demo = NpmPanelSnapshot(listOf(project("demo")))
+        val host = object : PanelHost(
+            events = listOf(
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.QUEUED),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.RESOLVE),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.DOWNLOAD),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.POST_CHECK),
+                InstallEvent.Finished("demo", "h1", success = true, detail = "npm uninstall 完成"),
+            ),
+        ) {
+            // 快照必须稳定：每轮 `loadNpmSnapshot` 若把项目抹掉，shouldContinue
+            // 的 `selectedProjectId == projectId` 立刻为假、循环当场停 ——
+            // 那拍到的是"回读把面板读没了"，不是轮询本身。
+            override suspend fun npmSnapshot(): NpmPanelSnapshot = demo
+        }
+        var s = NpmState.of(demo).copy(
+            installing = true,
+            installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+        )
+        val seen = mutableListOf<String>()
+        val final = pollInstallWhileRunning(host, s, "demo", intervalMillis = 1L, maxTicks = 8) {
+            seen += it.installProgress!!.let { p -> "${p.label}:${p.done}" }
+        }
+        assertEquals(
+            listOf(
+                "排队中:false",
+                "解析依赖:false",
+                "下载:false",
+                "写入 node_modules:false",
+                "收尾校验:false",
+                "收尾校验:true",
+            ),
+            seen,
+            "首拉把第一格立刻送上 onStep（不等 400ms），随后一格一拍；终态轮（收条那拍）也在 onStep 里",
+        )
+        assertEquals(1, host.polls, "六条一次拉齐，逐格只消费缓冲，不再回头问宿主")
+        assertEquals(0L, host.lastSince, "游标在拉批那拍推进到批尾，展示慢是节奏不是重放")
+        assertFalse(final.installing, "Finished 折入那一格跟着落「在途」")
+        assertTrue(final.installProgress!!.done)
+    }
+
     @Test
     fun `进度：一批事件折成当前阶段，终态把条收起来`() {
         val folded = foldProgress(
@@ -305,6 +457,22 @@ class NpmInstallOpsTest {
         val second = pollInstallEvents(host, first, "demo")
         assertEquals(1L, host.lastSince, "第二次要带上次的游标，不能从 0 重放")
         assertEquals(1L, second.installSeq)
+    }
+
+    /**
+     * 「指针没动就原样复用」：安装轮询每 400ms 一 tick，安静的阶段
+     * （写入 node_modules 那种没有事件可报的窗口）里每一 tick 都是等值重建 ——
+     * LazyColumn 的 item lambda 捕获的是 state **引用**，换一份等值的也会让
+     * 展开的可见行重组合一次。`===` 断的是引用不变，不是值相等。
+     */
+    @Test
+    fun `进度：事件没推进时原样返回同一份，轮询期不白重画`() = runBlocking {
+        val host = PanelHost() // 事件环是空的：每轮都是空批
+        val before = loaded(project("demo"))
+        val first = pollInstallEvents(host, before, "demo")
+        assertTrue(first === before, "没有新事件的第一轮就该原样复用")
+        val again = pollInstallEvents(host, first, "demo")
+        assertTrue(again === first, "持续空批的 tick 必须引用不变，才不触发可见行重组")
     }
 
     @Test

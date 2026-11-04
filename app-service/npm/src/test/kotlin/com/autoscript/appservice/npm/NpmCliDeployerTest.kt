@@ -172,7 +172,7 @@ class NpmCliDeployerTest {
         assertTrue(out.trim().isNotEmpty(), "npm --version 应有版本输出")
         // 再打一记重的：`npm ls` 要**装进 @npmcli/arborist**（整棵依赖树的真载入），
         // 而剪裁口径恰恰丢掉了 npm 自己树里的点条目（node_modules/.bin、
-        // node_modules/.package-lock.json）。2026-10-01 在本机实测过：这条路是通的
+        // node_modules/.package-lock.json）。这条路实测是通的
         // （还跑通了真 install），这条断言是给"以后有人改剪裁口径"留的回归哨。
         val ls = runCli(r, "ls", "--json", workDir = dir.resolve("probe"))
         assertTrue(ls.contains("\"probe\"") || ls.trim().startsWith("{"), "npm ls 应有 JSON 输出：$ls")

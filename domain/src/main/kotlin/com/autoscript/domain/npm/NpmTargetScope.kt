@@ -3,7 +3,7 @@ package com.autoscript.domain.npm
 import com.autoscript.domain.scripts.ProjectId
 
 /**
- * 依赖**作用域**（2026-10-17 用户口径：「项目选择改成依赖作用域，然后下拉框加个全局」）。
+ * 依赖**作用域**。
  *
  * 一次安装（或一条 `npm` 命令）最后总得落在某一棵 `node_modules` 上，"落在哪一棵"就是作用域。
  * 今天两档：
@@ -22,7 +22,7 @@ import com.autoscript.domain.scripts.ProjectId
  *
  * ## 为什么全局必须落在 `files/scripts/` 这一层，而不是另开一个目录
  *
- * 用户口径：「项目依赖和全局依赖如果有重复的，则优先读取项目依赖」。Node 找包是**逐级向上**
+ * 「项目依赖和全局依赖如果有重复的，则优先读取项目依赖」。Node 找包是**逐级向上**
  * 找 `node_modules` 的，而项目目录 `files/scripts/<projectId>/` 正压在 `files/scripts/`
  * 底下 —— 全局那份只要落在这儿，项目自己的 node_modules **天然更近、天然优先**，这条规则
  * 一行代码都不用写。换个位置（比如 `files/npm-global/`）它就不再是任何项目目录的祖先，
@@ -46,10 +46,10 @@ object NpmTargetScope {
      * 界面上怎么说这个作用域。
      *
      * 空串在屏幕上**不能显示成空**：「依赖作用域」那一行右边留白，用户读成"还没读到"，
-     * 而它其实是一个明确的作用域（全局）。所以全局那条在界面上永远显示成「全局」。
+     * 而它其实是一个明确的作用域（全局）。所以全局那条在界面上永远显示成「全局项目」。
      *
      * 措辞放在 `:domain` 而不是 `:ui`：宿主把事件、日志、去向上的 `projectId` 也写成空串，
      * 两边对同一个值的说法必须是一份（先例：`NpmConsoleKeys` 的拒收话术）。
      */
-    fun label(projectId: String): String = if (isGlobal(projectId)) "全局" else projectId
+    fun label(projectId: String): String = if (isGlobal(projectId)) "全局项目" else projectId
 }

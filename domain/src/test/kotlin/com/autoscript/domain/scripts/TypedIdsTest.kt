@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * [ProjectId] / [RelPath] 的判据（批 109，typed ids）。
+ * [ProjectId] / [RelPath] 的判据（typed ids）。
  *
  * **为什么这两个值类要单独钉**：它们替代的是本仓原先**三份**逐字相同（或相近）的判据。
  * 抄在一起必然漂，漂的方向最坏是「放行的一侧比拒收的一侧宽」—— 于是界面能敲出来的
@@ -39,7 +39,7 @@ class TypedIdsTest {
 
     @Test
     fun `非法项目号 createOrNull 回 null 不抛`() {
-        // 样本按 2026-10-16 放宽后的判据（排除分隔符/点/控制字符）：`a b`、` a`、`a:b`
+        // 样本按放宽后的判据（排除分隔符/点/控制字符）：`a b`、` a`、`a:b`
         // 这些**原先在名单里**的现在合法了，已挪去下面那条「放宽」用例。
         for (bad in listOf("", "..", ".", "a/b", "a\\b", "p.1", "a\n", "\t", "a\u0000b")) {
             assertNull(ProjectId.createOrNull(bad), "应回 null: ${bad.replace("\n", "\\n")}")
@@ -47,7 +47,7 @@ class TypedIdsTest {
     }
 
     /**
-     * 放宽后的样本（2026-10-16 用户裁定：根层文件夹名允许中文）。
+     * 放宽后的样本（用户裁定：根层文件夹名允许中文）。
      *
      * 判据从"允许清单"（`[A-Za-z0-9_-]+`）换成"**禁止清单**"（不含 `/`、`\`、`.`、控制字符）——
      * 这条用例钉的是"禁的那几样一个都没放行"，而不是列举放行了什么。
@@ -64,7 +64,7 @@ class TypedIdsTest {
     }
 
     /**
-     * 根层哨兵（2026-10-16）：空串**构造得出来** —— 它是 `files/scripts/` 本层
+     * 根层哨兵：空串**构造得出来** —— 它是 `files/scripts/` 本层
      * （[ScriptPaths.projectRoot] 落到 `files/scripts` 本身，见 [ScriptPathsScriptFileTest]），
      * 但它**不是项目号**：外部输入进不来（[ProjectId.createOrNull] 回 null）。
      */

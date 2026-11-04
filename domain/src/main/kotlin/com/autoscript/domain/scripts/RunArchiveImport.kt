@@ -3,7 +3,7 @@ package com.autoscript.domain.scripts
 import com.autoscript.domain.json.DomainJson
 
 /**
- * jsonl 运行档案 → SQLite 的**一次性导入解析**（§8.5 存储引擎替换的迁移面；批 102 P4）。
+ * jsonl 运行档案 → SQLite 的**一次性导入解析**（§8.5 存储引擎替换的迁移面）。
  *
  * **为什么解析住 `:domain` 而不是解析方**：与 [IntentLogImport] / [TaskStoreImport] 同一理由
  * —— `:platform:system` 的 `SqliteRunArchive.importRecords` 要「行」，`:app` 装配层要

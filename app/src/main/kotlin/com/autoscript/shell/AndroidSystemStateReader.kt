@@ -72,14 +72,14 @@ interface CapabilityProbes {
  * - `SCREEN_CAPTURE` 无活动会话 = `DEGRADED` —— §9.5 把 GRANTED 定义成"含会话型
  *   MediaProjection **已激活**"，而"还没问过用户"不等于被拒（首次截图时才弹授权，§9.2）；
  * - `ROOT` 探测不到 = `DENIED`（§9.3：无 root 不降级渲染为禁用）；
- * - `ADB_INPUT` 没就绪 = `DENIED`（批 61 起，2026-10-06）：三通道三选一之后
+ * - `ADB_INPUT` 没就绪 = `DENIED`：三通道三选一之后
  *   **不存在降级链** —— 脚本指定 adb 而该通道不可用就是 `ERR_PERMISSION_DENIED`，
  *   绝不改用别的通道（§9.3，口径见 `design-decisions.md` 第 35 项）。此前这里恒
  *   `DEGRADED`（"未就绪时输入走无障碍手势"），那条承诺随三通道裁定一起作废：
  *   它描述的降级路径已经不存在了，再报 DEGRADED 就是拿旧口径骗人。
  *   Shizuku 在跑但**尚未授权本应用**时也如实 `DENIED`（`isAvailable` 的 binder 问询
  *   在未授权下拿不到服务），文案因此把"授权本应用"与"装/启动 Shizuku"并列写；
- * - `USAGE_ACCESS` 没开 = `DENIED`（批 48）—— `auto.app.currentPackage` 没有降级路径：
+ * - `USAGE_ACCESS` 没开 = `DENIED`—— `auto.app.currentPackage` 没有降级路径：
  *   未授权就查不到，引导文案逐字承诺"如实返回 null"，不走"编个空串假装查了"那条路。
  *
  * 探测抛异常不在这里兜底：`PermissionCenter.state` 已把读取异常折成 `DEGRADED`
@@ -190,7 +190,7 @@ class AndroidCapabilityProbes(context: Context) : CapabilityProbes {
     }
 
     /**
-     * 使用情况访问（`PACKAGE_USAGE_STATS`，特殊权限，批 48）。
+     * 使用情况访问（`PACKAGE_USAGE_STATS`，特殊权限）。
      *
      * 问 AppOps 而不是拉 `UsageStatsManager` 列表：拉列表要选时间窗再遍历判空，
      * "查到空列表"与"没权限"会混成同一个 false；AppOps 直接回答

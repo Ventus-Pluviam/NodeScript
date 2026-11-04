@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 /**
- * 屏幕采集三态的**投屏判据**（§9.2/§9.5，批 79）—— 能力中心那一行「屏幕采集」的
+ * 屏幕采集三态的**投屏判据**（§9.2/§9.5）—— 能力中心那一行「屏幕采集」的
  * 结论从哪来。
  *
  * 判据只有一句：`GRANTED` 的定义是"**会话已激活**"，其余一律 `DEGRADED` ——

@@ -8,7 +8,7 @@ import java.nio.file.Path
  * 项目仓库（docs §9）：id → 目录（files/scripts/<id>）。
  * id 白名单校验 + 目录解析二次校验，杜绝穿越仓库根（同 [DeployPath] 的防逃逸纪律）。
  *
- * **接口收 [ProjectId] 而不是裸 `String`**（2026-10-12 批 109，typed ids）：本仓此前
+ * **接口收 [ProjectId] 而不是裸 `String`**（typed ids）：本仓此前
  * **第二份**项目号判据就住在 [FsProjectStore]（`[A-Za-z0-9][A-Za-z0-9._-]{0,63}` ——
  * 收 `.` 且限长 64），与 `ScriptPaths.PROJECT_ID` 不同。判据收 `:domain` 之后，
  * 实现类不再自带正则，本接口也就顺理成章收类型化的 id。
@@ -68,7 +68,7 @@ class FsProjectStore(override val base: Path) : ProjectStore {
 
     private companion object {
         /**
-         * 闸在**写侧两个口**上（2026-10-16）：[ProjectId.ROOT]（根层哨兵，空串）自本轮起
+         * 闸在**写侧两个口**上：[ProjectId.ROOT]（根层哨兵，空串）自本轮起
          * 构造得出来，而 `rootFor(ROOT)` 就是 `base` 本身 —— `create` 是"建一个已经存在的
          * 根"（无害但没意义），`delete` 则是**把整个项目库连根删掉**。
          * 根层不是项目，没有"删根层"这个动作；把闸设在这里，而不是把哨兵从值类里禁掉

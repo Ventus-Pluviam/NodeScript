@@ -78,7 +78,7 @@ data class NodeEngineConfig(
      */
     val scriptEnv: () -> Map<String, String> = { emptyMap() },
     /**
-     * **单脚本 JS 堆上限（MiB）**（§8.1「脚本资源限额」，批 107）：用户在设置页 → 脚本设置里
+     * **单脚本 JS 堆上限（MiB）**（§8.1「脚本资源限额」）：用户在设置页 → 脚本设置里
      * 填的那个数，落成 `--max-old-space-size=<n>` 插在脚本路径**之前**。
      *
      * **是 `() -> Int?` 而不是 `Int`，且每次 execute 现读** —— 与 [scriptEnv] 同一条纪律
@@ -96,7 +96,7 @@ data class NodeEngineConfig(
      */
     val maxHeapMb: () -> Int? = { null },
     /**
-     * **单脚本 libuv 后台线程池大小**（§8.1「脚本资源限额」，批 107）：落成
+     * **单脚本 libuv 后台线程池大小**（§8.1「脚本资源限额」）：落成
      * `UV_THREADPOOL_SIZE` 环境变量。
      *
      * **为什么只能是环境变量**：Node 没有 argv 形式（`node --uv-threadpool-size` 不存在），
@@ -107,7 +107,7 @@ data class NodeEngineConfig(
      */
     val uvThreadPoolSize: () -> Int? = { null },
     /**
-     * **runId 分配器的初始水位**（2026-10-14 真机 bug）：装配期可把分配器直接建在档案
+     * **runId 分配器的初始水位**（真机 bug）：装配期可把分配器直接建在档案
      * 高水位之后。取值形态与 `RunArchive.maxEngineRunId()` 同源（"已用过的最大号"），
      * 本类保证**下一个发出的号严格大于它** —— 两处取"下界"而不是"起点"会让调用点各差
      * 一次一，那正是这类缝最容易错的地方。缺省 `0` = 从 1 数（单测/离线路径行为不变）。
@@ -146,7 +146,7 @@ data class NodeEngineConfig(
  * **runId 全局唯一**：文件级计数器跨全部实例递增 —— `RuntimeController.active` 以 runId 为键，
  * 池内多槽实例各自从 1 数会在在途表互相覆盖（与 `FakeEngine` 的共享序列同一语义）。
  *
- * **跨进程纪律（2026-10-14 真机 bug）**：这个计数器是**进程内**的 —— App 每次重启都从 1
+ * **跨进程纪律（真机 bug）**：这个计数器是**进程内**的 —— App 每次重启都从 1
  * 重新数。档案却是持久的（上一进程的终态行还在库里），于是新进程第一次执行会把上一进程
  * 用掉的 engineRunId 再发一遍，`SqliteRunArchive.put` 撞「终态记录不可改写」响亮失败。
  * 装配期必须把档案高水位喂进 [NodeEngineConfig.runIdHighWater]（`RunArchive.maxEngineRunId`）——
@@ -163,7 +163,7 @@ class NodeProcessEngine(
 ) : ScriptEngine {
 
     init {
-        // 构造即顶水位（2026-10-14）：配置里带了历史高水位的话，本实例一存在就已经
+        // 构造即顶水位：配置里带了历史高水位的话，本实例一存在就已经
         // 站在历史之后 —— 不依赖装配层"记得在建完之后、第一次 execute 之前调一次"。
         raiseFloor(config.runIdHighWater)
     }
@@ -178,7 +178,7 @@ class NodeProcessEngine(
     @Volatile private var execution: Execution? = null
 
     /**
-     * 脚本资源限额的注入面（批 107；§8.1）—— 单独成函数是为了让 [execute] 少两个分支
+     * 脚本资源限额的注入面（§8.1）—— 单独成函数是为了让 [execute] 少两个分支
      * （它正好压在 detekt `CyclomaticComplexMethod` 的线上）。
      *
      * 两项的落地形态不同，理由都在各自配置项的 KDoc 里：堆上限走 **argv**（`NODE_OPTIONS`
@@ -192,7 +192,7 @@ class NodeProcessEngine(
     /**
      * 拼 spawn 命令行：**堆上限标志位插在脚本路径之前**。
      *
-     * 位置是契约不是排版：`main.cpp` 按 node argv 规则**两段拼**（2026-10-14 修）——
+     * 位置是契约不是排版：`main.cpp` 按 node argv 规则**两段拼**——
      * `node_argv = {argv[0], [选项…], [-e BOOTSTRAP --], script, args...}`，选项落在
      * `--` **之前**（node 先吃选项、遇 `--` 收手）；标志位若排在 `--` 之后会被当成脚本的
      * 第一个位置参数（设备实测 `Cannot find module '--max-old-space-size=192'`，
@@ -228,13 +228,13 @@ class NodeProcessEngine(
                     }
                     old.lease?.naturalExit()
                 }
-                // scriptPath/projectId 的词法闸在 ScriptPaths.scriptFile 内（外审 M1 收口，
-                // 2026-10-12）。这里把它折成 ERR_INVALID_PARAM 而不是让 IllegalArgumentException
+                // scriptPath/projectId 的词法闸在 ScriptPaths.scriptFile 内（外审 M1 收口）。
+                // 这里把它折成 ERR_INVALID_PARAM 而不是让 IllegalArgumentException
                 // 裸穿出去：这条路径两个调用方语义不同 —— 桥侧 RPC 本来就把 IAE 折成
                 // ERR_INVALID_PARAM（RpcNamespaceHandler），而调度侧会把裸 IAE 记成宿主内部错。
                 // 判据「参数不对」只有一个错误码，两条路才对得上。
                 val scriptAbs = try {
-                    // 判据在**构造值类**那一刻（批 109）：`EngineRunRequest` 的两个字段仍是
+                    // 判据在**构造值类**那一刻：`EngineRunRequest` 的两个字段仍是
                     // `String`（DTO 边界），到这里才折成 `ProjectId`/`RelPath` ——
                     // 折不出就是「这俩不是合法项目号/项目内相对路径」，与外层那个 catch 同一语义。
                     ScriptPaths.scriptFile(
@@ -337,7 +337,7 @@ class NodeProcessEngine(
     }
 
     /**
-     * 冻住这次执行（2026-10-13；SPI [ScriptEngine.pause] 的真实现）。
+     * 冻住这次执行（SPI [ScriptEngine.pause] 的真实现）。
      *
      * 委托当前 execution 的进程（SIGSTOP）。false = 没有在跑的执行 / 进程侧冻不住
      * （pid 拿不到 / `kill` 二进制缺席 —— `SpawnedProcess.pauseExecution` 如实报）。
@@ -358,7 +358,7 @@ class NodeProcessEngine(
     }
 
     /**
-     * 往这次执行的脚本进程 stdin 送一行（2026-10-16 用户令；SPI [ScriptEngine.sendInput]
+     * 往这次执行的脚本进程 stdin 送一行（SPI [ScriptEngine.sendInput]
      * 的真实现）。
      *
      * 与 [pause]/[resume] 同一条"当前执行体"口径：没有在跑的执行 → false。
@@ -374,7 +374,7 @@ class NodeProcessEngine(
     }
 
     /**
-     * 关掉这次执行的 stdin 写端发 EOF（2026-10-16 用户令「答完自己退」；SPI
+     * 关掉这次执行的 stdin 写端发 EOF（SPI
      * [ScriptEngine.closeStdin] 的真实现）。宿主侧那条链的终点：脚本答完最后一个问题、
      * 关掉 readline 之后，`stdin-idle.ts` 报上来的"没有读者了"在这里落成真 EOF。
      *
@@ -394,7 +394,7 @@ class NodeProcessEngine(
      * 回 [StopResult.Clean]；超时回 [StopResult.TimedOut]（partial=true = 尚有残留），
      * 池侧 `PoolSlot.quiesce` 据此 kill 兜底。从未启动/已退净 → 如实 Clean（无事可停）。
      *
-     * **先解冻再停**（2026-10-13）：SIGTERM 发给 SIGSTOP 冻住的进程不会被处理 ——
+     * **先解冻再停**：SIGTERM 发给 SIGSTOP 冻住的进程不会被处理 ——
      * 不解冻就 3s 必 TimedOut 降级 SIGKILL，丢掉干净退出语义与排水尾部。解冻失败
      * （冻不住的进程本来也没被冻住）不阻断停止。
      */
@@ -492,7 +492,7 @@ class NodeProcessEngine(
         const val ENV_BRIDGE_DIST = "AUTOSCRIPT_BRIDGE_DIST"
 
         /**
-         * `UV_THREADPOOL_SIZE`：libuv 后台线程池大小（§8.1「脚本资源限额」，批 107）。
+         * `UV_THREADPOOL_SIZE`：libuv 后台线程池大小（§8.1「脚本资源限额」）。
          *
          * **刻意不是 `AUTOSCRIPT_` 前缀** —— 那一族是本仓与 `main.cpp` 的内部约定
          * （[ScriptEnvKeys] 据此拒收用户同前缀的键，避免覆盖导致越权）。而这一条**本来就是

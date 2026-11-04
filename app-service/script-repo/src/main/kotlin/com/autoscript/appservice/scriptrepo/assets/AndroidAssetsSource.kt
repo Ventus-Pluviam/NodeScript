@@ -13,7 +13,7 @@ import com.autoscript.domain.scripts.ScriptPaths
  * 递归逻辑本体不在这里：见 [AssetsWalk]（独立文件，本机无 SDK 也能单测）。
  * 本类退化为按 [AssetManager] 转接的薄壳。
  *
- * **assets 下的根名不再硬编码 `scripts/`**（批 109）：那字面量与
+ * **assets 下的根名不再硬编码 `scripts/`**：那字面量与
  * [ScriptPaths.PROJECTS_DIR] 是同一件事，抄两份就会漂 —— 而漂的后果是「部署落点」与
  * 「约定落点」分家，本类读到的文件永远部署不出去，且没有任何报错。
  */

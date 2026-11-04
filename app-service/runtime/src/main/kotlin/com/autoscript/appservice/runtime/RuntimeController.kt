@@ -24,8 +24,8 @@ import kotlinx.coroutines.sync.withLock
  *
  * 职责：
  * - **[start]/[stop]/[killAll] 经 [guard] 串行化**——串的是**在途表**（谁活着、
- *   谁被摘走），**不是池的容量记账**：容量记账由池自己扛（批 96 摘掉「整段持锁」的病灶、
- *   批 103 换成空闲队列为唯一真源 + [PoolLease] 独占归还），本类不再因「排队等槽」而
+ *   谁被摘走），**不是池的容量记账**：容量记账由池自己扛（ 摘掉「整段持锁」的病灶、
+ *    换成空闲队列为唯一真源 + [PoolLease] 独占归还），本类不再因「排队等槽」而
  *   阻塞 stop/killAll/看门狗（那正是外审 B1 测到的 2927ms）；
  * - 以 runId 为键维护在途表：`stop(未知 runId)` 如实回 [StopOutcome.AlreadyGone]，
  *   绝不静默吞掉（JS `engines.stop(runId)` 语义）；
@@ -84,7 +84,7 @@ class RuntimeController(
      */
     private val revokeRunResources: (Long) -> Unit = {},
     /**
-     * **run 启动时的落盘口**（2026-10-13 执行日志持久化）：`start()` 的 Granted 分支、
+     * **run 启动时的落盘口**（执行日志持久化）：`start()` 的 Granted 分支、
      * `startedAt` 记账之后调用一次。实现是 `ScriptLogStore::begin`（`:app` 的装配缝）。
      *
      * 与 [revokeRunResources] 对偶：那边是"终结时收"，这边是"开始时记" ——
@@ -107,7 +107,7 @@ class RuntimeController(
     private val startedAt = HashMap<Long, Long>()
 
     /**
-     * 已 OS 冻结（SIGSTOP）的在途 run（2026-10-13 执行暂停；[guard] 下读写）。
+     * 已 OS 冻结（SIGSTOP）的在途 run（执行暂停；[guard] 下读写）。
      *
      * **为什么是旁账集合而不是状态**：`EngineStatus` 没有 SUSPENDED（P0 不存在，
      * 见 implementation-notes L533）—— 引擎 `status()` 暂停中仍报 RUNNING，
@@ -169,7 +169,7 @@ class RuntimeController(
 
     /**
      * 往一次**在途**执行的脚本进程 stdin 送一行（悬浮窗底部输入框 → 脚本的
-     * `process.stdin`；2026-10-16 用户令；`HostSummary.sendInput` 的落点）。
+     * `process.stdin`；`HostSummary.sendInput` 的落点）。
      *
      * 与 [pauseRun] 同一条"在途表精确命中"口径：不在途（已结算/从未存在）→ false，
      * 不去猜它是谁 —— 窗里的 `boundRunId` 结算后仍留着（结算不解绑），那时用户
@@ -191,7 +191,7 @@ class RuntimeController(
     }
 
     /**
-     * 关掉一次**在途**执行的 stdin 写端（发 EOF；2026-10-16 用户令「答完自己退」；
+     * 关掉一次**在途**执行的 stdin 写端（发 EOF；
      * `EnginesNamespaceHandler` 的 `stdinIdle` 落点）。
      *
      * 与 [sendInput] 同一条"在途表精确命中"口径：不在途（已结算/从未存在）→ false ——
@@ -239,7 +239,7 @@ class RuntimeController(
     /**
      * 取槽启动；满则按 [PoolAcquireRequest.waitTimeoutMillis] 排队（null = 无限等）。
      *
-     * **等证不持 [guard]**（2026-10-11 批 96，外审 B1）：`pool.acquire` 在满池时会挂到
+     * **等证不持 [guard]**（外审 B1）：`pool.acquire` 在满池时会挂到
      * `waitTimeoutMillis`（调度链路 60–120s）。原实现整段 `guard.withLock`，于是「A 在跑、
      * B 排队」时 A 的 [stop]/[killAll]/[forceStopAll] 与看门狗取锚全被 B 的排队挡住 ——
      * 实测容量 1 下 `stop(A)` 耗时 2927ms（= B 的排队超时），现场表现为「脚本停不下来、
@@ -266,7 +266,7 @@ class RuntimeController(
                     active[receipt.runId] = outcome.handle
                     val started = clock()
                     startedAt[receipt.runId] = started
-                    // 落盘口（2026-10-13）：index 先行 —— 日志行随后经
+                    // 落盘口：index 先行 —— 日志行随后经
                     // ConsoleCollector.lineSink 落 `<runId>.log`，详情页靠它找文件。
                     onRunStarted(receipt.runId, outcome.handle.request.projectId, outcome.handle.request.scriptPath, started)
                     StartOutcome.Started(receipt.runId, receipt.handle)
@@ -327,7 +327,7 @@ class RuntimeController(
             // 为了让「它曾被暂停过」这个事实随 run 终结一起消失（集只装在途）。
             paused.remove(runId)
             // 必须放在最后：`withLock` 的值就是本块最后一个表达式 —— 放到 `paused.remove`
-            // 之后会把 `Boolean` 当成 `PoolHandle` 交出去（2026-10-13 CI 抓到）。
+            // 之后会把 `Boolean` 当成 `PoolHandle` 交出去（CI 抓到）。
             active.remove(runId)
         } ?: return StopOutcome.AlreadyGone
         heartbeats.forget(runId)
@@ -372,7 +372,7 @@ class RuntimeController(
             val killed = handle.slot.engine.kill()
             // 强杀即终结：槽位必须归还（§8.2 记账）；cause 透传给状态机归类
             // （§8.3：REQUESTED→STOPPED，watchdog/OOM→CRASHED）。
-            // 归还经 [PoolHandle.lease]（批 103 P2：空闲队列是唯一真源，lease 的 claim
+            // 归还经 [PoolHandle.lease]（：空闲队列是唯一真源，lease 的 claim
             // 独占归还权）—— 与 [stop] 走的是**同一条归还路径**，故
             // 「killRun 与迟到的 stop 同时到达」只会归还一次。
             handle.lease.forceReturn(cause)
@@ -467,7 +467,7 @@ class RuntimeController(
      * await 并超时强杀（§8.6 dispatcher），看门狗**不得**越过调用方去替它收账。
      */
     suspend fun watchAnchors(): List<WatchAnchor> = guard.withLock {
-        // 暂停的 run 不进锚点（2026-10-13）：冻住的进程心跳必停，`WatchdogPolicy`
+        // 暂停的 run 不进锚点：冻住的进程心跳必停，`WatchdogPolicy`
         // 1.5s 即判 WATCHDOG_HEARTBEAT —— 不排除等于"暂停 1.5 秒就被杀"。这是
         // 08-execution.md L140「看门狗判定只看 RUNNING」在本账上的落点：
         // 暂停的 run 此刻不是"可被判定"的 RUNNING，故不在取数口出现。
@@ -547,7 +547,7 @@ class RuntimeController(
             if (!isWatchable(status)) {
                 return settleDone(runId)
             }
-            // 暂停期不计时（2026-10-13）：冻住的 run 的 status 仍是 RUNNING（引擎不报
+            // 暂停期不计时：冻住的 run 的 status 仍是 RUNNING（引擎不报
             // SUSPENDED），不冻结 deadline 的话，长暂停会被 dispatcher 以 REQUESTED 强杀 ——
             // 用户按了暂停，宿主却替它收了尸。注意这里用 [guard] 快照判，不持锁过 delay。
             if (guard.withLock { runId in paused }) {
@@ -621,13 +621,13 @@ class RuntimeController(
         /** 两侧是否**不一致**（host 读不到时不判分歧：那可能是宿主已死，见 [statusOf] KDoc）。 */
         val drift: Boolean,
         /**
-         * 本次执行的归属（2026-10-13：悬浮窗标题与日志详情的"这是谁的输出"就靠它 ——
+         * 本次执行的归属（悬浮窗标题与日志详情的"这是谁的输出"就靠它 ——
          * `PoolHandle.request` 里本来就有，之前只是没带出来。现值每次现取）。
          */
         val projectId: String,
         /** 同 [projectId]：项目内相对路径（如 `data/test.js`）。 */
         val scriptPath: String,
-        /** 是否被 [pauseRun] 冻住（2026-10-13：暂停按钮的事实源，不另开读口）。 */
+        /** 是否被 [pauseRun] 冻住（暂停按钮的事实源，不另开读口）。 */
         val paused: Boolean,
     )
 

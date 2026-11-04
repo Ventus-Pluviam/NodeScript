@@ -4,8 +4,8 @@ import com.autoscript.domain.host.InstallSize
 import java.io.File
 
 /**
- * 安装体积的实测（§15 的 E1 处置：2026-10-02 拍板「接受超支并在能力中心明示」；
- * 2026-10-07 预算重定为 `≤ 150MB release`，见 `design-decisions.md` 第 41 项 —— 本类的量法与之无关，
+ * 安装体积的实测（§15 的 E1 处置：拍板「接受超支并在能力中心明示」；
+ * 预算重定为 `≤ 150MB release`，见 `design-decisions.md` 第 41 项 —— 本类的量法与之无关，
  * 它量的是宿主现场的**真实字节数**，不是拿预算数字去比）。
  *
  * **为什么量而不是抄**：§15 记的 ≈92MB 是 node-slice 产物的**未压缩** jniLibs 三件套合计，

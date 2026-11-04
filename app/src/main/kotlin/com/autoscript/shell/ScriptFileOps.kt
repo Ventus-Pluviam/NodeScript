@@ -20,12 +20,12 @@ import java.util.Comparator
  * **为什么单独一个对象**（与 [ScriptFilesRead] 同一条理由）：`Application` 在 JVM
  * 单测里构造不出来，而"名字合不合法、路径怎么落、撞了已存在的怎么办"这段判断必须可测。
  *
- * **根层可写（2026-10-16 用户裁定「根层可写」，三条判据打通）**：`projectId` 空串 =
+ * **根层可写（用户裁定「根层可写」，三条判据打通）**：`projectId` 空串 =
  * `files/scripts/` 本层（[com.autoscript.domain.scripts.ProjectId.ROOT]）。首页 FAB 建的**文件**
  * 落 `files/scripts/<名字>`、建的**文件夹**就是一个新项目（`files/scripts/<名字>/`）——
  * 后者多两条判据，见 [requireName] 的 `isProject` 档。六个口（[createFile]/[createFolder]/[read]/[save]/
  * [delete]/[absolutePath]）共用 [resolveInProject]，根层分支只改"归属怎么判"，不改"防不防越界"。
- * **删除与绝对路径（2026-10-17 用户口径）**：删文件夹是**递归整棵**（非空文件夹删不掉等于没做）；
+ * **删除与绝对路径**：删文件夹是**递归整棵**（非空文件夹删不掉等于没做）；
  * 绝对路径就是 [resolveInProject] 的字符串形态（判据复用，不另写一套容错拼法）。
  *
  * 两条口径（原文口径不变，根层只是给它们各加一档）：
@@ -162,7 +162,7 @@ object ScriptFileOps {
      *    ⇒ 至少深一层），但这条闸挡的是**删掉整个项目库**，值得自己有句话。
      *
      * **根层的文件夹就是项目本身**（`files/scripts/<名字>/`）：删它就是删掉一整个项目 ——
-     * 用户 2026-10-17 裁定「允许」（见 `HostSummary.deleteEntry` 的 KDoc），故本函数不为它
+     * 用户 裁定「允许」（见 `HostSummary.deleteEntry` 的 KDoc），故本函数不为它
      * 设闸，只保证"删干净、不留半个目录"。
      *
      * 删除用 `walk` 逆序（先文件后目录）+ `deleteIfExists`：`Files.delete` 对非空目录抛
@@ -189,17 +189,17 @@ object ScriptFileOps {
      * 它由 `ScriptFilesRead` 从 `files/scripts/` 起算（`root.relativize(path)`），**首段就是**
      * `projectId`。契约按"列表给什么就收什么"写，实现按"首段必须等于 [projectId]"校验 ——
      * 两者说不到一块（比如传了项目内相对路径 `lib/main.js`）当场抛，而不是静默拼成
-     * `files/scripts/demo/lib/main.js` 去读另一个文件。**2026-10-06 实测踩过这个坑**：
+     * `files/scripts/demo/lib/main.js` 去读另一个文件。**这个坑实测踩过**：
      * 编辑器报"不是文件：demo/main.js"，因为被拼成了 `files/scripts/demo/demo/main.js`。
      *
      * 三道校验：[DeployPath.resolveIn] 防 `..`/绝对路径/越界、首段与项目名一致、项目目录存在。
      *
-     * **根层分支（2026-10-16）**：`projectId` 空串时"首段与项目名一致"这条没有意义
+     * **根层分支**：`projectId` 空串时"首段与项目名一致"这条没有意义
      * （根层条目没有项目段），换成**"必须正好一层"** —— `base.relativize(target).nameCount == 1`。
      * 防越界那一道（[DeployPath.resolveIn]）一字不动：根层照样不许 `..`/绝对路径/穿层。
      *
-     * （原文这里写着「[ScriptPaths.scriptFile] 刻意不做逃逸校验」，**2026-10-12 删掉**——
-     * 那是批 7c0fec9 订正前的状态：外审 M1 收口时 `scriptFile` 已补上词法闸，理由与
+     * （
+     * 那是c0fec9 订正前的状态：外审 M1 收口时 `scriptFile` 已补上词法闸，理由与
      * 词法判据的边界见该方法 KDoc。这里仍用自己的 `resolveIn` 而不是复用 `scriptFile`：
      * 两条路径的入参形状不同（那边是项目内相对路径，这边首段就是 `projectId`），判据可共用、
      * 拼接不能共用。）
@@ -280,7 +280,7 @@ object ScriptFileOps {
     /**
      * 名字判据（**不分层**，落哪一层由 `dirRelPath` 说）。
      *
-     * 后两条是 2026-10-16 顺手堵的"建了但看不见"：
+     * 后两条堵的是"建了但看不见"：
      * - **点开头**：`ScriptFilesRead` 把点开头条目当系统噪声排除，建出来的东西**不进列表**
      *   （项目根下的 `.npmrc` 那种内务文件正是靠这条隐身），用户只会读到"建了但没了"；
      * - **超长**：Linux/Android 文件名上限 255 **字节**（汉字 UTF-8 占 3 字节，约 85 个字），
@@ -290,7 +290,7 @@ object ScriptFileOps {
      *
      * [isProject] 为真时 = 这个名字落盘后就是 `files/scripts/<名字>/`，**也就是一个项目**，
      * 故多两条判据。为什么非有不可（而不是"建了就建了，打不开再说"）：项目号判据比文件名判据
-     * **严**一档 —— 文件名可以含 `.`（`a.b.js`），项目名不可以（批 84：`.` 让
+     * **严**一档 —— 文件名可以含 `.`（`a.b.js`），项目名不可以（`.` 让
      * `projectsRoot.resolve("..")` 跳出项目根）。放行的话，用户建出一个 `v1.0/`，进得去却
      * **里面每个文件都打不开**（`ProjectId("v1.0")` 当场抛），而错要等到那一刻才现形。
      * 第二条同理但更俗：叫 `node_modules` 的目录在文件列表里**整棵不显示**

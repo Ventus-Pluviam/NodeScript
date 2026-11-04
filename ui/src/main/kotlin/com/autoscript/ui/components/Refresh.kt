@@ -94,9 +94,9 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  * 壳在这里只是给"内容宿主"一个名字，四屏一行不用动。**它也是下拉形变的代管层**
  * （见下），所以四屏一处接上、四处生效。
  *
- * ## 下拉形变：代管一份平台 `EdgeEffect`（2026-10-13 用户口径，第 4 次尝试）
+ * ## 下拉形变：代管一份平台 `EdgeEffect`
  *
- * 用户口径：「文件列表、任务列表、管理面板这些下拉时要有和 TG 一样的形变」。
+ * 「文件列表、任务列表、管理面板这些下拉时要有和 TG 一样的形变」。
  *
  * **TG 用的是什么**（`/tmp/tg` 12.10.6 实读）：就是 AOSP `EdgeEffect` 本身，
  * 形变一个字没改 —— `RecyclerListView.java:2160` 的 `setAdaptiveOverScroll()` +

@@ -31,7 +31,7 @@ class ArchitectureTest {
                 "androidx.compose.ui..",
                 "androidx.compose.material3..",
                 "androidx.compose.foundation..",
-                // :ui 模块（2026-09-23 拆出）：装配包不得依赖呈现层 ——
+                // :ui 模块（拆出）：装配包不得依赖呈现层 ——
                 // 首屏读口走 :domain 的 HostSummary，不是 shell 反向 import MainActivity。
                 "com.autoscript.ui..",
             )
@@ -47,11 +47,11 @@ class ArchitectureTest {
 
         ArchRuleDefinition.noClasses()
             .that().resideInAPackage("com.autoscript")
-            // **Composition Root 例外的范围是「装配包」不是「整个模块」**（批 107 收紧）：
-            // 批 107 要把用户设的每连接闸推给 `NewlineFrameServer`，而那个调用点在
+            // **Composition Root 例外的范围是「装配包」不是「整个模块」**（ 收紧）：
+            //  要把用户设的每连接闸推给 `NewlineFrameServer`，而那个调用点在
             // `AppShellApplication`（根包）。把整个 :app 对 bridge 的门打开是最省事的一条，
             // 也是把这条边界一笔勾销的一条。故只点名除外**这一个类**，其余根包类照旧不许碰。
-            // 逐字点名的一个类（批 107）：桥接触点收敛到它，门上只多这一条白名单，
+            // 逐字点名的一个类：桥接触点收敛到它，门上只多这一条白名单，
             // 而不是对整个 :app 打开（那是把这条边界一笔勾销）。
             // **用 simpleName 而不是包名**：它在**同一个包**里（`com.autoscript`），
             // `resideOutsideOfPackages` 判不到同包的另一个类 —— 那条 API 只对子包有效。

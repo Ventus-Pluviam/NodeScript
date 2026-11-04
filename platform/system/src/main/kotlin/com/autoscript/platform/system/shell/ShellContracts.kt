@@ -19,7 +19,7 @@ enum class ShellMode { DEFAULT, ROOT, ADB }
  * shell 执行结果（与 JS `extras.ts` 的 `ShellResult` 逐字对齐：code/stdout/stderr/truncated）。
  * [stdout]/[stderr] 可空 = 该流没产出；绝不拿空串冒充「有输出但为空」。
  *
- * [truncated]：至少一条流被 [ShellCaptureLimit.MAX_CAPTURE_BYTES] 截断（2026-10-02 口径，
+ * [truncated]：至少一条流被 [ShellCaptureLimit.MAX_CAPTURE_BYTES] 截断（口径，
  * 见 `docs/design-decisions.md` 第 21 项）。**默认 false**，只有真发生截断才置位 ——
  * 因此旧调用方/旧 facade 拿到的形状不变（多一个字段，语义是纯增量）。
  *

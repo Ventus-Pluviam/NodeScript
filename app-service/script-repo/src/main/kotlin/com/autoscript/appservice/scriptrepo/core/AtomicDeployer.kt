@@ -31,7 +31,7 @@ class AtomicDeployer(
     /**
      * 阶段 1：写入 stage 区并登记 journal（STAGED）。
      *
-     * **收 [RelPath]**（批 109）：入参形态已在值类的 `init` 里判过，故这里**不再判**；
+     * **收 [RelPath]**：入参形态已在值类的 `init` 里判过，故这里**不再判**；
      * 而 [Staged.relPath] 仍是 `String` —— journal 是**线式文本**（`DeployJournal` 按行记
      * 原始路径供回滚重放），那是序列化边界，解包成字符串是那一刻的职责，不是丢掉了类型。
      */

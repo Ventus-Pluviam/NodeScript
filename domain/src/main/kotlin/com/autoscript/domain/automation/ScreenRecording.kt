@@ -260,7 +260,7 @@ suspend fun screenRecordingContextOrThrow(): ScreenRecordingContext {
             com.autoscript.domain.core.ErrorCode.ERR_PERMISSION_DENIED,
             "本连接没有已认证的执行身份，不能开启录屏会话",
         )
-    // 判据进 `ProjectId`（批 109）：空串与「不是项目号的串」在此**同一处**被拒，
+    // 判据进 `ProjectId`：空串与「不是项目号的串」在此**同一处**被拒，
     // 而下游 [MediaProjectionRecorder.start] 收的是类型 —— 拿到类型就意味着它能拼落点。
     // 两句话术合并成一条的后果要照实记：空串现在报的是「不是合法项目号」而不是
     // 「没有项目号」，而空串**本来就是**不是合法项目号 —— 合并没有丢信息，

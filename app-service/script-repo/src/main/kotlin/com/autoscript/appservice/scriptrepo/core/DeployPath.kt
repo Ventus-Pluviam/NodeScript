@@ -16,7 +16,7 @@ object DeployPath {
     /**
      * relPath 合法：非空、相对、段内无 `..`/`.`/空段/反斜杠。
      *
-     * **判据已上提到 [RelPath.isSafe]**（2026-10-12 批 109，typed ids）：本仓此前有**三份**
+     * **判据已上提到 [RelPath.isSafe]**（typed ids）：本仓此前有**三份**
      * 逐字相同的实现 —— 本方法、`ScriptPaths.scriptFile` 内联的那份、以及
      * `ScriptDeployRecovery` 的私有副本（它是被架构门禁逼着抄的，见那处的 KDoc）。
      * 三份意味着以后改判据要记得改三处；本方法保留是因为**外部调用方仍收裸 `String`**
@@ -27,7 +27,7 @@ object DeployPath {
     /**
      * 解析到 root 之下并做二次校验（**纯词法**：防边界绕行，**不防符号链接**）。
      *
-     * **这一句 KDoc 曾经写着「防符号链接/边界绕行」，那句话不成立**（2026-10-12 订正，
+     * **这一句 KDoc 曾经写着「防符号链接/边界绕行」，那句话不成立**（订正，
      * 外审「KDoc 与实现矛盾」那条）：本方法只做 `normalize()` + `startsWith(base)`，两者
      * 都是**字符串级**判据 —— 路径里若含指向 root 之外的符号链接（`root/link → /data/other`，
      * `resolveIn(root, "link/f.txt")` 返回 `root/link/f.txt`，词法检查一路放行），真正的
@@ -50,7 +50,7 @@ object DeployPath {
     }
 
     /**
-     * 已拿到 [RelPath] 的那一步（批 109 起）：**不再判入参**，只判拼接结果是否仍在 root 之下。
+     * 已拿到 [RelPath] 的那一步：**不再判入参**，只判拼接结果是否仍在 root 之下。
      *
      * 与 [resolveIn] 的差别只剩入参那一道闸 —— 而那道闸现在在 [RelPath] 的 `init` 里，
      * 于构造时就已经过了。留两条口是因为调用方形态不同（裸 `String` 的写入侧还在）。

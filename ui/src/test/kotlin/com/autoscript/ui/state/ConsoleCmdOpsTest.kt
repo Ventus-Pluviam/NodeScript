@@ -22,8 +22,8 @@ import org.junit.jupiter.api.Test
  */
 class ConsoleCmdOpsTest {
 
-    /** 只实现控制台那几条的替身；其余成员继承 [FakeHost] 的响亮失败。 */
-    private class CmdHost(
+    /** 只实现控制台那几条的替身；其余成员继承 [FakeHost] 的响亮失败（open：整段轮询用例要覆写输出面）。 */
+    private open class CmdHost(
         private val projects: List<String> = listOf("p1"),
         private val failSnapshot: Exception? = null,
         private val failOutput: Exception? = null,
@@ -95,7 +95,7 @@ class ConsoleCmdOpsTest {
             return com.autoscript.domain.host.ShellConsoleResult(0, "ok", null)
         }
 
-        /** 停止面的调用账（批 94）：停了哪个项目、宿主怎么答。 */
+        /** 停止面的调用账：停了哪个项目、宿主怎么答。 */
         val stopped = mutableListOf<String>()
         var cancelResult: Boolean = true
         var failCancel: Exception? = null
@@ -276,7 +276,7 @@ class ConsoleCmdOpsTest {
         assertEquals("p2 早先的输出", onP2.lines.single().text, "归 0 才取得到 seq 更小的那些行")
     }
 
-    // ── 命令历史（2026-10-10 批 90）────────────────────────────────────────
+    // ── 命令历史────────────────────────────────────────
 
     @Test
     fun `现取一轮就带上历史；换项目跟着换`() = runBlocking {
@@ -334,7 +334,7 @@ class ConsoleCmdOpsTest {
         assertEquals(listOf("npm install axios"), done.history)
     }
 
-    // ── 停止（2026-10-11 批 94）───────────────────────────────────────────
+    // ── 停止───────────────────────────────────────────
 
     @Test
     fun `停止：交给宿主句柄账，回执不替宿主宣布结果`() = runBlocking {
@@ -363,5 +363,44 @@ class ConsoleCmdOpsTest {
         val s = stopConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
         assertTrue(s.opError != null && s.opError!!.contains("还没有选中的项目"), "${s.opError}")
         assertTrue(host.stopped.isEmpty(), "没选中就不该把请求发出去")
+    }
+
+    /**
+     * 轮询**整段**的写回纪律（修，见 `LivePoll.pollWhile` 的账）：
+     * 中间态逐轮进 [onStep]，而不是攒到协程结束一口涌出 —— npm 边跑边说的
+     * 那些行从此一行行进组合状态。这里让宿主**每次拉完补一行**（模拟 npm
+     * 边跑边说），钉三件事：行数逐轮长、每行长出的那轮都到过 [onStep]、
+     * 宿主改口"跑完了"的那一轮也在 [onStep] 里。
+     */
+    @Test
+    fun `轮询整段：每轮长出的行与停的那轮都进 onStep`() = runBlocking {
+        val host = object : CmdHost() {
+            override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot {
+                val snap = super.consoleOutput(projectId, sinceSeq, maxLines)
+                if (outputCalls < 3) {
+                    // 每次拉完给下一次拉补一行（seq 单调，模拟 npm 的下一行输出）
+                    lines += SequencedConsoleLine(++lastSeq, NpmConsoleLine(NpmConsoleLineKind.OUTPUT, "行${lastSeq}", 0L))
+                }
+                // 第三轮改口"跑完了"：那一轮必须也在 onStep 里收尾
+                return if (outputCalls >= 3) snap.copy(running = false) else snap
+            }
+        }
+        host.runningFlag = true
+        host.lines += SequencedConsoleLine(1L, NpmConsoleLine(NpmConsoleLineKind.OUTPUT, "行1", 0L))
+        host.lastSeq = 1L
+        val seen = mutableListOf<Pair<Int, Boolean>>()
+        val final = pollConsoleWhileRunning(
+            host,
+            ConsoleCmdState.NOT_LOADED.copy(running = true),
+            intervalMillis = 1L,
+            maxTicks = 6,
+        ) { s -> seen += s.lines.size to s.running }
+        assertEquals(
+            listOf(1 to true, 2 to true, 3 to false),
+            seen,
+            "逐行长出的行逐轮进 onStep；宿主说跑完的那一轮也在 onStep 里（不憋到返回值）",
+        )
+        assertEquals(3, final.lines.size, "返回终值兜底，终态行不漏")
+        assertFalse(final.running)
     }
 }

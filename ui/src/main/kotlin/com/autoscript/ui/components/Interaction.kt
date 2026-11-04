@@ -91,7 +91,7 @@ private class FlatPressNode(
             drawRect(overlay)
         } else {
             // 给了形状就按形状裁：圆钮上的按下档必须是**圆**的，裸 `drawRect` 会在四个角
-            // 上露出方块（2026-10-06 真机：长按项目页右下角那颗蓝钮，浮出一块灰色方影）。
+            // 上露出方块（真机：长按项目页右下角那颗蓝钮，浮出一块灰色方影）。
             // `clipPath` 收的是 Path，故先把 Outline 收进 Path 再裁（`addOutline`）。
             val outline = clip.createOutline(size, layoutDirection, this)
             clipPath(Path().apply { addOutline(outline) }) { drawRect(overlay) }

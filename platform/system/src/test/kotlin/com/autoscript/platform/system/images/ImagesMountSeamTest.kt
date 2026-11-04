@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Test
 
 /**
- * `images` 挂载缝透传测试（§9.2）—— 2026-09-30 审查步骤 6 自 capabilities 的
+ * `images` 挂载缝透传测试（§9.2）—— 自 capabilities 的
  * CapabilityNamespacesTest 拆出（images handler 随迁 :platform:system，工厂在
  * [SystemNamespaces.images]）。
  *

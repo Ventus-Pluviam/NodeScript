@@ -113,7 +113,7 @@ data class TaskCenterState(
 data class TaskRowState(
     val id: String,
     val name: String,
-    /** 所属项目（2026-10-13：立即执行开悬浮窗要归属，`ScheduledTaskRow` 本来就有）。 */
+    /** 所属项目（立即执行开悬浮窗要归属，`ScheduledTaskRow` 本来就有）。 */
     val projectId: String,
     val scriptPath: String,
     val scheduleText: String,

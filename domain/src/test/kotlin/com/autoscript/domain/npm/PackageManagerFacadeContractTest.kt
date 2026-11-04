@@ -18,7 +18,7 @@ class PackageManagerFacadeContractTest {
             // 重操作
             "install", "ci", "update", "uninstall", "dedupe", "prune",
             "audit", "importOfflineBundle", "importTarball", "cancel",
-            // 提升到全局（2026-10-17「依赖去重执行后让它把依赖自动放进全局作用域中」——
+            // 提升到全局（去重之后把项目声明的依赖装一份到全局 ——
             // 「去重并提升到全局」那颗按钮的后半。与 install 同族：它就是把**声明的**依赖
             // 装一份到全局作用域，故走同一条重操作路，不新开一条"搬包"的语义）
             "promoteToGlobal",
@@ -28,14 +28,14 @@ class PackageManagerFacadeContractTest {
             "globalRegistry", "setGlobalRegistry",
             // 控制台命令面（§10.9 第 3 条「npm 终端视图」；同样不经桥）
             "runConsoleCommand", "consoleOutput",
-            // 控制台停止（2026-10-11 批 94：「停止」按钮的宿主面 —— 与 runConsoleCommand
+            // 控制台停止（「停止」按钮的宿主面 —— 与 runConsoleCommand
             // 并列而不是 cancel(handle) 的别名：界面拿到的是 NpmConsoleHandle，它没有
             // InstallHandle 的句柄号，按项目停是界面唯一说得清的语义）
             "cancelConsoleCommand",
-            // 命令历史（§10.9 第 3 条；2026-10-10 批 90 —— 环 vs 盘：输出环随进程消失，
+            // 命令历史（§10.9 第 3 条； —— 环 vs 盘：输出环随进程消失，
             // 历史落盘，故是**另一个口**而不是 consoleOutput 的一个参数）
             "consoleHistory", "recordConsoleHistory",
-            // 控制台 shell 面（2026-10-09 用户口径：控制台要能执行 shell）
+            // 控制台 shell 面
             "runShellCommand",
             // P1
             "runScript", "exec",
@@ -45,7 +45,7 @@ class PackageManagerFacadeContractTest {
             "exportSnapshot",
             // 缓存回收（§10.9 第 5 条的动作半边；**不是** npm cache clean，见该方法的 KDoc）
             "reclaimCache",
-            // npm-cache 体积读数（§10.9 第 5 条的 `npm-cache` 尺寸栏，2026-10-09 批 87）
+            // npm-cache 体积读数（§10.9 第 5 条的 `npm-cache` 尺寸栏）
             "cacheStorage",
         )
         assertEquals(expected, names, "门面方法面必须与 §10.7 冻结清单一致")

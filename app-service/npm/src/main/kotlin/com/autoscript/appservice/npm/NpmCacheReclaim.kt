@@ -8,12 +8,12 @@ import java.util.Base64
 /**
  * npm 缓存按 lock 闭包回收（§10.9 第 5 条「cache clean」的落地形态）。
  *
- * **为什么不是 `rm -rf npm-cache`**（用户 2026-10-09 裁定）：§10 整卷的离线能力
+ * **为什么不是 `rm -rf npm-cache`**（用户 裁定）：§10 整卷的离线能力
  * （`--prefer-offline`、精选种子首装、`offlineGap` 体检）全建在这个缓存上，全清等于
  * 把紧挨着的「按 lock 重装」那颗按钮变成**必须联网**。回收的语义是「删掉没有任何项目
  * lock 需要的那些」，而不是「把缓存清空」。
  *
- * **不碰 `index-v5` 的既有内容、只做修复**：实测（2026-10-09，npm 10.9.8 本机）——
+ * **不碰 `index-v5` 的既有内容、只做修复**：实测（npm 10.9.8 本机）——
  * - `npm ci --offline` 走 `cacache.get.stream.byDigest`，**不看 index**：content 在就命中，
  *   缺就 `ENOTCACHED`（与 `NpmCacheSeedDeployer.CACHE_HIT_NOTE` 同一条实测口径）；
  * - 但**在线**路径读 index：index 指向一份已消失的 content 时，`npm install` 报
@@ -29,7 +29,7 @@ import java.util.Base64
  * 小文件，清它们要重建整棵桶树，收益与风险不成比例。故 [Report.keptEntries] 会**大于**
  * 真正被 lock 引用的条目数，这不是漏删，是刻意留的。
  *
- * **调用方给哪个目录就只动哪个目录**（2026-10-09 批 86 已把四处读者合一到
+ * **调用方给哪个目录就只动哪个目录**（ 已把四处读者合一到
  * [NpmCacheSeedDeployer.cacheRoot]，但这条纪律不变）：本对象不替调用方猜「npm 的缓存
  * 是不是在别处」—— 猜错会把「回收」变成「删掉别人正在用的东西」。合一之前那四处
  * 实测互不相同（`--cache` 拿的是 `cacheDir` 本身、[CacacheIndex] 读 `cacheDir/npm-cache`、

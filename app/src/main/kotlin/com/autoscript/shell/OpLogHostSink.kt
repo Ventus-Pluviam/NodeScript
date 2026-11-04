@@ -5,7 +5,7 @@ import com.autoscript.appservice.npm.OpLogSink
 /**
  * [OpLogSink] 的**生产**实现：npm 操作事实打**系统日志**。
  *
- * 2026-10-17 用户令：**去掉审计**（依赖管理页那颗「审计」进的那个子页，以及它背后那份
+ * **去掉审计**（依赖管理页那颗「审计」进的那个子页，以及它背后那份
  * 只追加的落盘账 `files/.ns/install-history.jsonl`），这些记录改打系统日志。
  * 「系统日志」在本仓有确切所指 —— 管理面板 → 日志管理页的第一段，即
  * `ConsoleCollector` 里 `runId == 0` 的那些行（"引擎外"）；[HostLog] 正是往那儿写的口，

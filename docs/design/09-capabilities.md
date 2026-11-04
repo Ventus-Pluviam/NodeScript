@@ -30,17 +30,17 @@ FrameSource (SPI)
   ├─ MediaProjectionSource          会话式 · createScreenCaptureIntent→同意→FGS(type mediaProjection)→createVirtualDisplay
   │    └─ Surface → ImageReader(maxImages=2~3 对象池) → Frame 进入 libopencv.so
   │         └─ 灰度/裁剪/缩放/旋转/找色/模板匹配/特征(ORB)/颜色查找 — 全 native, 0~1 拷贝
-  │            （计算核八算子全落：找色/模板匹配/灰度/裁剪/缩放/旋转/特征，P1 native 面收官；桥面八算法已全开（2026-09-29））
+  │            （计算核八算子全落：找色/模板匹配/灰度/裁剪/缩放/旋转/特征，P1 native 面收官；桥面八算法已全开）
   └─ MediaProjectionRecorder        会话式 · **同一条会话账**（同意 + FGS 同上），输出汇不同：Surface → MediaRecorder → 视频文件
-       （2026-10-08 批 77 落地；落点 files/scripts/<projectId>/.recordings/，路径**开的时候就回**）
+       （落地；落点 files/scripts/<projectId>/.recordings/，路径**开的时候就回**）
 ```
 - 截图对象生命周期：JS `Image` 句柄 → native 帧句柄；`recycle()` 显式 + finalize 兜底；`dispose` tombstone 协议同 §7.4。
 - `FLAG_SECURE` → 分类错误（§7.6），不返回黑图（让脚本可判断）。
 - **实现注记已外迁**：Kotlin/native 落地链、八个算子的逐条记账与真机实测数字，逐字见 [`design-status.md` §9.2 实现注记](../design-status.md#实现注记自各分卷外迁逐字保留)。
   留此的口径要点：`images` 十方法 SPI 走 §12.2 第七条独立缝（native 侧 OpenCV 4.14.0 静态链接）；**两缝帧表已合一**（§18 第 8 项 (b)：`screen.capture` 与 `images.decode` 的帧同号段互认，
-  「帧不通用」纪律取消，落点是 §7.4 发号侧归一）；~~**仍缺** MediaProjection 高清会话（换 producer 即插，语义面不动）~~ **作废（2026-10-08，批 75）：会话式截屏已落地** —— `MediaProjectionSource` 经 `PlatformWiring.screenHandler` 接入，一次性同意 + API 34+ 顺序 + 幂等释放 + 会话资源随连接终结收口；**录屏（`MediaRecorder`）2026-10-08 批 77 亦已落地** —— `MediaProjectionRecorder` 与截屏腿并列、共用同一条投屏会话账（同意 + FGS），输出汇换成 `MediaRecorder` → 视频文件；桥面 `screen.startRecording/stopRecording` 两侧契约与生成物齐全。
+  「帧不通用」纪律取消，落点是 §7.4 发号侧归一）；~~**仍缺** MediaProjection 高清会话（换 producer 即插，语义面不动）~~ **作废：会话式截屏已落地** —— `MediaProjectionSource` 经 `PlatformWiring.screenHandler` 接入，一次性同意 + API 34+ 顺序 + 幂等释放 + 会话资源随连接终结收口；**录屏（`MediaRecorder`）亦已落地** —— `MediaProjectionRecorder` 与截屏腿并列、共用同一条投屏会话账（同意 + FGS），输出汇换成 `MediaRecorder` → 视频文件；桥面 `screen.startRecording/stopRecording` 两侧契约与生成物齐全。
 - MediaProjection **会话语义**：`capture()` 一次性授权会话（API34 每会话确认）；`reconnect` 不自动重试授权，由 PermissionCenter 引导用户重授权。
-- **两缝帧表已合一（§18 第 8 项 (b)，2026-09-26 落地）**：`screen.capture()` 出的帧与
+- **两缝帧表已合一（§18 第 8 项 (b)）**：`screen.capture()` 出的帧与
   `images.decode` 出的帧现在**同号段、互认** —— 拿截屏帧当 `images.findImage()` 的
   haystack 通，`images.release()` 也放得掉一帧截屏。"帧不通用"那条纪律**取消**。
   落点是**发号侧归一**（§7.4）—— 归一的两条落点（`ImageAnalyzer.ingest` 第 6 方法、
@@ -49,7 +49,7 @@ FrameSource (SPI)
 ### 9.3 输入通道（`auto` / `adb` / `root`）
 `InputProvider` SPI 三实现：无障碍手势 / root / Shizuku-ADB。统一 `touchDown/Move/Up` + 手势 DSL。root 能力分级进 PermissionCenter，无 root 不降级渲染为禁用（不假装可用）。
 
-**三通道平级、显式选路（2026-10-06 拍板，见 [`design-decisions.md`](../design-decisions.md) 第 35 项；
+**三通道平级、显式选路（拍板，见 [`design-decisions.md`](../design-decisions.md) 第 35 项；
 含 Shizuku 依赖引入与「未真机验证」这条诚实缺口）**：
 - 取值 `auto`（无障碍）/ `adb`（Shizuku）/ `root`（`su`）。**必须显式指定**：单次调用在
   payload 带 `{channel}`，会话级用 `a11y.setInputChannel`（**按桥连接隔离**，一个脚本设的
@@ -111,15 +111,15 @@ FrameSource (SPI)
   `PlatformWiringTest` 同路径覆盖）。
 - 脚本文件目录：`files/scripts/<projectId>/` 标准化；要求 `assets→filesDir` **原子部署**（tmp 写入 + sha256 校验 + rename 替换），防止半截断电文件。
 - `shell`：SPI 是 `:domain` 的 `ShellExecutor`（`exec(command, mode, timeoutMillis)` → `ShellResult`，超时是**实现者义务**而非可选项 —— §10 零 spawn 的副作用落在宿主侧，且铁律 3 禁止无限等待）；语义层 `ShellNamespaceHandler` 住 `:platform:capabilities`（参数校验、超时默认值 30s、`ShellMode` 字面量 `default`/`root`/`adb`），Android 实现 `AndroidShellExecutor`（`Runtime.exec("sh","-c",…)`）已落在 `:platform:system`。
-  **捕获有上限（2026-10-02 拍板，口径见 `design-decisions.md` 第 21 项）**：每条流至多留 `ShellCaptureLimit.MAX_CAPTURE_BYTES`（1 MiB），超出即**静默截断 + 显式日志 Warning + `ShellResult.truncated=true`**（纯增量字段，缺省 false）。三条硬约束：① **到顶后仍要把管道读到 EOF**，只是不再落缓冲 —— 停下来不读会让子进程憋死在写满的管道上，那正是「双流并发读干」要防的死锁；② **两条流各自计数**（stdout 截了不挤掉 stderr 的额度，错误信息恰是最该留住的短输出）；③ 上限必须满足 `MAX_CAPTURE_BYTES × JSON_WORST_CASE_EXPANSION(6) < 单帧上限`（§7.5 的 8 MiB）—— 单帧超限在桥上是 `FrameTooLargeException` → **关连接**，比截断重得多，所以必须在实现侧先兜住、不让超限载荷走到 JSON 编码那一步。**截断不进 `isSuccess` 的判据**：`code` 是子进程真实退出码，截断是宿主侧捕获策略，两者正交；被截的那条流末尾另追加 `TRUNCATION_MARK` 说明行（人读的那一层，机器判定一律用 `truncated`）。日志走可注入的 `LogSink`（缺省 `java.util.logging`，其 `ConsoleHandler` 写 `System.err`，Android 把 `System.err` 重定向进 logcat）—— **刻意不直接调 `android.util.Log`**：`:platform:system` 的 JVM 单测没有 `isReturnDefaultValues`，直接调会抛 "not mocked"，一条"输出超限"的告警不该把测试判红。
+  **捕获有上限（拍板，口径见 `design-decisions.md` 第 21 项）**：每条流至多留 `ShellCaptureLimit.MAX_CAPTURE_BYTES`（1 MiB），超出即**静默截断 + 显式日志 Warning + `ShellResult.truncated=true`**（纯增量字段，缺省 false）。三条硬约束：① **到顶后仍要把管道读到 EOF**，只是不再落缓冲 —— 停下来不读会让子进程憋死在写满的管道上，那正是「双流并发读干」要防的死锁；② **两条流各自计数**（stdout 截了不挤掉 stderr 的额度，错误信息恰是最该留住的短输出）；③ 上限必须满足 `MAX_CAPTURE_BYTES × JSON_WORST_CASE_EXPANSION(6) < 单帧上限`（§7.5 的 8 MiB）—— 单帧超限在桥上是 `FrameTooLargeException` → **关连接**，比截断重得多，所以必须在实现侧先兜住、不让超限载荷走到 JSON 编码那一步。**截断不进 `isSuccess` 的判据**：`code` 是子进程真实退出码，截断是宿主侧捕获策略，两者正交；被截的那条流末尾另追加 `TRUNCATION_MARK` 说明行（人读的那一层，机器判定一律用 `truncated`）。日志走可注入的 `LogSink`（缺省 `java.util.logging`，其 `ConsoleHandler` 写 `System.err`，Android 把 `System.err` 重定向进 logcat）—— **刻意不直接调 `android.util.Log`**：`:platform:system` 的 JVM 单测没有 `isReturnDefaultValues`，直接调会抛 "not mocked"，一条"输出超限"的告警不该把测试判红。
 **实现注记已外迁**：五个系统命名空间（`dialogs`/`shell`/`device`/`app`/`floatingWindow`）的落地清单与 `dialogs` 的回投/取消语义，逐字见 [`design-status.md` §9.6 实现注记](../design-status.md#实现注记自各分卷外迁逐字保留)。
   **Promise 封装的诚实口径**：`stdout`/`stderr` 为 `null` 表示「流无输出」，不是「有输出但为空」；退出码非 0 不是异常，原样回 `{code, stdout, stderr, truncated}` 由 JS 侧判；child_process 副作用限制如实上报。
-- `zip` = 归档压缩/解压（`:domain` `ZipArchiver` SPI + `:platform:system` `JdkZipArchiver`）。契约级安全底线：**zip-slip 先验后写** —— 全包条目名校验通过才落字节（`../` 逃逸/绝对路径条目 → `ERR_INVALID_PARAM`，界内零写入；与 shell 超时同级的实现方义务）。压缩 tmp+rename 原子落位、空目录条目保留、垃圾包如实 `ERR_IO`（`ZipFile` 中央目录校验，不用对垃圾"零条目静默成功"的流式读）。**体积上限（2026-10-06，backlog B13）**：解压前先卡**单条目** 256 MiB 与**整包合计** 1 GiB（两道都要 —— 单条目的闸防「一个巨物」，总量的闸防「一万个小东西」），超限整次拒绝并回 `ERR_INVALID_PARAM`（与 zip-slip 同码：都是「这个归档本身不合格」，是**输入**的问题，不是目标盘的问题）。判据分两拍：第一拍按包的**声明**早退（诚实炸弹在写任何字节之前就被拦下），第二拍在字节流经过的地方按**真读出来的字节数**再判一次（`ZipEntry.getSize()` 是包自己声明的数，可以撒谎）。**不查剩余空间** —— 那是配额面的事（§10.9 UX 5），混在一起会让「盘满了」与「包是炸弹」报同一个错。
+- `zip` = 归档压缩/解压（`:domain` `ZipArchiver` SPI + `:platform:system` `JdkZipArchiver`）。契约级安全底线：**zip-slip 先验后写** —— 全包条目名校验通过才落字节（`../` 逃逸/绝对路径条目 → `ERR_INVALID_PARAM`，界内零写入；与 shell 超时同级的实现方义务）。压缩 tmp+rename 原子落位、空目录条目保留、垃圾包如实 `ERR_IO`（`ZipFile` 中央目录校验，不用对垃圾"零条目静默成功"的流式读）。**体积上限（backlog B13）**：解压前先卡**单条目** 256 MiB 与**整包合计** 1 GiB（两道都要 —— 单条目的闸防「一个巨物」，总量的闸防「一万个小东西」），超限整次拒绝并回 `ERR_INVALID_PARAM`（与 zip-slip 同码：都是「这个归档本身不合格」，是**输入**的问题，不是目标盘的问题）。判据分两拍：第一拍按包的**声明**早退（诚实炸弹在写任何字节之前就被拦下），第二拍在字节流经过的地方按**真读出来的字节数**再判一次（`ZipEntry.getSize()` 是包自己声明的数，可以撒谎）。**不查剩余空间** —— 那是配额面的事（§10.9 UX 5），混在一起会让「盘满了」与「包是炸弹」报同一个错。
 **实现注记已外迁**：`ScriptPaths` 三处复用、`ScriptDeployRecovery` 的「只补缺不覆盖」与诚实边界，逐字见 [`design-status.md` §9.6 实现注记](../design-status.md#实现注记自各分卷外迁逐字保留)。
   **桥面已通**：handler（`:platform:capabilities` `ZipNamespaceHandler`，参数口径+错误原码透传，不碰归档字节）+ 独立注入缝（`assemble.zipHandler`）+ JS facade（`zip.ts`）。与 packager 的 npm 专用 zip（`NpmSnapshot` 固定 mtime+integrity）边界分明，不互相复用。
 
 ### 9.7 OCR（P1）与插件（P2）
-- `OcrProvider` SPI：**不内置 OCR 实现（2026-09-26 拍板）**——MLKit 插件基准实现（可下载模型）不做；`OcrProvider` 只保留可替换接缝（§2/§6），有需要的脚本自带外部方案。插件以独立 `:plugin:*` 模块 + 清单注册，native addon 走 `:node-runtime-build` 交叉编译管线（arm64 `.node`）。
+- `OcrProvider` SPI：**不内置 OCR 实现（拍板）**——MLKit 插件基准实现（可下载模型）不做；`OcrProvider` 只保留可替换接缝（§2/§6），有需要的脚本自带外部方案。插件以独立 `:plugin:*` 模块 + 清单注册，native addon 走 `:node-runtime-build` 交叉编译管线（arm64 `.node`）。
 - 插件加载: P2，plugin.json 声明 require 钩子/资源/权限；市场脚本不可加载任意插件（白名单）。**沙箱已裁（§18 第 1 项）** —— 这条白名单是能力面的，不再有"引到 QuickJS 子集"的去处。
 
 ---

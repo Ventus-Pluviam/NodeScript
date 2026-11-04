@@ -361,7 +361,7 @@ class NodeProcessEngineTest {
         assertEquals("v2", launcher.lastEnv!!["K"], "装配期定死会让这条红 —— 用户改完必须下次执行就生效")
     }
 
-    // ── 脚本资源限额（批 107；§8.1）────────────────────────────────────────
+    // ── 脚本资源限额（§8.1）────────────────────────────────────────
 
     @Test
     fun `堆上限走 argv 且排在脚本路径之前`() {
@@ -572,7 +572,7 @@ class NodeProcessEngineTest {
     }
 
     /**
-     * 2026-10-14 真机 bug 的引擎侧回归：**进程重启**后分配器从 1 重新数，会重发上一进程
+     * 真机 bug 的引擎侧回归：**进程重启**后分配器从 1 重新数，会重发上一进程
      * 用掉的号 —— 档案撞「终态记录不可改写」。装配期把档案高水位喂进
      * [NodeEngineConfig.runIdHighWater]，构造即站在历史之后。
      *
@@ -679,7 +679,7 @@ class NodeProcessEngineTest {
     }
 
     /**
-     * 暂停/恢复（2026-10-13）：委托当前 execution 的进程；stop 入口先解冻。
+     * 暂停/恢复：委托当前 execution 的进程；stop 入口先解冻。
      *
      * FakeProcess 缺省 `pauseExecution/resumeExecution` = false（`SpawnedProcess`
      * 接口缺省）—— 这里用可冻的替身；真 `kill -STOP` 由设备验证，单测只钉委托关系。

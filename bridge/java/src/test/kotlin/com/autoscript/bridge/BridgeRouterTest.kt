@@ -75,7 +75,7 @@ class BridgeRouterTest {
     }
 
     /**
-     * 外审 M4（2026-10-11 批 97）：**内部 bug 不得说成参数错**。
+     * 外审 M4：**内部 bug 不得说成参数错**。
      *
      * 修前：任何 `Exception` 折成 `ERR_INVALID_PARAM` + 回显 `e.message` —— 脚本
      * `e.is('ERR_INVALID_PARAM')` 会去改自己的参数，而真相在宿主堆栈里；回显还把

@@ -40,7 +40,7 @@ internal fun promotePlanOf(projectRoot: Path, projectId: String): PromotePlan {
                 "没有可提升到全局的依赖",
         )
     }
-    // `--prefer-offline` 与面板那条安装行同款（2026-10-17 起缺省开启）：提升的往往正是
+    // `--prefer-offline` 与面板那条安装行同款（起缺省开启）：提升的往往正是
     // 刚在项目里装过的那几包，缓存里十有八九已经有了。
     return PromotePlan(specs, listOf("install") + specs + listOf("--prefer-offline"))
 }

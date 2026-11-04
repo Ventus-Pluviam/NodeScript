@@ -113,7 +113,7 @@ class ForegroundKeeperTest {
 
     @Test
     fun `装配层投递必须带 token 与期限——服务拒收的代价是整个进程被杀`() {
-        // 2026-10-02 真机回归：`AndroidForegroundOps.startService` 只投了 action、没带
+        // 真机回归过的坑：`AndroidForegroundOps.startService` 只投了 action、没带
         // token/期限，服务侧按契约拒收（不 startForeground）→ 系统在 startForegroundService
         // 的窗口超时后**连进程一起杀**（界面在前台也照杀）。本测钉住 Keeper 这一侧的
         // 投递参数；Intent extra 的那一段（`AndroidForegroundOps`）只能在真机上验。

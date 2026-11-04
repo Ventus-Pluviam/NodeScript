@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 两处「更多」三点的**粗细层级**（用户口径：顶栏那颗最粗、列表行尾那颗细一点）。
+ * 两处「更多」三点的**粗细层级**。
  *
  * 为什么值得一条测试：这两个参数住在同一个文件里、长得几乎一样，下一个人"顺手改成一致"
  * 是极自然的动作 —— 而那样一来层级就没了，且**编译、截图、lint 都不会报**。

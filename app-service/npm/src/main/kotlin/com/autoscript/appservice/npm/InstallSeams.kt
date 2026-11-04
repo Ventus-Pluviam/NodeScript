@@ -8,7 +8,7 @@ import com.autoscript.domain.npm.InstallEvent
 import java.nio.file.Path
 
 /**
- * [InstallCoordinator] 的对外接缝与上下文 DTO（2026-10-01 D7 自 `InstallCoordinator.kt`
+ * [InstallCoordinator] 的对外接缝与上下文 DTO（D7 自 `InstallCoordinator.kt`
  * 原样外迁，语义逐字未改）。
  *
  * 为什么单独一件：这些类型是**装配层与执行体**（`:app` 的 `AppShellKit`、同包的
@@ -22,9 +22,8 @@ import java.nio.file.Path
  */
 
 /**
- * 重操作的资源闸。**2026-10-17 起只剩磁盘这一道**：用户口径「node_modules 取消 512MB 限制」
- * 「取消上限设置吧」把项目 node_modules 的配额整个摘了（`projectQuotaBytes` /
- * `quotaWarnRatio` 两个字段随之下线），此前它是「80% 黄 · 100% 拦」的那条线。
+ * 重操作的资源闸。**只有磁盘这一道**（没有项目配额 —— 「已用/上限」那条线
+ * 不存在，node_modules 想多大就多大）。
  *
  * [minFreeBytes] 因此成了**唯一**还会拒安装的资源判据：可用空间低于它就是 `ERR_DISK_FULL`
  * （`InstallCoordinator.enqueueHeavy` 的预检）。`InstallEvent.Kind.DISK_QUOTA` 这个事件名
@@ -39,7 +38,7 @@ data class InstallConfig(
  *
  * [summary] 进操作事实（[OpLogSink] 的 `detail`）与 `Finished.detail`（一句话的人类可读结论）。
  *
- * [outputTail] 是**命令自己的输出尾部**（2026-10-09 批 84 新增）：控制台要把
+ * [outputTail] 是**命令自己的输出尾部**（ 新增）：控制台要把
  * 「npm 到底说了什么」显示出来，而 `Finished.detail` 只放得下一句摘要。
  * null = 该执行体给不出（[HeavyOpExecutor.Unavailable]、测试替身）——
  * **不拿摘要冒充输出**：控制台会把它渲染成「本次没有捕获到命令输出」，
@@ -59,7 +58,7 @@ fun interface HeavyOpExecutor {
      * 在已分配的事务上下文里执行重操作；args 为 npm CLI 参数（install/ci/…）。
      * 实现方负责进度事件（经 [ProgressSink]）。
      *
-     * [output] 是**命令自己的输出**（2026-10-10 批 90 新增，真流式）：实现方**边读边报**，
+     * [output] 是**命令自己的输出**（ 新增，真流式）：实现方**边读边报**，
      * 宿主把它逐行落进控制台环 —— 用户看到的是 npm 正在说什么，而不是跑完之后的一大坨。
      * 不报就传 [OutputSink.None]（只回 [HeavyOpOutcome.outputTail] 的老路径）。
      * 两条路并存是刻意的：`outputTail` 是**摘要面**（谁都要得到），流是**过程面**
@@ -106,7 +105,7 @@ fun interface ProgressSink {
 }
 
 /**
- * 命令**输出**回传缝（执行体 → 控制台环，2026-10-10 批 90）。
+ * 命令**输出**回传缝（执行体 → 控制台环）。
  *
  * 与 [ProgressSink] 分开而不是合并：那条装的是 [InstallEvent]（**脚本侧的契约形状**，
  * `bridge/js` 的 `onProgress` 逐字对齐），这条装的是 npm 自己吐的原文 ——
@@ -136,7 +135,7 @@ fun interface OutputSink {
 /**
  * **操作事实的去向缝**（一次重操作/轻操作的最终结局 + 可读明细）。
  *
- * 2026-10-17 用户令：**去掉审计**（依赖管理页那颗「审计」进的那个子页，以及它背后那份
+ * **去掉审计**（依赖管理页那颗「审计」进的那个子页，以及它背后那份
  * 只追加的落盘账 `files/.ns/install-history.jsonl`），这些记录改打**系统日志**。
  * 于是这一族的形状从「一本自己的文件」变成「一条去向」：
  *
@@ -171,7 +170,7 @@ fun interface OpLogSink {
  * **取值域是开放的**：`opName(args)` 把任何 argv 首词直接当 op 记，本对象只是给
  * 「实际会出现的名字」一个稳定的比较锚（测试与去向侧读起来不必猜字面量）。
  *
- * 2026-10-17 随「去掉审计」自 `:domain` 的 `InstallHistoryOp` 整体搬来本模块：
+ * 自 `:domain` 的 `InstallHistoryOp` 整体搬来本模块：
  * 那时它是为了让 `:ui` 审计页分组而住契约层，页面没了，唯一的消费方就是本模块自己
  * （`OpLogSink` 的实参）。
  *
@@ -230,7 +229,7 @@ fun interface ScriptOpExecutor {
     /**
      * 返回摘要（人类可读）。
      *
-     * [output] 是**脚本会话自己的输出**（2026-10-11 批 94 补，真流式）：T1 会话进程
+     * [output] 是**脚本会话自己的输出**（ 补，真流式）：T1 会话进程
      * （`npm run` / `npx`）的 stdout/stderr 是脚本说话的地方，而它在跑完之前就该
      * 到控制台 —— 形状与语义逐字同 [HeavyOpExecutor.execute] 的那条缝（不重复注释，
      * 见那边：尽力而为、实现方不抛、与 `ProgressSink` 分开的理由）。
@@ -271,7 +270,7 @@ data class ScriptOp(
     val versionHash: String,
     val timeoutMillis: Long,
     /**
-     * **用户取消的观测缝**（2026-10-11 批 94）：协调器的句柄账执行体看不见 —— 但
+     * **用户取消的观测缝**：协调器的句柄账执行体看不见 —— 但
      * 「停止」按钮按下去之后**进程树必须真死**，靠的是执行体在 `waitFor` 的切片间隙
      * 查到这一位（TTL 契约「合作式响应取消」在 T1 这条路上的物理载体）。
      * 缺省恒 false：测试替身与无句柄的调用零改动。
@@ -283,7 +282,7 @@ data class ScriptOp(
 }
 
 /**
- * 取消观测缝（2026-10-11 批 94）。
+ * 取消观测缝。
  *
  * 为什么是**读位**而不是回调：调用方（协调器）持有的是 `TrackedOp.cancelled` 那个
  * `@Volatile` 位，执行体要的只是「现在该不该停」—— 一个布尔探针把两边的并发面都压到
@@ -299,7 +298,7 @@ fun interface OpCancelSignal {
 }
 
 /**
- * 控制台 shell 面的执行缝（2026-10-09）。
+ * 控制台 shell 面的执行缝。
  *
  * **为什么是缝而不是直接调 `:platform:system`**：`:app-service:npm` 的 `ArchitectureTest`
  * 禁 `com.autoscript.platform..`（依赖方向铁律），控制台命令面住在本模块，编译期看不到

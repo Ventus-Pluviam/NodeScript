@@ -165,7 +165,7 @@ class AppShell(
             screenGate: ScreenGate = ScreenGate.AllowAll,
             poolCapacity: Int = 1,
             /**
-             * 脚本输出日志的落盘缝（2026-10-13 执行日志持久化）。null = 不落盘
+             * 脚本输出日志的落盘缝（执行日志持久化）。null = 不落盘
              * （骨架/单测的缺省）：`ConsoleCollector.lineSink` 与
              * `RuntimeController.onRunStarted` 同时接到它 —— 两条缝不分开给，
              * 免得 index 与日志文件各说各的（begin 了没 sink / sink 了没 begin）。
@@ -173,8 +173,7 @@ class AppShell(
              */
             scriptLogs: ScriptLogStore? = null,
             /**
-             * **系统日志**（`runId == 0` 那批宿主行）的落盘缝（2026-10-17 用户令
-             * 「系统日志不要每次进 app 都清除」）。null = 不落盘（骨架/单测的缺省）。
+             * **系统日志**（`runId == 0` 那批宿主行）的落盘缝。null = 不落盘（骨架/单测的缺省）。
              *
              * 与 [scriptLogs] **成对但去两个方向**：两者都挂在同一个
              * `ConsoleCollector.lineSink` 上，按 `runId` 分道（脚本行 vs 宿主行）。
@@ -299,9 +298,9 @@ class AppShell(
              *
              * 缺省 = `ScriptAuthorizationPolicy()`：没有来源元数据 → `TrustTier.UNKNOWN` 档
              * （[com.autoscript.domain.permission.TrustTierMasks.UNKNOWN_DEFAULT]）。
-             * **这是一处真实的行为变化**（2026-10-08 已裁定为「保守档 A」）：跨脚本面
+             * **这是一处真实的行为变化**（已裁定为「保守档 A」）：跨脚本面
              * （`engines.exec/stop/status/poolStats`）与 `workManager.*` 从此对脚本拒
-             * （`ERR_PERMISSION_DENIED`），其余面（a11y/截图/文件/npm/设备面）保持批 74 的全量。
+             * （`ERR_PERMISSION_DENIED`），其余面（a11y/截图/文件/npm/设备面）保持全量。
              * 逐条对照见 [com.autoscript.domain.permission.TrustTierMasks] 的 KDoc 表格 ——
              * 别把它读成"保持现行行为"。
              *
@@ -344,7 +343,7 @@ class AppShell(
             val frameServer = NewlineFrameServer(router, identities)
             var assembled = false
             try {
-                // 2026-10-13 落盘缝：行级 sink（ConsoleCollector.append 锁外回调）与
+                // 落盘缝：行级 sink（ConsoleCollector.append 锁外回调）与
                 // run 级 begin（RuntimeController.start Granted 分支回调）同时接到
                 // 同一份 store —— index 与日志文件永不分家（见 assemble 的 scriptLogs KDoc）。
                 // 一个收集器、两条去向，按 `runId` 分道（两边的守卫是对偶的：
@@ -388,7 +387,7 @@ class AppShell(
                 if (powerManagerHandler != null) router.register("power_manager", powerManagerHandler)
                 systemHandlers?.registerAll(router::register)
 
-                // 崩溃行出口（2026-10-16 用户报「有不支持的函数应该在悬浮窗里输出报错」）：
+                // 崩溃行出口：
                 // 脚本抛错的 stderr 尾部按 error 档写进控制台，归属仍是这次 runId ——
                 // 于是悬浮窗/控制台/日志管理同时看得见病因，而不是只在档案的 crashSummary 里
                 // （那份要翻到任务日志详情才读得到，悬浮窗画的是「没有输出」）。
@@ -413,7 +412,7 @@ class AppShell(
                 // 因为它要算子掩码、比调用方掩码，而这两件事只有 `:app` 同时看得见
                 // （scheduler 模块的 arch 门禁禁 `domain.permission`）。
                 //
-                // **判据 = 「自建」与「替别人建」分开**（2026-10-08 批 78，对齐批 75 给
+                // **判据 = 「自建」与「替别人建」分开**（对齐 给
                 // `engines.stop/status` 定下的形状）：那一次把「是不是别的执行」的判据从
                 // 目录级下沉到 handler，好让窄掩码脚本停得掉**自己**。本闸原先照抄
                 // `engines.exec` 的一刀切 —— 无条件要求 `CROSS_SCRIPT_CONTROL`，

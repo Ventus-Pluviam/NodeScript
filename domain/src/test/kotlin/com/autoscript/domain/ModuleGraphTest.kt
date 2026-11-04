@@ -103,9 +103,9 @@ class ModuleGraphTest {
         ":app-service:script-repo" to setOf(":domain"),
         ":app-service:permission-center" to setOf(":domain"),
         ":app-service:packager" to setOf(":domain"),
-        // `:platform:process` = 进程/`/proc` 收尸面（批 105）：叶子模块，零模块依赖 ——
+        // `:platform:process` = 进程/`/proc` 收尸面：叶子模块，零模块依赖 ——
         // 它连 :domain 都不需要，用 std 的 java.nio + Process 桩面。放进 :domain 等于让
-        // 领域层知道 /proc，那正是批 95/99 留两份副本的原因。
+        // 领域层知道 /proc，那正是/99 留两份副本的原因。
         ":app-service:npm" to setOf(":domain", ":platform:process"),
         ":domain" to emptySet(),
         ":bridge:java" to setOf(":domain"),

@@ -152,7 +152,7 @@ class PoolAccountingTest {
 
         pool.recycle(stale.slot)            // 看门狗 kill 裁决 → recycle（走 lease 归还，幂等）
 
-        // 队列化的「过期句柄」判据换成**归还位**（2026-10-12 批 103 P2）：旧句柄手里那份
+        // 队列化的「过期句柄」判据换成**归还位**：旧句柄手里那份
         // lease 已被 recycle 归还过，于是它随后的 release 是 no-op —— 物理上到不了槽位。
         assertTrue(stale.leaseReturned, "recycle 后旧句柄的 lease 已归还（过期句柄的判据）")
 
@@ -232,7 +232,7 @@ class PoolAccountingTest {
 }
 
 /**
- * 队列化的记账不变量（2026-10-12 批 103 P2；外审 B2 的彻底解）。
+ * 队列化的记账不变量（外审 B2 的彻底解）。
  *
  * 原实现有两套靠手拿同步的记账（`Semaphore permits` 计**数** + `PoolSlot.state` 计**状态**），
  * 四种失真全是「忘了还另一半」的产物。这组用例钉的是**它们在结构上不再可能**：

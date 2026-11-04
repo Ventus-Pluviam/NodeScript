@@ -22,25 +22,25 @@ import java.util.concurrent.TimeUnit
  * 1. **超时是实现者义务**（铁律 3）：[ShellExecutor] 的 KDoc 明说「调用方只传建议值，
  *    实现不得无限等待」。所以超时到点就 `destroyForcibly()` 并抛
  *    [ErrorCode.ERR_TIMEOUT] —— 不是"返回已读到的半截输出"，更不是继续挂着。
- * 2. **任何退出路径都要收尸（但「收尸」不等于「杀干净整棵树」——2026-10-11 批 99 订正）**：
+ * 2. **任何退出路径都要收尸（但「收尸」不等于「杀干净整棵树」—— 订正）**：
  *    成功、超时、被上层取消（桥 TTL 到点会取消 handler 协程）三条路都走 `finally` 里的
  *    [Process.destroyForcibly]。**但那条只杀直接子进程**（`sh` 或 `su`）—— 它们自己起的
- *    孙进程（`sh -c "sleep 300 &"`）不会被连带杀掉，仍留在设备上。批 99 起按 [killTree]
- *    走 `/proc` ppid 图把整棵树收掉（复用批 95 的同一手法，见下方第 5 条）。
- *    **诚实边界**：批 99 之前那条 KDoc 写的是「不留孤儿进程」，那句话**不成立** ——
- *    原实现只保证「不留直接子进程」。批 99 起按 [killTree] 走 `/proc` ppid 图收整棵树，
+ *    孙进程（`sh -c "sleep 300 &"`）不会被连带杀掉，仍留在设备上。按 [killTree]
+ *    走 `/proc` ppid 图把整棵树收掉（复用同一手法，见下方第 5 条）。
+ *    **诚实边界**：此前那条 KDoc 写的是「不留孤儿进程」，那句话**不成立** ——
+ *    原实现只保证「不留直接子进程」。按 [killTree] 走 `/proc` ppid 图收整棵树，
  *    但**那仍有降级档**（`/proc` 读不到或 ppid 图不完整时只杀直接子进程），所以准确
  *    口径是「**尽力收掉整棵树，不保证**」，不是「不留孤儿进程」。
  * 3. **双流必须并发读干**：管道缓冲区（Linux 默认 64KB）写满即阻塞子进程，
  *    先读干 stdout 再读 stderr 会在输出超过一屏时死锁 —— 所以两条读流在
  *    `waitFor` **之前**就起来了。
- * 4. **捕获有上限**（2026-10-02，backlog A2b）：每条流最多留
+ * 4. **捕获有上限**（backlog A2b）：每条流最多留
  *    [ShellCaptureLimit.MAX_CAPTURE_BYTES]，超出即**静默截断 + Warning + 置标志**
  *    （口径见 `docs/design-decisions.md` 第 21 项）。**关键在「继续读干」**：
  *    到顶后仍然把管道读到 EOF，只是不再往缓冲里放字节 —— 停下来不读的话
  *    子进程会阻塞在写满的管道上，那正是第 3 条要防的死锁，截断反而把它请回来。
  *
- * **读流走独立线程，不是 `async` 子协程**（2026-10-01 修，见 `docs/backlog.md` A2）：
+ * **读流走独立线程，不是 `async` 子协程**（修，见 `docs/backlog.md` A2）：
  * `InputStream.read` 阻塞期间**不响应协程取消**（协程取消只标记状态、线程中断也不保证
  * 唤醒它），而 `coroutineScope` 要等全部子协程结束才传播异常/取消 —— 于是超时抛出后
  * 卡在等两条读流上，`finally` 里的 `destroyForcibly()` 反而永远轮不到执行。
@@ -61,8 +61,8 @@ class AndroidShellExecutor(
     private val launcher: ProcessLauncher = ProcessLauncher { Runtime.getRuntime().exec(it) },
     private val logSink: ShellCaptureLimit.LogSink = ShellCaptureLimit.defaultLogSink,
     /**
-     * 进程树收尸的操作面（外审 M6，批 99；缝的理由见 [killTree]）。
-     * 缺省生产实现走 `/proc` + `kill` 二进制（批 105 起住 `:platform:process`）。
+     * 进程树收尸的操作面（外审 M6，；缝的理由见 [killTree]）。
+     * 缺省生产实现走 `/proc` + `kill` 二进制（住 `:platform:process`）。
      */
     private val treeOps: TreeOps = ProcTreeOps(),
 ) : ShellExecutor {
@@ -91,7 +91,7 @@ class AndroidShellExecutor(
             }
             val out = PipeReader(process.inputStream, "autoscript-shell-stdout").start()
             val err = PipeReader(process.errorStream, "autoscript-shell-stderr").start()
-            // stdin 立即关（外审 M6，批 99）：shell 面的契约是「**只执行命令，不喂输入**」
+            // stdin 立即关（外审 M6）：shell 面的契约是「**只执行命令，不喂输入**」
             // （[ShellExecutor.exec] 签名里根本没有 stdin 参数）。不关的话，等 stdin 的
             // 命令（`cat`、`read x`）会**一直挂到超时** —— 用户看到的是「一条 cat 命令
             // 跑满超时还返回空」，而根因是宿主攥着写端不撒手。关掉之后它们立刻读到 EOF
@@ -136,13 +136,13 @@ class AndroidShellExecutor(
     }
 
     /**
-     * 收掉**整棵进程树**（外审 M6，批 99）。
+     * 收掉**整棵进程树**（外审 M6）。
      *
      * [Process.destroyForcibly] 只杀直接子进程（`sh`/`su`），它们自己起的孙进程留在设备上
      * —— 而「越跑越卡」这种现场恰恰查不到源头。手法（**扫在杀之前** —— reparent 只断
      * 死后回找，pid 集合在树还活着时到手；同 UID 靠 fork 继承，ppid 图上可达即同 UID；
-     * 按 pid 杀用 `kill` 二进制，JVM 没有「按 pid 杀」的 API）与批 95 的 T1 杀树
-     * **逐字同款** —— 批 105 起两者共用 `:platform:process` 的**同一份实现**，不再
+     * 按 pid 杀用 `kill` 二进制，JVM 没有「按 pid 杀」的 API）与 T1 杀树
+     * **逐字同款** —— 两者共用 `:platform:process` 的**同一份实现**，不再
      * 是两份副本。pid 取不到就**诚实降级为只杀直接子进程**（不更坏、不炸收尸）。
      *
      * **为什么不在这里 new 一份而要注入**（与 T1 的 [TreeOps] 同理由）：判据要能用替身
@@ -154,7 +154,7 @@ class AndroidShellExecutor(
         process.destroyForcibly()
         runCatching { treeOps.kill(firstWave, force = true) }
         // pid 拿不到 / /proc 不可读 → firstWave 为空：上面退化成「只杀主进程」，
-        // 与批 95 的降级口径一致（不更坏、也不假装收干净了）。
+        // 与降级口径一致（不更坏、也不假装收干净了）。
     }
 
     /**

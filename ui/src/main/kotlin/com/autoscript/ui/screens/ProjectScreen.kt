@@ -123,7 +123,7 @@ import kotlinx.coroutines.launch
  *   覆盖 [ActionBar] 缺省标题样式的屏），右上角 `⋮`（本屏菜单，缺省只有"日间/夜间模式"）；
  * - **搜索栏**：灰底圆框（`FragmentSearchField` 的 `DialogsActivity` 档：白底上
  *   `key_windowBackgroundWhiteBlackText @5%` 的灰、**无投影**、圆角 20dp 落在 40dp
- *   高上 = 两端全圆；批 43 按 TG 源码逐值对齐 —— 高 40dp、距屏边 12dp（= 屏宽 −24dp）、
+ *   高上 = 两端全圆；几何按 TG 源码逐值对齐 —— 高 40dp、距屏边 12dp（= 屏宽 −24dp）、
  *   槽位 52dp、放大镜 [GlyphKind.SEARCH_FIELD]）+ 「搜索文件」提示词（TG 的 hint 位）；
  * - **文件列表 = 会话列表**：一行 = 52dp 圆形头像（TG `DialogCell` 的 avatar 52dp）
  *   + 文件名 16sp 粗体（`nameTextView`）+ 次行"大小 · 时刻"13sp（`dateTextView`），
@@ -135,7 +135,7 @@ import kotlinx.coroutines.launch
  * 诚实边界（与其他屏同一条纪律）：没读到显示「尚未读取」，失败带原文；
  * 读到了且为空才说「还没有脚本文件」—— 那是真的没有（`files/scripts/` 为空）。
  */
-// 参数数在 2026-10-13 加了 [onRunFile] 之后跨过 detekt 的阈值（10），原来的 9 个离阈值不远；
+// 参数数跨过了 detekt 的阈值（10）；
 // 全部是屏自己的读口/回调（与 SettingsScreen 那份 @Suppress 同型），不是值得继续拆分了才压下来。
 @Suppress("LongParameterList")
 @Composable
@@ -158,7 +158,7 @@ fun ProjectScreen(
     /**
      * 新建文件/文件夹（FAB 展开的两个子项；落盘在宿主，本屏只收结论）。
      *
-     * [dirRelPath] = **用户按下 FAB 时所在的那一层**（2026-10-16 用户口径「在当前进入的
+     * [dirRelPath] = **用户按下 FAB 时所在的那一层**（
      * 文件夹中新建」）——本屏把当前目录原样交出去，不在这一层拼路径。
      */
     onCreate: (projectId: String, name: String, isFolder: Boolean, dirRelPath: String?) -> Unit,
@@ -167,7 +167,7 @@ fun ProjectScreen(
     /** 覆盖写一个脚本文件的文本（编辑器「保存」；**正常返回即已落盘**）。 */
     onSaveFile: suspend (projectId: String, relPath: String, content: String) -> Unit,
     /**
-     * 跑一个脚本文件（文件行尾那颗 ▶；2026-10-13 用户口径）。
+     * 跑一个脚本文件（文件行尾那颗 ▶）。
      *
      * **挂起**：宿主要挂到本次执行结算（与任务中心的「立即执行」同一条口径），
      * 调用方据此把那一行的 ▶ 换成"执行中"并禁用。
@@ -176,7 +176,7 @@ fun ProjectScreen(
     /** 排序档/逆向变更（写入 state —— 重读不重置呈现偏好）。 */
     onSortChange: (FileSort, Boolean) -> Unit,
     /**
-     * 条目（文件或文件夹）的绝对路径（菜单「复制绝对路径」；2026-10-17 用户口径）。
+     * 条目（文件或文件夹）的绝对路径（菜单「复制绝对路径」）。
      *
      * **挂起**：绝对路径 = `files/scripts/` 的落点 + relPath，而落点只有宿主知道
      * （本屏拿不到 `filesDir`，也不该拿到 —— 它连 `files/scripts` 这个约定都不该知道）。
@@ -184,7 +184,7 @@ fun ProjectScreen(
      */
     onAbsolutePath: suspend (projectId: String, relPath: String) -> String,
     /**
-     * 删除条目（菜单「删除」与选择模式顶栏那一格；2026-10-17 用户口径）。
+     * 删除条目（菜单「删除」与选择模式顶栏那一格）。
      *
      * **一条回调两条路**：菜单传只有一个元素的清单，多选传 [com.autoscript.ui.state.deleteTargets]
      * 剪好的那一份（父子同选只留父、深度降序）。
@@ -192,7 +192,7 @@ fun ProjectScreen(
      * **正常返回 ≠ 已全删**：宿主逐条删、聚合成败，回执（`opNotice`/`opError`）由外壳写；
      * 本屏只管把行送出去 —— 删完必须重读列表，那是外壳的事。
      *
-     * **不弹确认框**（用户口径原文「不用加弹窗」）：点了即删，不可撤销。
+     * **不弹确认框**：点了即删，不可撤销。
      */
     onDelete: suspend (rows: List<ScriptFileRowUi>) -> Unit,
     /**
@@ -205,7 +205,7 @@ fun ProjectScreen(
     // 搜索词/当前目录/多选集合都是本屏私有的现值：过滤、下钻、选中都是**呈现**
     // （TG 文件页"仅应用于此文件夹"），不是读取 —— 不进读口。
     var query by rememberSaveable { mutableStateOf("") }
-    // 「点输入框外面就收键盘/撤光标」（2026-10-16 用户报"焦点转移后光标还在闪"）：
+    // 「点输入框外面就收键盘/撤光标」：
     // 一份 state 管本屏那一个搜索框，见 `FocusDismiss` 的 KDoc。
     val focusDismiss = rememberFocusDismissState()
     // 当前目录 = relPath 的**全路径前缀**（含项目名，如 "demo/"、"demo/lib/"）；
@@ -221,7 +221,7 @@ fun ProjectScreen(
     ) { mutableStateOf(emptySet<String>()) }
     var sheetTarget by remember { mutableStateOf<ScriptFileRowUi?>(null) }
     val copy = rememberCopyAction()
-    // 操作回执（新建的成败）走外壳浮层（批 44）：此前是列表里的一行，弹一条就把
+    // 操作回执（新建的成败）走外壳浮层：插进列表的话，弹一条就把
     // 首行往下推一次。文案一个字没动（判读见 [opToastMessage]，纯层可测）；
     // 「刷新/换排序把上一次的回执清掉」仍由 MainActivity 的写路径负责。
     val toast = LocalToast.current
@@ -255,7 +255,7 @@ fun ProjectScreen(
         runningKey = key
         scope.launch {
             try {
-                // 2026-10-13 起成功回执 = 悬浮窗（外壳在 onRunFile 里先开窗再跑）——
+                // 成功回执 = 悬浮窗（外壳在 onRunFile 里先开窗再跑）——
                 // 这里不再弹「已触发…」toast（措辞不替宿主宣布结果那条纪律仍在：
                 // 成败在控制台/任务日志/日志管理，窗里只看输出）。失败 catch 保留。
                 onRunFile(file.projectId, file.relPath)
@@ -270,7 +270,7 @@ fun ProjectScreen(
                 // `IllegalStateException("任务不存在…")`）不收进「执行失败」toast 就没人接：
                 // 悬浮窗失败路径不抛这些，抛的只可能是宿主没有把「跑不起来」折成
                 // `AutojsException` 的缺口 —— 亮原文，但**不上抛**（闪退换不来任何信息，
-                // 2026-10-14「点执行就闪退」那次就是这类没捂住的结果）。
+                // 没捂住的话，这类异常会把组合作用域打死 —— 点执行就闪退）。
                 toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
             } finally {
                 runningKey = null
@@ -319,7 +319,7 @@ fun ProjectScreen(
     /**
      * 进一层目录（点目录行、长按面板的「进入文件夹」都走这里）。
      *
-     * **底栏整条收掉**（用户口径 2026-10-13：「点进列表里面时，让底栏消失，退出来时才重新出现」）：
+     * **底栏整条收掉**（点进列表时底栏消失、退出来才重新出现）：
      * 进了层就是"在里面"，那四个页签既是别的页面、又压着列表最后几行 —— 与编辑面占整屏
      * 是同一条理由。写口收在这两个函数里（而不是每个 `currentFolder = …` 各写一遍）：
      * 三处入口漏一处就是"有时候收、有时候不收"。
@@ -341,7 +341,7 @@ fun ProjectScreen(
 
     // 底栏收放的**唯一**判据：**只有编辑面**（editing 非空）算占整屏，才收掉。
     //
-    // **进目录不算**（用户口径 2026-10-13「点进文件列表不需要隐藏啊，进入编辑页面才隐藏」）：
+    // **进目录不算**（进入编辑页面才隐藏底栏）：
     // 进目录只是列表换了一层内容，页面本身还是那个项目页 —— 底栏在它下面才是 TG 的读法。
     // 写成一条派生判据而不是各处散写 flag：从目录里打开编辑面再退出这种嵌套，
     // 散写会把旗标复位成 false 而编辑面还开着。
@@ -369,7 +369,7 @@ fun ProjectScreen(
     // 新建落在**当前所在那一层**：进了目录就是那一层（`currentFolder` 本身就是合格的
     // relPath 前缀），还在全库根时落 `files/scripts/` 本层本身（[ProjectId.ROOT]）。
     //
-    // **2026-10-16 用户裁定「根层可写」**：此前这里有一串兜底
+    // **根层可写**：
     // （`state.files.firstOrNull()?.projectId ?: "demo"`）—— 全库根被当成"没有项目可写"，
     // 于是拿第一个项目顶替，首装没有项目时还回落到缺省名 `demo`。用户实测读到的正是
     // 「我在首页创建的，怎么进了 demo 里面」。根层现在**真能放东西**：文件落
@@ -383,7 +383,7 @@ fun ProjectScreen(
     var creatingKind by remember { mutableStateOf<ProjectState.CreationKind?>(null) }
 
     // 顶栏副标题只留给「没读到 / 读失败」两句（诚实边界照旧）；读到了根层就只有标题
-    // —— TG 主页顶栏没有第二行，「共 N 个文件」的计数批 25 起不再上顶栏（列表空态
+    // —— TG 主页顶栏没有第二行，「共 N 个文件」的计数不上顶栏（列表空态
     // 有 EmptyFilesHint 居中那句，信息不丢）。**进了目录才有第二行**：那是当前路径
     // （TG 文件页顶栏的副标题位就是路径），不是计数。
     val load = state.load
@@ -413,7 +413,7 @@ fun ProjectScreen(
                         onBack = { selected = emptySet() },
                         backGlyph = "✕",
                         actions = {
-                            // 两格：全选开关 + **删除**（2026-10-17 用户口径「顺带做上」）。
+                            // 两格：全选开关 + **删除**。
                             // 删除**排在后面**（右端）：破坏性动作不放在拇指先够到的位置上。
                             // 删完**退出选择模式** —— 行没了，选中集里不能留幽灵键
                             // （留着的话顶栏还写"已选 N 项"，而列表里一行都没选上）。
@@ -522,7 +522,7 @@ fun ProjectScreen(
                                         selected = ProjectState.toggleSelection(selected, key)
                                     },
                                 )
-                                // 行间不画分割线（2026-10-07 用户口径：取消文件列表之间的横线）。
+                                // 行间不画分割线。
                             }
                             if (state.load.isLoaded && visible.isEmpty()) {
                                 item { EmptyFilesHint(filtered = query.isNotBlank(), inFolder = currentFolder != null) }
@@ -550,11 +550,11 @@ fun ProjectScreen(
                 }
             }
         // 一行的操作面板（TG 底部操作面板：长按/点文件行弹出，动作是大触控目标的整行）。
-        // **2026-10-17 用户口径**：三项 —— 复制相对路径 / 复制绝对路径 / 删除。
+        // 三项：复制相对路径 / 复制绝对路径 / 删除。
         // 「进入文件夹」那一项**删掉了**：点目录行本身就是进一层（见 `onClick` 的
         // `file.isDirectory -> enterFolder(...)`），菜单项与主手势重复了一件事。
         // 删除是**红色**（`StatusTone.PROBLEM`，TG 的删除项就是 `text_RedRegular`），
-        // 且**没有确认框**（用户口径「不用加弹窗」）—— 点了即删，不可撤销。
+        // 且**没有确认框** —— 点了即删，不可撤销。
         if (showOverlays) sheetTarget?.let { target ->
             ActionBottomSheet(
                 title = target.name,
@@ -699,7 +699,7 @@ private fun ProjectMenu(
             actions = buildList {
                 // 标签 = **点它切到的那一档**（TG `DialogsActivity` 的日夜项：
                 // 当前是深色就写 "Day Mode"，当前是浅色就写 "Night Mode"）。
-                // `dismissOnClick = false`：切主题**不关菜单**（用户口径）—— 换的只是配色，
+                // `dismissOnClick = false`：切主题**不关菜单** —— 换的只是配色，
                 // 菜单里其余项还得能接着点；收掉会逼用户为"再选一次排序"重开一遍。
                 add(
                     MenuAction(
@@ -749,11 +749,11 @@ private fun ProjectMenu(
  * 槽内水平 12dp / 垂直 6dp → 高 40dp、宽 = 屏宽 −24dp、圆角 20dp**（40dp 高上 20dp 圆角
  * = 两端全圆）、灰底（白底压 5% 黑 —— 与任务中心那颗白药丸不是一个键）、**无投影**
  * （`createRoundRectDrawable`，不是 `…Shadowed`）、放大镜 24dp 距左 12dp
- * （[GlyphKind.SEARCH_FIELD]，`outline_search_1_24` 实测几何 —— 批 43 换掉旧的 SEARCH）、
+ * （[GlyphKind.SEARCH_FIELD]，`outline_search_1_24` 实测几何）、
  * 提示词 15sp 半透明、输入文字 15sp（`editText.setTextSize(15)`）。
  *
- * 框本身的版式在 [CapsuleInputField]（2026-10-16 起与新建对话框共用同一份 —— 那一份
- * 就是这里原先逐值写死的那几个数；2026-10-17 它搬到 `components/Inputs.kt`，多了第三个
+ * 框本身的版式在 [CapsuleInputField]（与首页搜索框、新建对话框共用同一份；
+ * 它在 `components/Inputs.kt`，还多了第三个
  * 使用点：依赖管理页的「安装依赖」输入框，那一处还多要 `enabled` / `onSubmit` 两个参数）；
  * 本函数只剩"搜索框这一处"的两件事：槽位内边距、放大镜、以及把聚焦态报给「点外面收键盘」那套。
  */
@@ -848,7 +848,7 @@ private fun FileRow(
             )
         }
         if (showRun) {
-            // 行尾 ▶（跑这个文件；2026-10-13 用户口径「可执行文件在菜单栏左边加个执行图标按钮」）：
+            // 行尾 ▶（跑这个文件）：
             // 与任务中心那颗「立即执行」同一形态（实心三角、accent 蓝、44dp 触控目标），
             // 只是它跑的是**这一行这个文件**、不需要先登记任务。
             //
@@ -1158,12 +1158,12 @@ private val FabSubRise = 64.dp
  * 无文案的代价是读屏认不出，故 [label] 仍进 contentDescription。
  *
  * 背板沿用 TG 的 `iBlur3Background`（`BlurredBackgroundDrawable`）那一套：
- * - **正圆**（TG 的 `setRadius(dp(18))` 落在 48dp 上本来就近乎正圆；用户口径：与主钮同形）；
+ * - **正圆**（TG 的 `setRadius(dp(18))` 落在 48dp 上本来就近乎正圆；与主钮同形）；
  * - **描边 0.4dp**（`setStrokeWidth(dpf2(0.4f), dpf2(0.4f))`），色随深浅：
  *   上边浅色 `0x20000000` / 深色 `0x11FFFFFF`（[FabSubStrokeTop]）；
  * - 底是**模糊背板**（把身后的内容模糊后上浮），本仓没有实时模糊，
  *   取 `key_windowBackgroundWhite` 的实色近似 —— 浅色下就是白，深色下是 `#161E27`
- *   （[ThemeColors.background]，批 67 的用户口径值）。
+ *   （[ThemeColors.background]）。
  * - 图标取 `key_actionBarDefaultIcon`（[ThemeColors.barIcon]：浅色偏冷深灰
  *   `#FF404E56`，**不是**正文黑）；按下底 = `key_listSelector`
  *   （[ThemeColors.menuSelector] 同档）。形状要一起给 [pressable]：按压遮罩按矩形画，
@@ -1203,7 +1203,7 @@ private fun FabSubStrokeTop(): Color =
 /**
  * 新建文件/文件夹对话框（TG 的 Alert 命名框分寸：标题点破建什么、输入框占位"名称"）。
  *
- * **2026-10-16 用户口径三条**：
+ * 三条约定：
  * - **白底**（[Colors.sheetBackground]，TG 的 `dialogBackground`）。M3 的缺省底色是
  *   `surfaceContainerHigh`，而本仓 `ColorScheme` 只映射了 primary/background/surface/error
  *   （见 `Theme.kt`）—— 那个键落回 M3 基线色（浅色下偏紫的灰），与页面不成一族；
@@ -1214,7 +1214,7 @@ private fun FabSubStrokeTop(): Color =
  *
  * 名字合法性在宿主侧裁决（`ScriptFileOps`），这里不预校验 —— 错误原文走 opError 行。
  * 根层的文件夹名多两条判据（它就是一个项目：不能含 `.`、不能叫 `node_modules`），
- * 同样由宿主侧当场拒并给原文 —— 界面不写第二套判据（2026-10-16）。
+ * 同样由宿主侧当场拒并给原文 —— 界面不写第二套判据。
  */
 @Composable
 private fun CreateEntryDialogs(

@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * `dialogs` 桥处理器测试（docs §9.4/§12.2，JS 对偶 `extras.ts`）——
- * 2026-09-30 审查步骤 6 自 SystemNamespacesTest 拆出（dialogs 留 capabilities，
+ * 自 SystemNamespacesTest 拆出（dialogs 留 capabilities，
  * shell/device/app/floatingWindow 随实现迁 :platform:system）。
  *
  * 判据与原文件同一套：载荷形状与 JS facade 逐字对齐（`{value,confirmed}`、裸下标

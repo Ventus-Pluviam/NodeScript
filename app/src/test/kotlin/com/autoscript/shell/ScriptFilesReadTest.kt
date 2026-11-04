@@ -74,7 +74,7 @@ class ScriptFilesReadTest {
 
     /**
      * 根层条目（`files/scripts/` 本层）的 `projectId` 是 [ProjectId.ROOT]（空串），
-     * 二层及以下仍是首段目录名（2026-10-16 用户裁定「根层可写」）。
+     * 二层及以下仍是首段目录名（用户裁定「根层可写」）。
      *
      * **此前一律取首段**，于是根层的文件被报成"项目 `x.js`"：列得出来，点开必得一句
      * 「项目不存在: x.js」（`ScriptFileOps.resolveInProject` 的 `require`）——

@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * [ScriptLimitsState] / ops 的契约（批 107；§8.1 脚本资源限额）。
+ * [ScriptLimitsState] / ops 的契约（§8.1 脚本资源限额）。
  *
  * 形态照 [ScriptEnvStateTest]：嵌套一个只覆盖本用例用到那几条 `HostSummary` 的替身
  * （`FakeHost` 其余成员**大声抛**，故这里必须逐条覆盖用到的，见该类的 KDoc）。

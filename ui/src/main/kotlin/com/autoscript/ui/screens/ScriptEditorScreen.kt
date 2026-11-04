@@ -136,7 +136,7 @@ fun ScriptEditorScreen(
     onSave: suspend (projectId: String, relPath: String, content: String) -> Unit,
     onClose: () -> Unit,
     /**
-     * 把本屏那条「能不能退」的判定（含未保存拦截）交给外层。批 115：外层包了一层
+     * 把本屏那条「能不能退」的判定（含未保存拦截）交给外层。外层包了一层
      * [com.autoscript.ui.ManagementTransition]，**预测式手势的提交路径走的是它的
      * `onBackRequest`**，不经本屏那颗 `BackHandler` —— 于是「有未保存改动先问一句」
      * 那道门必须从这儿递出去，否则侧缘滑回来会**静默丢改动**。
@@ -152,17 +152,17 @@ fun ScriptEditorScreen(
     // 保存成功后要收的两样东西：焦点（= 光标）与输入法（见下面保存那一段）。
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
-    // **编辑面占整屏，底栏整条收掉**（用户口径）：编辑时那四个页签既点不到正文、又压着最后几行。
+    // **编辑面占整屏，底栏整条收掉**：编辑时那四个页签既点不到正文、又压着最后几行。
     //
     // **开关不在这里写**（原来是 `DisposableEffect` 进写 true、`onDispose` 写回 false，
     // 已删）：`onDispose` 落在编辑面真正离开组合那一刻，而那是**切出动画走完**之后 ——
-    // 底栏于是要等那 380ms 飞出动画结束才突然冒出来（用户 2026-10-13 报的"等一会才突然
+    // 底栏于是要等那 380ms 飞出动画结束才突然冒出来（"等一会才突然
     // 出现"）。现在归宿主 [ProjectScreen]：开编辑面时写 true（与 `editing` 同一拍），
     // 关编辑面时写回 false（与"编辑面开始关"同一拍，不等动画）。
     // null = 还没读到（或正在读）：与「读到了但是空文件」（空串）必须区分开。
     //
     // 存的是 **TextFieldValue 而不是 String**：光标位置也是编辑器状态的一部分 ——
-    // "点正文下方的空白把光标送到文末"（用户口径）要能**主动设选区**，而 String 那套重载
+    // "点正文下方的空白把光标送到文末"要能**主动设选区**，而 String 那套重载
     // 的选区归 Compose 内部管，外面够不着。
     var value by remember { mutableStateOf<TextFieldValue?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -226,7 +226,7 @@ fun ScriptEditorScreen(
                             // 存失败：那句原文留在正文上方，**不收键盘**（还要接着改）。
                             if (saveError != null) return@launch
                             dirty = false
-                            // 存完就**收键盘、撤光标**（用户口径）：写完了还杵着输入法 +
+                            // 存完就**收键盘、撤光标**：写完了还杵着输入法 +
                             // 一根闪烁光标，读起来像"还在编辑、没存上"。清焦点即撤光标
                             // （未聚焦的 BasicTextField 不画光标），键盘随之收起。
                             focusManager.clearFocus()
@@ -256,7 +256,7 @@ fun ScriptEditorScreen(
                 relPath = relPath,
                 onValueChange = { next ->
                     // **只有正文真的变了才标脏**：点正文下方的空白只是把光标挪到文末
-                    // （用户口径），正文一个字没动 —— 那时亮起"保存"、退出还要问
+                    // ，正文一个字没动 —— 那时亮起"保存"、退出还要问
                     // "有未保存的修改"，就是在骗人。
                     val edited = next.text != loaded.text
                     value = next
@@ -352,11 +352,11 @@ internal data class ScriptLoad(val text: String?, val error: String?)
 /**
  * 正文那一层：**行号槽 + 正文 + 右下那颗跳转钮**（含它上面那个数）。
  *
- * 正文**不折行**（用户口径）：一行就是一行，超出的部分交给横向滚动，所以"第几行"
+ * 正文**不折行**：一行就是一行，超出的部分交给横向滚动，所以"第几行"
  * 只有一个口径 —— 行号列就是 `1..lineCount(text)`，与正文天然逐行对齐。
  * 双指捏合改的是**字号/行高/字距**（见 [detectPinchZoom]），不是把画面拉伸。
  *
- * **捏合期间不重排**（用户口径"有点卡"的修法）：字号是排版的输入，改它就得把整篇重排一遍 ——
+ * **捏合期间不重排**：字号是排版的输入，改它就得把整篇重排一遍 ——
  * 文档几百行时每帧重排一次就是每帧掉帧。这里把捏合拆成两段：手势期间只改 [EditorZoom] 的
  * 预览字段（三个数都**只在绘制阶段**被读，改它们不触发重组、更不重排，画面直接跟着手指走）；
  * 松手时提交成真字号（一次重排），并把这期间"欠"的滚动补上（见 [commitPinch]）。
@@ -468,8 +468,7 @@ private fun EditorBody(
                         translationY = zoom.shift.y
                     }
                     .fillMaxWidth()
-                    // 正文不足一屏时，下面那一块**也要收得到点击**（用户口径：点空白把光标
-                    // 送到文末）。不给最小高度，那块空白根本不属于编辑器，点了没反应。
+                    // 正文不足一屏时，下面那一块**也要收得到点击**。不给最小高度，那块空白根本不属于编辑器，点了没反应。
                     .heightIn(min = metrics.viewportHeight)
                     // 手势挂在**内边距之外**这一层：`at` 的坐标就是整行的坐标，
                     // "在不在正文下方"只需和正文高度比，不用再去减内边距。
@@ -517,7 +516,7 @@ private fun EditorBody(
                     vScroll.animateScrollTo(if (toTop) 0 else vScroll.maxValue)
                     // 跳完**把方向翻过来**：刚去了顶部，下一次有用的是"去底部"。不翻的话
                     // 钮会停在"去顶部"上、再点一次什么都不发生 —— 看起来像按钮坏了。
-                    // （用户口径只规定了"手指方向 → 钮的方向"，跳转后的方向由这里补齐。）
+                    // 
                     towardTop = !toTop
                 }
             },
@@ -736,7 +735,7 @@ private fun commitPinch(
 }
 
 /**
- * 点正文下方的空白 → 光标送到文末（用户口径）。
+ * 点正文下方的空白 → 光标送到文末。
  *
  * 只认**正文下方、且不在行号槽里**的空白：正文本身有自己的落光标逻辑（点哪落哪），
  * 行号槽点了不该动光标。三个取值都走 lambda，读的是 `rememberUpdatedState` 里的当下值。
@@ -766,7 +765,7 @@ private fun Modifier.tapToTextEnd(
 }
 
 /**
- * 行号槽：一条淡灰竖线把它和正文分开（用户口径）。数字与正文**同一套行高**（同一个 TextStyle
+ * 行号槽：一条淡灰竖线把它和正文分开。数字与正文**同一套行高**（同一个 TextStyle
  * 派生的），所以第 n 个数字恰好落在第 n 行上。
  */
 @Composable
@@ -795,7 +794,7 @@ private fun EditorGutter(width: Dp, text: String, style: TextStyle) {
 }
 
 /**
- * 正文：**不折行 + 横向滚动**（用户口径）。一行就是一行，长行往右拉；于是"第几行"只有一个
+ * 正文：**不折行 + 横向滚动**。一行就是一行，长行往右拉；于是"第几行"只有一个
  * 口径，行号列与正文天然逐行对齐（折行那套 `getLineForOffset` 映射整个不需要了）。
  */
 @Composable
@@ -888,7 +887,7 @@ private suspend fun PointerInputScope.detectPinchZoom(
 /**
  * 编辑器右下那颗圆钮与它上面那个数。
  *
- * 形态按用户口径：**正圆、白底、一圈淡灰描边**；钮上是**直角**折线（两条边成 90°，长短与
+ * 形态按**正圆、白底、一圈淡灰描边**；钮上是**直角**折线（两条边成 90°，长短与
  * 粗细是 [EditorChipGlyphLeg] / [EditorChipGlyphStroke] 两个数），往下 = 去最底、往上 = 去最顶。
  *
  * 那个数（屏幕外还剩几行）的**中心压在圆的边线上**（见 [straddleTopEdge]），而且是这颗钮的
@@ -928,7 +927,7 @@ private fun EditorJumpChip(
 /**
  * 钮上那个**直角**箭头：两条边成 90°，顶点朝下（去最底）或朝上（去最顶）。
  *
- * 为什么是画出来的折线而不是 `↓`/`↑` 字形：用户口径点名要"直角向下/向上"，而字形给不出
+ * 为什么是画出来的折线而不是 `↓`/`↑` 字形：要的是"直角向下/向上"，而字形给不出
  * 可调的边长与线宽 —— 画布可以（[EditorChipGlyphLeg] / [EditorChipGlyphStroke] 就是那两处）。
  */
 @Composable
@@ -1063,7 +1062,7 @@ private val EditorFontSize = 14.sp
 /** 正文行高：行号槽、气泡那个数、点空白的判据**全按它算** —— 改它要三处一起看。 */
 private val EditorLineHeight = 20.sp
 
-/** 字间距（用户口径：别让字连在一起）。等宽字体的 CJK 与数字挤在一起最难认。 */
+/** 字间距。等宽字体的 CJK 与数字挤在一起最难认。 */
 private val EditorLetterSpacing = 0.5.sp
 
 /**
@@ -1099,7 +1098,7 @@ private val EditorTextEnd = 16.dp
 /** 右下那颗圆钮的直径（与"回到顶部"那颗同档）。 */
 private val EditorChipSize = 44.dp
 
-/** 圆钮与气泡的描边宽度（用户口径"淡淡的灰边"）。 */
+/** 圆钮与气泡的描边宽度。 */
 private val EditorChipBorderWidth = 1.dp
 
 /** 气泡的圆角。 */

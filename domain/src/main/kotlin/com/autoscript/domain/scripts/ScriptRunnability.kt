@@ -1,7 +1,7 @@
 package com.autoscript.domain.scripts
 
 /**
- * 「这个脚本文件能不能被引擎跑」的**唯一一份**判据（2026-10-13 用户口径：项目页文件行尾那颗 ▶）。
+ * 「这个脚本文件能不能被引擎跑」的**唯一一份**判据。
  *
  * 为什么住 `:domain` 而不是各写一份：这条判据有**两个**读点 —— 呈现层（`ProjectScreen` 决定
  * 行尾画不画 ▶）与执行口（`AssembledShell.runScriptFile` 决定收不收这次请求）。抄两份必然漂，
@@ -12,7 +12,7 @@ package com.autoscript.domain.scripts
  * `node <脚本路径>`（§7.8 的 argv 契约，`NodeProcessEngine` 里拼的就是它），能被它跑起来的
  * 只有 JS 家族 —— Node 24 起 `.ts` 走内置的类型擦除，也在这一档里。
  *
- * **`.sh` / `.bash` / `.zsh` 刻意不在表内**（用户口径里点了 "sh"，这里是如实收窄）：引擎
+ * **`.sh` / `.bash` / `.zsh` 刻意不在表内**：引擎
  * 起的是 Node，`node x.sh` 只会得到一句 SyntaxError；shell 脚本唯一的执行面是宿主控制台的
  * shell 面（`HostSummary.runShellCommand`），而那条路**默认模式一律拒**（要 root 或 Shizuku，
  * 见 `ShellConsoleMode` 的 KDoc）。在行尾画一颗注定失败的 ▶ 比不画更糟 —— 所以不画，

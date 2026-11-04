@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test
  * console 收集），不是传输介质 —— loopback TCP 与 AF_UNIX 在 [NewlineFrameServer]
  * 走的是同一条 read/write 路径（见其 KDoc），介质差异由调用方承担，语义无差；
  * 不依赖 AF_UNIX 也让这条用例在任何 JDK/容器组合下都跑得起来。
- * （2026-09-30 前这里写的理由是「本机裸 kotlinc 旁路没铺
+ * （前这里写的理由是「本机裸 kotlinc 旁路没铺
  * `ServerSocketChannel.open(PROTOCOL_FAMILY)`」——旁路已删，那条不再成立。）
  *
  * 前置：bridge/js 已 npm run build（dist/bootstrap.js + runtime.js + console.js）。

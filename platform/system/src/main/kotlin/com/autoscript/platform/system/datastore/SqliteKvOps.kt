@@ -29,7 +29,7 @@ class SqliteKvOps(context: Context) : AndroidDataStore.KvOps, AutoCloseable {
         }
 
         /**
-         * 升版走**显式迁移表**（2026-10-11 批 97，外审 M8）—— 此前是「版本一升就 DROP 重建」，
+         * 升版走**显式迁移表**（外审 M8）—— 此前是「版本一升就 DROP 重建」，
          * 用户的脚本数据说没就没。现口径见 [KvSchemaMigrations]：找不到路径抛
          * [KvSchemaMigrations.UnknownMigration] 让升级整体失败（响亮），绝不静默重建。
          */

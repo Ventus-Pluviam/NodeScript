@@ -202,7 +202,7 @@ class AppShellNpmCliTest {
         }
     }
 
-    // —— registry 一条链的装配接线（§10.2；2026-10-09 批 83）——
+    // —— registry 一条链的装配接线（§10.2）——
 
     /**
      * **本批修掉的 bug 的回归钉**：生产装配出的执行体，argv 里到底有没有 `--registry`。

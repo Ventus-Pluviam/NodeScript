@@ -39,7 +39,7 @@ import java.util.zip.ZipOutputStream
  *    不留半截 zip 冒充成品。
  * 3. **空目录以目录条目保留**：只拷文件不落目录条目的写法会让空目录消失
  *    （naive 实现的常见缺斤短两），这里目录条目显式 createDirectories。
- * 4. **体积上限（2026-10-06 补，backlog B13）**：见 [MAX_ENTRY_BYTES] / [MAX_TOTAL_BYTES]。
+ * 4. **体积上限（补，backlog B13）**：见 [MAX_ENTRY_BYTES] / [MAX_TOTAL_BYTES]。
  *    与 zip-slip 同层 —— 都是「解压一个不可信归档」这条路上的契约级底线，所以同样
  *    **先验后写**（诚实的炸弹在写任何字节之前就被拦下），撒谎的声明由第二拍的计数闸兜住。
  */
@@ -50,12 +50,12 @@ class JdkZipArchiver(
      *
      * 为什么要这个缝：边界要按真值测就得造 256 MiB+ 的条目，而**为一条不该落盘的条目
      * 先写满 256 MiB 磁盘**是拿边界的坑去测边界（同 `NpmOfflineBundleImporter` 的
-     * 上限缝，2026-10-06 backlog B12）。缝只开在上限上 —— 解包/校验/落盘一条不分叉。
+     * 上限缝，backlog B12）。缝只开在上限上 —— 解包/校验/落盘一条不分叉。
      */
     private val maxEntryBytes: Long = MAX_ENTRY_BYTES,
     private val maxTotalBytes: Long = MAX_TOTAL_BYTES,
     /**
-     * 条目**个数**上限（2026-10-11 批 99，外审 M7）。
+     * 条目**个数**上限（外审 M7）。
      *
      * 为什么字节上限不够：一个「零字节 × 50 万条」的归档能过掉 [maxTotalBytes]（合计 0）
      * 与 [maxEntryBytes]（每条 0）两道闸，却在解包时造 50 万个目录项/文件 inode ——
@@ -243,7 +243,7 @@ class JdkZipArchiver(
         )
 
     /**
-     * 条目数超限的统一出口（批 99，外审 M7）。与 [tooLarge] 同码同层：都是「这个归档本身
+     * 条目数超限的统一出口（外审 M7）。与 [tooLarge] 同码同层：都是「这个归档本身
      * 不合格」（**输入**的问题），话术必须点名「个数」以免与字节闸混淆。
      */
     private fun tooManyEntries(actual: Int, limit: Int): AutojsException =
@@ -302,7 +302,7 @@ class JdkZipArchiver(
         const val MAX_TOTAL_BYTES: Long = 1024L * 1024 * 1024
 
         /**
-         * 条目个数上限（批 99，外审 M7）：**零字节条目绕过字节闸的那一档**。
+         * 条目个数上限（外审 M7）：**零字节条目绕过字节闸的那一档**。
          *
          * 取值依据：合法归档（脚本包/离线 bundle/录屏产物切片）的条目数在**数百到数千**
          * 量级；1 万条对合法用途是够不着的余量，而 50 万条零字节条目足以把 inode 与

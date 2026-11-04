@@ -25,7 +25,7 @@ object ScriptPaths {
     /**
      * 某项目的目录：`files/scripts/<projectId>`。
      *
-     * **收 [ProjectId] 而不是裸 `String`**（2026-10-12 批 109）：项目号的合法性在
+     * **收 [ProjectId] 而不是裸 `String`**：项目号的合法性在
      * [ProjectId] 的 `init` 里判过一道，本方法因此**不再重复 `require`** ——
      * 拿到类型就意味着过了判据，这正是值类存在的意义。仍**不校验存在性**
      * （那是 [Path.exists] 的事，不是约定的）。
@@ -53,13 +53,13 @@ object ScriptPaths {
      * 与 [com.autoscript.domain.npm.NpmConsoleKeys.rejectProjectId] 的分工：那是**话术**
      * （拒收原文，给用户看），这是**判据**（是/否）。
      *
-     * ## 2026-10-16 放宽：从 `[A-Za-z0-9_-]+` 到"排除分隔符与点"
+     * ## 判据：从 `[A-Za-z0-9_-]+` 放宽到"排除分隔符与点"
      *
      * **用户裁定**：首页可写之后，在根层建的**文件夹就是一个新项目**（`files/scripts/<名字>/`），
      * 于是"根层文件夹名"与"项目号"必须是同一条判据 —— 两套判据会造出「列得出、点不开」的
      * 目录（建的时候放行，进里面打开文件时 `ProjectId` 抛）。用户选的是**允许中文**（除分隔符与点）。
      *
-     * **放宽的只是字符集，不是防逃逸判据**：批 84 收掉 `.` 的理由是
+     * **放宽的只是字符集，不是防逃逸判据**： 收掉 `.` 的理由是
      * `projectsRoot.resolve("..")` 跳出项目根，那条仍然一个字不动 —— `.` 依旧禁，
      * `/` 与 `\` 依旧禁（它们是路径分隔符），控制字符一并禁（NUL 会让 `Path.resolve` 抛
      * `InvalidPathException`，`\n` 会把日志行/文件名搞成两行）。**空串仍不是项目号**
@@ -77,8 +77,8 @@ object ScriptPaths {
      * 判据里**没有 `.`**：原正则 `[A-Za-z0-9._-]+` 收 `.` 与 `..`，而
      * `projectsRoot.resolve("..")` 正好跳出项目根 —— 那条 `require` 自称「防路径逃逸」，
      * 实际把最经典的一种逃逸放行了（`.` 本身则让 `files/scripts/.` 变成项目根，
-     * 于是「项目 `.npmrc`」落在共享目录上）。`.` 在项目号里也没有真实用途。批 84 收口时
-     * 一并钉住，2026-10-16 放宽字符集时**仍然保留**（见 [PROJECT_ID] 的 KDoc）。
+     * 于是「项目 `.npmrc`」落在共享目录上）。`.` 在项目号里也没有真实用途。 收口时
+     * 一并钉住，放宽字符集后**仍然保留**（见 [PROJECT_ID] 的 KDoc）。
      *
      * 空串回 **false**（项目号非空）：根层哨兵 [ProjectId.ROOT] 是"没有项目"的编码，
      * 不是项目号 —— 故它构造得出来，但 [ProjectId.createOrNull] 与界面校验都不放行它。
@@ -91,7 +91,7 @@ object ScriptPaths {
      * 引擎宿主拿到的必须是绝对路径：引擎进程有自己的 cwd（native 侧由 `:engine:node-process`
      * 决定），相对路径会解析到别处。
      *
-     * **读侧判据（2026-10-12 补，外审 M1 收口；此前本方法一个字都不校验）**：
+     * **读侧判据（补，外审 M1 收口；此前本方法一个字都不校验）**：
      * 词法闸 —— 绝对路径、`..`/`.`/空段、反斜杠一律 `require` 拒（[IllegalArgumentException]），
      * 归一后还要求目标**严格在**项目根之下（用 [Path.startsWith] 词法判据）。
      * 加这道闸的理由不是当下有可利用的漏洞
@@ -106,7 +106,7 @@ object ScriptPaths {
      * 且对符号链接要逐级解真实 inode。写入侧防符号链接是另一条线（见
      * `DeployPath.resolveIn` 的 KDoc，那里已如实分开记「判据不够强」与「当下可利用」）。
      *
-     * **与 [isValidProjectId] 的分工（2026-10-12 批 109 调整）**：本方法的两个入参现在
+     * **与 [isValidProjectId] 的分工（ 调整）**：本方法的两个入参现在
      * 是 [ProjectId] / [RelPath] —— 判据在**值的构造期**就过了（各自的 `init` 里各判一遍），
      * 所以本方法只剩「归一后仍在项目根之下」这一条，它判的是**拼接结果**而不是**入参形态**。
      * [isValidProjectId] 仍在（它是 [ProjectId.createOrNull] 与界面侧话术的判据来源），
@@ -131,8 +131,8 @@ object ScriptPaths {
      * 意图日志、在途表、归档）按项目内路径说（`data/test.js`），
      * [scriptFile] 就是拿它去拼绝对路径的。两种形状在字符串上长得一样，
      * 拼错了**不会编译失败**：`demo/demo/data/test.js` 只会得到一句
-     * `ERR_FILE_NOT_FOUND`（2026-10-06 编辑器那条链正是这么踩的，
-     * 见 `ScriptFileOps.resolveInProject` 的 KDoc），而 2026-10-13 的 ▶ 链
+     * `ERR_FILE_NOT_FOUND`（编辑器那条链正是这么踩的，
+     * 见 `ScriptFileOps.resolveInProject` 的 KDoc），而 ▶ 链
      * （`AssembledShell.runScriptFile` → 调度器 → 引擎）当时就漏了这一道。
      *
      * **判据是"首段必须等于 projectId"**（与 `ScriptFileOps.resolveInProject` 同一条），
@@ -142,7 +142,7 @@ object ScriptPaths {
      *
      * 不做词法校验（`..`/绝对路径）：那是 [scriptFile] 与 [RelPath] 的事，本方法只削前缀。
      *
-     * **根层分支（2026-10-16）**：[ProjectId.ROOT]（空串）时不削前缀 —— 根层条目本身就是
+     * **根层分支**：[ProjectId.ROOT]（空串）时不削前缀 —— 根层条目本身就是
      * 项目内路径（`files/scripts/x.js` 的 `scriptPath` 就是 `x.js`）。但**必须是单段**：
      * 根层只有一层（`files/scripts/`），`a/b.js` 对根层是"更深的层"，回 null 由调用方响亮拒绝
      * —— 与前面"削不出就回 null，不静默当成项目内路径"同一条纪律。

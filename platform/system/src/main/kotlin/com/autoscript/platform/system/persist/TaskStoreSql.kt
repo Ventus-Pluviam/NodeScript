@@ -5,7 +5,7 @@ import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.domain.scripts.TimedSchedule
 
 /**
- * 任务注册表的 SQL 面（§8.6；2026-10-11 批 102 P4 阶段 C）。
+ * 任务注册表的 SQL 面（§8.6）。
  * 与 [RunArchiveSql] 同一架子，纯函数、零 Android。
  *
  * **表形状（`tasks`）的三个决定**：

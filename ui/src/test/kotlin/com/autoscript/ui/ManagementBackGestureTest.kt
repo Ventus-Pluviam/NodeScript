@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * [backGestureScale] 的判据（批 115，跟手返回手势）。
+ * [backGestureScale] 的判据（跟手返回手势）。
  *
  * 这是纯函数 —— 手势那层只在绘制阶段读它，没有别的守卫可依赖。抄的是 TG
  * `ActionBarLayout.java:1119`，所以**用 TG 的那几个数**当断言值。锚点那一半

@@ -87,7 +87,7 @@ class FakeEngine(
     override suspend fun resume(): Boolean = resumeResult
 
     /**
-     * `sendInput` 的账（2026-10-16）：收到的行按序记下来，返回值由 [sendInputResult] 定。
+     * `sendInput` 的账：收到的行按序记下来，返回值由 [sendInputResult] 定。
      *
      * 缺省 true（写成功）与 `pauseResult` 的缺省相反，是刻意的：那条"在途才送得到"
      * 的判据住在 `RuntimeController`（不在途直接回 false，根本不问引擎），引擎这一层
@@ -102,7 +102,7 @@ class FakeEngine(
     }
 
     /**
-     * `closeStdin` 的账（2026-10-16「答完自己退」）：关了几次由 [closeStdinCalls] 记，
+     * `closeStdin` 的账：关了几次由 [closeStdinCalls] 记，
      * 返回值由 [closeStdinResult] 定 —— 缺省 true 与 [sendInputResult] 同一条口径
      * （引擎这一层该答的是"我这边没问题"，要测"写端已关/替身关不了"再关掉开关）。
      */

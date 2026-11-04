@@ -20,7 +20,7 @@ interface EnginePool {
     /**
      * 放回槽位：四步 quiesce（[ScriptEngine.stop]），TimedOut 由池 kill 兜底。
      *
-     * **幂等**（批 103 P2）：经 [PoolHandle.lease] 归还，重复调用是 no-op（返回 Clean）——
+     * **幂等**：经 [PoolHandle.lease] 归还，重复调用是 no-op（返回 Clean）——
      * 原实现的「双重归还 → 超发一证 → 同一引擎跑两个脚本」那条路已消除。
      */
     suspend fun release(handle: PoolHandle): StopResult
@@ -31,7 +31,7 @@ interface EnginePool {
     /**
      * 看门狗 kill 后的槽位收归（kill 权威归 RuntimeController，§4.1）。
      *
-     * **生产路径不走这里**（2026-10-12 批 103 P2）：控制器改走 [PoolHandle.lease] 的
+     * **生产路径不走这里**：控制器改走 [PoolHandle.lease] 的
      * [PoolLease.forceReturn] —— 因为「归还权」必须与 [release] 抢**同一个 CAS**，否则
      * 「killRun 与迟到的 stop 同时到达」会双重归还。本方法保留给
      * 「只拿到槽位、拿不到 lease」的诊断路径与直接测池记账的单测。
@@ -101,12 +101,12 @@ sealed interface PoolAcquireOutcome {
 
 /** 已获槽位的执行句柄（池内身份：请求 + 归还凭证 + 收据；无跨层包装——会话面在桥两侧
  * 各一边：Kotlin 侧是 `EnginesNamespaceHandler` 的 exec/stop/status/channel* 方法，
- * JS 侧是 `EngineSessionImpl`/`EngineChannel`）。**不再持代次** —— 批 103 P2 起过期判据是
+ * JS 侧是 `EngineSessionImpl`/`EngineChannel`）。**不再持代次** ——  起过期判据是
  * [PoolLease] 的 CAS，不是 `PoolSlot.generation`，见该字段 KDoc。 */
 class PoolHandle internal constructor(
     val request: PoolAcquireRequest,
     /**
-     * 本次占用的**归还凭证**（2026-10-12 批 103 P2）：release / recycle 都经它，
+     * 本次占用的**归还凭证**：release / recycle 都经它，
      * 而**不是**外部直接碰 [slot]。归还**恰好一次**由 [PoolLease] 的 CAS 保证。
      */
     val lease: PoolLease,

@@ -6,7 +6,7 @@ import com.autoscript.domain.scripts.ScriptPaths
 import java.time.ZoneId
 
 /**
- * 脚本输出日志的文件列表（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+ * 脚本输出日志的文件列表（日志管理页「脚本输出」tab）。
  *
  * 一条 = **一次执行**（与 `TaskLogState` 的"终态历史"不同：这里含"在跑的"，
  * 那是 [ScriptLogRowUi.running] 这一列，不是第二种数据）。
@@ -51,7 +51,7 @@ data class ScriptLogRowUi(
         fun of(row: ScriptLogRow, zone: ZoneId) = ScriptLogRowUi(
             runId = row.runId,
             // 根层条目没有项目段（`projectId` 空串）：直接拼会渲染成 `//x.js`，
-            // 故走 `ScriptPaths.fullRelPath`（那条判据只有一份，2026-10-16）。
+            // 故走 `ScriptPaths.fullRelPath`（那条判据只有一份）。
             title = "/" + ScriptPaths.fullRelPath(row.projectId, row.scriptPath),
             // 同 `LogWindowState.ext`：`substringAfterLast('/')` 不能带第二参数
             // （传 "" 会让没有斜杠的路径整个变空串）。

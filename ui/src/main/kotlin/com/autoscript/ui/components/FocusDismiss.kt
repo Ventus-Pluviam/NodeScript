@@ -20,8 +20,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
 
 /**
- * 「点输入框外面就收键盘、撤光标」（2026-10-16 用户报：搜索框与输入框「焦点转移后
- * 输入指示条还在一闪一闪」）。
+ * 「点输入框外面就收键盘、撤光标」。
  *
  * **病不在闪烁动画，在焦点根本没转移。** 设备实测（`uiautomator` 读 `focused` +
  * `dumpsys input_method` 读 `mInputShown`）：点搜索框 → `focused=true`、输入法起来；
@@ -110,7 +109,7 @@ private class CoordinatesHolder {
 }
 
 /**
- * **跨窗口**的焦点清理登记处（2026-10-16 用户报：悬浮窗输入框与应用内搜索框互相收不掉）。
+ * **跨窗口**的焦点清理登记处。
  *
  * 病：两个窗口（应用 Activity 与悬浮窗）各有**自己那份** `FocusManager`
  * （`LocalFocusManager` 是每个组合所有者一份），而 [dismissFocusOnTapOutside] 那套只看得到
@@ -189,9 +188,9 @@ fun Modifier.dismissFocusOnTapOutside(
                 val here = holder.value ?: return@awaitEachGesture
                 // 判据分两半，**不能合成一个 `state.focused` 的早退**：
                 // - 清自己：只在本面真聚焦着、且这一下点在输入框外时才做（见本修饰符 KDoc）；
-                // - 清**别的窗口**：与"本面聚没聚焦"无关 —— 用户报的那条正是
+                // - 清**别的窗口**：与"本面聚没聚焦"无关 ——
                 //   「点搜索框（应用）→ 再点悬浮窗」：那一刻**悬浮窗自己没聚焦**，
-                //   若跟着早退，应用的搜索框就永远收不掉（2026-10-16 用户报的原症状）。
+                //   若跟着早退，应用的搜索框就永远收不掉。
                 val outside = !state.focusedBounds.contains(here.localToRoot(down.position))
                 if (outside && state.focused) focusManager.clearFocus()
                 if (outside && clearAppFaces) FocusDismissRegistry.clearAppFaces(except = focusManager)
@@ -200,7 +199,7 @@ fun Modifier.dismissFocusOnTapOutside(
 }
 
 /**
- * 「**窗口**失焦就收键盘」（2026-10-16 用户报：悬浮窗输入框与首页搜索框互相收不掉）。
+ * 「**窗口**失焦就收键盘」。
  *
  * 病：[dismissFocusOnTapOutside] 只看得到**自己这棵组合**里的指针事件，而系统悬浮窗是
  * **另一个窗口**（`SystemLogWindowHost` 的 `TYPE_APPLICATION_OVERLAY` + 离屏 `ComposeView`，

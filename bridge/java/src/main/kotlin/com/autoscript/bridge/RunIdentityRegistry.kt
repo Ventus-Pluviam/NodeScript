@@ -40,11 +40,11 @@ class RunIdentityRegistry(
     private var closed = false
 
     /**
-     * 「pid 不可得 ⇒ 本次没做 pid 绑定」的累计次数（外审 M5，2026-10-11 批 97）。
+     * 「pid 不可得 ⇒ 本次没做 pid 绑定」的累计次数（外审 M5）。
      *
      * 为什么要有这个计数而不是继续静默跳过：`spawn.pid` 为 null 时整段防劫持判据被跳过，
      * 而「跳过」与「度量通过」在返回类型上长得一样 —— 现场表现是「身份绑定这层不知何时
-     * 失效了」。批 97 已在引擎侧补了 pid 的第二级反射阶梯（Android 8–12 不再无 pid），
+     * 失效了」。 已在引擎侧补了 pid 的第二级反射阶梯（Android 8–12 不再无 pid），
      * 真拿不到时这个计数是唯一的可见信号。
      */
     @Volatile
@@ -109,7 +109,7 @@ class RunIdentityRegistry(
             // 防劫持判据（外审 M5 相关）：宿主侧 pid 拿不到时**跳过**而不是放行成「相等」。
             // 原判据 `peerPid != null && spawn.pid != null && peerPid != spawn.pid` 在 pid 缺席
             // 时静默跳过整套检查 —— 这是「拿不到度量」而非「度量通过」，两者必须分得开。
-            // 补 pid 的第二级反射阶梯（批 97，engine ProcessLauncher.pidOf）后 Android 8–12
+            // 补 pid 的第二级反射阶梯（engine ProcessLauncher.pidOf）后 Android 8–12
             // 不再走这条路；真的两个都拿不到时仍跳过并计数（字段 KDoc 是判据本身）。
             if (peerPid != null && spawn.pid != null && peerPid != spawn.pid) denied()
             else if (peerPid != null && spawn.pid == null) pidUnavailable++   // 见 pidUnavailable 的 KDoc

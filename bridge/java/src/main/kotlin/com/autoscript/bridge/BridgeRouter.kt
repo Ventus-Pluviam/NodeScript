@@ -111,7 +111,7 @@ class BridgeRouter(
                 // 自己抛的那一半）——「能读懂的事实」，脚本据此改参数。
                 BridgeResponse.Err(request.id, ErrorCode.ERR_INVALID_PARAM.code, "参数非法: ${e.message}")
             } catch (e: Exception) {
-                // 其余一律「宿主内部错误」（2026-10-11 批 97，外审 M4）：**不是调用方的错**。
+                // 其余一律「宿主内部错误」（外审 M4）：**不是调用方的错**。
                 // 此前折成 ERR_INVALID_PARAM 会让脚本把代码 bug 当成参数 bug 去改参数；
                 // 回显 e.message 还会把内部路径/字段名带进 wire（外审同条的泄露面）。
                 // 详情只在 detail（宿主侧另有堆栈日志），脚本侧按「宿主有问题」处理。

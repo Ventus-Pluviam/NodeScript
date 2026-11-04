@@ -26,10 +26,10 @@ enum class GrantPage {
     EXACT_ALARM,
     /** 应用详情页：没有专门授权页的能力（root/Shizuku）统一送到这里，不假装有快捷入口。 */
     APP_DETAILS,
-    /** 特殊访问权限 → 使用情况访问权限（批 48；`ACTION_USAGE_ACCESS_SETTINGS` 列表页，无包名 extra）。 */
+    /** 特殊访问权限 → 使用情况访问权限（`ACTION_USAGE_ACCESS_SETTINGS` 列表页，无包名 extra）。 */
     USAGE_ACCESS,
     /**
-     * 投屏授权（§9.2，批 79）：**不是系统设置页**，而是 `createScreenCaptureIntent()` 的
+     * 投屏授权（§9.2）：**不是系统设置页**，而是 `createScreenCaptureIntent()` 的
      * 运行时对话框 —— 需要 Activity 承载，所以 [AndroidSettingsPageOpener] 对它走
      * `ScreenConsentHolder`（界面注册的宿主），而不是 `startActivity`。
      *
@@ -102,7 +102,7 @@ class AndroidGrantLauncher(
          * 能力 → 系统页（§9.5 引导文案逐条对应；`PermissionCenter.guideText` 里写的
          * 「设置 → 应用 → AutoScript → X」就是这里的落点）。
          *
-         * `SCREEN_CAPTURE` 走**投屏同意**（[GrantPage.PROJECTION_CONSENT]，批 79）：
+         * `SCREEN_CAPTURE` 走**投屏同意**（[GrantPage.PROJECTION_CONSENT]）：
          * 屏幕采集的 GRANTED 定义是"会话已激活"，而唯一能推进它的动作就是同意一次投屏
          * —— 旧口径把它送应用详情页，等于把用户送到一个与屏幕采集无关的地方。
          * `ROOT`/`ADB_INPUT` 仍送应用详情页：它们由用户在本应用之外准备（`su`/Shizuku），

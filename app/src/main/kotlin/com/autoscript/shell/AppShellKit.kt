@@ -68,7 +68,7 @@ import com.autoscript.platform.capabilities.CapabilityNamespaces
  * - **本文件不 new 任何能力实现**，也不碰 `:bridge:java`（只有 `com.autoscript.shell.AppShell`
  *   一个类可以，见 `ArchitectureTest`；本文件只用 `:domain` 的 [NamespaceHandler] 接口）。
  *
- * **2026-10-01 D7**：[AssembledShell] 与它的协程域 [ShellScope] 已外迁到同包的
+ * [AssembledShell] 与它的协程域 [ShellScope] 在同包的
  * `AssembledShell.kt` —— 本文件只剩「怎么装」（配方与注入缝），产物与收口责任在那边。
  * 判据没变，只是读的人不必先翻过 250 行产物类才能看到 `assemble` 的参数表。
  *
@@ -172,12 +172,12 @@ object AppShellKit {
          */
         npmGateDeploy: (Path) -> NpmSpawnGate.Deploy = { NpmSpawnGate.deploy(it) },
         /**
-         * T1 桥 socket 的绑定缝（§10.3 T1，2026-10-10 批 91）。**刻意不给缺省值**。
+         * T1 桥 socket 的绑定缝（§10.3 T1）。**刻意不给缺省值**。
          *
          * 缺省在这里不是"省事"而是"陷阱"：[NpmT1Bridge.fileSystemBinder] 是 JDK 的
          * unix domain socket，而它在 Android 上**必炸**（`java.net.UnixDomainSocketAddress`
          * 不在 android.jar 里 → `NoClassDefFoundError`，是 Error 不是 Exception，任何
-         * `catch (e: Exception)` 都拦不住它，会一路掀翻整个壳的装配 —— 2026-10-10 真机
+         * `catch (e: Exception)` 都拦不住它，会一路掀翻整个壳的装配 —— 真机
          * 实测就是这条：`Path.of` 先炸，修完 `Path.of` 紧接着就是它）。
          *
          * 故判据做成**编译期**的：设备装配必须显式传 [AndroidT1SocketBinder]（或它将来的
@@ -186,13 +186,13 @@ object AppShellKit {
          */
         npmT1Binder: NpmT1Bridge.SocketBinder,
         /**
-         * 控制台 shell 面的执行缝（2026-10-09）。**只有 `:app` 能造它** ——
+         * 控制台 shell 面的执行缝。**只有 `:app` 能造它** ——
          * `:app-service:npm` 的 ArchitectureTest 禁 `com.autoscript.platform..`，
          * 故真实现（`PlatformWiring.ConsoleShellExecutor`）在这里被转成 `:domain` 的缝。
          */
         shellExecutor: ShellOpExecutor = ShellOpExecutor.Unavailable,
         /**
-         * 控制台 shell 命令的 TTL（毫秒，2026-10-09）。缺省 30 秒（与
+         * 控制台 shell 命令的 TTL（毫秒）。缺省 30 秒（与
          * [InstallCoordinator.DEFAULT_CONSOLE_SHELL_TIMEOUT_MILLIS] 同值，装配层按需覆盖）——
          * 本配方只透传，不判。
          */
@@ -250,24 +250,24 @@ object AppShellKit {
          * 生产由 `PlatformWiring.intentStore` 给 SQLite（并在那里做一次性迁移）；
          * 测试给 `:domain` `testFixtures` 的 `InMemoryIntentStore`。
          *
-         * **为什么必填**（2026-10-08 裁定）：原先的缺省是「不给就本配方自建 jsonl」，
-         * 而那条路正是被删掉的回落 —— 留着这个缺省等于 fail closed 没做。也不在本文件里
-         * 选：打开存储要碰 Android（`Context` → `SQLiteOpenHelper`），而本文件是纯 JVM
-         * 可测的配方（不 import `android.`）。于是「谁碰 Android 谁开」落在 `PlatformWiring`。
+         * **为什么必填**：「不给就自建 jsonl」这种缺省就是一条隐蔽的回落 ——
+         * 留着它等于 fail closed 没做。也不在本文件里选：打开存储要碰 Android
+         * （`Context` → `SQLiteOpenHelper`），而本文件是纯 JVM 可测的配方
+         * （不 import `android.`）。于是「谁碰 Android 谁开」落在 `PlatformWiring`。
          */
         intentStore: IntentStore,
         /**
-         * 运行档案存储（§8.5；批 102 P4 注入缝）。
+         * 运行档案存储（§8.5 注入缝）。
          *
          * 缺省 = 本配方自建 jsonl（[FileRunArchive]）—— **这是单测/离线配方那条路**，
          * 生产必须显式传 `PlatformWiring.runArchive(...)` 给的 SQLite 面。
          *
-         * **为什么档案与注册表有缺省而 [intentStore] 没有**：那是一次性裁定（2026-10-08），
+         * **为什么档案与注册表有缺省而 [intentStore] 没有**：
          * 理由是「回落目标的记账靠单写者假设撑着」。本次不重复那次争论 —— 但**口径一致**：
          * 生产装配（[AppShellApplication]）一定会显式传，见该处调用点。
          */
         /**
-         * 运行档案 + 任务注册表两个存储的工厂（§8.5 / §8.6；批 102 P4 注入缝）。
+         * 运行档案 + 任务注册表两个存储的工厂（§8.5 / §8.6 注入缝）。
          *
          * 合成一个参数（同 [PlatformWiring.stores] 的理由）：两者同源、同目录、同纪律，
          * 且 `assemble` 的参数已经逼近 detekt 的 `LongParameterList` 上限。
@@ -300,7 +300,7 @@ object AppShellKit {
          * dlopen 的库，同一个 jniLibs 目录里的两件）—— 排在参数表末尾是仓规，不是把它和
          * [npmNodeBin] 拆开：读的时候请把两处一起看。
          *
-         * **为什么必须有这条**（2026-10-17 设备实测）：`main.cpp` 头一件事就是读
+         * **为什么必须有这条**：`main.cpp` 头一件事就是读
          * `AUTOSCRIPT_LIBNODE`，缺了直接 `exit 2`（stderr 只有一行
          * `:nodeN 缺 AUTOSCRIPT_LIBNODE`）。脚本引擎那条路一直注着
          * （`NodeEngineConfig.libnodePath`），**npm 这条路从来没注过** —— 而宿主 JVM 测试
@@ -316,20 +316,17 @@ object AppShellKit {
          * **必须由调用方给**（缺省 [OpLogSink.None] 是给
          * 测试替身留的）：本类够不着"事实该去哪儿"这个决定 —— 生产恒传
          * [OpLogHostSink]（logcat + 日志管理页「系统日志」段）。
-         *
-         * 2026-10-17 用户令「去掉审计、改打系统日志」：原先这条链上没有这条缝，
-         * 事实由 `:app-service:npm` 自己写一本 `files/.ns/install-history.jsonl`。
          */
         opLog: OpLogSink = OpLogSink.None,
     ): AssembledShell {
         val nsDir = filesDir.resolve(".ns")
         Files.createDirectories(nsDir)
-        // 执行日志落盘（2026-10-13）：`nsDir/script-logs`，`AppShell.assemble` 的
+        // 执行日志落盘：`nsDir/script-logs`，`AppShell.assemble` 的
         // scriptLogs 缝吃这份 —— 目录在这里建（与 nsDir 同一条"配方管目录"纪律），
         // store 本身不建目录（`begin`/`appendLine` 里 `createDirectories` 兜底，
         // 装配失败路径下也不炸）。
         val scriptLogs = ScriptLogStore(nsDir.resolve("script-logs"))
-        // 系统日志（runId 0）跨重启（2026-10-17 用户令「系统日志不要每次进 app 都清除」）：
+        // 系统日志（runId 0）跨重启保留：
         // 与 script-logs 同住 `.ns`，但**是一个文件**而不是一次执行一个（系统日志
         // 不按执行分节 —— 它记的是"引擎外"那些事，见 `HostLog` 的类 KDoc）。
         val hostLogs = HostLogStore(nsDir.resolve(HostLogStore.FILE_NAME))
@@ -374,10 +371,10 @@ object AppShellKit {
         // 测试 = InMemoryIntentStore。两者语义由 `IntentStoreContract` 同一组用例守着。
         // **无回落**：打不开在 PlatformWiring 就抛了，装配层据此判壳未就绪。
         val log = PersistentIntentLog(intentStore)
-        // 运行档案与任务注册表（批 102 P4）：存储引擎换 SQLite，各带一次性 jsonl 迁移。
+        // 运行档案与任务注册表：存储引擎是 SQLite，各带一次性 jsonl 迁移。
         // **存储引擎由调用方给**（本函数纪律）：生产 = `PlatformWiring.runArchive`/
         // `PlatformWiring.taskStore`（SQLite，含迁移），单测 = `InMemory*`/jsonl 面。
-        // **无回落**（与 `intentStore` 同一条纪律，2026-10-08 裁定）：打不开就在
+        // **无回落**（与 `intentStore` 同一条纪律）：打不开就在
         // `PlatformWiring` 抛了，装配层据此判壳未就绪 —— 不拿「回落 jsonl」冒充「还能用」。
         val (archive, tasks) = storesFactory?.invoke() ?: (FileRunArchive(nsDir) to FileTaskStore(nsDir))
         // 注册表第三持久（§8.6）：意图日志管"已投递的意向"，这里管"还没到点的排期"。
@@ -427,13 +424,12 @@ object AppShellKit {
                 filesDir = filesDir,
                 cacheDir = cacheDir,
                 executor = npmWiring!!.executor,
-                // T2 装配缺口收口（2026-10-08 批 79）：此前这里从不传 `lockKey`，
-                // 于是生产路径上 lock 既不签也不验 —— §11.3 第 8 条记的就是这件事。
+                // lockKey 必须传：不传的话生产路径上 lock 既不签也不验（§11.3 第 8 条）。
                 // 接上后 `ci` 先验签、`install` 收尾重签、快照导出带 snapshot.sig。
                 lockKey = lockKey,
                 shellExecutor = shellExecutor,
                 consoleShellTimeoutMillis = consoleShellTimeoutMillis,
-                // T1 脚本执行体（2026-10-10 批 91）：素材 + 宿主 + 桥 shim 三条齐才有值，
+                // T1 脚本执行体：素材 + 宿主 + 桥 shim 三条齐才有值，
                 // 缺一条保持 `Unavailable`（如实 ERR_NOT_IMPLEMENTED）。
                 scriptExecutor = npmWiring!!.scriptExecutor,
                 // 操作事实的去向：装配层给（生产 = HostLog），本配方只转发。
@@ -468,7 +464,7 @@ object AppShellKit {
             systemHandlers = systemHandlers,
             authorization = authorization,
             capabilityMask = capabilityMask,
-            // 2026-10-13 落盘缝：见本函数头的 scriptLogs —— 单测/离线配方走同一条
+            // 落盘缝：见本函数头的 scriptLogs —— 单测/离线配方走同一条
             // （store 无副作用，只在 begin/append 时建目录写文件）。
             scriptLogs = scriptLogs,
             hostLogs = hostLogs,
@@ -506,7 +502,7 @@ object AppShellKit {
         val cliFailure: String?,
         val gate: Path?,
         /**
-         * T1 脚本执行体（2026-10-10 批 91）。缺省 [ScriptOpExecutor.Unavailable] ——
+         * T1 脚本执行体。缺省 [ScriptOpExecutor.Unavailable] ——
          * **与 [executor] 独立**：安装会话与 T1 会话是两条链，一条接上不等于另一条接上
          * （实测过的组合：CLI 在盘、宿主在、门禁 shim 落位失败 → 安装链 fail closed，
          * 而 T1 链本来就不该用门禁 shim）。
@@ -566,7 +562,7 @@ object AppShellKit {
             )
         }
         // 宿主与它要 dlopen 的 libnode.so 是**一件必填件的两半**：只给前一半，
-        // 会话一起来就 exit 2（2026-10-17 设备实测的 bug）。故与
+        // 会话一起来就 exit 2。故与
         // "没有 Node 宿主"同一档处理 —— 装配期拒，不留到用户按安装那一刻。
         if (libnode == null) {
             return NpmWiring(
@@ -576,7 +572,7 @@ object AppShellKit {
                 null,
             )
         }
-        // T1 脚本执行体（2026-10-10 批 91）：**与安装链并列、条件不同**。
+        // T1 脚本执行体：**与安装链并列、条件不同**。
         // 安装链要门禁 shim（零 spawn），T1 链要桥 shim（spawn 走桥）—— 两者互斥，
         // 故不共用"三条齐"那条判据，也不因门禁 shim 落位失败而一起缺席。
         val t1 = wireT1Executor(filesDir, deployed.cliJs, host, t1ShimDeploy, t1Binder, libnode)
@@ -596,7 +592,7 @@ object AppShellKit {
             NpmWiring(
                 HostNodeExecutor(
                     deployed.cliJs, NpmCacheSeedDeployer.cacheRoot(cacheDir), nodeBin = host, spawnGateFile = gate,
-                    // 全局镜像源走 userconfig（§10.2 三层链；2026-10-09 批 83）。
+                    // 全局镜像源走 userconfig（§10.2 三层链）。
                     // **不再传 registryOverride**：此前无条件注入 `--registry 官方`，
                     // 于是用户设的镜像源对真实安装毫无影响。现在让 npm 自己按
                     // `--prefix`（workDir，里面已拷了项目 .npmrc）→ userconfig → 出厂解析，
@@ -616,7 +612,7 @@ object AppShellKit {
     }
 
     /**
-     * T1 脚本执行体（§10.3 T1 下半段，2026-10-10 批 91）。
+     * T1 脚本执行体（§10.3 T1 下半段）。
      *
      * 两条前置：**桥 shim 落位** + **socket 绑得上**。缺任一条回
      * [ScriptOpExecutor.Unavailable] —— 与安装链同一条 fail-closed 口径：桥没接上时

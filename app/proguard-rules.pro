@@ -5,6 +5,13 @@
 #
 #   1. 资源面确实干净：`getIdentifier` / `getDeclaredField` / `newInstance` 在**全部模块**
 #      的 main 源集里 0 命中（`grep -rn --include=*.kt` 一遍就知道），资源都是 `R.*` 直引；
+#      **~~复数勘误（2026-10-28 第十六批复核）~~**：`getDeclaredField` 现在**有 1 处** ——
+#      `:platform:process` 的 `ProcOps.pidOf`（模块批 105，2026-10-12 才进仓，早于本条审计
+#      时点 2026-10-09）。**结论不变**：它反射的字段/方法全在 **java.lang 平台类**上
+#      （`Process::class` + 运行时类 `UNIXProcess`/`ProcessImpl` 往父类走 —— 桌面 JDK 与
+#      Android 13 libcore 的落点不同，这正是那条「两级阶梯」里字段住子类上的原因），
+#      平台类不进 app dex、不参与收缩，名字不会变 —— 与下面 ProcessLauncher 那条同理，
+#      **仍不用在这里列**；哪天阶梯上出现了 app 自己的 `Process` 子类，才需要回头加 keep。
 #   2. androidx / compose / kotlinx 各自带 consumer 规则（随 AAR 合并进来），manifest 里的
 #      Activity/Service/Receiver/Provider 由 AGP 从**合并后的 manifest** 生成 keep 规则
 #      （`rikka.shizuku.ShizukuProvider` 那条就是这么来的，见 `configuration.txt`）——

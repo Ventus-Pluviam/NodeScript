@@ -8,7 +8,7 @@ import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
 
 /**
- * 「aborted ≠ 绿」守卫 —— 承已删除的 tools/jvm-test-all.sh 的纪律（2026-09-30 起由约定插件承接）：
+ * 「aborted ≠ 绿」守卫 —— 承已删除的 tools/jvm-test-all.sh 的纪律（起由约定插件承接）：
  * 测试里出现 skipped（JUnit5 Assumptions 中止 / @Disabled）即红。当年的事故是
  * SocketE2EHostTest 因 dist 落空 abort 成"静默跳过"、全仓大面积 abort 而门一路放行。
  *

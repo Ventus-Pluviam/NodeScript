@@ -13,13 +13,13 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * `root` / `adb` 两条 shell 输入通道的契约测试（§9.3，2026-10-06）。
+ * `root` / `adb` 两条 shell 输入通道的契约测试（§9.3）。
  *
  * 用**假执行缝**（[Recorder]）而不是真进程：本类要钉的是「命令怎么拼、退出码怎么判、
  * 通道怎么映射」，与 IO 语义无关 —— 真进程那半边由 `AndroidShellExecutorTest` 守
  * （那里的替身强度问题另有一课，见其类注释）。
  *
- * **真机未验**：设备道 2026-10-06 已裁（backlog B3/E3）。这里只钉 JVM 侧能钉的部分，
+ * **真机未验**：设备道已裁（backlog B3/E3）。这里只钉 JVM 侧能钉的部分，
  * 真机上第一次用应当拿它跟 `auto` 通道的行为对一遍。
  */
 class ShellInputProviderTest {

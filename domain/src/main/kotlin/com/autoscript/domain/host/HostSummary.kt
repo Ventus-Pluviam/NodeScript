@@ -81,7 +81,7 @@ interface HostSummary {
     suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot
 
     /**
-     * 脚本输出日志的文件列表（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+     * 脚本输出日志的文件列表（日志管理页「脚本输出」tab）。
      *
      * 读的是落盘目录（`filesDir/.ns/script-logs/`），**壳没装好也不抛** —— 与
      * [scriptFiles] 同一条"不依赖壳寄存器"口径：目录照样可读，列出来是事实
@@ -92,7 +92,7 @@ interface HostSummary {
     suspend fun scriptLogIndex(): ScriptLogSnapshot
 
     /**
-     * 一次执行的日志全文（点日志列表那一行进详情；2026-10-13 用户令）。
+     * 一次执行的日志全文（点日志列表那一行进详情）。
      *
      * 读 `filesDir/.ns/script-logs/&lt;runId&gt;.log`（JSONL，截尾 [maxLines] 行 ——
      * 长跑脚本的输出能到几十万行，详情页全读会把内存撑爆；截尾只截**显示**，
@@ -105,7 +105,7 @@ interface HostSummary {
     suspend fun scriptLogContent(runId: Long, maxLines: Int = 2000): List<ConsoleLineRow>
 
     /**
-     * 暂停一次**在途**执行（悬浮窗「暂停执行」按钮；2026-10-13 用户令）。
+     * 暂停一次**在途**执行（悬浮窗「暂停执行」按钮）。
      *
      * OS 级冻结（SIGSTOP，见 `RuntimeController.pauseRun`）—— 不是优雅停：
      * 进程原地冻住、心跳停、输出停，恢复（[resumeRun]）后从冻住那一行继续。
@@ -119,8 +119,7 @@ interface HostSummary {
     suspend fun resumeRun(runId: Long): Boolean
 
     /**
-     * 往一次**在途**执行的脚本进程 stdin 送一行（悬浮窗底部输入框那颗蓝色箭头；
-     * 2026-10-16 用户令）。
+     * 往一次**在途**执行的脚本进程 stdin 送一行（悬浮窗底部输入框那颗蓝色箭头）。
      *
      * 走的是 OS 管道（引擎 spawn 时本来就 `Redirect.PIPE`），脚本侧用 `process.stdin`
      * 照常读 —— **不是桥调用**，脚本零改动。行尾由实现补（调用方给的是"用户敲的那一行"）。
@@ -132,7 +131,7 @@ interface HostSummary {
     suspend fun sendInput(runId: Long, line: String): Boolean = false
 
     /**
-     * 本机有没有弹**系统级**悬浮窗的资格（执行日志悬浮窗的宿主二选一；2026-10-13 用户令）。
+     * 本机有没有弹**系统级**悬浮窗的资格（执行日志悬浮窗的宿主二选一）。
      *
      * 同步、便宜：就是 `Settings.canDrawOverlays` 那一句（`:ui` 不碰 `Settings`，
      * 实现在 `:app`）。false = 用应用内兜底窗（与 ToastHost 同型）+ toast 引导去能力中心授权。
@@ -218,7 +217,7 @@ interface HostSummary {
      * @param isFolder true = 建文件夹，false = 建空文件。
      * @param dirRelPath **目标文件夹**的 `files/scripts/` 之下相对路径（与 [readScriptFile]
      *   的 relPath 同一个形态：[ScriptFileRow.relPath]，首段就是 [projectId]，尾随 `/` 可有可无）；
-     *   `null`/空 = 项目根。**2026-10-16 用户口径**：项目页 FAB 落点从"项目根"改成"**当前进入的
+     *   `null`/空 = 项目根。项目页 FAB 落点是"**当前进入的
      *   那一层**"（用户在哪一层按的新建，就建在哪一层）—— 呈现层把当前目录原样传下来，
      *   不再由它 `substringBefore('/')` 只取项目名。
      *   实现方必须**防越界**（`..` 之类）并校验首段与 [projectId] 一致，且目标目录**必须已存在**
@@ -232,7 +231,7 @@ interface HostSummary {
     )
 
     /**
-     * 删一个条目（文件列表的菜单「删除」／多选批量删除；2026-10-17 用户口径）。
+     * 删一个条目（文件列表的菜单「删除」／多选批量删除）。
      *
      * **文件夹递归整棵**：非空文件夹删不掉的话，菜单里那格在"能看见却删不动"的形态上
      * 等于没做（TG 文件页删文件夹也是连内容一起）。
@@ -243,7 +242,7 @@ interface HostSummary {
      * - 落盘失败（权限、占用）。
      *
      * **根层的文件夹就是项目本身**（`files/scripts/<名字>/`，见 [ProjectId.ROOT]）——
-     * 删它就是连同其中全部文件删掉一整个项目。用户 2026-10-17 裁定**允许**（不是禁止），
+     * 删它就是连同其中全部文件删掉一整个项目。这是**允许**的（不是禁止），
      * 故本口不为此设闸；实现方仍必须挡住"删 `files/scripts/` 本身"（那是整个项目库）。
      *
      * **不检查在途执行**：引擎已把脚本读进内存，删文件不会打断本次执行，下一次投递才会
@@ -256,7 +255,7 @@ interface HostSummary {
     suspend fun deleteEntry(projectId: String, relPath: String)
 
     /**
-     * 条目（**文件或文件夹**）的绝对路径 —— 文件列表菜单的「复制绝对路径」（2026-10-17 用户口径）。
+     * 条目（**文件或文件夹**）的绝对路径 —— 文件列表菜单的「复制绝对路径」。
      *
      * 为什么这条要经宿主：绝对路径 = `files/scripts/` 的落点 + relPath，而**只有宿主知道
      * `filesDir`**（`:ui` 拿不到，也不该拿到 —— 它连 `files/scripts` 这个约定都不该知道）。
@@ -284,7 +283,7 @@ interface HostSummary {
      * @param relPath **`files/scripts/` 之下的相对路径**（= [ScriptFileRow.relPath]，首段就是
      *   [projectId]；**不是**单段名字，也不是"项目根之下"——子文件夹里的文件靠它定位）。
      *   实现方必须防越界，并**校验首段与 [projectId] 一致**：两者对不上就是调用方写错了，
-     *   当场抛比静默读到另一个文件强（2026-10-06 实测：把"项目内相对路径"按"项目根之下"
+     *   当场抛比静默读到另一个文件强（把"项目内相对路径"按"项目根之下"
      *   拼，编辑器报"不是文件：demo/main.js"——被拼成了 `files/scripts/demo/demo/main.js`）。
      */
     suspend fun readScriptFile(projectId: String, relPath: String): String
@@ -302,7 +301,7 @@ interface HostSummary {
     suspend fun saveScriptFile(projectId: String, relPath: String, content: String)
 
     /**
-     * 跑一个脚本文件（项目页文件行尾那颗 ▶；2026-10-13 用户口径）。
+     * 跑一个脚本文件（项目页文件行尾那颗 ▶）。
      *
      * 与 [runTaskNow] 是**两条入口、一条执行链**：那边按 `taskId` 触发已登记的任务，
      * 这边按 `(projectId, relPath)` 触发**没登记过**的那个文件 —— 用户想跑一下手里这个
@@ -384,7 +383,7 @@ interface HostSummary {
     suspend fun removeScriptEnv(key: String)
 
     /**
-     * 脚本资源限额读数（§8.1「脚本资源限额」，批 107；设置页 → 脚本设置）。
+     * 脚本资源限额读数（§8.1「脚本资源限额」；设置页 → 脚本设置）。
      *
      * 与 [scriptEnv] **同一套纪律**：读不到**抛**不返回出厂值 —— 出厂值长得像「用户填的」，
      * 回它会把「盘读不出来」画成「你的设置重置了」（另见 `AppShellApplication` 的
@@ -394,7 +393,7 @@ interface HostSummary {
     suspend fun scriptLimits(): ScriptRuntimeLimits
 
     /**
-     * 保存脚本资源限额（§8.1，批 107）。
+     * 保存脚本资源限额（§8.1）。
      *
      * 不过 [ScriptRuntimeLimits.reject] 时**抛** [IllegalArgumentException]，原文点名
      * 是哪个字段越界 —— 判据唯一一份在 `:domain`，本口只转发，`:ui` 与落盘实现都不另判一遍。
@@ -448,7 +447,7 @@ interface HostSummary {
         )
 
     /**
-     * 停掉该项目此刻还在跑的控制台命令（2026-10-11 批 94：控制台「停止」按钮）。
+     * 停掉该项目此刻还在跑的控制台命令（控制台「停止」按钮）。
      *
      * 与 [runNpmCommand] 同一条分工：交给**装配产物里那个 facade**（句柄账在协调器手里，
      * 换一个实例就找不到要停的那个句柄）；未接线**抛**，不假装停过。
@@ -463,7 +462,7 @@ interface HostSummary {
         )
 
     /**
-     * 在控制台执行一条 **shell 命令**（2026-10-09 用户口径：控制台要能执行 shell）。
+     * 在控制台执行一条 **shell 命令**。
      *
      * 与 [runNpmCommand] 并列的第二条执行面，**不走 npm 那条链**：shell 命令与
      * 依赖树无关（不建事务、不占安装会话、不碰项目锁），它就是「跑一条命令、把输出拿回来」。
@@ -539,7 +538,7 @@ interface HostSummary {
         )
 
     /**
-     * 把一个项目声明的依赖**提升到全局作用域**（2026-10-17 用户口径：依赖去重之后
+     * 把一个项目声明的依赖**提升到全局作用域**（依赖去重之后
      * 「把依赖自动放进全局作用域中」）。
      *
      * 与 [runNpmMaintenance] 是**两条口**而不是给那个枚举加一个动作：这条的产物落在
@@ -571,7 +570,7 @@ interface HostSummary {
         NpmConsoleSnapshot(firstSeq = sinceSeq, lastSeq = sinceSeq, lines = emptyList(), running = false)
 
     /**
-     * 控制台**命令历史**读数（§10.9 第 3 条，2026-10-10 批 90）。
+     * 控制台**命令历史**读数（§10.9 第 3 条）。
      *
      * 与 [consoleOutput] 的分工是**环 vs 盘**：输出环随进程消失，而"关掉控制台再进来
      * 还能翻回上次敲的那条"要靠落盘。历史由宿主在命令派发时记下
@@ -586,7 +585,7 @@ interface HostSummary {
     suspend fun consoleHistory(projectId: String): List<String> = emptyList()
 
     /**
-     * 记一条控制台命令历史（写口，2026-10-10 批 90）。
+     * 记一条控制台命令历史（写口）。
      *
      * 由 `:ui` 在**派发点**调用（那里手上有用户敲的原文）；执行入口拿不到原文
      * （shell 面那条只收得到剥掉入口词的正文）。理由见门面同口的 KDoc。
@@ -597,7 +596,7 @@ interface HostSummary {
     suspend fun recordConsoleHistory(projectId: String, line: String) {}
 
     /**
-     * 依赖面板的**变更半边**入口：跑一行安装/卸载命令（§10.9 第 1 条，2026-10-09 批 87）。
+     * 依赖面板的**变更半边**入口：跑一行安装/卸载命令（§10.9 第 1 条）。
      *
      * **为什么是「一行命令」而不是「一组 `PackageSpec`」**：门禁强度不该取决于用户从哪个
      * 界面按下去 —— 依赖面板的输入行与控制台敲的是同一种东西，故两者走**同一条**执行入口
@@ -617,7 +616,7 @@ interface HostSummary {
         runNpmCommand(projectId, line)
 
     /**
-     * 安装会话的**进度读数**（§10.9 第 1 条的阶段进度条，2026-10-09 批 87）。
+     * 安装会话的**进度读数**（§10.9 第 1 条的阶段进度条）。
      *
      * 与 [consoleOutput] 同形同纪律（seq 游标拉取、有界、空洞可见），但**问的是另一件事**：
      * 控制台答「命令行发生了什么」（ECHO/OUTPUT/WARNING/RESULT 混在一条流里），
@@ -652,7 +651,7 @@ data class CapabilityCenterSnapshot(
 )
 
 /**
- * 安装体积的实测值（§15：预算 `≤ 40MB release` 已被实测推翻，**2026-10-07 用户裁定重定为 `≤ 150MB release`**
+ * 安装体积的实测值（§15：预算是 **`≤ 150MB release`**
  * —— 见 `design-decisions.md` 第 41 项；本类与 `InstallSizeRead` 的实测链出自第 20 项，不受重定影响）。
  *
  * **为什么是实测而不是文档里的 92MB**：92MB 是 node-slice 产物的**未压缩**三件套合计，
@@ -676,7 +675,7 @@ data class InstallSize(
  *
  * @property guide 引导文案（`PermissionCenter.guideText` 的同一份）—— 三态通用：
  *   每条只答"这项能力是干什么的 + 怎么让它可用"，**不按拒绝态起句**（backlog A8 的
- *   裁定，2026-10-07），所以 GRANTED/DEGRADED/DENIED 下都成立，呈现层不按三态去猜
+ *   裁定），所以 GRANTED/DEGRADED/DENIED 下都成立，呈现层不按三态去猜
  *   该不该显示它。当前态由 [state] 表达，文案不重复说它。
  */
 data class CapabilityRow(

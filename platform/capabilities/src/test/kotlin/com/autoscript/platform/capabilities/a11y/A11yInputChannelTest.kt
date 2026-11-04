@@ -26,10 +26,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 输入通道选路（§9.3，2026-10-06；判据见 `design-decisions.md`）。
+ * 输入通道选路（§9.3；判据见 `design-decisions.md`）。
  *
  * 四组：
- * 1. **必须显式**（2026-10-06 用户口径「必须显式传，无默认」）：既没给 `channel`
+ * 1. **必须显式**：既没给 `channel`
  *    也没设会话值 → `ERR_INVALID_PARAM`，**不落 auto**；
  * 2. **会话通道**（`setInputChannel`）经协程上下文传播，且**不跨连接串扰**；
  * 3. **指定不可用的通道 = `ERR_PERMISSION_DENIED`**，绝不回落到别的通道

@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 /**
- * `pidOf` 第二级阶梯（私有字段 `pid` 的反射查找）的**方向**门（2026-10-15）。
+ * `pidOf` 第二级阶梯（私有字段 `pid` 的反射查找）的**方向**门。
  *
  * 病（设备实测坐实的那个）：原实现从 `Process::class.java` 起步、每轮 `cls.superclass`
  * 往上走，而 `getDeclaredField` **只看该类自己声明的成员** —— 这条循环走的是

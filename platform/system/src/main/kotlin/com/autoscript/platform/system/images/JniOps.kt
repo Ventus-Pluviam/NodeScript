@@ -6,7 +6,7 @@ import com.autoscript.domain.automation.ImageMatch
 
 /**
  * so 装载面（[NativeImageAnalyzer.Ops] 的真机实现）：`System.loadLibrary("opencv")`
- * 装载 `libopencv.so`（`:bridge:image` 产物）+ 十个 `external` native 方法（P1 五算子 2026-09-29 补齐）。
+ * 装载 `libopencv.so`（`:bridge:image` 产物）+ 十个 `external` native 方法（P1 五算子 补齐）。
  * 方法名与 `:bridge:image` 的 `images_jni.cc`
  * 的 `Java_com_autoscript_platform_system_images_JniOps_*` 对表 ——
  * **换包名/换类名必须同批改那边**（JNI 符号名是字符串约定，编译器不看护；

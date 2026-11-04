@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 /**
- * [ScriptPaths.projectInternalOrNull] 的形状转换，以及两个展示口（2026-10-16 补）。
+ * [ScriptPaths.projectInternalOrNull] 的形状转换，以及两个展示口（补）。
  *
  * **为什么此前一条测试都没有、现在必须有**：这条转换是"文件清单形状（首段 = 项目名）→
  * 执行侧形状（项目内路径）"的唯一收口点，`AssembledShell.runScriptFile` 与

@@ -7,11 +7,11 @@ package com.autoscript.domain.npm
  * 拿它决定这行能不能跑）与界面侧（`:ui` 的命令输入行，用户敲错要**当场**被告知，
  * 而不是往返一趟宿主才拿到同一句话）。抄两份必然漂，而漂的方向最坏：
  * 界面放行的行在宿主侧被拒，用户看到的是「执行失败」而不是「你这行写错了」。
- * 批 82 的 `ScriptEnvKeys`、批 83 的 `NpmRegistryKeys` 是同一条理由的先例。
+ *  `ScriptEnvKeys`、 `NpmRegistryKeys` 是同一条理由的先例。
  *
  * **本对象不依赖任何实现类**：白名单与拒收话术是**契约**，实现只能引用它。
  *
- * **入口**（2026-10-09 二次裁定，用户口径：控制台要能执行 shell）：`npm` / `npx` 走
+ * **入口**（二次裁定，控制台要能执行 shell）：`npm` / `npx` 走
  * npm 命令面；`su` / `shizuku` 走 **shell 命令面**并进入对应的特权模式；`exit` 退出特权
  * 模式。默认（未进特权模式）的裸首词仍按 **npm bin** 解析 —— 那是「装好的依赖提供的
  * 命令」那条路（`tsc` / `eslint` / `prettier`），与 shell 面不共用判据。
@@ -91,7 +91,7 @@ object NpmConsoleKeys {
     /**
      * 项目号合法性：合法 → null；不合法 → **拒收原文**。
      *
-     * **空串合法**（2026-10-17）：它是根层哨兵，在本仓的依赖面上读作「全局」作用域
+     * **空串合法**：它是根层哨兵，在本仓的依赖面上读作「全局」作用域
      * （[NpmTargetScope]）—— 依赖管理页的「依赖作用域」那一行选「全局」时传下来的就是它。
      * 于是"这个命令落在哪棵 node_modules 上"这件事，全局与项目走的是同一个参数。
      *
@@ -99,11 +99,11 @@ object NpmConsoleKeys {
      * 单一事实来源），本函数只是把它翻成一句给用户看的话 —— 界面当场拒与落盘侧
      * `require` 因此同源。
      *
-     * 话术里**点了「点」**：`ScriptPaths.PROJECT_ID` 于 2026-10-09 批 84 收掉了 `.`
+     * 话术里**点了「点」**：`ScriptPaths.PROJECT_ID` 于  收掉了 `.`
      * （它放行 `..`，而 `projectsRoot.resolve("..")` 正好跳出项目根）。话术跟着判据走，
      * 否则用户按话术写一个 `a.b` 却被拒 —— 那比不写还坏。
      *
-     * **2026-10-16 判据放宽成"排除分隔符与点"**（允许中文/空格/`:` 等，见
+     * **判据是"排除分隔符与点"**（允许中文/空格/`:` 等，见
      * `ScriptPaths.PROJECT_ID` 的 KDoc），话术跟着改成"禁止清单"而不是"允许清单"——
      * 判据不再是可枚举的字符集，话术再写成"只允许字母数字"就是**又一次**话术与判据漂开
      * （而且这次漂的方向是"用户照话术写中文名以为不合法"）。
@@ -115,7 +115,7 @@ object NpmConsoleKeys {
      * 输入形态所限，不是本判据的事（判据只有一份，不为它收窄）。
      */
     fun rejectProjectId(projectId: String): String? =
-        // 空串**放行**（2026-10-17）：它是根层哨兵 [com.autoscript.domain.scripts.ProjectId.ROOT]，
+        // 空串**放行**：它是根层哨兵 [com.autoscript.domain.scripts.ProjectId.ROOT]，
         // 在依赖面板上读作「全局」作用域（见 [NpmTargetScope]）—— 全局依赖就装在
         // `files/scripts/node_modules`，与项目那条走同一套寻址。
         // 放行它**不放松防逃逸**：`projectsRoot.resolve("")` 恒等自身，逃不出项目根；
@@ -123,7 +123,7 @@ object NpmConsoleKeys {
         if (projectId.isEmpty() || com.autoscript.domain.scripts.ScriptPaths.isValidProjectId(projectId)) null
         else "项目号不合法（不能含 / 、\\ 、. 或控制字符）：$projectId"
 
-    /** 进入特权模式的入口词（用户口径 2026-10-09：`su` = root，`shizuku` = adb）。 */
+    /** 进入特权模式的入口词。 */
     const val ENTER_ROOT = "su"
     const val ENTER_ADB = "shizuku"
 
@@ -256,7 +256,7 @@ sealed interface NpmConsoleCommand {
 }
 
 /**
- * 控制台的特权模式（2026-10-09）。
+ * 控制台的特权模式。
  *
  * - [DEFAULT]：**未进特权模式**。shell 命令在这里一律拒（如实说「需要 root 或 Shizuku」），
  *   裸首词按 npm bin 解析。

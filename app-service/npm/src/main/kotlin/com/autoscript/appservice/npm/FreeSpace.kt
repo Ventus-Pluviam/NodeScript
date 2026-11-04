@@ -6,7 +6,7 @@ import java.nio.file.Path
 /**
  * 「这个目录所在分区还剩多少可用字节」的**唯一一处读法**（§10.2 磁盘预检的取数口）。
  *
- * **为什么不用 `Files.getFileStore(dir).usableSpace`**（2026-10-17 设备实测）：
+ * **为什么不用 `Files.getFileStore(dir).usableSpace`**（设备实测）：
  * Android 上的 `java.nio.file` 只实现了 NIO2 的一半，而 `FileSystemProvider.getFileStore`
  * 正是没实现的那一格 —— 调它直接抛 `UnsupportedOperationException("getFileStore")`。
  * 难看的不是"读不到磁盘"，是**装依赖这条路整个走不通**：[InstallCoordinator] 的每次重操作

@@ -7,10 +7,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 自动补出来的 `package.json`（2026-10-17 用户口径「应该让它缺的时候自动创建呀」）。
+ * 自动补出来的 `package.json`。
  *
  * 两件事各钉一处：
- * - [ProjectManifest.npmNameOf]：项目号判据 2026-10-16 放宽到"拒分隔符与点"（中文、大写、
+ * - [ProjectManifest.npmNameOf]：项目号判据是"拒分隔符与点"（中文、大写、
  *   空格、`@` 都合法），而 npm 的包名只认小写 URL-safe —— 名字没洗好就是
  *   `EINVALIDPACKAGENAME`，等于把"缺清单"换成"清单不合法"，用户照样装不上；
  * - [ProjectManifest.minimal]：形状（三个字段 + **不写 `main`**）。

@@ -59,19 +59,18 @@ import com.autoscript.ui.state.StatusTone
 import com.autoscript.ui.theme.ThemeColors
 
 /**
- * 执行日志悬浮窗的**内容**（2026-10-13 用户令；两个宿主共用同一份）。
+ * 执行日志悬浮窗的**内容**（两个宿主共用同一份）。
  *
- * 版式（2026-10-16 用户令第三轮）：**窗 = 一张白卡片**（[WindowSurface] + 一圈淡灰描边
+ * 版式：**窗 = 一张白卡片**（[WindowSurface] + 一圈淡灰描边
  * [ThemeColors.editorChipBorder]），里面**三块**同色白胶囊（[WindowBlockSurface]，
  * [RoundedCornerShape] + 内缩边距、**无描边**）：上面一块装标题行（标题 + 五颗图标钮）、
  * 中间一块装日志、最下面一块是**给脚本发输入的输入行**（输入框 + 蓝色箭头）。
  * 三轮口径的取舍写在 [WindowSurface] 那处。
  * 未绑定（执行还没进在途表 / **从开窗起一次都没绑上过**）→ 空态「本次执行未开始」。
- * 绑定那条跑完（结算）后窗口**保持**绑定、输出照常可见（用户令「脚本执行完不要
- * 自动清理输出」）—— 标题照旧只写路径，行区照常画；没出过一行且已结算的
+ * 绑定那条跑完（结算）后窗口**保持**绑定、输出照常可见—— 标题照旧只写路径，行区照常画；没出过一行且已结算的
  * 才画「本次执行没有输出」。
  *
- * **日志可拖选**（2026-10-15 用户令「日志不要让它每次只能复制一行，去除单行复制限制」）：
+ * **日志可拖选**：
  * 日志那块包在 [SelectionContainer] 里 —— 长按拖出选择手柄，任意范围（跨行也行）
  * 都能选，再走系统的「复制」。**取代**了原来「点一行复制那一行」：那是"一次只能
  * 复制一行"的根源，用户要的是像看文本一样选。
@@ -94,7 +93,7 @@ fun LogWindowContent(
     state: LogWindowState,
     lines: List<ConsoleLineState>,
     /**
-     * 第一颗钮位的统一动作（2026-10-15 用户令「执行完变重跑」）：在途 = 暂停/继续
+     * 第一颗钮位的统一动作：在途 = 暂停/继续
      * （[LogWindowController.togglePause]），已结算 = 重新执行（`LogWindowController.rerun`）。
      * 内容层只看 [state] 决定画什么图标与文案，动作本身由调用方按 [LogWindowState] 分派。
      */
@@ -105,7 +104,7 @@ fun LogWindowContent(
     /** 头部拖拽：本次的位移增量（px，屏幕上的真实位移）。 */
     onDrag: (Offset) -> Unit,
     /**
-     * 底部输入框的草稿变更（2026-10-16 用户令「在悬浮窗最下面放一个输入框」）。
+     * 底部输入框的草稿变更。
      *
      * 草稿由调用方持有（`LogWindowState.inputDraft`）而不是内容层 `remember`：
      * 内容层是**无状态**的（两个宿主画同一个窗，见文件头 KDoc），`remember` 会在
@@ -115,7 +114,7 @@ fun LogWindowContent(
     /** 底部那颗蓝色箭头（与输入框回车同一个动作）：把草稿那一行送进脚本进程的 stdin。 */
     onSendInput: () -> Unit,
     /**
-     * 输入框拿到/失去焦点（2026-10-16）。**系统宿主必须接**：那颗窗全程带
+     * 输入框拿到/失去焦点。**系统宿主必须接**：那颗窗全程带
      * `FLAG_NOT_FOCUSABLE`（"贴在旁边看"的窗不抢输入法），而不可聚焦的窗口打不出字 ——
      * 宿主要在拿到焦点那段时间把窗口变可聚焦（`SystemLogWindowHost.setImeFocus`）。
      * in-app 宿主是普通 Compose 树，输入法本来就能用，接了也只是转给控制器（它按
@@ -123,7 +122,7 @@ fun LogWindowContent(
      */
     onImeFocusChange: (Boolean) -> Unit,
     /**
-     * **结束脚本**（顶栏那颗停止钮；2026-10-16 用户令）。
+     * **结束脚本**（顶栏那颗停止钮）。
      *
      * 调 `LogWindowController.stop`（→ `HostSummary.stopRun` 的四步停走）。脚本卡在
      * stdin 等输入时，引擎那条自动 EOF 帮不上忙（正卡着读的脚本"读者还在"）——
@@ -144,14 +143,14 @@ fun LogWindowContent(
     modifier: Modifier = Modifier,
 ) {
     // 窗底 = **白 + 一圈淡灰描边**；里面三块（标题行 / 日志 / 输入行）**同色白**
-    // （2026-10-16 用户第三轮口径「胶囊框换白色」，问询确认「窗底保持白+描边，胶囊也白」；
+    // （用户第三轮口径「胶囊框换白色」，问询确认「窗底保持白+描边，胶囊也白」；
     // 前两轮的取舍逐条记在 [WindowSurface] 那处）。
     //
     // 描边用 [ThemeColors.editorChipBorder]（编辑器那颗白圆钮的"淡淡灰边"，
     // 浅色 `0xFFDCDCDC` / 深色 `0xFF4A5563`）—— 仓里现成的"白底 + 淡灰边"配方，
     // 不新造色键（深浅两档都是调好的）。
     //
-    // 点输入行外面就收键盘（2026-10-16 用户报"焦点转移后光标还在闪"）：一份 state 管
+    // 点输入行外面就收键盘：一份 state 管
     // 窗里那一个输入框；容器侧挂在下面这个 Column 上（Initial 趟只读不消费，日志拖选照旧）。
     val focusDismiss = rememberFocusDismissState()
     // 窗口失焦也收键盘（跨窗口那一半：点应用界面 = 本窗失焦，见 `DismissFocusOnWindowBlur`）——
@@ -161,7 +160,7 @@ fun LogWindowContent(
     Column(
         modifier
             // `clearAppFaces = true`：窗里点输入框外那一下要**连应用的搜索框一起收**
-            // （用户报「点击搜索框时，再点击悬浮窗也不会消失」）—— 见那条修饰符的 KDoc。
+            // —— 见那条修饰符的 KDoc。
             .dismissFocusOnTapOutside(focusDismiss, clearAppFaces = true)
             // 顺序照 `ScriptEditorScreen` 那颗白圆钮的先例：`background(shape)` → `border(…, shape)`
             // —— 两者各带形状，不用再套一层 `clip`（多一层只是多一次绘制指令）。
@@ -170,9 +169,8 @@ fun LogWindowContent(
             .padding(WindowBlockGap),
         verticalArrangement = Arrangement.spacedBy(WindowBlockGap),
     ) {
-        // 头部（拖拽区）：标题 + 五钮 + **底缘一条分隔线**（2026-10-16 用户令
-        // 「悬浮窗标题下面加个分隔线」）。顺序：暂停·重跑 / **结束脚本** / 清空 / 关闭 / 全屏
-        // —— 前两颗是"跑"这一档（2026-10-16 用户令加第二颗），后三颗是窗自己的。
+        // 头部（拖拽区）：标题 + 五钮 + **底缘一条分隔线**。顺序：暂停·重跑 / **结束脚本** / 清空 / 关闭 / 全屏
+        // —— 前两颗是"跑"这一档，后三颗是窗自己的。
         //
         // 线画在**这一块的底缘之内**（不是两块之间另起一个子项）：三块现在同色
         // （第三轮配色「胶囊也白」），中间那 8dp 缝里悬一条线会像"飘着"；贴着底缘
@@ -201,9 +199,9 @@ fun LogWindowContent(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                // 第一颗钮位：暂停/继续/重跑三态（2026-10-15 用户令）。
+                // 第一颗钮位：暂停/继续/重跑三态。
                 // - 在途且没暂停 → 暂停（点 = 暂停）；在途且已暂停 → 继续（点 = 恢复）；
-                // - 已结算（跑完/被停/崩溃）→ **重跑**（用户令「执行完变重跑图标」）：
+                // - 已结算（跑完/被停/崩溃）→ **重跑**：
                 //   点 = 重新执行同一文件，长按 = 也是重跑（同一语义，防"没长按对"）。
                 WindowIconButton(
                     kind = when {
@@ -220,7 +218,7 @@ fun LogWindowContent(
                     onClick = onFirstAction,
                     onLongClick = onFirstAction,
                 )
-                // 第二颗钮位：结束脚本（2026-10-16 用户令）。与第一颗同属"跑"这一档
+                // 第二颗钮位：结束脚本。与第一颗同属"跑"这一档
                 // （暂停/重跑、结束），所以挨着放；后面三颗是窗自己的（清空/关闭/全屏）。
                 // 只在途可点：已结算时它没有任何可停的东西（那时第一颗画的是重跑）。
                 WindowIconButton(
@@ -250,8 +248,7 @@ fun LogWindowContent(
         ) {
             LogBlock(state = state, lines = lines)
         }
-        // 输入行（2026-10-16 用户令「在悬浮窗最下面放一个输入框，输入框右边放一个蓝色的
-        // 箭头用于输入」）：**第三块**，与上面两块同一套胶囊几何。
+        // 输入行：**第三块**，与上面两块同一套胶囊几何。
         InputRow(
             draft = state.inputDraft,
             onDraftChange = onInputDraft,
@@ -265,7 +262,7 @@ fun LogWindowContent(
 /**
  * 底部输入行：灰底胶囊 + 裸 `BasicTextField` + 右侧蓝色箭头（[GlyphKind.SEND]）。
  *
- * **样式照首页搜索框**（用户口径）：`ThemeColors.fieldBackground` 那一档灰
+ * **样式照首页搜索框**：`ThemeColors.fieldBackground` 那一档灰
  * （项目页/任务中心/控制台三处的输入框都是它）+ 两端全圆的药丸，高度 36dp
  * —— 比搜索栏矮一档，因为窗外框紧凑态只有 340×420dp，第三块再占 52dp 就把日志
  * 挤掉一行半（控制台的命令输入行也是 36dp，同一条取舍）。
@@ -332,8 +329,7 @@ private fun InputRow(
                     .onFocusChanged {
                         onImeFocusChange(it.isFocused)
                         // 窗里这个输入框**拿到**焦点 = 用户的手已经在这一边了：把应用窗口
-                        // 那边的焦点收掉（用户报「点击搜索框时，再点击悬浮窗也不会消失」——
-                        // 点悬浮窗那一刻应用还在闪光标）。只做单向：这边拿到才清别人，
+                        // 那边的焦点收掉。只做单向：这边拿到才清别人，
                         // 失去焦点时不动别人（那时候用户可能正回到应用里打字）。
                         if (it.isFocused) FocusDismissRegistry.clearAppFaces(except = focusManagerOfThisFace)
                     }
@@ -341,7 +337,7 @@ private fun InputRow(
                     .reportFocusBounds(focusDismiss),
             )
         }
-        // 蓝色箭头（用户口径「蓝色的箭头」）：**用强调色**（`ThemeColors.accent`，
+        // 蓝色箭头：**用强调色**（`ThemeColors.accent`，
         // 浅色 #238AE3 / 深色 #5CC1FF —— 全仓的"可点的主色"就是它，不新造蓝）。
         // 触控格 36dp 与输入框同高（图标 20dp 居中），与标题行四颗钮同一套
         // [WindowIconButton] —— 按压缩放反馈、`contentDescription` 都跟着来。
@@ -371,7 +367,7 @@ private fun InputRow(
 private fun BoxScope.LogBlock(state: LogWindowState, lines: List<ConsoleLineState>) {
     if (state.boundRunId == null) {
         // **只有「从开窗起一次都没绑上过、兜底补绑也没补上」才到这里**：跑过的那条
-        // 即使结算了也保持绑定（用户令「执行完不要自动清理输出」），起跑即结算的
+        // 即使结算了也保持绑定，起跑即结算的
         // 快速脚本由兜底补绑接住（见 `LogWindowState.bind` 的 fallbackRunId）——
         // 落这里的只剩：启动失败 / 门禁拒 / 起跑即被停的那一线，或跑得太快**一行都没出**
         // 就结束了（在途表没见到、行里也摘不出号）。
@@ -458,15 +454,15 @@ private val WindowBlockShape = RoundedCornerShape(12.dp)
 private val WindowBlockGap = 8.dp
 
 /**
- * 窗底与块底（**三轮口径的落点**，2026-10-15 → 2026-10-16）。
+ * 窗底与块底的对齐。
  *
  * 三轮都是"哪一层是白的"这一个问题的不同答案：
- * 1. **第一轮**（用户令「背景改成任务栏背景一样的灰色，然后用胶囊框包裹起来控件」）：
+ * 1. **第一轮**：
  *    灰窗底（`surfaceMuted`）+ **白胶囊**（`surface`）+ 2dp 阴影 —— 用户看过说
  *    「效果不太好」：浅色档下白压浅灰只差一点点，阴影只是勉强补一点；
- * 2. **第二轮**（用户令「背景换成白色（要有描边），胶囊框灰色，不要有描边试试」）：
+ * 2. **第二轮**：
  *    白窗 + 1dp 淡灰描边 + **灰胶囊**（无描边、无阴影）—— 灰压白的分辨率高得多；
- * 3. **第三轮**（用户令「胶囊框换白色」；问询确认「窗底保持白+描边，胶囊也白」）：
+ * 3. **第三轮**（问询确认「窗底保持白+描边，胶囊也白」）：
  *    两块也回白 —— 于是整张卡片是**一个白面 + 一圈描边**，胶囊的形状不再可见。
  *    **这是用户的明确选择，不是漏改**：8dp 的块间距与 12dp 圆角仍在（结构没变），
  *    只是三块同色；要再把两块分出来，改 [WindowBlockSurface] 这一个键即可。
@@ -508,7 +504,7 @@ private fun WindowIconButton(
     onLongClick: () -> Unit = {},
     /**
      * 图标色。缺省 = 次级灰（标题行那四颗的档）；底部那颗**发送箭头**用强调色
-     * （用户口径「蓝色的箭头」）—— 它在这一行里是唯一的主动作，与四颗工具钮
+     * —— 它在这一行里是唯一的主动作，与四颗工具钮
      * 不是一个层级。
      */
     tint: Color? = null,
@@ -534,13 +530,13 @@ private fun WindowIconButton(
  * 头部拖拽手势：把 `positionChange()` 交给宿主
  * （系统窗 → `updateViewLayout` 改 x/y；in-app → 状态层 offset）。
  *
- * **不要"补偿"**（2026-10-14 用户实测"轻轻一动就移动出去很远"，起因就是补偿）：
+ * **不要"补偿"**（用户实测"轻轻一动就移动出去很远"，起因就是补偿）：
  * Compose 的 `positionChange()` 已经把 `position` 与 `previousPosition` **用同一份
  * 当前坐标**换算过（事件派发时逐点 `screenToLocal`），所以差值恒等于屏幕上的真实位移
  * —— 窗自己挪了不会让它变小。再"补上一步落位量"就是**把位移加两遍**，而且逐帧累积：
  * 第 1 帧 10、第 2 帧 10+10=20、第 3 帧 10+20=30…… 窗越拖越快，正是"轻轻一动就飞出去"。
  *
- * **真正要防的是手势检测被重组打断**（2026-10-13 那次"不跟手"）：拖动每帧都改状态 →
+ * **真正要防的是手势检测被重组打断**（那次"不跟手"）：拖动每帧都改状态 →
  * 重喂内容 → 重组 → `pointerInput` 的 key 若是回调本身（每次新建实例），检测协程会被
  * 自己的重组取消重启，手指还没抬手势就断。故 key 恒为 [Unit]（检测器活过整场拖动），
  * 回调经 `rememberUpdatedState` 现取最新那份。

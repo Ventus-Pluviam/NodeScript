@@ -33,7 +33,7 @@ import kotlin.io.path.name
  * （`Files.list` 现数；目录的"大小"就是它，TG 文件夹行也不显示字节数）。
  * 目录行 `relPath` 以 `/` 结尾：呈现层不用再对一遍 `isDirectory`。
  *
- * **`projectId` 的根层编码（2026-10-16 用户口径「根层可写」）**：`files/scripts/` 本层那些
+ * **`projectId` 的根层编码**：`files/scripts/` 本层那些
  * 条目（`files/scripts/x.js`、`files/scripts/新项目/`）**没有项目段**，报 [ProjectId.ROOT]（空串）；
  * 二层及以下照旧报首段目录名。此前一律取 `root.relativize(path).first()` —— 根层的文件于是
  * 被报成"项目 `x.js`"，点开必得一句「项目不存在: x.js」（列得出、打不开的那一半）。

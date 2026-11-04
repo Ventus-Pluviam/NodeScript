@@ -54,12 +54,12 @@ class NpmStateTest {
     )
 
     /**
-     * 作用域那一行怎么说（2026-10-17「项目选择改成依赖作用域，下拉框加个全局」）。
+     * 作用域那一行怎么说。
      *
      * 两条各自钉一个**不许冒充**：空串不许显示成空（用户读成"没读到"）、
      * 还没读到不许冒充「全局」（那是"还不知道"，不是"知道，是全局"）。
      *
-     * 缺省档 2026-10-17 第二批**改成全局**（用户口径「依赖作用域，默认为全局」）——
+     * 缺省档是**全局**——
      * 那条断言从"缺省是第一条"翻了过来，断言里写的理由也随之换掉。
      */
     @Test
@@ -73,13 +73,13 @@ class NpmStateTest {
         val loaded = NpmState.of(NpmPanelSnapshot(listOf(project("demo"), global)))
 
         assertEquals(NpmTargetScope.GLOBAL, loaded.selectedProjectId, "缺省落在全局那一档")
-        assertEquals(NpmState.withProject(loaded, NpmTargetScope.GLOBAL).scopeLabel, "全局")
-        assertEquals("—", NpmState.NOT_LOADED.scopeLabel, "还没读到 ≠ 全局：那是两句话")
-        assertEquals("—", NpmState.failed(RuntimeException()).scopeLabel, "读失败也不冒充成全局")
+        assertEquals(NpmState.withProject(loaded, NpmTargetScope.GLOBAL).scopeLabel, "全局项目")
+        assertEquals("—", NpmState.NOT_LOADED.scopeLabel, "还没读到 ≠ 全局项目：那是两句话")
+        assertEquals("—", NpmState.failed(RuntimeException()).scopeLabel, "读失败也不冒充成全局项目")
     }
 
     /**
-     * 缺省回落的**三档顺序**（2026-10-17 第二批）。
+     * 缺省回落的**三档顺序**（第二批）。
      *
      * 中间那档（"快照里没有全局那条"）不是凑数的：全局那一条是**宿主拼上去的**
      * （`InstallCoordinator.globalSnapshot`），测试替身与非本宿主的快照里可以没有它 ——
@@ -171,6 +171,42 @@ class NpmStateTest {
         assertTrue(NpmState.failed(RuntimeException()).installed.isEmpty())
     }
 
+    /**
+     * 「快照没变就复用旧状态」：`npmSnapshot()` 每次回读一份内容相同的
+     * 快照（量尺寸那趟走完 node_modules，数字没动），盲目重建会让展开的依赖列表
+     * **整屏陪重组** —— 安装轮询每 400ms 撞一次，滑动手感就断一帧。
+     * 这里把「内容没变 → 同一份实例」钉成不变量：`===` 断言的是引用，不是值 ——
+     * `copy` 出来的同值对象救不了重组，只有原样复用才救得了。
+     */
+    @Test
+    fun `快照没变时复用旧状态_同一份实例`() {
+        val snapshot = NpmPanelSnapshot(listOf(project("demo", installed = listOf(PkgNode("esbuild", "0.21.5")))))
+        val loaded = NpmState.of(snapshot)
+        val refreshed = NpmState.of(snapshot, loaded)
+        assertTrue(refreshed === loaded, "内容没变的回读应该原样复用上一份，而不是重建一份相等的")
+    }
+
+    @Test
+    fun `失败态不短路_同一份快照读成功要讲得掉读取失败`() {
+        val snapshot = NpmPanelSnapshot(listOf(project("demo")))
+        val loaded = NpmState.of(snapshot)
+        val failed = NpmState.failed(IllegalStateException("npm 未接线"), loaded)
+        val recovered = NpmState.of(snapshot, failed)
+        assertFalse(recovered === failed, "失败态下同一份快照读成功必须重建 —— 那句「读取失败」是成功的回读讲掉的")
+        assertTrue(recovered.load.isLoaded)
+        assertNull(recovered.load.failedReason())
+    }
+
+    @Test
+    fun `操作账随现取累积：快照没变短路复用也带着账`() {
+        val snapshot = NpmPanelSnapshot(listOf(project("demo")))
+        val loaded = NpmState.of(snapshot)
+        val noticed = loaded.copy(opNotice = "已提交 npm install")
+        val refreshed = NpmState.of(snapshot, noticed)
+        assertTrue(refreshed === noticed, "快照没变 → 复用上一份（账随 previous 走，不回退）")
+        assertEquals("已提交 npm install", refreshed.opNotice, "回执与 npm 输出同等待遇：累积到清日志/新账顶替")
+    }
+
     @Test
     fun `尺寸没量到不画成零字节，且不再有配额分母`() {
         val unmeasured = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = null))))
@@ -179,14 +215,14 @@ class NpmStateTest {
         val zero = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = stats(0)))))
         assertEquals("0 B", zero.sizeLabel, "量到了、就是 0 字节 → 如实说 0")
 
-        // 2026-10-17：配额摘了之后**那一行里不许再出现任何上限数字**（用户口径
+        // 配额摘了之后**那一行里不许再出现任何上限数字**（
         // 「取消 512MB 限制」「取消上限设置吧」）—— 这条断言就是防它悄悄回来。
         val big = NpmState.of(NpmPanelSnapshot(listOf(project("demo", storage = stats(700L * 1024 * 1024)))))
         assertEquals("700 MB", big.sizeLabel, "700MB 的 node_modules 只报 700 MB，不带 /512 MB")
     }
 
     /**
-     * 「清理」那颗按钮的判据（2026-10-17 从 Composable 里提上来的那条行内表达式）。
+     * 「清理」那颗按钮的判据（从 Composable 里提上来的那条行内表达式）。
      *
      * 三者互斥的来源是宿主的 `globalSession`（同时只跑一个安装会话）—— 界面上出现的形态
      * 是"按下去没反应"，用户读成"卡了"。这一条把判据钉在纯数据上，改判据时会被拦。
@@ -218,7 +254,7 @@ class NpmStateTest {
     }
 
     /**
-     * 每行那个尺寸读数（2026-10-17 用户口径「依赖列表显示一下各个依赖占用的空间大小」）。
+     * 每行那个尺寸读数。
      *
      * 三态各自钉一句：量到就说数字、**量不到就不画**、量到 0 也**不画** ——
      * 后两样都来自宿主同一个约定（`sizeBytes <= 0` = 这个包不在盘上，见 [NpmRowState.sizeLabel]），
@@ -260,14 +296,16 @@ class NpmStateTest {
     }
 
     /**
-     * 日志大框那一段：本页操作的账在前、npm 输出在后（用户 2026-10-17 裁定「两者都显示」），
-     * 且**裁过要说**。
+     * 日志大框那一段：npm 输出在前（时间序）、操作账跟进**流水尾**（
+     *「这些描述不要在日志框最上面出现，而是慢慢追加」——
+     * 「操作账在前」随本次翻转），且**裁过要说**。
      */
     @Test
-    fun `日志框先操作账后 npm 输出，且累积不重复`() {
+    fun `日志框 npm 输出在前操作账跟进流水尾，且累积不重复`() {
         val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
         val withLog = NpmState.withConsole(
-            base.copy(opError = "npm 退出码 1: E404", opNotice = "已提交 npm install"),
+            // 写账走 [withOpAccount]（顺带钉住入口纪律：直接 copy 会留下 1970 时间戳）
+            base.withOpAccount("npm 退出码 1: E404", "已提交 npm install"),
             consoleSnapshot(
                 seq = 2,
                 lines = listOf("npm install axios" to NpmConsoleLineKind.ECHO, "ok" to NpmConsoleLineKind.OUTPUT),
@@ -275,19 +313,21 @@ class NpmStateTest {
             // 时区**注入**（不读系统默认）：断言里那个 `00:00:00` 才是个定值，而不是"跑在哪个时区就变一次"。
             zone = ZoneId.of("UTC"),
         )
-        assertEquals(
-            listOf(
-                "npm 退出码 1: E404",
-                "已提交 npm install",
-                "00:00:00  npm install axios",
-                "00:00:00  ok",
-            ),
-            withLog.logLines.map { it.text },
-            "两条操作账要排在 npm 输出**前面**",
+        val texts = withLog.logLines.map { it.text }
+        assertEquals("00:00:00  npm install axios", texts[0], "npm 输出行排前（时间戳定值）：${texts[0]}")
+        assertEquals("00:00:00  ok", texts[1], "npm 输出按序排前：${texts[1]}")
+        assertTrue(
+            texts[2].matches(Regex("""\d{2}:\d{2}:\d{2}  npm 退出码 1: E404""")),
+            "操作账跟流水尾、带落账时刻的时间戳（写账入口钉的是格式，值是当刻）：${texts[2]}",
+        )
+        assertTrue(
+            texts[3].matches(Regex("""\d{2}:\d{2}:\d{2}  已提交 npm install""")),
+            "回执同款：${texts[3]}",
         )
         assertEquals(
-            listOf(StatusTone.PROBLEM, StatusTone.MUTED, StatusTone.MUTED, StatusTone.NEUTRAL),
+            listOf(StatusTone.MUTED, StatusTone.NEUTRAL, StatusTone.PROBLEM, StatusTone.MUTED),
             withLog.logLines.map { it.tone },
+            "npm 输出两行（ECHO/OUTPUT 各自语气）+ 失败红字 + 回执灰字",
         )
 
         // 同一批再折一遍：seq 去重，不重复入列、游标不倒退。
@@ -318,6 +358,30 @@ class NpmStateTest {
         assertEquals("line-11", state.consoleLines.first().text, "裁的是**最早**的那些，不是最新的")
         assertEquals("line-${many.size}", state.consoleLines.last().text, "最新的那行必须在（裁的是最早的那些）")
         assertTrue(state.logLines.first().text.contains("更早的输出已裁掉"), "裁过的说明排在最前")
+    }
+
+    @Test
+    fun `清日志腾空日志框但水位不动，之后只来新行`() {
+        val base = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+        val withLog = NpmState.withConsole(
+            base.copy(opError = "npm 退出码 1: E404"),
+            consoleSnapshot(seq = 2, lines = listOf("npm install axios" to NpmConsoleLineKind.ECHO, "ok" to NpmConsoleLineKind.OUTPUT)),
+        )
+        // 清空：可见行、裁切标注、操作账一并归空；游标是宿主环的水位，**不动**。
+        val cleared = NpmState.clearLog(withLog)
+        assertTrue(cleared.logLines.isEmpty(), "清过之后日志框是空的")
+        assertTrue(cleared.consoleLines.isEmpty())
+        assertFalse(cleared.consoleTruncated)
+        assertNull(cleared.opError)
+        assertNull(cleared.opNotice)
+        // 水位保持：宿主的 console 环按 `sinceSeq = consoleSeq` 拉增量（`consoleRing.drain`），
+        // 清了行把游标保住在 2 —— 宿主下一次只会给 seq>2 的行，已清掉的天然进不来。
+        assertEquals(2L, cleared.consoleSeq, "水位只进不退：清日志不能把「该从哪条往后拉」归零")
+
+        // 宿主按水位给的新行照常进来 —— 清日志不能把后续输出挡在门外。
+        val newer = NpmState.withConsole(cleared, consoleSnapshot(3, listOf("new line" to NpmConsoleLineKind.OUTPUT)))
+        assertEquals(1, newer.consoleLines.size)
+        assertEquals("new line", newer.consoleLines.first().text)
     }
 
     @Test

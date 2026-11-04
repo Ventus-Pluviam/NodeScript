@@ -71,7 +71,7 @@ class LockSignerTest {
         other.verifyOrThrow("p1", lock)
     }
 
-    // ── 落盘格式严格性 + 原子落位（2026-10-01，backlog A4）─────────────
+    // ── 落盘格式严格性 + 原子落位（backlog A4）─────────────
     // 病灶：KDoc 写「前缀不识一律拒」，实现却是 removePrefix("v1") —— 裸 hex 照样接受，
     // 于是「版本前缀」这个换算法的兼容开关等于不存在。
 

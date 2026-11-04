@@ -25,14 +25,14 @@ import java.nio.file.StandardCopyOption
  * 还能被 `:app-service:npm` 的 JVM 单测**真跑一遍**（`NpmSpawnGateTest` 起真 node 验拦截），
  * 而不是只对着一份"我以为的 JS"断言。
  *
- * **失败即失败（fail closed，与批 78 删 jsonl 回落同一条口径）**：资源取不到或落盘失败
+ * **失败即失败（fail closed，与 删 jsonl 回落同一条口径）**：资源取不到或落盘失败
  * = [Deploy.Failed]，装配层据此**不注入安装执行体**（[NpmSpawnGate] 是 P0 承诺面，
  * 少一条防线不许静默降级成「装是能装、守卫没了」）。原因原文进
  * `AssembledShell.npmCliFailure`，不吞。
  *
  * **边界**：本 shim 是**不变量守卫**，不是安全边界（shim 自己 KDoc 里写死同一条）——
  * 已获批的脚本可以 `delete require.cache` 后重新 require 拿到未打补丁的模块。真正的
- * 对抗面是 §10.5-2 人机分离的脚本自发起路径（`requestApprove` 已拆，2026-10-11）。
+ * 对抗面是 §10.5-2 人机分离的脚本自发起路径（`requestApprove` 已拆）。
  */
 object NpmSpawnGate {
 
@@ -67,7 +67,7 @@ object NpmSpawnGate {
 
     /**
      * classpath 上的 `.cjs` 资源 → 落盘（**两个 shim 共用**：本门禁与 T1 桥，
-     * 2026-10-10 批 91 自 [deploy] 提出）。
+     *  自 [deploy] 提出）。
      *
      * 提出来的理由不是"少写几行"：两份 shim 的落位要求**逐字相同**（原子写、字节一致不动盘、
      * 空文件拒收、失败给原文），而其中任何一条漏在第二份上，症状都是「平时没事、某次更新后

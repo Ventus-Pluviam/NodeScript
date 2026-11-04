@@ -7,13 +7,13 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 引擎四件 `.so` 的**落位门**（2026-10-14 真机 bug 的回归门）。
+ * 引擎四件 `.so` 的**落位门**（真机 bug 的回归门）。
  *
  * **它挡的是什么**：`AppShellApplication` 装配引擎时把四处路径喂给
  * `NodeEngineConfig.hostBinary` / `.libnodePath`、`npmNodeBin` 与 `npmLibnode`（后者
- * 2026-10-17 补：npm 那条路一直没把 `AUTOSCRIPT_LIBNODE` 注下去，设备上点安装 = exit 2），
+ * 补：npm 那条路一直没把 `AUTOSCRIPT_LIBNODE` 注下去，设备上点安装 = exit 2），
  * 四处**都**必须指向 `nativeLibraryDir`（jniLibs 交付位，§19；`useLegacyPackaging = true` 安装期解压）。
- * 批 109（`e338000`，`typed ids`）批量改名时把这三处的接收者从 `nativeDir` 串成了
+ * （`e338000`，`typed ids`）批量改名时把这三处的接收者从 `nativeDir` 串成了
  * `nsDir`（`filesDir/.ns`）—— **Kotlin 不报错**，因为两个都是 `Path`、`resolve` 都合法；
  * 设备上表现为点执行零输出：`NodeProcessEngine.execute` 的必填件预检如实点名
  * `ERR_FILE_NOT_FOUND … /data/user/0/com.autoscript/files/.ns/libnoden.so`，池判 `Failed`、

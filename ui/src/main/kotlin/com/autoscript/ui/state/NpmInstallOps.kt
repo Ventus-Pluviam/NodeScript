@@ -7,7 +7,7 @@ import com.autoscript.domain.npm.NpmConsoleKeys
 import kotlinx.coroutines.CancellationException
 
 /**
- * 依赖面板的**变更半边**（§10.9 第 1 条的安装输入行 + 旗标 + 阶段进度条，2026-10-09 批 87）。
+ * 依赖面板的**变更半边**（§10.9 第 1 条的安装输入行 + 旗标 + 阶段进度条）。
  *
  * 搬出 `MainActivity` 的理由与 [loadRegistry]/[runNpmMaintenanceOp] 逐字相同：
  * Activity 的函数数贴着 detekt 的 `TooManyFunctions` 线，且这几段是"拿读口算下一份状态"
@@ -31,8 +31,7 @@ private const val INSTALL_DRAFT_MAX = 200
 /**
  * 面板提交的每一条安装命令都带上的旗标。
  *
- * **`--prefer-offline` 从 2026-10-17 起是缺省**（用户口径「去掉开发依赖，和离线优先。
- * 默认开启离线优先」）：界面上那两颗旗标整排下线，其中「离线优先」不再是一个选项，
+ * **`--prefer-offline` 从 是缺省**：界面上那两颗旗标整排下线，其中「离线优先」不再是一个选项，
  * 而是**这一屏安装的一贯行为** —— 装上几十个包时先翻本地缓存的收益最明显，而它的代价
  * （可能拿到略微陈旧的元数据）在"依赖面板"这个场景里没有对象。
  *
@@ -40,6 +39,24 @@ private const val INSTALL_DRAFT_MAX = 200
  * "这算不算开发依赖" —— 那是个多数人答不上来、答错了要重装一遍的问题。
  */
 private const val INSTALL_FLAGS = " --prefer-offline"
+
+/**
+ * 「提交动作发生」那一刻的在途写回（修 —— 见 [runPanelCommand] 的 KDoc）。
+ *
+ * 三个安装/卸载/重装入口在 **launch 之前**先同步写回这一份：宿主侧 `runNpmPanelCommand`
+ * 是**入队即返回**的假设已经过时 —— `enqueueHeavy` 是协程内联执行，调用要挂到会话
+ * 跑完才返回。挂起期间若什么都不写回，屏幕就停在按下前的那一刻：阶段条不出现、
+ * 按钮不置灰、爱连点几下点几下 —— 而 [NpmScreen] 侧兜底轮询
+ * （`LaunchedEffect(page, npmState.installing)`）的键也就永远不变化、永远不启动。
+ * 把在途先写回，这三件事各有归属：阶段条立现（QUEUED 起）、按钮即时置灰，
+ * 兜底轮询随即接管「挂起期间每 400ms 续拉事件 / 快照 / 日志」。
+ *
+ * 与 [runPanelCommand] 内部那份 busy **逐字同形**（那边复用本函数，不允许两处各写一份）。
+ */
+internal fun NpmState.withInstallInFlight(): NpmState = copy(
+    installing = true,
+    installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+).withOpAccount(null, null)
 
 /**
  * 把输入框里的一行 + 两个旗标拼成一条命令（**纯函数**，可单测）。
@@ -53,7 +70,7 @@ private const val INSTALL_FLAGS = " --prefer-offline"
  * 旗标**追加在包名之后**（`npm install axios --prefer-offline`）：npm 两种位置都认，
  * 而后置的形态在用户眼里就是「装了 axios，带这些旗标」。
  *
- * 2026-10-17 前这里还有 `dev`/`offline` 两个入参（对应界面上那两颗勾选框）—— 两颗都
+ * 这里曾经有 `dev`/`offline` 两个入参（对应界面上两颗勾选框）—— 两颗都
  * 下线了，见 [INSTALL_FLAGS] 的说明。
  */
 internal fun buildInstallCommand(draft: String): String? {
@@ -66,7 +83,7 @@ internal fun buildInstallCommand(draft: String): String? {
 internal fun buildRemoveCommand(name: String): String = "npm uninstall $name"
 
 /**
- * **重装某一个包**（2026-10-17 用户口径：「在依赖列表里，加一个重装的图标按钮」）。
+ * **重装某一个包**。
  *
  * `npm install <包名>@<版本> --no-save`，三条各自有理由：
  * - **带版本**：清单里那个版本就是宿主读 lockfile 读出来的"现在装的应该是哪一个"，
@@ -98,12 +115,12 @@ internal fun buildReinstallCommand(name: String, version: String): String =
  */
 internal suspend fun submitInstall(host: HostSummary?, state: NpmState): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖装在那个项目的 node_modules 里", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖装在那个项目的 node_modules 里", null)
     if (state.installDraft.trim().length > INSTALL_DRAFT_MAX) {
-        return state.copy(opError = "输入过长（上限 $INSTALL_DRAFT_MAX 字符）：请只写包名与版本", opNotice = null)
+        return state.withOpAccount("输入过长（上限 $INSTALL_DRAFT_MAX 字符）：请只写包名与版本", null)
     }
     val line = buildInstallCommand(state.installDraft)
-        ?: return state.copy(opError = "先写要装什么（例如 axios 或 axios@1.7.0）", opNotice = null)
+        ?: return state.withOpAccount("先写要装什么（例如 axios 或 axios@1.7.0）", null)
     return runPanelCommand(host, state, projectId, line, clearDraft = true)
 }
 
@@ -115,7 +132,7 @@ internal suspend fun submitInstall(host: HostSummary?, state: NpmState): NpmStat
  */
 internal suspend fun removeInstalled(host: HostSummary?, state: NpmState, name: String): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖装在那个项目的 node_modules 里", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖装在那个项目的 node_modules 里", null)
     return runPanelCommand(host, state, projectId, buildRemoveCommand(name), clearDraft = false)
 }
 
@@ -131,7 +148,7 @@ internal suspend fun removeInstalled(host: HostSummary?, state: NpmState, name: 
  */
 internal suspend fun reinstallInstalled(host: HostSummary?, state: NpmState, name: String, version: String): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.copy(opError = "还没有选中的项目：依赖装在那个作用域的 node_modules 里", opNotice = null)
+        ?: return state.withOpAccount("还没有选中的项目：依赖装在那个作用域的 node_modules 里", null)
     return runPanelCommand(host, state, projectId, buildReinstallCommand(name, version), clearDraft = false)
 }
 
@@ -143,11 +160,11 @@ private suspend fun runPanelCommand(
     line: String,
     clearDraft: Boolean,
 ): NpmState {
-    NpmConsoleKeys.rejectProjectId(projectId)?.let { return state.copy(opError = it, opNotice = null) }
+    NpmConsoleKeys.rejectProjectId(projectId)?.let { return state.withOpAccount(it, null) }
     val parsed = NpmConsoleKeys.parse(line)
-    if (parsed is NpmConsoleCommand.Rejected) return state.copy(opError = parsed.reason, opNotice = null)
+    if (parsed is NpmConsoleCommand.Rejected) return state.withOpAccount(parsed.reason, null)
     if (host == null) {
-        return state.copy(opError = "宿主摘要未接线（Application 未实现 HostSummary）", opNotice = null)
+        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
     // 命令已过判据 → 必然是一条 `npm <sub>`：阶段条从 `QUEUED` 起（那一格之前没有别的
     // 信息可给）。
@@ -155,22 +172,19 @@ private suspend fun runPanelCommand(
     // **草稿在这里不清**：清了就意味着"提交即视为成功"，而宿主那一侧是先落 ECHO 行
     // **再抛**的（磁盘/配额预检、验签拒绝都在发出去之后才发生）。清早了，用户看到的是
     // 一句失败 + 一个空输入框 —— 他还得把包名重打一遍。清草稿是**成功之后**的事。
-    val busy = state.copy(
-        installing = true,
-        opError = null,
-        opNotice = null,
-        installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
-    )
+    val busy = state.withInstallInFlight()
     return try {
         host.runNpmPanelCommand(projectId, line)
-        // 入队之后**跟着拉到它跑完**（2026-10-10 批 90）：宿主是入队即返回的，
-        // 而 DOWNLOAD/REIFY 发生在返回之后 —— 只拉一次的话阶段条永远停在 QUEUED。
+        // 挂起返回之后**再拉到它跑完**（ 把话说准：
+        // `enqueueHeavy` 是协程内联执行，这一行其实要**挂到会话跑完才返回** —
+        // 阶段条实时走的那一路是」在途写回之后 [NpmScreen] 的兜底轮询
+        // （`LaunchedEffect(page, npmState.installing)`）拉着的。本条只是再追一遍，
+        // 兜住挂起返回时会话仍在跑的窗口。
         val polled = pollInstallWhileRunning(host, busy, projectId)
         loadNpmSnapshot(host, polled).copy(
             installing = false,
             installDraft = if (clearDraft) "" else state.installDraft,
-            opNotice = noticeForPanel(parsed),
-        )
+        ).withOpAccount(null, noticeForPanel(parsed))
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
@@ -178,14 +192,12 @@ private suspend fun runPanelCommand(
         val polled = pollInstallEvents(host, busy, projectId)
         loadNpmSnapshot(host, polled).copy(
             installing = false,
-            opError = t.message ?: t.javaClass.simpleName,
-            opNotice = null,
-        )
+        ).withOpAccount(t.message ?: t.javaClass.simpleName, null)
     }
 }
 
 /**
- * 安装跑着的时候**自己拉**（2026-10-10 批 90：阶段条不再停在 `QUEUED`）。
+ * 安装跑着的时候**自己拉**（阶段条不再停在 `QUEUED`）。
  *
  * 停的条件是**宿主给的** [NpmState.installing]（句柄账 / 事件里的 `Finished`），
  * 不是界面猜的；有界见 [pollWhile]。每一轮都同时取**事件**（阶段条）与**快照**
@@ -194,6 +206,13 @@ private suspend fun runPanelCommand(
  *
  * **与 [pollInstallEvents] 的分工**：那个是"拉一次"（刷新按钮、进页面），
  * 这个是"拉到跑完"（提交之后）。两者共用同一个读口，不另开取数路径。
+ *
+ * **两处写回时机**（修，见 `LivePoll.pollWhile` 的账）：[onStep]
+ * 逐轮把中间态写回组合状态 —— 阶段条逐格走、日志逐行长都是这条链路给的；
+ * 返回值只是兜底（`runPanelCommand` 在轮询结束后还要基于终态拼回执）。
+ * **首轮不等那 400ms**：`pollWhile` 的节奏是"先等一拍再拉"，而安装会话本身
+ * 以秒计（卸载 627ms 的一次，等一拍回来整批已经端齐）—— 首拉先走一把，
+ * 从 `QUEUED` 起的第一格才立得住。
  */
 internal suspend fun pollInstallWhileRunning(
     host: HostSummary,
@@ -201,17 +220,88 @@ internal suspend fun pollInstallWhileRunning(
     projectId: String,
     intervalMillis: Long = LIVE_POLL_INTERVAL_MILLIS,
     maxTicks: Int = LIVE_POLL_MAX_TICKS,
-): NpmState =
-    pollWhile(
-        initial = state,
+    /** 每一轮的推进都回调一次（终态轮在内）：调用方在这里把中间值写回组合状态。 */
+    onStep: suspend (NpmState) -> Unit = {},
+): NpmState {
+    val shouldContinue: (NpmState) -> Boolean = { it.installing && it.selectedProjectId == projectId }
+    val tick: suspend (NpmState) -> NpmState = { current ->
+        // 逐格版而不是单次版：客户看到的安装瓶颈不在"有没有事件"，在"事件都挤在同一
+        // 批里被一口气折完"（见 `pollInstallEventsStepped` 的 KDoc）。
+        val withEvents = pollInstallEventsStepped(host, current, projectId)
+        if (withEvents.selectedProjectId == projectId) loadNpmSnapshot(host, withEvents) else withEvents
+    }
+    // 首拉不进 `pollWhile`，这里先走一把：等第一拍（400ms）白等、还大概率把整批
+    // 事件等齐（会话 1 秒内跑完的例子已经见过两回）。首拉推进也走 [onStep]，
+    // 与轮内同一条写回通道 —— 否则第一格（QUEUED 之后的 RESOLVE）又只有终态才现身。
+    var current = state
+    if (shouldContinue(state)) {
+        current = tick(state)
+        onStep(current)
+    }
+    return pollWhile(
+        initial = current,
         intervalMillis = intervalMillis,
         maxTicks = maxTicks,
-        tick = { current ->
-            val withEvents = pollInstallEvents(host, current, projectId)
-            if (withEvents.selectedProjectId == projectId) loadNpmSnapshot(host, withEvents) else withEvents
-        },
-        shouldContinue = { it.installing && it.selectedProjectId == projectId },
+        tick = tick,
+        shouldContinue = shouldContinue,
+        onStep = onStep,
     )
+}
+
+/**
+ * 轮询版的事件拉取 —— **逐格步进**。
+ *
+ * 一根：[pollInstallEvents] 是"拉一次"（进页面/刷新），它整批折叠 —— 那是对的，现取
+ * 要的就是"此刻宿主报到哪一步"。但轮询循环若也整批折，观感就成了另一个东西：
+ * 宿主在**一条协程里同步内联跑完整个安装会话**（`enqueueHeavy` 协程内联执行，
+ * QUEUED → RESOLVE → POST_CHECK → FINISHED 毫秒级全发，事件环里它们本来就排成
+ * 一串），400ms 才回来拉一次的轮询大概率一次端回**整串** —— 整批折完，阶段条
+ * 从「排队中」直接跳「完成」，中间五档一格都没露过脸，就是用户说的"不刷新，
+ * 直到完成时一次性全部出现"。
+ *
+ * 这里把节奏闸在 UI 侧立起来：**一个 tick 只消费一条事件**，批里剩下的进
+ * [NpmState.pendingProgressEvents] 缓冲，等下个 tick 再放一条 —— 阶段条逐格走完
+ * 六档（400ms/格 × 6 格 ≈ 2.4 秒，一次安装也就这个量级）。缓冲里没有可消费的
+ * 才去拉新的（否则每 tick 都拉新批，消费节流就白立了）。
+ *
+ * 游标纪律与 [pollInstallEvents] 相同：`batch.lastSeq` 是那次所拉全部事件的最尾
+ * seq，**即使只展示了一条**，游标也要推进到批尾 —— 事件只消费一遍，展示慢一点
+ * 是节奏，重复消费就是重放了。
+ */
+internal suspend fun pollInstallEventsStepped(
+    host: HostSummary,
+    state: NpmState,
+    projectId: String,
+): NpmState {
+    if (state.selectedProjectId != projectId || state.installProgress == null) return state
+    // 上一批还有没放出来的：本 tick 只放一条，不动游标（游标已在拉批那拍推到底）。
+    if (state.pendingProgressEvents.isNotEmpty()) {
+        val folded = foldProgress(state.installProgress, listOf(state.pendingProgressEvents.first()))
+        return state.copy(
+            installProgress = folded,
+            pendingProgressEvents = state.pendingProgressEvents.drop(1),
+            installing = if (folded?.done == true) false else state.installing,
+        )
+    }
+    val since = state.installSeq
+    return try {
+        val batch = host.npmInstallEvents(projectId, since, INSTALL_EVENT_PAGE)
+        if (batch.events.isEmpty() && batch.lastSeq == since) return state
+        val events = batch.events.map { it.event }
+        val folded = if (events.isNotEmpty()) foldProgress(state.installProgress, listOf(events.first())) else state.installProgress
+        state.copy(
+            installSeq = batch.lastSeq,
+            installProgress = folded,
+            pendingProgressEvents = events.drop(1),
+            installing = if (folded?.done == true) false else state.installing,
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // 与 [pollInstallEvents] 同一条：进度是装饰性读数，读失败不动已有进度、不抬成报错。
+        state
+    }
+}
 
 /**
  * 拉一次安装事件（阶段进度条的数据源，§10.9 第 1 条）。
@@ -236,9 +326,16 @@ internal suspend fun pollInstallEvents(host: HostSummary, state: NpmState, proje
     return try {
         val batch = host.npmInstallEvents(projectId, since, INSTALL_EVENT_PAGE)
         val folded = foldProgress(state.installProgress, batch.events.map { it.event })
+        // **游标没动、阶段也没变 → 原样返回这一份**：等值重建照样
+        // 让展开的可见行重组合一次 —— LazyColumn 的 item lambda 捕获的是 state
+        // **引用**，换一份等值的也是换。安装长跑在安静的阶段（写入 node_modules
+        // 那种没有事件可报的窗口）时，每 400ms 一 tick 全是白重画。
+        if (batch.lastSeq == since && folded == state.installProgress) return state
         state.copy(
             installSeq = batch.lastSeq,
             installProgress = folded,
+            // 单次现取**整批折完**：逐格桥的缓冲不随这次带过来（copy 缺省即空）——
+            // 阶段条已被折到批尾，缓冲里没有比它更新的东西（见 `pollInstallEventsStepped`）。
             // `Finished` 到了 = 这次安装**在宿主侧已经收尾**（句柄逐出）——
             // 「在途」这个旗标跟着它落，而不是等调用方那一句 `copy(installing = false)`。
             // 两者看着等价，差在**轮询**上：`pollInstallWhileRunning` 的停条件就是它，
@@ -287,11 +384,22 @@ internal fun foldProgress(current: InstallProgressState?, events: List<InstallEv
 /** 单批拉取上限（与 `ConsoleCmdState` 的页大小同量级：够一次安装的阶段事件）。 */
 internal const val INSTALL_EVENT_PAGE = 64
 
-/** 提交后的回执（**不替用户宣布结果** —— 结果在清单与阶段条里）。 */
+/**
+ * 提交后的回执（**动作已完成的那一句** —— `runPanelCommand` 等到宿主挂起返回才构造它，
+ * `enqueueHeavy` 是协程内联执行，这一行从回执构造那一刻起说的就是结果，不是"刚提交"）。
+ *
+ * 第十七批第 41 条改口：原文案「已提交 npm uninstall：安装会话在跑」是「入队即返回」
+ * 假设时代的措辞 —— 宿主早已同步执行到跑完才回来，回执却还在说"在跑"，用户把"卸载完成"
+ * 读成"刚提交、东西还在装"，正是「卸载没生效」观感的一半来源。改成**动作名 + 对象 + 结果**
+ * 的完成句式：卸载说「已卸载 xx」，安装/重装说「已安装 xx」。对象取命令里的**第一个包名**
+ * （`-` 开头的旗标跳过；重装的 `npm install axios@1.7.9 --no-save` 取到 `axios@1.7.9`）。
+ */
 private fun noticeForPanel(cmd: NpmConsoleCommand): String = when (cmd) {
-    is NpmConsoleCommand.Npm ->
-        if (cmd.sub == "uninstall") "已提交 npm uninstall：安装会话在跑，完成后清单会更新"
-        else "已提交 npm install：安装会话在跑（几十秒量级），完成后清单会更新"
+    is NpmConsoleCommand.Npm -> {
+        val target = cmd.args.firstOrNull { !it.startsWith("-") }
+        if (cmd.sub == "uninstall") "已卸载 ${target ?: "所选包"}：清单已更新"
+        else "已安装 ${target ?: "所选依赖"}：清单已更新"
+    }
     is NpmConsoleCommand.Run ->
         "已提交 npm run ${cmd.script}：结果见上方"
     is NpmConsoleCommand.Exec ->

@@ -9,7 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * [ProcOps] 的 `/proc` 面（批 105 从 `:app-service:npm` 与 `:platform:system` 两份合并到
+ * [ProcOps] 的 `/proc` 面（ 从 `:app-service:npm` 与 `:platform:system` 两份合并到
  * 本模块的**唯一一份**测试 —— 合并前 npm 那侧有 [ProcOpsTest]、platform 那侧只有一条
  * 走真进程的用例，合进来的判据取两边并集）。
  *
@@ -88,7 +88,7 @@ class ProcOpsTest {
     }
 
     /**
-     * **方向门**（2026-10-15，与 `:engine:node-process` 的 `ProcessLauncherPidTest` 同批）：
+     * **方向门**（与 `:engine:node-process` 的 `ProcessLauncherPidTest` 同批）：
      * `pid` 字段住**运行时类**上（设备 libcore 是 `java.lang.UNIXProcess.pid`，
      * 桌面 JDK 是 `java.lang.ProcessImpl.pid`），而 `getDeclaredField` 只看该类自己声明的成员
      * —— 所以阶梯必须**从 `process.javaClass` 起步**。本实现一直是这么写的，
@@ -136,7 +136,7 @@ class ProcOpsTest {
     }
 
     /**
-     * 二次收割的判据（批 95 的 T1 用，批 99 的 shell 不用 —— 它没有宽限期这一档）。
+     * 二次收割的判据（ T1 用， shell 不用 —— 它没有宽限期这一档）。
      *
      * 形态照抄 T1 那条真实判据：第一轮扫到 101；**然后** 101 在宽限期内新起 103（合成树里
      * 就是多写一个 stat 文件），第二轮必须从**仍活着的 101** 捡到它 —— 从主进程 100 再扫

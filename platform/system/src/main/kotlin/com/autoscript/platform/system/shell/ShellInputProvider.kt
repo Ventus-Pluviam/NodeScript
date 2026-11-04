@@ -25,7 +25,7 @@ import com.autoscript.domain.core.ErrorCode
  * `cmd input` 的稳定面（AOSP `InputShellCommand`），换一个特权身份（shell uid 或 root）即可注入 ——
  * 这正是「adb/root 通道」与无障碍通道的**语义差异**：注入者的进程身份不同。
  *
- * **本类未经真机验证**：设备道 2026-10-06 已裁（backlog B3/E3）。JVM 侧用假
+ * **本类未经真机验证**：设备道 已裁（backlog B3/E3）。JVM 侧用假
  * [ShellExecutor] 钉住「命令拼装 + 通道映射 + 退出码判定」，真机上的第一次使用
  * 应当与 auto 通道对一遍行为。
  */

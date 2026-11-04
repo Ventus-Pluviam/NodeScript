@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * `workManager` 的**装配层恒挂载**验证（§12.2 接线现状表）——
- * 2026-09-30 审查步骤 6：handler 本体迁 `:app-service:scheduler` 后，挂载缝回到
+ * handler 本体迁 `:app-service:scheduler` 后，挂载缝回到
  * `:app` 侧测（scheduler 模块见不到 `AppShell`/引擎假件，那半测不了）：
  * `AppShell.assemble` 不经注入束就把 `workManager` 挂上 Router，建任务即达。
  * handler 的方法面/错误分类测试随迁 `:app-service:scheduler`
@@ -52,7 +52,7 @@ class WorkManagerMountTest {
     }
 
     /**
-     * §11 派生运行入口的**自建 / 跨脚本二分**（批 78）：`workManager.create` 要过
+     * §11 派生运行入口的**自建 / 跨脚本二分**：`workManager.create` 要过
      * 装配层那道授权闸（[AppShell] 的 `authorizeCreate`）。判据不是一刀切要求跨脚本位，
      * 而是「caller 的项目号（由认证点从 lease 装填，不可自报）与目标项目号相同 → 自建，放行；
      * 不同 → 走跨脚本全套」。缺来源档（`UNKNOWN_DEFAULT`，无 `CROSS_SCRIPT_CONTROL`）的脚本

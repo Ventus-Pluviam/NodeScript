@@ -23,7 +23,7 @@ import kotlinx.coroutines.withContext
  *
  * **为什么必须缓存**：这是**全量遍历**（大项目十万级文件、秒级），而两个读口都在主线程
  * 那条链上 —— 配额预检顶在"点安装 → 有反应"之间，`snapshot()` 则被依赖面板每 400ms 续拉
- * 一次（2026-10-17 那次「依赖装多了，一查看就闪退」就是这个形态）。
+ * 一次（那次「依赖装多了，一查看就闪退」就是这个形态）。
  *
  * **代价如实记**：盘上变了而时钟没走 → 回的是缓存里的旧值（陈旧上界 = TTL）。
  * 本进程装完**不失效**（一失效就等于每次安装照旧全量遍历，正是要修的东西）；
@@ -40,7 +40,7 @@ internal suspend fun nodeModulesBytesOf(nodeModules: Path, at: Long): Long =
     }
 
 /**
- * 每个顶层包占的字节（依赖列表每行那个尺寸，2026-10-17 用户口径「依赖列表显示一下各个依赖
+ * 每个顶层包占的字节（依赖列表每行那个尺寸
  * 占用的空间大小」）。分摊判据见 [topLevelPkgOf]。
  */
 internal suspend fun packageSizesOf(nodeModules: Path, at: Long): Map<String, Long> =

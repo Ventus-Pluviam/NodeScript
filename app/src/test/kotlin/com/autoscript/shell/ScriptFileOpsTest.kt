@@ -13,8 +13,8 @@ import org.junit.jupiter.api.io.TempDir
 /**
  * 新建文件/文件夹落盘（[ScriptFileOps]）的裁决面：
  * - 合法名字落到 `files/scripts/<projectId>/<dirRelPath>/<name>`（路径出处在
- *   [com.autoscript.domain.scripts.ScriptPaths]）；父文件夹由 `dirRelPath` 说（2026-10-16
- *   用户口径「在当前进入的文件夹中新建」），**必须已存在**、不许越界、不许跨项目；
+ *   [com.autoscript.domain.scripts.ScriptPaths]）；父文件夹由 `dirRelPath` 说（
+ *   「在当前进入的文件夹中新建」），**必须已存在**、不许越界、不许跨项目；
  * - 非法名字（含 `/`、`..`、空）拒绝 —— 原文抛，呈现层不写第二套判据；
  * - **不覆盖已存在**（撞名抛 `FileAlreadyExistsException`）；
  * - 项目目录不存在拒绝（而不是静默建到别处）。
@@ -22,12 +22,12 @@ import org.junit.jupiter.api.io.TempDir
  * 编辑面（[ScriptFileOps.read]/[ScriptFileOps.save]，项目页点文件进编辑）：
  * - 读回原样、存后读得到新内容，且**不留临时文件**（原子替换的副产物必须清掉）；
  * - **relPath 是 `files/scripts/` 之下的路径（首段 = 项目名）**，与 `ScriptFileRow.relPath` 同形；
- *   写成"项目内相对路径"当场抛 —— 2026-10-06 实机踩过（被拼成 `…/demo/demo/main.js`，编辑器报"不是文件"）；
+ *   写成"项目内相对路径"当场抛 —— 实机踩过（被拼成 `…/demo/demo/main.js`，编辑器报"不是文件"）；
  * - 越界 relPath（`..`/绝对路径）在**读取侧也拒绝**；
  * - 目录不是文件、保存**不新建**（新建归 createFile）；
  * - 二进制（含 NUL）与超限文件读时拒绝 —— 当文本打开再存回去就是损坏用户文件。
  *
- * 删除与绝对路径（[ScriptFileOps.delete]/[ScriptFileOps.absolutePath]，2026-10-17 用户口径
+ * 删除与绝对路径（[ScriptFileOps.delete]/[ScriptFileOps.absolutePath]，
  * 「文件列表菜单加个删除 + 复制绝对路径」）：
  * - 删**文件夹递归整棵**（非空文件夹删不掉等于菜单里那格没做），删完项目本身留着；
  * - 删不存在的条目**拒**（静默成功会把"删错了对象"与"删掉了"画成同一件事）；
@@ -146,7 +146,7 @@ class ScriptFileOpsTest {
 
     @Test
     fun `relPath 必须带项目名前缀`() {
-        // 2026-10-06 实机踩过的坑：呈现层手里那条是 ScriptFileRow.relPath（首段 = 项目名），
+        // 实机踩过的坑：呈现层手里那条是 ScriptFileRow.relPath（首段 = 项目名），
         // 而实现按"项目根之下"去拼 —— 读成了 files/scripts/demo/demo/main.js，编辑器于是
         // 报"不是文件：demo/main.js"（点文件进不去编辑）。现在只有一种写法合法。
         val project = dir.resolve("scripts/demo")
@@ -215,7 +215,7 @@ class ScriptFileOpsTest {
 
     // ── 根层（[com.autoscript.domain.scripts.ProjectId.ROOT] = 空串）：`files/scripts/` 本层 ──
     //
-    // 2026-10-16 用户裁定「根层可写」：首页 FAB 建的文件落本层、建的文件夹就是一个新项目。
+    // 根层可写：首页 FAB 建的文件落本层、建的文件夹就是一个新项目。
     // 下面这几条钉的是三条判据（列得出/打得开/跑得起来）里的**读与写两半**，
     // 跑那一半在 `ScriptPathsProjectInternalTest`（形状转换）与 `ScriptPathsScriptFileTest`
     // （绝对路径拼装）里钉。
@@ -262,7 +262,7 @@ class ScriptFileOpsTest {
      * 根层建**文件夹** = 建一个新项目，故多两条判据（名字得能当项目号）。
      *
      * 放行的代价是"进得去、里面每个文件都打不开"：项目号判据比文件名判据严一档
-     * （文件名可以含 `.`，项目名不可以 —— 批 84：`.` 让 `projectsRoot.resolve("..")` 跳出项目根）。
+     * （文件名可以含 `.`，项目名不可以 —— `.` 让 `projectsRoot.resolve("..")` 跳出项目根）。
      */
     @Test
     fun `根层建文件夹的名字要能当项目名`() {
@@ -309,7 +309,7 @@ class ScriptFileOpsTest {
         assertEquals("", ScriptFileOps.read(dir, "demo", "demo/empty.js"))
     }
 
-    // ── 删除与绝对路径（2026-10-17 用户口径：菜单「复制绝对路径」/「删除」）──
+    // ── 删除与绝对路径──
 
     @Test
     fun `绝对路径按 files_scripts 之下那条算`() {
@@ -349,7 +349,7 @@ class ScriptFileOpsTest {
         assertTrue(Files.isDirectory(dir.resolve("scripts/demo")), "只删那一棵")
     }
 
-    /** 根层的文件夹**就是项目本身**：删它 = 连同其中全部文件删掉一整个项目（用户 2026-10-17 裁定允许）。 */
+    /** 根层的文件夹**就是项目本身**：删它 = 连同其中全部文件删掉一整个项目（用户 裁定允许）。 */
     @Test
     fun `根层的文件夹就是项目_删它整棵没`() {
         val scripts = Files.createDirectories(dir.resolve("scripts"))

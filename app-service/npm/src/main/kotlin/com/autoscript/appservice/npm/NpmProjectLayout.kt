@@ -17,7 +17,7 @@ import java.nio.file.Path
 class NpmProjectLayout(val projectsRoot: Path) {
 
     /**
-     * 防路径逃逸 —— 判据在 [ProjectId] 的 `init` 里（2026-10-12 批 109：判据收 `:domain`，
+     * 防路径逃逸 —— 判据在 [ProjectId] 的 `init` 里（判据收 `:domain`，
      * 本仓**唯一一份**）。故本方法**不再重复 `require`**：拿到 [ProjectId] 就意味着过了判据。
      */
     fun projectRoot(projectId: ProjectId): Path = projectsRoot.resolve(projectId.value)
@@ -38,7 +38,7 @@ class NpmProjectLayout(val projectsRoot: Path) {
      * 过滤三档，缺一不可：
      * - 不是目录的（`package.json` / `package-lock.json` / `.npmrc` 这几个文件）；
      * - 目录名过不了 [ProjectId] 判据的（别人留下的怪目录）；
-     * - **保留名**（[isReservedDirName]）—— 2026-10-17 起 `files/scripts/` 本层多了一个
+     * - **保留名**（[isReservedDirName]）——  `files/scripts/` 本层多了一个
      *   `node_modules`（全局依赖的家），而这个名字**过得了项目号判据**（没有点、没有分隔符），
      *   不排掉的话面板的项目列表里会凭空多出一个叫 `node_modules` 的"项目"，
      *   它还会带上一棵自己的 node_modules 尺寸 —— 用户看到一个自己从没建过的项目。
@@ -76,10 +76,10 @@ class NpmProjectLayout(val projectsRoot: Path) {
                 name.startsWith("${ScriptPaths.NODE_MODULES_DIR}.part-")
 
         /**
-         * 项目号判据的**别名**（2026-10-09 批 84）：字面量已上提到
+         * 项目号判据的**别名**：字面量已上提到
          * [com.autoscript.domain.scripts.ScriptPaths.PROJECT_ID] —— 界面侧的命令行校验
          * 也要用它，而 `:ui` 够不到本模块。留这个别名是为了让既有引用点零改动，
-         * **URL/正则字面量从此只有一份**（与批 83 把 `NpmRegistryVerifier.OFFICIAL`
+         * **URL/正则字面量从此只有一份**（与 把 `NpmRegistryVerifier.OFFICIAL`
          * 改成 `NpmRegistryKeys.OFFICIAL` 的别名是同一手法）。
          */
         val PROJECT_ID: Regex = ScriptPaths.PROJECT_ID

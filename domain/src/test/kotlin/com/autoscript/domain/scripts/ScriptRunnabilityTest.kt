@@ -22,7 +22,7 @@ class ScriptRunnabilityTest {
 
     @Test
     fun `shell 脚本整体不可执行`() {
-        // 用户口径点名了 `sh`，这里是如实收窄：引擎起的是 node，node x.sh 只会 SyntaxError；
+        // `sh` 如实收窄：引擎起的是 node，node x.sh 只会 SyntaxError；
         // shell 脚本唯一的执行面是控制台 shell（默认模式一律拒，要 root/shizuku）。
         assertFalse(ScriptRunnability.isRunnable("deploy.sh"))
         assertFalse(ScriptRunnability.isRunnable("run.bash"))

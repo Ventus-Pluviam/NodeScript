@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * 安装体积的实测（§15 的 E1 处置：2026-10-02 拍板「接受超支并在能力中心明示」）。
+ * 安装体积的实测（§15 的 E1 处置：拍板「接受超支并在能力中心明示」）。
  *
  * 钉住三件会撒谎的事：
  * - **量不到回 null，不回 0**（0 会被 UI 读成「安装包是空的」）；

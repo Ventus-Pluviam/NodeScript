@@ -22,7 +22,7 @@ import java.nio.file.Path
  * - [binTarget]：bin 声明（归属包 pkg@version + bin 名 + 目标相对路径）的摘要。
  *
  * 纯 JS bin 白名单（§10.3 T1「纯 JS bin 白名单」）：判据是**目标文件本身**，不是文件名后缀
- * （2026-10-09 修，见 [isPureJsEntry]）。非 JS 即 `ERR_NOT_SUPPORTED` 并指向
+ * （修，见 [isPureJsEntry]）。非 JS 即 `ERR_NOT_SUPPORTED` 并指向
  * 「wasm 优先、纯 JS 兜底」（§10.3 明确不可行那节）—— 从 app 数据区 exec 任意二进制
  * 本就不允许（W^X），设备端也没有编译器可用。
  *
@@ -72,7 +72,7 @@ internal object NpmScriptResolver {
 
     /**
      * 项目 `package.json` 里**声明**的依赖，拼成可以直接喂给 `npm install` 的包说明符
-     * （2026-10-17，「去重并提升到全局」那条路的取数口）。
+     * （「去重并提升到全局」那条路的取数口）。
      *
      * 两段都收（`dependencies` + `devDependencies`）、**顺序固定**（按名字排序）：
      * - 为什么连 `devDependencies` 一起：提升到全局是为了"别的项目也能用"，而全局那份
@@ -104,6 +104,24 @@ internal object NpmScriptResolver {
     }
 
     /**
+     * `package.json` 声明段的**包名集合**：
+     * `dependencies` + `devDependencies` 两段键名的并集 —— 「这个项目声明了哪些依赖」的
+     * 唯一事实源，供 [InstallCoordinator.list] 把 lock 闭包滤成直接依赖清单。
+     *
+     * 与 [declaredSpecs] 同读 [manifestOf]，故同一条纪律：manifest 不存在 → null
+     * （那是"没有这个项目 / 还没装过"）；声明段缺失或为空 → 空集（不写 null）。
+     */
+    fun declaredNames(projectRoot: Path): Set<String>? {
+        val manifest = manifestOf(projectRoot) ?: return null
+        val out = LinkedHashSet<String>()
+        for (section in listOf("dependencies", "devDependencies")) {
+            val fields = (manifest[section] as? DomainJson.Value.Obj)?.fields ?: continue
+            for (name in fields.keys) if (name.isNotBlank()) out += name
+        }
+        return out
+    }
+
+    /**
      * `node_modules` 里声明了名为 [bin] 的 bin 的那个包（纯 JS 白名单已过）。
      *
      * 扫描深度 1（`node_modules/<pkg>`）+ 深度 2 的 scope（`node_modules/@scope/<pkg>`），
@@ -132,7 +150,7 @@ internal object NpmScriptResolver {
             )
         }
         val (pkgDir, rel) = hits.single()
-        // 顺序是**刻意**的（2026-10-09 修）：逃逸 → 存在 → 是不是 JS。
+        // 顺序是**刻意**的：逃逸 → 存在 → 是不是 JS。
         // 白名单判据现在要**读文件**，故必须排在存在性之后；而逃逸检查本就该最先 ——
         // 它对恶意 manifest 是第一条防线，没有理由排在一条纯字符串后缀检查后面。
         val entry = pkgDir.resolve(rel).normalize()
@@ -225,9 +243,9 @@ internal object NpmScriptResolver {
 }
 
 /**
- * bin 目标「是不是能交给 node 跑的纯 JS」的**唯一判据处**（2026-10-09 修）。
+ * bin 目标「是不是能交给 node 跑的纯 JS」的**唯一判据处**。
  *
- * 为什么从 [NpmScriptResolver] 里拆出来（2026-10-09）：探测从「看文件名后缀」变成
+ * 为什么从 [NpmScriptResolver] 里拆出来：探测从「看文件名后缀」变成
  * 「读文件内容」（ELF 魔数 / shebang / 后缀三道），解析器因此多出三个函数、越过了
  * detekt 的 `TooManyFunctions` 线。拆的判据不是「凑数」—— 这两件事本来就不同：
  * [NpmScriptResolver] 管**怎么找到** bin（manifest 声明、路径逃逸、包目录扫描），
@@ -241,7 +259,7 @@ internal object PureJsProbe {
     /**
      * 纯 JS bin 目标的**辅助**后缀表（`.js`/`.cjs`/`.mjs`）。按文件名的结尾判，不是整名相等。
      *
-     * **不再是唯一判据**（2026-10-09 修）：它是 [isPureJsEntry] 里 shebang 之后的**第二道**，
+     * **不再是唯一判据**：它是 [isPureJsEntry] 里 shebang 之后的**第二道**，
      * 不是第一道。理由见该函数的 KDoc。
      */
     private val JS_SUFFIXES = listOf(".js", ".cjs", ".mjs")
@@ -261,7 +279,7 @@ internal object PureJsProbe {
     private val NODE_SHEBANG = Regex("(^|\\s|/)node(\\s|$)")
 
     /**
-     * bin 目标是不是**能交给 node 跑的纯 JS**（2026-10-09 修）。
+     * bin 目标是不是**能交给 node 跑的纯 JS**。
      *
      * **修的是什么**：原判据是「文件名以 `.js`/`.cjs`/`.mjs` 结尾」。而 npm 生态里大量 bin
      * 是**无后缀**的 —— `typescript` 的 `{"tsc": "./bin/tsc"}`、`esbuild` 的 `bin/esbuild`

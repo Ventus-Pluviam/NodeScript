@@ -3,7 +3,7 @@ package com.autoscript.appservice.scheduler.core
 /**
  * 排队/到期上限的默认分级表（§8.6 分级口径的**唯一正本**）。
  *
- * 2026-10-07（backlog D7）自 `Scheduler.kt` 原样外迁：它是**一个纯函数常量**
+ * （backlog D7）自 `Scheduler.kt` 原样外迁：它是**一个纯函数常量**
  * （零 `Scheduler` 状态、零 Android），留在类文件里既占篇幅又让人以为它与
  * 调度器生命周期有关。语义逐字未改。
  *

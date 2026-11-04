@@ -213,7 +213,7 @@ class EnginesNamespaceHandler(
         val rawScriptPath = requiredStr(o, "scriptPath")
         if (rawProjectId.isBlank()) throw IllegalArgumentException("projectId 不得为空")
         if (rawScriptPath.isBlank()) throw IllegalArgumentException("scriptPath 不得为空")
-        // **判据进值类**（2026-10-12 批 109，typed ids）：这两个值是**脚本给的**，而
+        // **判据进值类**（typed ids）：这两个值是**脚本给的**，而
         // scriptPath 会一路进 `node <路径>` 的 argv。裸 String 传下去时，「这是个项目号」
         // 与「这是个项目内相对路径」只靠下游各自的 require 兜着，而 `a/b` 对两者都合法 ——
         // 换句话说，一次串错位既不会被类型拦下，也不会被下游的 require 拦下。
@@ -229,7 +229,7 @@ class EnginesNamespaceHandler(
             ?: throw IllegalArgumentException("exec 必须显式给 timeoutMillis（桥路径无人 await 终结，期限须由调用方声明；§8.6）")
         if (timeout <= 0) throw IllegalArgumentException("timeoutMillis 必须 > 0：$timeout")
         return PoolAcquireRequest(
-            // 解包回 String 是**DTO 边界**（批 109 的范围只到两端，DTO 字段仍是 String）：
+            // 解包回 String 是**DTO 边界**（范围只到两端，DTO 字段仍是 String）：
             // 判据已经在上面那道 `createOrNull` 过了，这里存的只是一个过了判据的值。
             projectId = projectId.value,
             scriptPath = scriptPath.value,

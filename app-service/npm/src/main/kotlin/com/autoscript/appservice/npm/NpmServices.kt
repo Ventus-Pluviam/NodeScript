@@ -32,7 +32,7 @@ data class NpmServices(
     /**
      * 操作事实的去向（[OpLogSink]）。
      *
-     * 2026-10-17 用户令「去掉审计、改打系统日志」后，原来那个 `history: InstallHistory?`
+     * 审计面撤掉之后，原来那个 `history: InstallHistory?`
      * （一本只追加的落盘账 `files/.ns/install-history.jsonl`）换成了这条缝。
      *
      * **不可空、缺省 [OpLogSink.None]**：与其余协作者不同，这里没有「未接线」与
@@ -48,7 +48,7 @@ data class NpmServices(
     val lockSigner: LockSigner? = null,
     val snapshots: NpmSnapshot? = null,
     /**
-     * 控制台**命令历史**（2026-10-10 批 90；`files/.ns/console-history.jsonl`）。
+     * 控制台**命令历史**（`files/.ns/console-history.jsonl`）。
      *
      * 收在这里而不是 [InstallCoordinator] 的构造参数上：那个构造面已经贴着 detekt
      * `LongParameterList` 的构造阈值（12），而本类正是为「协作者太多」而生的那一层。

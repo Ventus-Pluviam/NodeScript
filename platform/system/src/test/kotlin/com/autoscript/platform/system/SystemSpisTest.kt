@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test
  * 1. 别把具体实现类漏进字段类型 —— 那会逼上层依赖本模块的具体类，分层就白做了；
  * 2. 别偷偷补一个"凑数的 dialogs" —— 缺位是**如实缺位**（注入侧留 null → 桥回
  *    `ERR_NOT_IMPLEMENTED`），补个假的比缺着更坏。字段集合被钉死在**已落地的 SPI 名单**上
- *    （datastore/zip/settings 2026-09-22 落地后从四件变七件，notification 同日补到八件，clipboard 补到九件，sensors 本批补到十件；dialogs 仍不许出现在名单里）。
+ *    （datastore/zip/settings/notification/clipboard/sensors 都在名单里；dialogs 仍不许出现）。
  */
 class SystemSpisTest {
 

@@ -1,7 +1,7 @@
 package com.autoscript.platform.system.datastore
 
 /**
- * kv 库的**升级路径表**（2026-10-11 批 97，外审 M8）。
+ * kv 库的**升级路径表**（外审 M8）。
  *
  * ## 为什么把它从 [SqliteKvOps] 里抽成纯函数
  *
@@ -20,7 +20,7 @@ package com.autoscript.platform.system.datastore
  *
  * 找不到路径时抛 [UnknownMigration]，让 `SQLiteOpenHelper` 的升级流程整体失败 ——
  * 现场是「应用启动报错 + 崩溃栈里有这句」，而不是「数据莫名其妙没了」。这条与
- * §8.5 意图日志那条「打不开不回落、异常直接冒到装配」的纪律同源（批 78 裁定）。
+ * §8.5 意图日志那条「打不开不回落、异常直接冒到装配」的纪律同源（ 裁定）。
  */
 internal object KvSchemaMigrations {
 

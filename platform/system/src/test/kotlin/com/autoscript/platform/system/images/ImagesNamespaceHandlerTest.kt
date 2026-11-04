@@ -38,7 +38,7 @@ import org.junit.jupiter.api.assertThrows
  *    （"已释放"与"从未存在"可分辨）；匹配用已释放的帧 → 同码；
  * 7. **不猜别名**：`pixel`/`fromFile`/`captureScreen` 等两侧都没有的名字 →
  *    `ERR_NOT_IMPLEMENTED`（`toGrayscale`/`crop`/`resize`/`rotate`/`findFeature`
- *    已于 2026-09-29 开桥面，P1 图像桥消费方，见本文件"五算子"段）。
+ *    P1 图像桥消费方，见本文件"五算子"段）。
  *
  * 像素语义归 `:bridge:image` 的 native 实现（还没到位）—— 这里只钉桥面形状与口径。
  */
@@ -549,7 +549,7 @@ class ImagesNamespaceHandlerTest {
         Unit
     }
 
-    // ── P1 图像桥消费方五算子（2026-09-29 开通，§9.2 末推演兑现）──────────
+    // ── P1 图像桥消费方五算子（开通，§9.2 末推演兑现）──────────
     // 判据：wire 形状（`{source}` 或 `{scene,template}`）、域校验零 SPI、产出帧
     // 与 decode 帧同一条表/同一条释放路、（findFeature）未命中是答案。
 

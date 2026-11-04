@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * `shell`/`device`/`app`/`floatingWindow` 四个命名空间的桥处理器测试
- * （docs §9.4/§9.6/§12.2，JS 对偶 `extras.ts`；`dialogs` 半 2026-09-30 随步骤 6 拆去
+ * （docs §9.4/§9.6/§12.2，JS 对偶 `extras.ts`；`dialogs` 半拆去
  * capabilities 的 DialogsNamespaceHandlerTest）。
  *
  * 判据与 [CapabilityNamespacesTest] 同一套口径，另加三件本组特有的事：
@@ -84,7 +84,7 @@ class SystemNamespacesTest {
 
     @Test
     fun `shell exec 四字段载荷与超时透传`() = runBlocking {
-        // 第四个字段 truncated 是 2026-10-02 新增（backlog A2b 的拍板口径）：
+        // 第四个字段 truncated 是后补的（backlog A2b 的拍板口径）：
         // 形状与 `extras.ts` 的 `ShellResult` 逐字对齐，这里同时钉住"缺省 false"
         // 与"实现报 true 时原样透出"—— 桥只透传，不自己判截断。
         val fake = FakeShell(result = { ShellResult(0, "out", "err") })

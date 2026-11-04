@@ -11,7 +11,7 @@ import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
 
 /**
- * [HostNodeExecutor] 交给控制台的那一半：[HeavyOpOutcome.outputTail]（§10.9 第 3 条，2026-10-09 批 84）。
+ * [HostNodeExecutor] 交给控制台的那一半：[HeavyOpOutcome.outputTail]（§10.9 第 3 条）。
  *
  * **为什么可以零真 node**：[HostNodeExecutor] 的 `nodeBin` 是可注入的，而它对子进程只做两件事
  * —— 读它的 stdout、看它的退出码。于是「npm 说的最后那段话有没有被带出来」这条不变量

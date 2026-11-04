@@ -19,7 +19,7 @@ class ArchitectureTest {
         "com.autoscript.appservice.scheduler..",
         "com.autoscript.appservice.scriptrepo..",
         "com.autoscript.appservice.permissioncenter..",
-        // 同级 npm（2026-09-30 自本模块拆出；编译期已无 Gradle 边，字节码再钉一道）
+        // 同级 npm（自本模块拆出；编译期已无 Gradle 边，字节码再钉一道）
         "com.autoscript.appservice.npm..",
     )
 }

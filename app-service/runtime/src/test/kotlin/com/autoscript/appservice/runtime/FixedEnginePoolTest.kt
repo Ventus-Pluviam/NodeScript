@@ -134,7 +134,7 @@ class FixedEnginePoolTest {
     }
 }
 /**
- * 池的**并发交错**（2026-10-12 批 103 P2 阶段 2；外审 B2 的另一半）。
+ * 池的**并发交错**（ 阶段 2；外审 B2 的另一半）。
  *
  * 为什么单独一套：[FixedEnginePoolTest] 与 [PoolAccountingTest] 的替身 `FakeEngine.stop()`
  * 不挂起、测试又都是单线程 `runBlocking` —— 那种形态**结构上暴露不了交错**：

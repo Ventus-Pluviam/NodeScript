@@ -61,6 +61,8 @@ import com.autoscript.domain.automation.ScreenConsentOutcome
 import com.autoscript.domain.automation.ScreenConsentRequests
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.host.HostSummary
+import com.autoscript.domain.npm.NpmMaintenanceAction
+import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.host.TaskRegistration
 import com.autoscript.ui.screens.ScriptLimitsDraft
@@ -103,6 +105,9 @@ import com.autoscript.ui.state.runNpmMaintenanceOp
 import com.autoscript.ui.state.runDedupeAndPromoteOp
 import com.autoscript.ui.state.reclaimNpmCacheOp
 import com.autoscript.ui.state.reinstallInstalled
+import com.autoscript.ui.state.withInstallInFlight
+import com.autoscript.ui.state.withMaintenanceInFlight
+import com.autoscript.ui.state.withCacheReclaimInFlight
 import com.autoscript.ui.state.loadNpmSnapshot
 import com.autoscript.ui.state.loadConsoleCmd
 import com.autoscript.ui.state.runConsoleCmd
@@ -161,7 +166,7 @@ import kotlin.coroutines.resume
  * **外壳（Telegram 式）**：四屏装进 pager 横划切页，各自的顶栏由 `ActionBar` / `ScaffoldScreen`
  * 统一（四屏顶栏长得一样靠的是同一种排版组件被同一个约定调用），最下面的页签条由外壳
  * 一处画（`MainShell`）—— 页签条是全局唯一的一条，不能跟着页里的内容一起滑走。
- * 主题档位（跟随系统/浅/深）**不挂顶栏**（批 24 起）：TG 顶栏右侧没有全局开关格，
+ * 主题档位（跟随系统/浅/深）不挂顶栏：TG 顶栏右侧没有全局开关格，
  * 它收在项目页与设置页的 ⋮ 菜单里（`themeSwitchLabel` 下发那一格的目标模式文案）。
  *
  * 这里也是本模块唯一直接持有 [HostSummary] 的类：各屏只收纯状态 DTO，
@@ -197,7 +202,7 @@ class MainActivity : ComponentActivity() {
     private var taskLogState: TaskLogState by mutableStateOf(TaskLogState.NOT_LOADED)
 
     /**
-     * 脚本输出日志的文件列表（日志管理页「脚本输出」tab；2026-10-13 用户令）。
+     * 脚本输出日志的文件列表（日志管理页「脚本输出」tab）。
      *
      * 与 [taskLogState] 同一条三落点纪律（未读/失败保留/成功覆盖）。
      */
@@ -212,25 +217,25 @@ class MainActivity : ComponentActivity() {
     private var npmState: NpmState by mutableStateOf(NpmState.NOT_LOADED)
 
     /**
-     * 环境变量页状态（批 82，§8.1）。读口**不依赖壳装配**（表住 `filesDir/.ns`，
+     * 环境变量页状态（§8.1）。读口**不依赖壳装配**（表住 `filesDir/.ns`，
      * 与 `scriptFiles()` 同一条口径），故首帧就现读一次 —— 不等壳就绪那一档。
      */
     private var envState: ScriptEnvState by mutableStateOf(ScriptEnvState.NOT_LOADED)
 
     /**
-     * 镜像源管理页状态（批 83，§10.9 第 8 条）。与 [envState] 同一条口径：读口不依赖
+     * 镜像源管理页状态（§10.9 第 8 条）。与 [envState] 同一条口径：读口不依赖
      * 壳装配（全局 `.npmrc` 住 `filesDir`），首帧就现读一次。
      */
     private var registryState: RegistryState by mutableStateOf(RegistryState.NOT_LOADED)
 
     /**
-     * 脚本设置子页状态（批 107，§8.1 脚本资源限额）。与 [registryState] 同一条口径：
+     * 脚本设置子页状态（§8.1 脚本资源限额）。与 [registryState] 同一条口径：
      * 读口不依赖壳装配（限额表住 `filesDir/.ns`），首帧就现读一次。
      */
     private var limitsState: ScriptLimitsState by mutableStateOf(ScriptLimitsState.NOT_LOADED)
 
     /**
-     * 执行日志悬浮窗控制器（2026-10-13；组合外持有，供挂起函数用）。
+     * 执行日志悬浮窗控制器（组合外持有，供挂起函数用）。
      *
      * 组合内的 `logWindow`（remember 那份）是同一实例的"组合可见版" ——
      * 这里存引用只是为了让 `runFileWithWindow`/`runTaskNowOp` 这些挂起函数
@@ -248,7 +253,7 @@ class MainActivity : ComponentActivity() {
      *
      * 为什么需要它：失败路径上要关窗，而关窗这件事本身**不该再抛** —— 拿不到控制器
      * 恰恰是它要处理的那种失败（控制器未就绪），在清理里再 `checkNotNull` 一次
-     * 就是把「本来要报的错」换成「清理时崩的错」（2026-10-14「点执行就闪退」）。
+     * 就是把「本来要报的错」换成「清理时崩的错」。
      */
     private fun logWindowRefOrNull(): com.autoscript.ui.overlay.LogWindowController? = logWindowCtl
 
@@ -259,7 +264,7 @@ class MainActivity : ComponentActivity() {
     private var themeMode: ThemeMode by mutableStateOf(ThemeMode.SYSTEM)
 
     /**
-     * 执行日志悬浮窗的系统宿主（2026-10-13；Activity 字段，组合外持有）。
+     * 执行日志悬浮窗的系统宿主（Activity 字段，组合外持有）。
      *
      * 组合里 `remember` 不合适：`SystemLogWindowHost` 持有 `WindowManager` 与 view，
      * 生命周期必须跟 Activity（`onDestroy` 撤窗），而不是跟某次组合 ——
@@ -393,7 +398,7 @@ class MainActivity : ComponentActivity() {
         // 界面没了：叫醒还挂着的等待者（如实回"没能问用户"），清在途轮次。
         // **不把任何东西留进待领口** —— 销毁不是授权。
         consentRequests.abandon()
-        // 执行日志系统窗必须跟 Activity 一起撤（2026-10-13）：泄漏的 overlay 窗
+        // 执行日志系统窗必须跟 Activity 一起撤：泄漏的 overlay 窗
         // 会让系统弹 "has leaked window" 并杀进程。`logWindowHost` 是 Activity 字段
         // （组合外持有，见 onCreate 的 setContent 部分），这里直接撤。
         logWindowHost?.hide()
@@ -430,16 +435,16 @@ class MainActivity : ComponentActivity() {
             var animating by rememberSaveable { mutableStateOf(false) }
             var logManagementOpen by rememberSaveable { mutableStateOf(false) }
             val closeLogManagement = { logManagementOpen = false }
-            // 依赖管理子页（批 81）：与日志管理同一层级（pager 外，切页不丢）。
+            // 依赖管理子页：与日志管理同一层级（pager 外，切页不丢）。
             var npmOpen by rememberSaveable { mutableStateOf(false) }
             val closeNpm = { npmOpen = false }
             // 三个子页开关的**唯一**读法：谁在前台是一个值，不是三个布尔的组合。
             // 顺序（控制台 → 依赖 → 日志）只写在这一处 —— 本页的路由、返回键让位、
             // 切页现取读的都是它，三处同序。
-            // 环境变量子页（批 82）：同一层级、同一读法。
+            // 环境变量子页：同一层级、同一读法。
             var envOpen by rememberSaveable { mutableStateOf(false) }
             val closeEnv = { envOpen = false }
-            // 镜像源管理子页（批 83）：同一层级、同一读法。
+            // 镜像源管理子页：同一层级、同一读法。
             var registryOpen by rememberSaveable { mutableStateOf(false) }
             val closeRegistry = { registryOpen = false }
             val subPage = when {
@@ -450,11 +455,11 @@ class MainActivity : ComponentActivity() {
                 logManagementOpen -> ManagementPage.LOGS
                 else -> null
             }
-            // 浮层口（批 44）：**一处**建、一处挂（[MainShell] 里那个 ToastHost），
+            // 浮层口：**一处**建、一处挂（[MainShell] 里那个 ToastHost），
             // 四屏的复制回执与操作/停止回执都经 `LocalToast` 落到它上面 ——
             // 此前那些回执是各屏列表里的一行，弹一条就把内容往下推一次。
             val toast = rememberToastAction()
-            // 执行日志悬浮窗（2026-10-13）：控制器 + 系统宿主各一份（组合内 remember，
+            // 执行日志悬浮窗：控制器 + 系统宿主各一份（组合内 remember，
             // 切页不丢 —— 它们在 pager 外的 setContent 层）。系统宿主的 view 生命周期
             // 挂 Activity 字段 `logWindowHost`（onDestroy 撤窗），这里只保证字段就位。
             if (logWindowHost == null) {
@@ -469,37 +474,35 @@ class MainActivity : ComponentActivity() {
             }
             // 控制器实例交组合外字段（见 logWindowCtl KDoc）：挂起函数经它调 open/close。
             logWindowCtl = logWindow
-            // 悬浮窗同步与轮询（2026-10-13）：系统窗内容同步 + 窗开期间拉取。
+            // 悬浮窗同步与轮询：系统窗内容同步 + 窗开期间拉取。
             // `logWindow.state != null` 即开 —— 关窗（state null）效应取消、轮询停。
             //
-            // **行数据不进 `SystemWindowSync` 的参数**（2026-10-14「点执行就闪退」）：
+            // **行数据不进 `SystemWindowSync` 的参数**：
             // 参数是 `LaunchedEffect` 的键，而每轮轮询都产出新的行列表 —— 内容一变
             // 效应就重启、离屏窗就重跑一次 `setContent`。改走 `logWindow.lines`
             // （窗内现读的 Compose 状态，刷新即普通重组，见 `SystemWindowSync` KDoc）。
             com.autoscript.ui.overlay.SystemWindowSync(
                 controller = logWindow,
                 onFirstAction = { scope.launch { windowFirstAction(logWindow) { toast.show(it) } } },
-                // 底部输入框（2026-10-16）：草稿写状态、送行走控制器（它按"在途/已结算"
+                // 底部输入框：草稿写状态、送行走控制器（它按"在途/已结算"
                 // 决定发不发、成功才清草稿，见 `LogWindowController.sendInput`）。
                 onInputDraft = { logWindow.updateInputDraft(it) },
                 onSendInput = { scope.launch { logWindow.sendInput() } },
                 onImeFocusChange = { logWindow.setImeFocus(it) },
-                // 顶栏「结束脚本」（2026-10-16 用户令）：与暂停/继续同一条协程域。
+                // 顶栏「结束脚本」：与暂停/继续同一条协程域。
                 onStop = { scope.launch { logWindow.stop() } },
             )
             com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
                 reloadConsole()
                 logWindow.updateLines(consoleState.lines)
-                // 结算不解绑（用户令「脚本执行完不要自动清理输出」）：绑定随在途表
+                // 结算不解绑（执行完保留输出）：绑定随在途表
                 // 现取，但同归属 run 跑完离开在途表时**保持**窗口绑在它上面、
                 // 输出照常可见（详见 `LogWindowState.bind`）。
                 //
-                // **快速脚本的兜底补绑**（用户令「有时点执行日志不显示在悬浮窗上」）：
+                // **快速脚本的兜底补绑**（极快的执行可能抢在绑定之前结束）：
                 // 起跑即结算的脚本整个生命周期可以落在两轮轮询（400ms）之间，在途表
-                // 一次都没见过它 —— 从落盘执行索引里挑**同归属**最近一条 run 补位
-                // （见 `fallbackRunIdFor`；2026-10-16 修：此前取的是全库最新行，
-                // 没有归属过滤，于是窗刚开时会被补到**上一次别的脚本**的输出上，
-                // 用户读到的是「它跑了上一次那个脚本」）。
+                // 一次都没见过它 —— 从落盘执行索引里挑**同归属**（同项目、同文件）
+                // 最近一条 run 补位（见 `fallbackRunIdFor`）。
                 //
                 // **只在窗从没绑上过时查**（`boundRunId == null`）：这条读口要读一次
                 // index.jsonl，绑上之后每轮再读纯属白花。
@@ -536,7 +539,7 @@ class MainActivity : ComponentActivity() {
                     // 唯一事实来源，页签条与重读都从它派生，绕过去就又会漂移。
                     onSelectTab = { scope.launch { pagerState.animateScrollToPage(it) } },
                     toast = toast,
-                    // 执行日志悬浮窗（2026-10-13）：控制器 + 行事实源 + 按钮协程域。
+                    // 执行日志悬浮窗：控制器 + 行事实源 + 按钮协程域。
                     logWindow = logWindow,
                     logLines = { consoleState.lines },
                     onFirstAction = { scope.launch { windowFirstAction(logWindow) { toast.show(it) } } },
@@ -558,7 +561,7 @@ class MainActivity : ComponentActivity() {
                             modifier = shellModifier,
                             // 邻页预组合：点页签滑动时邻页已经在了，不会划到一半才现画。
                             beyondViewportPageCount = 1,
-                            // **禁横划**（批 25）：屏幕里横划是各屏自己的手势域（列表回弹、
+                            // **禁横划**：屏幕里横划是各屏自己的手势域（列表回弹、
                             // 未来 Dochirō 式侧滑菜单），pager 抢掉它们就全是误切页。
                             // 切页只走页签点按（onSelectTab 的 animateScrollToPage）。
                             userScrollEnabled = false,
@@ -587,7 +590,7 @@ class MainActivity : ComponentActivity() {
                                 // （子屏那几档收在 [ManagementSubPageHost] 里 ——
                                 // onCreate 已贴着 detekt 的长函数线）。
                                 // 面板 ⇄ 子页 / 子页 ⇄ 子页 那一层切换走 TG 那套进场动画
-                                // （2026-10-12；`ManagementTransition` 里逐值对着
+                                // （`ManagementTransition` 里逐值对着
                                 // `ActionBarLayout.startLayoutAnimation`）。`page == null`
                                 // 就是面板本身 —— 它也占一个槽位，所以「返回」是同一条路径。
                                 Tab.MANAGEMENT -> {
@@ -678,7 +681,7 @@ class MainActivity : ComponentActivity() {
                         }
                 }
             // 管理子页的返回键与侧缘手势**整个交给 `ManagementTransition` 内部那个
-            // handler**（2026-10-12）。此前外壳挂着一个 `BackHandler`，它组合在
+            // handler**。外壳若挂 `BackHandler`，它组合在
             // `ManagementTransition` **之后** —— `OnBackPressedDispatcher` 是 LIFO，
             // 后注册的优先，于是系统回退手势全被它吃掉，`PredictiveBackHandler`
             // 一次都收不到，跟手动画自然无从谈起（**不报错、静默不生效**）。
@@ -703,7 +706,10 @@ class MainActivity : ComponentActivity() {
                     // 日志管理两个列表都要现取：系统日志是控制台游标增量，任务日志读档案。
                     Tab.MANAGEMENT -> when (subPage) {
                         ManagementPage.CONSOLE -> reloadConsoleCmd()
-                        ManagementPage.NPM -> reloadNpm()
+                        // 依赖页页头要画"当前在用镜像源"（第十四批第 35 条），故进本页时
+                        // 把全局镜像源读数一并现取 —— 与镜像源管理页共享同一份
+                        // RegistryState，改过配置切回来也拿得到新值。
+                        ManagementPage.NPM -> { reloadNpm(); reloadRegistry() }
                         ManagementPage.ENV -> reloadEnv()
                         ManagementPage.REGISTRY -> reloadRegistry()
                         ManagementPage.LOGS -> { reloadConsole(); reloadTaskLog(); reloadScriptLogs() }
@@ -747,8 +753,8 @@ class MainActivity : ComponentActivity() {
                 onReadFile = { projectId, relPath -> readScriptFileOp(projectId, relPath) },
                 onSaveFile = { projectId, relPath, content -> saveScriptFileOp(projectId, relPath, content) },
                 // 点行尾 ▶ 跑这个文件：挂起到本次执行结算（与任务中心「立即执行」同一条链），
-                // 成败归控制台/任务日志。2026-10-13 起回执 = 开悬浮窗（不再弹
-                // 「已触发…」toast）：先开窗再跑，跑起来之前窗里是「未开始」空态；
+                // 成败归控制台/任务日志。成功回执 = 开悬浮窗（不弹「已触发…」toast）：
+                // 先开窗再跑，跑起来之前窗里是「未开始」空态；
                 // 没跑起来（抛）→ 关窗 + 上抛给 ProjectScreen 的失败 toast。
                 //
                 // **直调 `runScriptFileOp`，不再包一层 `scope.launch`**：`onRunFile`
@@ -792,7 +798,7 @@ class MainActivity : ComponentActivity() {
         onCloseLogManagement: () -> Unit,
         scope: CoroutineScope,
     ) {
-        // 「盯着这一页时它自己动」（2026-10-10 批 90）：`runConsoleCmdOp`/`submitInstall`
+        // 「盯着这一页时它自己动」：`runConsoleCmdOp`/`submitInstall`
         // 已经会在**提交之后**跟到跑完，但那条链只覆盖"是我按下去的那一次"——
         // 用户切走再切回来、或进页面时命令已经在跑，就没人拉了。这里补上：
         // 只要**这一页在前台**且**宿主说在跑**，就一直拉到它停。
@@ -802,7 +808,9 @@ class MainActivity : ComponentActivity() {
         // 页不在前台（`page` 变了）时效应随之取消：**不在看的页面不该一直问宿主**。
         LaunchedEffect(page, consoleCmdState.running) {
             if (page == ManagementPage.CONSOLE && consoleCmdState.running) {
-                consoleCmdState = pollConsoleWhileRunning(hostSummary(), consoleCmdState)
+                // 逐轮写回组合状态：这条循环靠 onStep 把 npm 的每行输出实时
+                // 排进屏幕，而不是协程结束才一口涌出（见 `LivePoll.pollWhile`）。
+                consoleCmdState = pollConsoleWhileRunning(hostSummary(), consoleCmdState) { consoleCmdState = it }
             }
         }
         LaunchedEffect(page, npmState.installing) {
@@ -813,7 +821,9 @@ class MainActivity : ComponentActivity() {
             // 四件事各自是"不轮询"的理由，不是一句合起来的判断。
             if (page != ManagementPage.NPM || !npmState.installing) return@LaunchedEffect
             if (projectId == null || host == null) return@LaunchedEffect
-            npmState = pollInstallWhileRunning(host, npmState, projectId)
+            // 逐轮写回组合状态：轮询的中间态不憋到协程结束 —— 阶段条逐格走、
+            // 日志逐行长靠的是这一拍拍的写回（见 `LivePoll.pollWhile`）。
+            npmState = pollInstallWhileRunning(host, npmState, projectId) { npmState = it }
         }
         when (page) {
             ManagementPage.CONSOLE -> ConsoleScreen(
@@ -830,24 +840,44 @@ class MainActivity : ComponentActivity() {
             )
             ManagementPage.NPM -> NpmScreen(
                 state = npmState,
-                onRefresh = { reloadNpm() },
+                registryLabel = registryState.snapshot?.effective ?: NpmRegistryKeys.OFFICIAL,
+                onClearLog = { npmState = NpmState.clearLog(npmState) },
                 onSelectProject = { npmState = NpmState.withProject(npmState, it) },
-                onMaintenance = { action -> scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) } },
+                onMaintenance = { action ->
+                    // 在途先写回：宿主挂起执行，不先置位按钮不会置灰。
+                    npmState = npmState.withMaintenanceInFlight(action)
+                    scope.launch { npmState = runNpmMaintenanceOp(hostSummary(), npmState, action) }
+                },
                 onInstallDraft = { npmState = npmState.copy(installDraft = it, opError = null, opNotice = null) },
-                onSubmitInstall = { scope.launch { npmState = submitInstall(hostSummary(), npmState) } },
-                onRemoveInstalled = { name -> scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) } },
+                onSubmitInstall = {
+                    // 在途先写回：不先置位，阶段条不出现、按钮不置灰，
+                    // 挂起期间也没有轮询在跑（兜底轮询的键就是 installing）。
+                    npmState = npmState.withInstallInFlight()
+                    scope.launch { npmState = submitInstall(hostSummary(), npmState) }
+                },
+                onRemoveInstalled = { name ->
+                    npmState = npmState.withInstallInFlight()
+                    scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) }
+                },
                 onBack = onCloseNpm,
                 // 「依赖去重」那个选项是**两件事**（去重 + 提升到全局），所以它有自己的一条
                 // 入口而不是从 `onMaintenance` 转手 —— 见 `OptionsCard` 的 KDoc。
-                onDedupePromote = { scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) } },
+                onDedupePromote = {
+                    npmState = npmState.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
+                    scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) }
+                },
                 onReinstall = { row ->
                     // 名字与版本都取自这一行（宿主读 lockfile 的结果），不是用户敲的 ——
                     // 走的是与「卸载」同一条命令通道，门禁强度因此不取决于按的是哪一颗。
+                    npmState = npmState.withInstallInFlight()
                     scope.launch { npmState = reinstallInstalled(hostSummary(), npmState, row.name, row.version) }
                 },
-                // 「清理缓存」那个选项（2026-10-17 第二批回到页面上）：它**不占安装会话**
-                // （只删几个缓存文件），所以走的是 `reclaimingCache` 那一条独立的状态位。
-                onReclaimCache = { scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) } },
+                // 「清理缓存」不占安装会话（只删几个缓存文件），
+                // 所以走 `reclaimingCache` 那一条独立的状态位。
+                onReclaimCache = {
+                    npmState = npmState.withCacheReclaimInFlight()
+                    scope.launch { npmState = reclaimNpmCacheOp(hostSummary(), npmState) }
+                },
                 modifier = Modifier,
             )
             ManagementPage.ENV -> ScriptEnvScreen(
@@ -891,7 +921,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 应用窗口的触摸入口（2026-10-16 用户报「点击软件非悬浮窗界面的时候，悬浮窗输入框还有光标」）。
+     * 应用窗口的触摸入口（点本窗口时清掉悬浮窗输入框的焦点）。
      *
      * **为什么在这一层**：悬浮窗是**另一个窗口**（`TYPE_APPLICATION_OVERLAY`），它收不到
      * 本窗口的指针事件，而本窗口的 Compose 树也看不到那一边 —— 跨窗口唯一确定的事实是
@@ -974,7 +1004,7 @@ class MainActivity : ComponentActivity() {
      * 三落点与 [createEntryOp] 同构：未接线 → opError；抛 → opError 原文；成功/部分成功 →
      * opNotice + 现取一次清单（行没了，不重读就会停在旧快照上）。
      *
-     * **不弹确认框**（用户口径「不用加弹窗」）：本口被调到就已经是"用户点了删除"。
+     * **不弹确认框**：本口被调到就已经是"用户点了删除"。
      */
     private suspend fun deleteEntriesOp(rows: List<ScriptFileRowUi>) {
         if (rows.isEmpty()) return
@@ -1014,8 +1044,8 @@ class MainActivity : ComponentActivity() {
      * → opError 原文、**不清清单**；成功 → opNotice 回执 + 现取一次（新条目要出现在
      * 列表里，回执在刷新之后盖上去）。成功时收掉创建对话框（[ProjectState.creating]）。
      *
-     * [dirRelPath] = 用户按下 FAB 时所在的那一层（2026-10-16 用户口径「在当前进入的文件夹中
-     * 新建」）—— 本层与宿主都不解释它，一路透传到 [ScriptFileOps] 落位。
+     * [dirRelPath] = 用户按下 FAB 时所在的那一层 —— 本层与宿主都不解释它，
+     * 一路透传到 [ScriptFileOps] 落位。
      */
     private suspend fun createEntryOp(
         projectId: String,
@@ -1129,11 +1159,11 @@ class MainActivity : ComponentActivity() {
             if (host == null) {
                 NpmState.failed(IllegalStateException("宿主摘要未接线（Application 未实现 HostSummary）"), previous)
             } else {
-                // 快照与**安装进度**同一次现取（§10.9 第 1 条，2026-10-09 批 87）：
-                // `:ui` 没有常驻轮询循环，宿主又是入队即返回的，故「刷新」这颗按钮
+                // 快照与**安装进度**同一次现取（§10.9 第 1 条）：
+                // 「刷新」同时是阶段条的续拉入口 ——
                 // 同时是阶段条的续拉入口 —— 分两次现取会让两个数字来自不同时刻。
                 // 走 [loadNpmSnapshot] 而不是裸调 `NpmState.of(host.npmSnapshot(), …)`：
-                // 底部那个日志大框与快照是**同一趟现取**（2026-10-17），两条各拉一次
+                // 底部那个日志大框与快照是**同一趟现取**，两条各拉一次
                 // 就会一个说"装完了"、另一个还没输出完。
                 val refreshed = loadNpmSnapshot(host, previous)
                 if (refreshed.selectedProjectId != null) {
@@ -1297,7 +1327,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 点行尾 ▶ 跑文件（2026-10-13）：先开悬浮窗再跑，挂起到结算。
+     * 点行尾 ▶ 跑文件：先开悬浮窗再跑，挂起到结算。
      *
      * 没跑起来（抛）→ 关窗 + 上抛（`ProjectScreen.runFile` 的 catch 弹失败 toast）。
      * 定时/后台触发不走这里（调度器直调宿主），故天然不弹窗 —— 日志照存。
@@ -1308,9 +1338,9 @@ class MainActivity : ComponentActivity() {
         // （首段 = 项目名）只活在文件列表里，出这一层就换形（转换收在 `:domain`）。
         // 削不出 = 这个文件不在该项目下 → 交给宿主拒（它的话术点名原因）。
         val internalPath = ScriptPaths.projectInternalOrNull(projectId, relPath) ?: relPath
-        // **开窗也在 try 里**（2026-10-14「点执行就闪退」）：`logWindowRef()` 拿不到
-        // 控制器时是 `checkNotNull`（IllegalStateException），此前它在 try 之外 ——
-        // 那条路连「关窗」都不需要，却照样把异常送进组合作用域。开窗失败与执行失败
+        // **开窗也在 try 里**：`logWindowRef()` 拿不到控制器时是 `checkNotNull`
+        // （IllegalStateException）—— 它在 try 之外的话，那条路连「关窗」都不需要，
+        // 却照样把异常送进组合作用域（点执行就闪退）。开窗失败与执行失败
         // 同一条出路：关窗 + 上抛（`ProjectScreen.runFile` 弹失败 toast）。
         try {
             logWindowRef().open(projectId, internalPath)
@@ -1325,7 +1355,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 悬浮窗第一颗钮的动作分派（2026-10-15 用户令「执行完变重跑图标」）。
+     * 悬浮窗第一颗钮的动作分派：在途 = 暂停/继续，已结算 = 重跑。
      *
      * 在途 → 暂停/继续（[LogWindowController.togglePause] 按 `state.paused` 自己选）；
      * 已结算（跑完/被停/崩溃，`state.running == false`）→ **重跑**：同一文件再执行一次。
@@ -1347,8 +1377,8 @@ class MainActivity : ComponentActivity() {
             // （窗的 relPath 恒为削过前缀的形状，不会双份前缀）。
             logWindow.rerun(state.projectId, state.relPath)
             try {
-                // **重跑前先确认窗里那个文件还在**（2026-10-16 用户报「运行的时候会执行上一次
-                // 执行成功的脚本」）：窗绑的是"上一次那条执行的文件"，它可能已被改名/删掉。
+                // **重跑前先确认窗里那个文件还在**：窗绑的是"上一次那条执行的文件"，
+                // 它可能已被改名/删掉。
                 // 缺文件的真相只有引擎侧那句 `ERR_FILE_NOT_FOUND`（落在意图日志/档案里），
                 // 窗里看到的是"没有任何新输出"—— 读起来正是"它跑了上一次那个脚本"。
                 // 这里先读一次（读口与引擎侧同一条 `ScriptFileOps` 判据），不在就当场说清楚。
@@ -1369,20 +1399,20 @@ class MainActivity : ComponentActivity() {
      * 立即执行（`USER_CLICK`）：**挂起到执行结算**（排队 10s + 脚本超时/默认 30s，
      * 见 `HostSummary.runTaskNow` KDoc），期间 `opInFlight` 禁用按钮。
      *
-     * 2026-10-13 起成功回执 = 开悬浮窗（不再弹「已触发…/已执行…」toast：
-     * 成功文案改 null，`opToastMessage` 对 null 静默 —— 登记/取消/失败回执不动）。
+     * 成功回执 = 开悬浮窗（不弹「已触发…/已执行…」toast：成功文案是 null，
+     * `opToastMessage` 对 null 静默 —— 登记/取消/失败回执不动）。
      * Once 出册语义不变（刷新后卡片消失仍是调度器语义）。失败（opError 非空）→ 关窗。
      */
     private suspend fun runTaskNowOp(task: TaskRowState) {
         // 挂起目标先落账：那一行的播放钮要画成"转圈的开口弧"（其余行不受影响）。
         taskState = taskState.copy(opTargetTaskId = task.id)
         try {
-            // **开窗失败不挡执行**（2026-10-14「点执行就闪退」）：控制器未就绪时
-            // `logWindowRef()` 抛 ISE，而本函数跑在 `scope.launch` 里（组合作用域），
+            // **开窗失败不挡执行**：控制器未就绪时 `logWindowRef()` 抛 ISE，
+            // 而本函数跑在 `scope.launch` 里（组合作用域），
             // 上抛 = 终结进程。开窗是**回执**不是执行的前提 —— 它失败就退成
             // 「没有悬浮窗的那次立即执行」（任务照跑，结局在控制台/任务日志里）。
-            // **立即执行也开窗**（2026-10-16 用户口径：执行了就要看得见输出、收得到输入）——
-            // 此前只有项目页那颗 ▶ 开窗，任务中心「立即执行」跑完没有任何输出面。
+            // **立即执行也开窗**（执行了就要看得见输出、收得到输入）——
+            // 任务中心「立即执行」与项目页那颗 ▶ 同一条链。
             // 归属形状与开窗那一套同源：`TaskRowState.scriptPath` 是**项目内**路径
             // （任务登记那条链，与在途表 `ActiveRunRow.scriptPath` 同一口径），
             // 不必再削首段前缀。
@@ -1459,7 +1489,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 停掉在跑的控制台命令（批 94「停止」按钮）：交给宿主句柄账（T1 通道真杀进程树）。
+     * 停掉在跑的控制台命令：交给宿主句柄账（T1 通道真杀进程树）。
      *
      * 不等它死透 —— 回执是「已请求停止」，进程回收是异步的；终态行由页面轮询
      * （[LivePoll]）随后拉回来。回执措辞不替宿主宣布结果，同 [stopRunOp] 那条纪律。
@@ -1802,35 +1832,34 @@ private fun ContentDrawScope.drawThemeReveal(reveal: ThemeSwitchReveal, progress
  * **本函数不读 pager 的滚动位置**（这一点是硬约束，不是风格）：`pagerState` 只往下
  * 传给页签条。这里若读一次 `currentPageOffsetFraction`，横划的每一帧都会把本函数
  * 连同它下面的 pager 子树重组一遍 —— 四个屏各自带着自己的列表子树，
- * 那是"切页卡死"的根因（2026-10-02 实测）。页签条自己在**它那一层**读
+ * 那就是"切页卡死"的根因。页签条自己在**它那一层**读
  * `currentPage`（每翻一页变一次），跟手的观感由颜色动画补完。
  *
- * 底栏是 TG 的**悬浮胶囊**（2026-10-03 批 21 起）：不再占版面的一行，而是与内容
- * 同层、盖在内容之上 —— 所以 Column 不再需要给自己铺底色（每屏自己铺），也不用
- * 给 pager 让出高度。主题切换曾经是页签条之上的一条 28dp 细行，已改挂各屏顶栏
- * （见 [LocalBarAction]）。
+ * 底栏是 TG 的**悬浮胶囊**：不占版面的一行，而是与内容同层、盖在内容之上 ——
+ * 所以 Column 不需要给自己铺底色（每屏自己铺），也不用给 pager 让出高度。
+ * 主题切换挂在各屏顶栏（见 [LocalBarAction]）。
  *
- * **浮层（toast）也挂在这一层**（批 44）：提示是"浮在内容之上、自己消失"的一条，
+ * **浮层（toast）也挂在这一层**：提示是"浮在内容之上、自己消失"的一条，
  * 宿主只有这一处 —— 四屏的回执经 [LocalToast] 落上来，各屏不必自己摆位置，
- * 也不必再往列表里插行（这正是批 44 要修的病）。
+ * 也不必再往列表里插行。
  */
 @Composable
 private fun MainShell(
     pagerState: PagerState,
     onSelectTab: (Int) -> Unit,
     toast: ToastAction,
-    /** 执行日志悬浮窗控制器（2026-10-13；in-app 兜底窗挂这里，与 ToastHost 同层）。 */
+    /** 执行日志悬浮窗控制器（in-app 兜底窗挂这里，与 ToastHost 同层）。 */
     logWindow: com.autoscript.ui.overlay.LogWindowController,
     /** 悬浮窗可见行的事实源（consoleState.lines 的呈现态；Activity 字段现读）。 */
     logLines: () -> List<com.autoscript.ui.state.ConsoleLineState>,
     /** 悬浮窗第一颗钮的动作（在途 = 暂停/继续，已结算 = 重跑；Activity 的 windowFirstAction）。 */
     onFirstAction: () -> Unit,
-    /** 悬浮窗底部输入框的草稿变更 / 送行（2026-10-16 用户令）。 */
+    /** 悬浮窗底部输入框的草稿变更 / 送行。 */
     onInputDraft: (String) -> Unit,
     onSendInput: () -> Unit,
     /** 输入框焦点变化（系统窗要靠它摘掉 `FLAG_NOT_FOCUSABLE`，否则输入法不起来）。 */
     onImeFocusChange: (Boolean) -> Unit,
-    /** 悬浮窗顶栏「结束脚本」的动作（2026-10-16 用户令；Activity 的 `logWindow.stop`）。 */
+    /** 悬浮窗顶栏「结束脚本」的动作（Activity 的 `logWindow.stop`）。 */
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
@@ -1838,8 +1867,7 @@ private fun MainShell(
     // 悬浮底栏的临时隐藏开关：整屏面（脚本文本编辑器）进来时自己写 true、退出写回
     // false。开关建在这一层是因为**只有外壳能同时"供"和"读"它**（见 LocalTabBarHidden）。
     //
-    // **收起/展开是瞬间的，没有过渡动画**（用户 2026-10-13 口径："不要加动画"）。
-    // 之前那 180ms 的位移/缩放/淡出整条删掉了 —— 进编辑页底栏立刻不见、退出立刻回来。
+    // **收起/展开是瞬间的，没有过渡动画**：进编辑页底栏立刻不见、退出立刻回来。
     val tabBarHidden = remember { mutableStateOf(false) }
     Column(modifier.fillMaxSize()) {
         // pager 占满整个屏高（**不留**底栏的那份）：底栏改成 TG 的悬浮胶囊后它不再
@@ -1858,7 +1886,7 @@ private fun MainShell(
                 ) {
                     content(Modifier.fillMaxSize())
                 }
-                // 执行日志悬浮窗的 in-app 兜底（2026-10-13）：无悬浮窗权限时走这里 ——
+                // 执行日志悬浮窗的 in-app 兜底：无悬浮窗权限时走这里 ——
                 // 与 ToastHost 同层（pager 外，过导航存活）、后画压内容。走系统窗时
                 // state 非空但这里不画（`!usingSystemWindow` 门），不叠两层窗。
                 val logState = logWindow.state
@@ -1880,8 +1908,8 @@ private fun MainShell(
                 }
                 // 胶囊盖在内容之上：后画的在上层。它自己的 8dp 外边距让四周露出内容。
                 //
-                // **收起/展开不带过渡动画**：进编辑页那一下整条直接消失、退出直接回来
-                // （用户 2026-10-13 口径）。所以这里连 `graphicsLayer` 都不需要 ——
+                // **收起/展开不带过渡动画**：进编辑页那一下整条直接消失、退出直接回来。
+                // 所以这里连 `graphicsLayer` 都不需要 ——
                 // 不画就没有触摸区，不存在"留一条看不见却点得到的胶囊"。
                 if (!tabBarHidden.value) {
                     Box(Modifier.align(Alignment.BottomCenter)) {
@@ -1906,7 +1934,7 @@ private fun MainShell(
 /**
  * pager 这一层的「露出来」口径：**永远不滚**。
  *
- * 病根（2026-10-07 云手机复现）：编辑器聚焦后 `BasicTextField` 会请求把光标
+ * 病根：编辑器聚焦后 `BasicTextField` 会请求把光标
  * bring-into-view，请求沿祖先链一路冒泡到 `HorizontalPager`。pager 缺省的
  * `PagerBringIntoViewSpec` 会把它当成「把这一页滚进来」，`userScrollEnabled = false`
  * 也拦不住（那只关手势）—— 于是 pager 被推向下一页（任务页），而项目页因
@@ -1932,7 +1960,7 @@ private const val HOME_RETRY_ATTEMPTS = 10
 /**
  * 冷启重问：壳还没就绪就过一会儿再问一次，**有界**。
  *
- * 为什么需要（2026-10-02 真机实测）：装配在 IO 域异步完成，而 `onCreate` 的首读
+ * 为什么需要：装配在 IO 域异步完成，而 `onCreate` 的首读
  * 大概率赶在它前面 —— 那一刻首屏显示「壳未就绪（装配中或失败）」与「保活未生效」
  * 两行红字，而首屏的读口只在 `onCreate` / `onResume` / 手动刷新三处被调，
  * **它不会自己变绿**：用户装完 App 一打开看到的就是"这 App 坏了"。

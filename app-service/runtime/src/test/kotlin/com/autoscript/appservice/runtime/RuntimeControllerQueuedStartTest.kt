@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 外审 B1（2026-10-11）的守卫：**排队中的 start 不得阻塞 stop/killAll/看门狗**。
+ * 外审 B1的守卫：**排队中的 start 不得阻塞 stop/killAll/看门狗**。
  *
  * 病灶：`RuntimeController.start` 整段持 `guard`，而 `pool.acquire` 会在满池时挂起等证
  * （默认容量 1、调度触发等 60–120s）。于是「A 在跑、B 排队」时，A 的 stop/killAll 与
