@@ -682,7 +682,18 @@ class InstallCoordinator(
         // 遍历整个缓存目录并真删文件，而这颗按钮是**主线程那条协程**直接 await 的
         // （`reclaimNpmCacheOp`）。包一层 `withContext` 是"做阻塞调用的那一层自己声明它是 IO"
         // 在别处（[cacheStorage]）已有的写法。
+        //
+        // **全程持 `globalSession`**（与每条重操作同一把锁）：回收会真删缓存 content，
+        // 而 keep 集算自各项目的 lock —— 在途安装的包是**先进缓存、后落 lock**的，
+        // 与它赛跑等于把一份刚写进缓存、lock 还没来得及记的包当成没人要的删掉
+        // （安装或许能跑完，但它刚攒下的离线能力静默没了）。排队在在途操作后面
+        // 是「等一下」，赛跑是「赌一把」—— 这里要的是前者。
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            globalSession.withLock { reclaimCacheLocked() }
+        }
+
+    /** [reclaimCache] 的本体（并发闸在调用方，见那边的注释）。 */
+    private fun reclaimCacheLocked(): NpmCacheReclaimReport {
             val cacheDir = resolveCacheDir()
             val keep = LinkedHashSet<String>()
             val unreadable = ArrayList<String>()
@@ -740,7 +751,7 @@ class InstallCoordinator(
                 if (unreadable.isNotEmpty()) append("；以下项目 lock 读不出来，其依赖未被保护：").append(unreadable.sorted())
             }
             opLog.log(OpName.CACHE_RECLAIM, "", true, why)
-            NpmCacheReclaimReport(
+            return NpmCacheReclaimReport(
                 removedEntries = report.removedEntries,
                 removedBytes = report.removedBytes,
                 keptEntries = report.keptEntries,
