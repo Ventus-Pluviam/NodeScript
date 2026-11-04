@@ -232,9 +232,21 @@ class InstallCoordinator(
          */
         val journaled: Boolean = true,
         @Volatile var journalStarted: Boolean = false,
+        @Volatile var journalCommitted: Boolean = false,
         @Volatile var cancelled: Boolean = false,
         @Volatile var done: Boolean = false,
     ) : OpCancelSignal {
+        /**
+         * 「一个句柄只能有一个终态事件」的**原子**落账（`runScriptOps` 的 `firstTerminal`
+         * 是同一条纪律）：`cancel()` 与执行尾的成功/失败收尾是**竞态**（用户在 commit
+         * 落盘那一毫秒按「停止」），两条都发 `Finished` 会让订阅方拿到两个互相矛盾的
+         * 终态。@Volatile 的 check-then-set 守不住两个并发 cancel —— CAS 才是「恰好一次」。
+         */
+        private val terminalOnce = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /** 抢终态发送权：true = 本调用方是第一个（它发事件）；false = 已有人发过。 */
+        fun claimTerminal(): Boolean = terminalOnce.compareAndSet(false, true)
+
         // 执行体经 ScriptOp.cancelSignal 读的就是这一位：「停止」按下去 → 这里置位
         // → 执行体在 waitFor 切片间隙看到 → 杀进程树。
         override fun isCancelled(): Boolean = cancelled
@@ -417,7 +429,7 @@ class InstallCoordinator(
         handles[handle.id]?.let {
             it.cancelled = true
             if (!it.done) {
-                if (it.journaled && it.journalStarted) {
+                if (it.journaled && it.journalStarted && !it.journalCommitted) {
                     journal.fail(
                         it.nonce, handle.projectId,
                         staging.stagePath(handle.projectId, it.nonce).fileName.toString(), "用户取消",
@@ -425,7 +437,9 @@ class InstallCoordinator(
                     staging.sweep(handle.projectId, setOf(it.nonce))
                 }
                 it.finish()
-                emit(InstallEvent.Finished(handle.projectId, handle.id, success = false, detail = "已取消"))
+                if (it.claimTerminal()) {
+                    emit(InstallEvent.Finished(handle.projectId, handle.id, success = false, detail = "已取消"))
+                }
             }
         }
     }
@@ -1087,14 +1101,18 @@ class InstallCoordinator(
                         }
                         tracked.finish()
                         opLog.log(action, projectId, true, summary)
-                        emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
+                        // cancel() 可能刚抢过终态（竞态窗口在 cancelled 检查与 finish 之间）：
+                        // 抢不到就不再发 —— 一个句柄只有一个终态事件。
+                        if (tracked.claimTerminal()) {
+                            emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = summary))
+                        }
                     } catch (e: CancellationException) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
                         throw e
                     } catch (e: Exception) {
-                        // cancel() 可能已就地把 done 置位并发过终态（见上面那段竞态说明）。
+                        // cancel() 可能已就地把终态抢走过（见上面那段竞态说明）。
                         // 一个句柄只能有一个终态事件 —— 两条会让订阅方无从裁决「那次到底成没成」。
-                        val firstTerminal = !tracked.done
+                        val firstTerminal = tracked.claimTerminal()
                         tracked.finish()
                         if (firstTerminal) {
                             opLog.log(action, projectId, false, e.message)
@@ -1320,6 +1338,7 @@ class InstallCoordinator(
             // 执行体把新树写在 stageDir（harvest 提升）；落位由 staging.commit 原子 rename
             staging.commit(projectId, nonce)
             journal.commit(nonce, projectId, stageDir.fileName.toString())
+            tracked.journalCommitted = true
             tracked.finish()
             // §10.5-1：install 会重写项目 lock（执行体 harvest 写回），签要跟着更新——
             // 用旧签会导致紧随其后的 ci 验签失败。签名失败 = 不谎称成功（回滚太重，
@@ -1328,7 +1347,11 @@ class InstallCoordinator(
                 lockSigner?.sign(projectId, layout.lockfile(ProjectId(projectId)))
             } catch (e: Exception) {
                 opLog.log(opName(args), projectId, false, "lock 签名失败: ${e.message}")
-                emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = "lock 签名失败: ${e.message}"))
+                // 终态只发一次：这一句说完，外层 catch 不得再补一条（同一句柄两个
+                // 终态事件，订阅方无从裁决 —— 与 cancel 竞态那处同一条纪律）。
+                if (tracked.claimTerminal()) {
+                    emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = "lock 签名失败: ${e.message}"))
+                }
                 throw AutojsException(
                     ErrorCode.ERR_PERMISSION_DENIED,
                     "lock 签名失败（应用密钥不可用？§10.5-1 安全降级须显式）：${e.message}",
@@ -1357,17 +1380,28 @@ class InstallCoordinator(
                 )
             }
             opLog.log(opName(args), projectId, true, outcome.summary)
-            emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = outcome.summary))
+            if (tracked.claimTerminal()) {
+                emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = outcome.summary))
+            }
         } catch (e: CancellationException) {
             // 事务与句柄须先收尾，再原样传播调用方取消。
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
             throw e
         } catch (e: Exception) {
-            journal.fail(nonce, projectId, stageDir.fileName.toString(), e.message)
+            // journal.fail 的前提是这个 nonce **begin 过且没 commit 过**：begin 没跑成
+            // 就写 fail 是「从未 begin 却已 fail」（§10.4 状态机不容无源之记）；
+            // commit 之后才落到这里（如 lock 签名失败的尾段）再补 fail，账本里同一条
+            // 事务 commit/fail 并存，残骸清扫与审计都读不懂。begin 过 → 暂存目录才是残骸。
+            if (tracked.journalStarted && !tracked.journalCommitted) {
+                journal.fail(nonce, projectId, stageDir.fileName.toString(), e.message)
+            }
             staging.sweep(projectId, setOf(nonce))
             tracked.finish()
             opLog.log(opName(args), projectId, false, e.message)
-            emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
+            // 终态只发一次：取消/签名失败那一路可能已抢过（见 [TrackedOp.claimTerminal]）。
+            if (tracked.claimTerminal()) {
+                emit(InstallEvent.Finished(projectId, handle.id, success = false, detail = e.message))
+            }
             throw e
         }
     }

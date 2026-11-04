@@ -315,6 +315,37 @@ class InstallCoordinatorTest {
         assertTrue(events.filterIsInstance<InstallEvent.Finished>().any { !it.success })
     }
 
+    /**
+     * lock 签名失败（应用密钥不可用）这条尾段（修）：commit 已落、安装**本体**已成，
+     * 失败只出在签名 —— 但旧实现在这条路上把 `Finished(success=false)` 发了**两条**
+     * （内层一条 + 外层 catch 一条），还顺手给已 commit 的 journal 补了一条 fail
+     * （同一条事务 begin/commit/fail 三态并存）。断三件事：终态事件恰好一条、
+     * journal 停在 begin→commit、异常照常上抛。
+     */
+    @Test
+    fun `lock 签名失败：同一句柄只有一个终态事件，journal 不补 fail`() = runBlocking {
+        val signer = LockSigner(dir.resolve(".ns"), LockSigner.KeyProvider { error("应用密钥不可用") })
+        val c = coordinator(executor = harvesting("axios" to "1.0.0"), lockSigner = signer)
+        val events = mutableListOf<InstallEvent>()
+        val collect = launch { c.progress("p1").collect { events += it } }
+
+        val thrown = runCatching { c.install("p1", listOf(PackageSpec("axios"))) }.exceptionOrNull()
+        collect.cancel()
+
+        assertTrue(thrown is AutojsException, "签名失败照常上抛（不谎称成功）：$thrown")
+        val finals = events.filterIsInstance<InstallEvent.Finished>()
+        assertEquals(
+            1, finals.size,
+            "一个句柄只能有一个终态事件（旧实现这条路发两条）：${finals.map { it.detail }}",
+        )
+        assertFalse(finals.single().success)
+        val states = journal.all().map { it.state }
+        assertEquals(
+            listOf(InstallJournal.State.BEGIN, InstallJournal.State.COMMIT), states,
+            "commit 之后不得再补 fail（事务状态机不容矛盾记录）",
+        )
+    }
+
     @Test
     fun `句柄账与项目锁在终态即逐出（长跑不涨）`() = runBlocking {
         val c = coordinator()
