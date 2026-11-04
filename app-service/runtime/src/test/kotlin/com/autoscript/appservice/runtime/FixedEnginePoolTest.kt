@@ -61,6 +61,36 @@ class FixedEnginePoolTest {
         assertEquals(2, engines[0].executed.size, "执行两次：释放后第二个才跑")
     }
 
+    /**
+     * 收尾失败那条归还路径（修）：engine.stop() 抛异常时，旧实现让异常从 quiesce
+     * 穿进 release 的 finally → markFree 的「状态机必在 STOPPED/CRASHED」探测当场
+     * 炸（QUIESCING 不在白名单）—— 原异常被盖掉、`idle.trySend` 没跑到、
+     * 槽永久丢一个（池容量缩水，现场只剩「引擎再不接活」）。
+     * 现口径：stop 抛异常与超时同档（kill 兜底 → STOPPED → IDLE → 回队），
+     * 原异常透传，容量不变。
+     */
+    @Test
+    fun `release 时 engine_stop 抛异常：kill 兜底、原异常透传、槽回队容量不缩水`() = runBlocking {
+        val engines = MutableList(1) { FakeEngine(EngineId(it)) }
+        val pool = FixedEnginePool({ id -> engines[id.poolIndex] }, capacity = 1)
+        val first = assertInstanceOf(
+            PoolAcquireOutcome.Granted::class.java,
+            pool.acquire(PoolAcquireRequest("p1", "a.js")),
+        ).handle
+        engines[0].stopThrowable = IllegalStateException("stop boom")
+
+        val thrown = runCatching { pool.release(first) }.exceptionOrNull()
+
+        assertEquals("stop boom", thrown?.message, "stop 的原异常必须透传，不许被归还路径盖掉")
+        assertEquals(1, engines[0].killCalls, "stop 抛异常与超时同档：kill 兜底")
+        assertEquals(PoolStats(1, free = 1, busy = 0), pool.stats(), "收尾失败不许让池永久 -1")
+        // 下一个持有者拿到的槽已回收（QUIESCING → STOPPED → IDLE），不是悬着的。
+        assertInstanceOf(
+            PoolAcquireOutcome.Granted::class.java,
+            pool.acquire(PoolAcquireRequest("p2", "b.js")),
+        )
+    }
+
     @Test
     fun `排队超时返回 TimedOut 且不占槽`() = runBlocking {
         val engines = MutableList(1) { FakeEngine(EngineId(it)) }

@@ -159,8 +159,18 @@ class FixedEnginePool(
         val lease = PoolLease(slot) { returnedSlot ->
             leases.remove(returnedSlot)
             inUse.decrementAndGet()
-            returnedSlot.markFree()
-            idle.trySend(returnedSlot)
+            // 回队是「池不缩水」的最后一道：markFree 的探测（响亮失败）再响也不能
+            // 跳过它 —— 探测红的代价是一次异常，跳过回队的代价是容量永久 -1
+            // （现场只剩「引擎再不接活」，没有任何日志指向它）。
+            try {
+                returnedSlot.markFree()
+            } finally {
+                // 有界队列的 trySend 失败 = 结构性双重归还（同号槽进了队列第二份）。
+                // 本类 KDoc 说它要「可观测」——吞掉返回值就什么都观测不到，当场响亮。
+                check(idle.trySend(returnedSlot).isSuccess) {
+                    "槽 ${returnedSlot.index} 回队失败：空闲队列已满（结构性双重归还）"
+                }
+            }
         }
         leases[slot] = lease
         return lease

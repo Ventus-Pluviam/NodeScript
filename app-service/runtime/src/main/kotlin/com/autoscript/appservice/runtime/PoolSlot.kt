@@ -6,6 +6,7 @@ import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.domain.engine.KillCause
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.engine.StopResult
+import kotlinx.coroutines.CancellationException
 
 /** 池槽位（docs §8.3 每执行单元状态机在池侧的最小投影：FREE/BUSY/QUIESCING）。 */
 enum class SlotState { FREE, BUSY, QUIESCING }
@@ -69,7 +70,24 @@ class PoolSlot internal constructor(
         if (state != SlotState.BUSY) return StopResult.Clean
         statusMachine.onQuiesceStart()          // BOOTING|RUNNING → QUIESCING
         state = SlotState.QUIESCING
-        val result = engine.stop()
+        val result = try {
+            engine.stop()
+        } catch (e: CancellationException) {
+            // 取消照常传播：挂起的 kill 在已取消的协程里补不得，收尾状态交给
+            // [markFree] 的 QUIESCING 档在回队前收（那档就是为这条路准备的）。
+            throw e
+        } catch (e: Exception) {
+            // stop 抛异常与超时同档：没干净停下，kill 兜底 + STOPPED 归类 + 落 FREE，
+            // 原异常再透出去 —— 不许让「收尾失败」把槽悬在 QUIESCING 上走进回队：
+            // markFree 的探测一响，原异常被盖掉、槽也回不了队（容量永久 -1），
+            // 而那个现象在池侧只剩「引擎再不接活」。
+            engine.kill()
+            statusMachine.onKill(KillCause.REQUESTED)
+            statusMachine.onRecycle()
+            state = SlotState.FREE
+            busySinceMillis = 0L
+            throw e
+        }
         // 归还是 claim 独占的（见 [PoolLease.release]）：quiesce 执行期间**没有别人能碰这个槽**
         // ——并发 release 的输家在 claim 就被挡住，killAll 的强释同样走 claim。于是下面这两句
         // 状态机转移面对的一定是 QUIESCING，不需要「停完再对表」那种事后补偿。
@@ -111,15 +129,23 @@ class PoolSlot internal constructor(
         if (state == SlotState.FREE) return
         state = SlotState.FREE
         busySinceMillis = 0L
-        // 归还时状态机必在 STOPPED/CRASHED：`release` 走 quiesce、其余走 forceFree，
-        // 两条都先把它落到终态。**这条断言是有意的探测器**（ 首跑就抓到「启动失败那条
-        // 归还路径漏了 reuse」）—— 若某天某条归还路径忘了，症状会是「下一个持有者拿到一个
-        // 状态机还悬着的槽」，而这里当场响亮。
-        check(statusMachine.status == EngineStatus.STOPPED || statusMachine.status == EngineStatus.CRASHED) {
-            "槽 $index 归还时状态机在 ${statusMachine.status}（应为 STOPPED/CRASHED）—— " +
-                "归还路径漏了 quiesce/forceFree 其中一步"
+        when (statusMachine.status) {
+            // 正常路径已落终态：quiesce 干净完成（STOPPED）/ 看门狗强杀（CRASHED）—— 回收即 IDLE。
+            EngineStatus.STOPPED, EngineStatus.CRASHED -> statusMachine.onRecycle()
+            // 被取消掐断的 quiesce（engine.stop() 在已取消协程里抛出，[quiesce] 补不了 kill）：
+            // 如实归 CRASHED（没收干净）再回收 —— 不拿 STOPPED 冒充干净停，进程级的底交给
+            // 看门狗兜。缺这一档的旧实现在这里 check 直接炸：取消被盖掉、槽也回不了队。
+            EngineStatus.QUIESCING -> {
+                statusMachine.onKill(KillCause.ENGINE_REQUEST)
+                statusMachine.onRecycle()
+            }
+            // 其余（BOOTING/RUNNING/IDLE）= 归还路径漏了 quiesce/forceFree 其中一步 ——
+            // 这条探测保持响亮（它首跑就抓到过「启动失败那条归还路径漏了 reuse」）。
+            else -> error(
+                "槽 $index 归还时状态机在 ${statusMachine.status}（应为 STOPPED/CRASHED/QUIESCING）—— " +
+                    "归还路径漏了 quiesce/forceFree 其中一步",
+            )
         }
-        statusMachine.onRecycle()
     }
 
     /** kill 收归复用（仅 [FixedEnginePool.recycle] 用，调用方持 stateLock）：状态复位，不触碰许可证。 */
