@@ -60,6 +60,49 @@ class NewlineFrameServerTest {
         }
     }
 
+    /**
+     * 挂起闸的取消归还（修）：读循环取完全局/本连接两道**字节**闸之后，要过
+     * `inFlight.acquire()` 这道**挂起**闸 —— 等许可期间连接被掐（abort/close），
+     * 取消异常从 acquire 穿出。旧实现不还那两道字节账：全局在途字节随每次
+     * 「等到一半被掐」单调泄漏，配额无声收紧，现场只剩「跑一会儿就全被拒」。
+     */
+    @Test
+    fun `等全局条数闸时被取消：已取的两道字节闸原路归还（不泄漏配额）`() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val blocking = BridgeRouter(RequestRegistry()).also { r ->
+            r.register("echo") { req ->
+                entered.complete(Unit)
+                gate.await()
+                BridgeResponse.Ok(req.id, req.payload)
+            }
+        }
+        val server = NewlineFrameServer(blocking, identities, maxInFlight = 1)
+        try {
+            val pipeOut = java.io.PipedOutputStream()
+            val input = java.io.PipedInputStream(pipeOut, 64 * 1024)
+            val output = ByteArrayOutputStream()
+            val conn = server.serveConnection(input, output)
+            pipeOut.write(hello()); pipeOut.flush()
+            pipeOut.write(frame(transport.encodeRequest(BridgeRequest(1, "echo", "m", "x".repeat(512), 5_000))))
+            pipeOut.flush()
+            withTimeout(5_000) { entered.await() }   // 第一条已占住全局条数闸（仅 1 个许可）
+            pipeOut.write(frame(transport.encodeRequest(BridgeRequest(2, "echo", "m", "y".repeat(512), 5_000))))
+            pipeOut.flush()
+            // 等读循环把第二帧读完、取完两道字节闸，挂死在 inFlight.acquire() 上。
+            delay(300)
+            conn.cancel()
+            gate.complete(Unit)
+            withTimeout(5_000) { conn.join() }
+            assertEquals(
+                0L, server.bytesInFlightCount(),
+                "等到一半被掐必须把两道字节账还清（漏了就是配额无声收紧）",
+            )
+        } finally {
+            server.close()
+        }
+    }
+
     private val transport = JsonTransport()
     private fun router() = BridgeRouter(RequestRegistry()).also { r ->
         r.register("echo") { req -> BridgeResponse.Ok(req.id, req.payload) }
@@ -370,7 +413,7 @@ class NewlineFrameServerAcceptRetryTest {
 /**
  * 外审 M2：在途请求的**字节**闸。
  *
- * 病灶：只��**条数**闸（256）。一条请求可以是 8 MiB（`maxFrameBytes`），256 条满配就是
+ * 病灶：只有**条数**闸（256）。一条请求可以是 8 MiB（`maxFrameBytes`），256 条满配就是
  * 2 GiB 堆 —— 在 minSdk 26 的设备上直接 OOM，而现场看不出是哪条面干的。
  * **条数与字节正交**，必须各设一闸（与 给 zip 加 `MAX_ENTRIES` 同一条纪律）。
  *

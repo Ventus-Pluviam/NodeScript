@@ -460,6 +460,47 @@ class NpmInstallOpsTest {
     }
 
     /**
+     * 单次现取**整批折到批尾时必须把逐格桥缓冲显式清空**（修）：data class 的 `copy`
+     * 不写字段 = 保留原值，旧实现信了「copy 缺省即空」把上一批缓冲留了下来 ——
+     * 阶段条已被折到批尾之后，下一个轮询 tick 会把缓冲里**更旧**的那几条重新折进去，
+     * 进度往回跳。这条断的是「缓冲清零」，不只是「不再折」。
+     */
+    @Test
+    fun `进度：单次现取整批折完后清空逐格桥缓冲（不把旧事件留到下个 tick 往回拽）`() = runBlocking {
+        val host = PanelHost(
+            events = listOf(
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.RESOLVE),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.DOWNLOAD),
+            ),
+        )
+        val before = loaded(project("demo")).copy(
+            installing = true,
+            installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+            // 模拟逐格桥放了一半：缓冲里还剩一条比批尾更旧的事件没放出来。
+            pendingProgressEvents = listOf(InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY)),
+        )
+        val after = pollInstallEvents(host, before, "demo")
+        assertEquals(InstallEvent.Phase.DOWNLOAD, after.installProgress!!.phase, "整批折到批尾")
+        assertTrue(after.pendingProgressEvents.isEmpty(), "批尾已是最新，缓冲里比它旧的必须清掉：${after.pendingProgressEvents}")
+        // 下一个 tick 走逐格桥：缓冲已空 → 只能去拉宿主（没有新事件 → 原样复用），
+        // 而不是把旧的 REIFY 折回来让阶段条从 DOWNLOAD「倒回」REIFY。
+        val tick = pollInstallEventsStepped(host, after, "demo")
+        assertTrue(tick === after, "清空之后没有可折的旧事件，tick 必须原样复用")
+    }
+
+    @Test
+    fun `新一轮安装：在途写回清掉上一会话的缓冲（旧事件不许折进新会话的阶段条）`() = runBlocking {
+        val before = loaded(project("demo")).copy(
+            installing = false,
+            pendingProgressEvents = listOf(InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY)),
+        )
+        val inflight = before.withInstallInFlight()
+        assertTrue(inflight.pendingProgressEvents.isEmpty(), "新会话从 QUEUED 起表，旧缓冲一个字都不能带过去")
+        assertEquals(InstallEvent.Phase.QUEUED, inflight.installProgress!!.phase)
+        assertTrue(inflight.installing)
+    }
+
+    /**
      * 「指针没动就原样复用」：安装轮询每 400ms 一 tick，安静的阶段
      * （写入 node_modules 那种没有事件可报的窗口）里每一 tick 都是等值重建 ——
      * LazyColumn 的 item lambda 捕获的是 state **引用**，换一份等值的也会让

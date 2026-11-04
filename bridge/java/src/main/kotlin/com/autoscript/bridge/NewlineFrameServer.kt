@@ -175,7 +175,7 @@ class NewlineFrameServer(
      * 每连接三档闸 + 它们的诊断回执**打包一个参数**（见 [QuotaSettings]）。
      *
      * **不是省事，是它们本来就是一个东西**：分两三个进构造函数会让调用方摆四个值
-     * 却看不出哪几个是一组，改闸时忘了带诊断口就成��「有闸但用户看不到为什么被拒」——
+     * 却看不出哪几个是一组，改闸时忘了带诊断口就成了「有闸但用户看不到为什么被拒」——
      * —— 闸与可见面是一起设计的。
      */
     quota: QuotaSettings = QuotaSettings(),
@@ -217,6 +217,12 @@ class NewlineFrameServer(
         connections.map { it.stat() }
     }
 
+    /**
+     * 全局在途字节账的当前值（[connectionStats] 只有每连接那半；这一半留给
+     * 「等到一半被掐 must refund」那类用例断言 —— 泄漏与否只有总数看得见）。
+     */
+    internal fun bytesInFlightCount(): Long = bytesInFlight.get()
+
     private val lock = Any()
     private val connections = HashSet<Connection>()
     private val listeners = HashSet<ServerSocket>()
@@ -241,7 +247,7 @@ class NewlineFrameServer(
      * 反过来把映射塞进 controller 会要求它替接入端记账，两处各记一份必然错位。
      *
      * **装填点必须早于任何业务请求**（认证成功后立刻，见 `serve`）：否则存在一个
-     * 「run 已终结、映射才装上」的窗口，撤销会扑空。选在认证之后是因为更早时 runId 还不���在。
+     * 「run 已终结、映射才装上」的窗口，撤销会扑空。选在认证之后是因为更早时 runId 还不存在。
      *
      * **为什么这条映射能堵住「子进程继承 socket fd」的漏**（A11 的原始病灶）：脚本进程死了
      * 不产生 EOF，连接不会 abort/dispose，于是挂在这条连接上的进程级资源（投屏会话）没有撤销点。
@@ -544,7 +550,17 @@ class NewlineFrameServer(
                 rejectOverQuota(frame, output, "本连接在途字节", "本连接上限 ${mine.bytes} B")
                 return
             }
-            inFlight.acquire()
+            // 第三道是**挂起**闸：等待全局许可的这段时间里连接可能被 abort/close，
+            // 取消异常从这里穿出 —— 已取的前两道（全局字节 + 本连接字节）必须原路还掉，
+            // 否则全局在途字节账随每次「等到一半被掐」单调泄漏，配额无声收紧，
+            // 现场只剩「跑一会儿就全被拒」，没有任何日志指向它（与下方各道「原路归还」同纪律）。
+            try {
+                inFlight.acquire()
+            } catch (e: CancellationException) {
+                bytesInFlight.addAndGet(-size)
+                ownBytes.addAndGet(-size)
+                throw e
+            }
             val ownCount = ownInFlight(mine.inFlight)
             if (ownCount == null) {
                 // 连接级闸建不起来（见 [ownInFlight]）：**降级为只有全局那两道**，

@@ -56,6 +56,10 @@ private const val INSTALL_FLAGS = " --prefer-offline"
 internal fun NpmState.withInstallInFlight(): NpmState = copy(
     installing = true,
     installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+    // 新一轮安装从 QUEUED 起表：上一会话残留在逐格桥缓冲里的旧事件**必须清掉** ——
+    // 不清的话下一个轮询 tick 会把它们折进新会话的阶段条（阶段往回跳的另一种形态，
+    // 与 [pollInstallEvents] 单次现取那处同一条纪律）。
+    pendingProgressEvents = emptyList(),
 ).withOpAccount(null, null)
 
 /**
@@ -334,8 +338,11 @@ internal suspend fun pollInstallEvents(host: HostSummary, state: NpmState, proje
         state.copy(
             installSeq = batch.lastSeq,
             installProgress = folded,
-            // 单次现取**整批折完**：逐格桥的缓冲不随这次带过来（copy 缺省即空）——
-            // 阶段条已被折到批尾，缓冲里没有比它更新的东西（见 `pollInstallEventsStepped`）。
+            // 单次现取**整批折完**：逐格桥的缓冲必须**显式清空** —— data class 的
+            // `copy` 不写的字段是「保留原值」不是「回到缺省」，旧实现信了
+            // 「copy 缺省即空」把上一批缓冲留了下来：下一次轮询 tick 会把比批尾更旧
+            // 的那几条重新折进阶段条，进度往回跳（展示慢一点是节奏，重复消费是重放）。
+            pendingProgressEvents = emptyList(),
             // `Finished` 到了 = 这次安装**在宿主侧已经收尾**（句柄逐出）——
             // 「在途」这个旗标跟着它落，而不是等调用方那一句 `copy(installing = false)`。
             // 两者看着等价，差在**轮询**上：`pollInstallWhileRunning` 的停条件就是它，

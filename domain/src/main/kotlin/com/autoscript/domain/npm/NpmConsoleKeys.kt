@@ -142,9 +142,10 @@ object NpmConsoleKeys {
      * `shizuku`/`exit` 五个入口词**在任何模式下都优先**（否则进了 root 模式就再也退不出来
      * —— 那五个词会被当成 shell 命令发给 `/system/bin/sh`）。
      *
-     * **shell 命令的正文原样透传**（`t.drop(1).joinToString(" ")` 而不是重新分词）：
-     * shell 要的是它自己的分词与引号规则，宿主在这里切一遍再拼回去只会把
-     * `echo "a  b"` 的双空格吃掉 —— 那是**改用户的命令**，比报错难查得多。
+     * **shell 命令的正文原样透传**（特权模式裸行 = `raw` 整行；`su id` 形态剥掉入口词
+     * 后按原文，见 [modeEntry]）—— 绝不重新分词再拼：shell 要的是它自己的分词与引号
+     * 规则，宿主切一遍再拼回去只会把 `echo "a  b"` 的双空格吃掉 —— 那是**改用户的命令**，
+     * 比报错难查得多。
      */
     fun parse(line: String, mode: ShellConsoleMode = ShellConsoleMode.DEFAULT): NpmConsoleCommand {
         val raw = line.trim()
@@ -179,7 +180,11 @@ object NpmConsoleKeys {
      */
     private fun modeEntry(raw: String, t: List<String>, mode: ShellConsoleMode): NpmConsoleCommand =
         if (t.size == 1) NpmConsoleCommand.EnterMode(mode)
-        else NpmConsoleCommand.Shell(command = raw.substringAfter(' ').trim(), mode = mode)
+        // 剥入口词按**首词长度**剥而不是 `substringAfter(' ')`：分词用的是 `\s+`，
+        // `su\tid`（tab 分隔）里没有字面空格 —— 旧写法把整条 `su\tid` 当命令发下去，
+        // shell 再解一遍等于用户敲了「su 里再跑 su」。入口词后面的**一切**（含引号、
+        // 多空格）原样保留，只剥词本身与紧邻的空白。
+        else NpmConsoleCommand.Shell(command = raw.substring(t[0].length).trimStart(), mode = mode)
 
     private fun parseNpm(raw: String, t: List<String>): NpmConsoleCommand {
         val sub = t.getOrNull(1)

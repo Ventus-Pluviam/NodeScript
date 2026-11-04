@@ -276,6 +276,19 @@ class ConsoleCmdOpsTest {
         assertEquals("p2 早先的输出", onP2.lines.single().text, "归 0 才取得到 seq 更小的那些行")
     }
 
+    @Test
+    fun `换项目保留特权模式（模式是人的姿势，不是项目的属性）`() = runBlocking {
+        val host = CmdHost(projects = listOf("p1", "p2"))
+        val onP1 = loadConsoleCmd(host, ConsoleCmdState.NOT_LOADED)
+            .copy(mode = com.autoscript.domain.npm.ShellConsoleMode.ROOT)
+        val onP2 = selectConsoleProject(host, onP1, "p2")
+        assertEquals(
+            com.autoscript.domain.npm.ShellConsoleMode.ROOT,
+            onP2.mode,
+            "换个项目不该把人踢出 root：接下来敲的裸行仍按 shell 解析（旧实现把它静默归 DEFAULT）",
+        )
+    }
+
     // ── 命令历史────────────────────────────────────────
 
     @Test
@@ -323,7 +336,7 @@ class ConsoleCmdOpsTest {
         host.runningFlag = true
         val polled = pollConsoleWhileRunning(host, loaded.copy(running = true), intervalMillis = 1L, maxTicks = 3)
         assertEquals(1, host.historyCalls, "跑动中不重复读历史（实为 ${host.historyCalls} 次）")
-        assertTrue(polled.lines.isNotEmpty() || true)
+        assertEquals(4, host.outputCalls, "三轮轮询是真拉了三次（首读 1 + tick 3），不是空转：${host.outputCalls}")
 
         // 宿主改口说跑完了：那一轮 `running=false`，历史立刻再取一次 ——
         // 刚敲的那条正是在跑的时候记下的（`recordConsoleHistory` 在派发点）。
