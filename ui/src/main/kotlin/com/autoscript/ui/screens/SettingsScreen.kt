@@ -100,7 +100,7 @@ import kotlinx.coroutines.launch
  * 子页开着时回前台同样现取（授权返回后的重读走这一条）。
  */
 // 10 个参数压着 detekt `LongParameterList` 的线（9）。**刻意不打包**：五个限额回调本来
-// 就已收成一个 [ScriptLimitsDraft] 回调（见 [ScriptLimitsScreen.onDraft]），再往上打���
+// 就已收成一个 [ScriptLimitsDraft] 回调（见 [ScriptLimitsScreen.onDraft]），再往上打包成
 // `LimitsCallbacks` 只会让「改一个回调要开另一个类型的定义」——那正是本仓点名的
 // 「打包省了参数数、丢了可读性」。
 @Suppress("LongParameterList")

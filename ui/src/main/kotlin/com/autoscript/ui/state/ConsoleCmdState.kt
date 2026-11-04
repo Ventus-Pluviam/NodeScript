@@ -156,6 +156,11 @@ data class ConsoleCmdState(
         /**
          * 换项目：**清行 + 游标归 0**（见类 KDoc：归 0 = 把这个项目还留在环里的行全取回来）。
          * 草稿与两条操作账一并清掉 —— 它们属于上一个项目的那次敲击。
+         *
+         * **模式（[ConsoleCmdState.mode]）刻意保留**：它是人的姿势、不是项目的属性
+         * （见 mode 字段 KDoc 那句「换个项目不必重置模式」—— 旧实现没搬它，
+         * 用户在 root 里换个项目就被静默踢回默认模式，裸 `ls` 落到 npm bin 解析，
+         * 敲出来的东西与用户以为的通道不是一条）。
          */
         fun withProject(previous: ConsoleCmdState, projectId: String): ConsoleCmdState =
             if (previous.selectedProjectId == projectId) {
@@ -165,6 +170,7 @@ data class ConsoleCmdState(
                     load = previous.load,
                     selectedProjectId = projectId,
                     projects = previous.projects,
+                    mode = previous.mode,
                     nowMillis = previous.nowMillis,
                     zone = previous.zone,
                 )
