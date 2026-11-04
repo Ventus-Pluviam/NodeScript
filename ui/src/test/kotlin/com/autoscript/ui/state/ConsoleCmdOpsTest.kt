@@ -336,7 +336,7 @@ class ConsoleCmdOpsTest {
         host.runningFlag = true
         val polled = pollConsoleWhileRunning(host, loaded.copy(running = true), intervalMillis = 1L, maxTicks = 3)
         assertEquals(1, host.historyCalls, "跑动中不重复读历史（实为 ${host.historyCalls} 次）")
-        assertEquals(3, polled.lines.size, "三轮各长一行（替身每次拉完补一行），断的是真拉到")
+        assertEquals(4, host.outputCalls, "三轮轮询是真拉了三次（首读 1 + tick 3），不是空转：${host.outputCalls}")
 
         // 宿主改口说跑完了：那一轮 `running=false`，历史立刻再取一次 ——
         // 刚敲的那条正是在跑的时候记下的（`recordConsoleHistory` 在派发点）。

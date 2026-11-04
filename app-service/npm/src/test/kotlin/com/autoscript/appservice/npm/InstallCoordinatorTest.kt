@@ -326,14 +326,14 @@ class InstallCoordinatorTest {
     fun `lock 签名失败：同一句柄只有一个终态事件，journal 不补 fail`() = runBlocking {
         val signer = LockSigner(dir.resolve(".ns"), LockSigner.KeyProvider { error("应用密钥不可用") })
         val c = coordinator(executor = harvesting("axios" to "1.0.0"), lockSigner = signer)
-        val events = mutableListOf<InstallEvent>()
-        val collect = launch { c.progress("p1").collect { events += it } }
 
         val thrown = runCatching { c.install("p1", listOf(PackageSpec("axios"))) }.exceptionOrNull()
-        collect.cancel()
 
         assertTrue(thrown is AutojsException, "签名失败照常上抛（不谎称成功）：$thrown")
-        val finals = events.filterIsInstance<InstallEvent.Finished>()
+        // 经 drainEvents（环，同步可见）而不是 progress 那条 Flow：缓冲投递是异步的，
+        // 断言与 emit 赛跑 —— 那是被测代码无关的抖动源（本文件其余终态断言都走环）。
+        val finals = c.drainEvents("p1", 0, 32).events.map { it.event }
+            .filterIsInstance<InstallEvent.Finished>()
         assertEquals(
             1, finals.size,
             "一个句柄只能有一个终态事件（旧实现这条路发两条）：${finals.map { it.detail }}",
