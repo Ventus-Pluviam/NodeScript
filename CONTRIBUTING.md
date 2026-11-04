@@ -8,7 +8,7 @@
 1. 从 `main` 切分支：`git checkout -b feat/…`（命名与 PR 纪律见下「分支与 PR」）。
 2. 改代码。**只有动契约语义**（`docs/design/*.md` 描述的行为）时才需要先读对应分卷；
    纯 bug 修 / 文案修不用。
-3. 跑门（与 CI 逐字同源；最短集 = 文档链接门 + 13 个 JVM 测试任务 +
+3. 跑门（与 CI 逐字同源；最短集 = 文档链接门 + JVM 单测全量 +
    `npm --prefix bridge/js test`，命令见 [`README.md`](README.md) 测试段）。
 4. push 分支、开 PR（描述按模板勾，**结果如实写** —— 红过就说红过）。
 5. CI 绿了等评审合并。**不要为触发 CI 直推 `main`**。
@@ -83,7 +83,7 @@ type(scope): 摘要
 
 | 门 | 何时必跑 |
 |---|---|
-| JVM 单测（13 个任务，全量命令见 [`README.md`](README.md) 测试段） | 每次 |
+| JVM 单测（全量命令见 [`README.md`](README.md) 测试段） | 每次 |
 | `npm --prefix bridge/js test` | 每次 |
 | `npm --prefix bridge/js run gen:wire && git diff --exit-code` | 改过 `bridge/schema` |
 | `npm --prefix bridge/js run docs:api && git diff --exit-code` | 改过 `bridge/js` 的公开注释/签名 |
