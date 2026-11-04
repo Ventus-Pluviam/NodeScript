@@ -162,7 +162,8 @@ class NpmRegistryVerifierTest {
             "https://registry.npmjs.org:443",
             "https://user:tok@registry.npmjs.org",
         )) {
-            val v = verifier(packument("1.11.23", listOf("1.11.23" to I1)), packument("1.11.23" to I1))
+            val two = packument("1.11.23", listOf("1.11.23" to I1))
+            val v = verifier(two, two)
             v.verify("dayjs", "1.11.23", primary = spelling)
             val req = sourceOf(v).requested
             assertTrue(
