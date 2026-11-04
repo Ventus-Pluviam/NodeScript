@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test
 /**
  * [TaskStoreImport] 的解析判据（§8.6 迁移面）。
  *
- * **喂的是真 jsonl 文本**（手写，与 `FileTaskStore.Codec.put` 逐字同形）—— 迁���解析读的是
+ * **喂的是真 jsonl 文本**（手写，与 `FileTaskStore.Codec.put` 逐字同形）—— 迁移解析读的是
  * 老设备上那些文件，形状对不对只有对着真文本验。借宿主 `FileTaskStore` 的 `Codec` 拼文本
  * 反而是「用被测的兄弟实现给被测的解析器造输入」（那份 Codec 本身也是被测对象）。
  */

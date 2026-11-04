@@ -97,6 +97,21 @@ class NpmConsoleKeysTest {
     }
 
     @Test
+    fun `su 与命令之间是 tab 时入口词照样剥掉（分词是任意空白，剥词不能认死空格）`() {
+        // 分词用的是 `\s+`，而旧实现按字面空格 `substringAfter(' ')` 剥 ——
+        // `su<TAB>id` 里没有空格，整条 `su\tid` 被当命令发给 shell，
+        // 等于用户敲了「su 里再跑 su」。
+        assertEquals(
+            NpmConsoleCommand.Shell("id", ShellConsoleMode.ROOT),
+            NpmConsoleKeys.parse("su\tid"),
+        )
+        assertEquals(
+            NpmConsoleCommand.Shell("id", ShellConsoleMode.ADB),
+            NpmConsoleKeys.parse("shizuku\tid"),
+        )
+    }
+
+    @Test
     fun `exit 退出特权模式，且不带参数`() {
         assertEquals(NpmConsoleCommand.ExitMode, NpmConsoleKeys.parse("exit"))
         val r = NpmConsoleKeys.parse("exit 1") as NpmConsoleCommand.Rejected
