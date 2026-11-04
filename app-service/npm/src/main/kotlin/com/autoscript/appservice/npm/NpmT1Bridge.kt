@@ -1,6 +1,8 @@
 package com.autoscript.appservice.npm
 
 import com.autoscript.domain.json.DomainJson
+import com.autoscript.platform.process.ProcTreeOps
+import com.autoscript.platform.process.TreeOps
 import java.io.BufferedInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -261,6 +263,8 @@ class T1Session(
     private val connection: NpmT1Bridge.AcceptedT1Connection,
     private val token: String,
     private val runner: T1ProcessRunner,
+    /** 收尸时杀树的缝（与 [T1Child] 同一条，只是多了「逐条转发」这一站）。 */
+    private val treeOps: TreeOps = ProcTreeOps(),
 ) : AutoCloseable {
 
     private val input: InputStream = BufferedInputStream(connection.input)
@@ -376,10 +380,17 @@ class T1Session(
             shell = (opts["shell"] as? DomainJson.Value.B)?.v == true,
             runner = runner,
             emit = ::writeFrame,
+            treeOps = treeOps,
         )
-        children[id] = child
+        val prev = children.put(id, child)
+        if (prev != null) {
+            // 同号 spawn（id 是对端给的，坏对端/shim bug 完全可能重号）：旧的那条必须
+            // 当场收掉再让位 —— 直接覆盖会让它脱离收尸账，会话关断时漏杀。
+            prev.reap()
+        }
         // 每条 spawn 一条线程：脚本之间互相独立（一条挂死不该卡住另一条）。
-        Thread({ child.run(); children.remove(id) }, "t1-child-$id").apply {
+        // remove 带值条件：同号 spawn 顶进来的新条目，不许被旧线程收尾时的摘除误伤。
+        Thread({ child.run(); children.remove(id, child) }, "t1-child-$id").apply {
             isDaemon = true
             start()
         }

@@ -125,8 +125,16 @@ class T1Child(
     /** 脚本往子进程 stdin 写（`in` 帧）。写失败静默：子进程可能已经退了。 */
     fun writeStdin(b64: String) {
         val os = stdin ?: return
+        val bytes = try {
+            Base64.getDecoder().decode(b64)
+        } catch (_: IllegalArgumentException) {
+            // 坏 base64 = 一条坏帧：跳过**这一帧**（与 dispatch「坏帧静默跳过」同一条
+            // 口径）。让它漏出去会顺着 [T1Session.run] 的 finally 把整条会话连锅端 ——
+            // 别的子进程还在跑，那不是「一条坏行」该有的代价。
+            return
+        }
         try {
-            os.write(Base64.getDecoder().decode(b64))
+            os.write(bytes)
             os.flush()
         } catch (_: IOException) {
             // 子进程已退：写不进去是正常结果（真 child_process 在这种情况下给 EPIPE）。
