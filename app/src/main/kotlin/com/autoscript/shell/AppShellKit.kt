@@ -316,7 +316,6 @@ object AppShellKit {
          * **必须由调用方给**（缺省 [OpLogSink.None] 是给
          * 测试替身留的）：本类够不着"事实该去哪儿"这个决定 —— 生产恒传
          * [OpLogHostSink]（logcat + 日志管理页「系统日志」段）。
-         *
          */
         opLog: OpLogSink = OpLogSink.None,
     ): AssembledShell {

@@ -132,7 +132,7 @@ data class NpmState(
      * 判据只有一处（[NpmTargetScope.isGlobal]），界面不自己比空串。
      *
      * 还没读到（[selectedProjectId] 为 null）时是 false：那时屏幕上根本不画依赖列表的内容
-     * （三态各说各的，见 `DependencyListCard`），"是不是全局"没有对象。
+     * （三态各说各的，见 `dependenciesGroup` 那张卡），"是不是全局"没有对象。
      */
     val scopeIsGlobal: Boolean
         get() = selectedProjectId?.let { NpmTargetScope.isGlobal(it) } == true
