@@ -91,12 +91,17 @@ export class RuntimeBridgeImpl {
     return new Promise<unknown>((resolve, reject) => {
       let settled = false
       let timer: NodeJS.Timeout | null = null
+      let onAbort: (() => void) | null = null
 
       const finish = (fn: () => void): void => {
         if (settled) return
         settled = true
         inflight.delete(id)
         if (timer) clearTimeout(timer)
+        // 结算即摘除 abort 监听：同一个信号被复用（脚本级的 AbortController）时，
+        // 每次调用留一个监听会撞上 EventTarget 的 10 监听告警线，且这些闭包要活到
+        // 信号触发/GC 才释放。once:true 只在「真触发」时自动摘，正常结算的路径没人摘。
+        if (onAbort !== null && opts.signal) opts.signal.removeEventListener('abort', onAbort)
         fn()
       }
 
@@ -119,13 +124,19 @@ export class RuntimeBridgeImpl {
       }
       const cancel = (): void => finish(() => reject(makeTimeout(ttl)))
 
+      // 信号在调用前就已中止：与到点取消同口径（ERR_TIMEOUT 收尾），不投递也不记账 ——
+      // addEventListener 对已中止的信号不会再触发，不拦这一手就是「挂着等 TTL」。
+      if (opts.signal?.aborted) {
+        reject(makeTimeout(ttl))
+        return
+      }
+
       inflight.set(id, { settle: onSettle })
       timer = setTimeout(cancel, ttl)
 
       if (opts.signal) {
-        const onAbort = (): void => cancel()
+        onAbort = (): void => cancel()
         opts.signal.addEventListener('abort', onAbort, { once: true })
-        // once:true 在触发时自动移除，无句柄泄漏
       }
 
       // 投递：同步抛错 → 立即失败（对齐 BridgeRouter 的 handler 异常 → ERR_INVALID_PARAM）；
