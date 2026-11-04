@@ -153,6 +153,34 @@ class NpmRegistryVerifierTest {
     }
 
     @Test
+    fun `官方的大写、显式端口、userinfo 拼法 → 第二意见仍挑镜像（同站拼法不许骗成自比）`() {
+        // 整串相等才认得出官方的旧实现下，这三种拼法都会让第二意见落回官方 ——
+        // 两个请求打同一台机器，「两镜像声明一致」就成了谎话（DNS 大小写不敏感、
+        // 443 是 https 缺省口、userinfo 不进 DNS，指的都是 registry.npmjs.org）。
+        for (spelling in listOf(
+            "https://Registry.NPMJS.ORG",
+            "https://registry.npmjs.org:443",
+            "https://user:tok@registry.npmjs.org",
+        )) {
+            val v = verifier(packument("1.11.23", listOf("1.11.23" to I1)), packument("1.11.23" to I1))
+            v.verify("dayjs", "1.11.23", primary = spelling)
+            val req = sourceOf(v).requested
+            assertTrue(
+                req.contains("https://registry.npmmirror.com/dayjs"),
+                "首选写成 $spelling 时第二意见必须是镜像（不是官方的另一种拼法）：$req",
+            )
+        }
+    }
+
+    @Test
+    fun `显式第二意见与首选同站 → Unverifiable（自比一律不许，显式值也不例外）`() {
+        val src = FakeSource(mapOf("registry.npmjs.org" to mapOf("dayjs" to packument("1.0.0", listOf("1.0.0" to I1)))))
+        val v = NpmRegistryVerifier(secondary = NpmRegistryVerifier.OFFICIAL, source = src)
+        val r = v.verify("dayjs", "1.0.0", null)   // 首选缺省 = 官方，与显式 secondary 同站
+        assertTrue(r is NpmRegistryVerifier.Verdict.Unverifiable, "同站自比恒真、恒无意义，必须如实没验成：$r")
+    }
+
+    @Test
     fun `作用域包名走百分号转义（与 npm npa escapedName 同形）`() {
         val v = verifier(packument("1.0.0", listOf("1.0.0" to I1)), packument("1.0.0", listOf("1.0.0" to I1)))
         v.verify("@types/node", "1.0.0", null)

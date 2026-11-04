@@ -34,7 +34,9 @@ class NpmRegistryVerifier(
      * 缺省 null = **跟着本次生效的首选现挑**：首选官方 → 镜像，首选非官方（镜像、
      * 企业源、任意别家）→ 官方。挑在调用期而不是构造期，是因为 [verify] 的
      * `primary` 每次都可被调用方覆盖（用户 `setRegistry` 后），构造期定死的话
-     * 覆盖成镜像就等于镜像跟镜像比 —— 自己跟自己比也算通过。显式给值则恒用给定值。
+     * 覆盖成镜像就等于镜像跟镜像比 —— 自己跟自己比也算通过。显式给值则恒用给定值，
+     * 但显式值与本次首选**同站**（host 相同，含大小写/端口/userinfo 拼法差异）时按
+     * 自比拒（[Verdict.Unverifiable]）——「自比一律不许」对显式值同样成立。
      */
     private val secondary: String? = null,
     private val source: RegistrySource = HttpRegistrySource(),
@@ -98,10 +100,20 @@ class NpmRegistryVerifier(
         val escaped = escapeName(name)
         val pBase = canonicalRegistry(main)
             ?: return Verdict.Unverifiable(name, "首选注册表不是 https 来源：$main（交叉校验不做明文来源）")
+        // 「是不是同一家」按 host 判，不按整串比：大写、显式 :443、内嵌 userinfo 的拼法
+        // 指的都是同一台机器（DNS 大小写不敏感、443 是 https 缺省口、userinfo 不进 DNS），
+        // 整串相等才认得出官方的话，这些拼法会让第二意见落回官方 —— 自己跟自己比也算通过，
+        // 正是本类要消灭的形态（「恒等自比会让交叉校验空转」，见类 KDoc）。
+        val pHost = registryHost(pBase)
         // 第二意见跟**本次**首选互补（见构造器 KDoc）：官方 ↔ 镜像，绝不同站。
-        val sec = secondary ?: if (pBase == canonicalRegistry(OFFICIAL)) MIRROR else OFFICIAL
+        val sec = secondary ?: if (pHost == registryHost(canonicalRegistry(OFFICIAL) ?: OFFICIAL)) MIRROR else OFFICIAL
         val sBase = canonicalRegistry(sec)
             ?: return Verdict.Unverifiable(name, "第二意见注册表不是 https 来源：$sec")
+        if (registryHost(sBase) == pHost) {
+            // 显式 secondary 与首选同站（含同站的另一种拼法）：自比恒真、恒无意义，
+            // 如实「没验成」，绝不折成「通过」——「自比一律不许」从口径落成强制的这一句。
+            return Verdict.Unverifiable(name, "第二意见与首选是同一站点（$sec vs $main）：自比不算交叉校验")
+        }
         val p = resolve(pBase, escaped, name, version)
         val s = resolve(sBase, escaped, name, version)
         if (p == null && s == null) {
@@ -181,6 +193,17 @@ class NpmRegistryVerifier(
          * 非 https / 无 host / 形态非法 → null，由调用方折叠成 `Unverifiable`（绝不折成「通过」）。
          */
         internal fun canonicalRegistry(base: String): String? = NpmRegistryKeys.canonicalize(base)
+
+        /**
+         * 运营主体判据 = host 小写：同站点的大小写 / 显式 :443 / userinfo / 子路径拼法
+         * 都归同一家（交叉校验要的是「两个运营主体」，不是「两个不同的字符串」）。
+         * 入参已过 [canonicalRegistry]（https 且 host 非空），解析失败只作防御性 null。
+         */
+        private fun registryHost(canonicalBase: String): String? = try {
+            URI(canonicalBase).host?.lowercase()
+        } catch (_: IllegalArgumentException) {
+            null
+        }
 
         private fun requireName(name: String) {
             val n = name.trim()
