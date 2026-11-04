@@ -142,7 +142,7 @@ internal class RecordingLive(
  * "一次开启"的状态机（§9.2）—— **取帧腿与录屏腿共用同一个实例**。
  *
  * 三个字段是同一件事的三面，拆开放会漂，所以合成一个对象：
- * - **同时只允许一次开启**（第二个并发 `open` 如实拒绝，而不是两条都去抢投影）；
+ * - **同时只允许一次开启**（第二个并发 `open` 被 [tryBegin] 如实拒绝，而不是两条都去抢投影）；
  * - **归属**（撤销路径要能在 `open` 中途收掉自己那条）；
  * - **哪条腿**（"放弃开启中那条"必须按腿区分）。
  *
@@ -161,14 +161,24 @@ internal class OpeningGate(private val lock: Any) {
     private var recording = false
     private var abandoned = false
 
-    fun begin(owner: MediaProjectionSessionOwner, recording: Boolean) {
+    /**
+     * 占位一次开启。**false = 已有一次开启在进行，本次被如实拒绝**（字段一个都不动）。
+     *
+     * 旧的 `begin` 无条件覆盖四字段：第二个并发 `open` 不但进了门，还把第一次的
+     * 归属/腿记账踩掉、`abandoned` 重置回 false —— 于是两条腿各开一条
+     * `MediaProjection` 赛跑去提交，后到者把 `current` 槽整个顶替（被顶替那条从此
+     * 没有任何收口路径找得到它：投影照跑、前台照挂，直到进程死）。拒绝必须发生在
+     * **置位之前**，所以本函数先判后写，调用方拿 false 去抛诚实的错。
+     */
+    fun tryBegin(owner: MediaProjectionSessionOwner, recording: Boolean): Boolean =
         synchronized(lock) {
+            if (active) return false
             active = true
             this.owner = owner
             this.recording = recording
             abandoned = false
+            true
         }
-    }
 
     fun end() {
         synchronized(lock) {

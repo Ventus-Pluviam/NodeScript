@@ -32,6 +32,7 @@ import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
@@ -345,13 +346,37 @@ class AndroidMediaProjectionSessions(
     // 不可能在"同意凭据用几次""能不能并发开两条"这类判据上漂。
 
     /**
-     * 开启占位：**两条腿共用同一个槽**。
+     * 开启占位：**两条腿共用同一个槽**（先判后写，同一把锁内完成两条判据）。
      *
      * 为什么必须共用：否则"取帧正在开"与"录屏正在开"互不可见，两次开启会赛跑到设备层
      * 抢同一条 `mediaProjection`（用户看到两份投屏、前台代际互相踩）。
+     *
+     * 1. `current` 槽非空 = 已有一条会话在跑（**含另一条腿的**——槽是两腿共用的，
+     *    语义层两张表各自只看自己那条腿，跨腿「开会话」只有这一道闸）：放过去
+     *    提交时就会把在册那条整个顶替，被顶替者从此没有任何收口路径找得到它
+     *    （`close(lease)`/`revokeOwner`/`onStop` 全走这个槽），投影照跑、前台照挂，
+     *    直到进程死 —— 如实拒绝，不顶替也不替对方收口。
+     * 2. 已有一次开启在进行 → 如实拒绝（[OpeningGate.tryBegin]）。
+     *
+     * 拒绝抛在 `try`/`finally` **之外**（调用点结构）：占位没成功就绝不 [endOpening]，
+     * 否则会把别人那一次开启的记账清掉。
      */
-    private fun beginOpening(owner: MediaProjectionSessionOwner, recording: Boolean) =
-        opening.begin(owner, recording)
+    private fun beginOpening(owner: MediaProjectionSessionOwner, recording: Boolean) {
+        synchronized(lock) {
+            if (current != null) {
+                throw MediaProjectionOpenException(
+                    MediaProjectionOpenFailure.UNAVAILABLE,
+                    "已有投屏会话在跑（一台设备同时只有一条）：本次不抢占，也不替你收掉别人的会话",
+                )
+            }
+            if (!opening.tryBegin(owner, recording)) {
+                throw MediaProjectionOpenException(
+                    MediaProjectionOpenFailure.UNAVAILABLE,
+                    "已有一次投屏会话正在开启（同一时刻只允许一次）：本次不抢占",
+                )
+            }
+        }
+    }
 
     private fun endOpening() = opening.end()
 
@@ -751,7 +776,14 @@ class AndroidMediaProjectionSessions(
             ScreenPolicy.requireCapturable(
                 ScreenSnapshot(locked = keyguardLocked(), secureForeground = false, hasWindows = true),
             )
-            val image = awaitImage()
+            val image = try {
+                awaitImage()
+            } catch (e: ClosedReceiveChannelException) {
+                // 等帧期间会话被收口（closeCurrent/撤销/系统 onStop 会把 frames 关掉，
+                // 挂起的 receive 以 ClosedReceiveChannelException 醒）：这不是"等帧超时"，
+                // 是"会话没了" —— 如实按已停止报，别让脚本以为重试一次就能拿到帧。
+                throw AutojsException(ErrorCode.ERR_CAPTURE_DENIED, "投屏会话在等待帧期间被收口（需重新授权）", e)
+            }
                 ?: throw AutojsException(ErrorCode.ERR_TIMEOUT, "等待投屏帧超时（${frameWaitMillis}ms）")
             return try {
                 rgbaOf(image)
@@ -778,7 +810,9 @@ class AndroidMediaProjectionSessions(
          * - **用 channel 而不是自己写的信号量**：`Semaphore(0)` 这类"许可为 0"的构造在
          *   kotlinx 里是非法的（每次取帧直接 `IllegalArgumentException`）；
          * - **协程取消/超时即退出**：`withTimeoutOrNull` 兜住，不留悬挂等待
-         *   （取消时 channel 不必由这里关 —— 会话收口会关它）。
+         *   （取消时 channel 不必由这里关 —— 会话收口会关它；收口把挂起的 `receive`
+         *   以 [ClosedReceiveChannelException] 打醒，由 [nextFrame] 折成诚实的
+         *   `ERR_CAPTURE_DENIED`，不混进"超时"）。
          */
         private suspend fun awaitImage(): Image? {
             live.reader.acquireLatestImage()?.let { return it }
