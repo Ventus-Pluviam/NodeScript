@@ -146,6 +146,20 @@ object NpmOfflineBundleImporter {
                 }
                 val (alg, a, b, rest) = seg
                 val hex = a + b + rest
+                // 段是包自己写的：非 hex / 奇数长 / 不足两字节前缀，后面 hex→base64 与
+                // contentPath 的 substring 都会当场抛 —— 那是一条烂条目，不是导入的死刑。
+                // 逐条目隔离是本循环的承诺（与 readCapped「读到顶就停」同一条纪律）：
+                // 形态烂 → 点名拒收，继续下一条，绝不把整次导入连锅端。
+                if (hex.length < 4 || hex.length % 2 != 0 || !HEX.matches(hex)) {
+                    rejected += name
+                    continue
+                }
+                // 未知摘要算法同上：MessageDigest.getInstance 对陌生 alg 抛
+                // NoSuchAlgorithmException（不是 IllegalArgumentException），照样按条目拒。
+                if (!isKnownDigest(alg)) {
+                    rejected += name
+                    continue
+                }
                 val integrity = "$alg-${integrityBase64Of(hex)}"
                 val target = NpmCacheSeedDeployer.contentPath(cacheDir, integrity)
                 // 第二道闸（便宜的早退）：**声明**就超顶的条目不必读。声明可以撒谎，
@@ -234,6 +248,21 @@ object NpmOfflineBundleImporter {
      * 那不是盘符，误伤合法文件名。
      */
     private val DRIVE_LETTER = Regex("^[A-Za-z]:")
+
+    /** content-v2 路径段里的摘要十六进制（`aa/bb/<rest>` 拼回）。 */
+    private val HEX = Regex("[0-9a-fA-F]+")
+
+    /**
+     * JVM 认识这个摘要算法才算（cacache 实发 sha512/sha1，这里按「找得到」判而不是开白名单
+     * —— JVM 支持的 alg 走这条路都能自洽复核）。未知 alg 的 getInstance 抛
+     * [java.security.NoSuchAlgorithmException]，那是一条烂条目而非导入的死刑（见 import 循环）。
+     */
+    private fun isKnownDigest(alg: String): Boolean = try {
+        java.security.MessageDigest.getInstance(alg)
+        true
+    } catch (_: java.security.NoSuchAlgorithmException) {
+        false
+    }
 
     private fun integrityBase64Of(hex: String): String {
         val raw = ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
