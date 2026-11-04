@@ -63,6 +63,8 @@ class PoolSlot internal constructor(
     }
 
     /** 四步 quiesce（§8.3）：stop 超时由池 kill 兜底，然后回 FREE。幂等：非 BUSY 视为已净。 */
+    @Suppress("TooGenericExceptionCaught") // stop 的失败面宽是刻意的：收尾失败的任何一种都要
+    // kill 兜底再原样上抛，一分类就等于放过某一种（与 FileScriptEnvStore 那条同款理由）
     suspend fun quiesce(): StopResult {
         // 非 BUSY 视为已净（幂等：并发 release 的输家、killAll 强释后的迟到 release
         // 都走这里）。**这是槽位状态那一句，不是状态机那一句** —— 状态机可能还停在
