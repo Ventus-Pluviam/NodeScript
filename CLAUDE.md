@@ -28,10 +28,12 @@
 - `:domain` — **纯 Kotlin 领域层**：SPI 接口 + DTO + 状态机（零 Android 依赖、JVM 可单测）
 - `:bridge:java` — Kotlin Router / RequestRegistry(TTL) / HandleRegistry(generation) / EventBus（§7）
 - `:bridge:native` — C++ N-API addon 控制面 + libnode.so 装载（§7，CI 构建）
+- `:bridge:treesitter` — C++ tree-sitter 解析库 .so（编辑器语法树的引擎，`:platform:editor` 经 JNI 装载，CI 构建）
 - `:bridge:image` — C++ 图像管线 libopencv.so（OpenCV 4.x，§9.2，CI 构建）
 - `:engine:node-process` — :nodeN 进程宿主：`NodeProcessEngine`（Kotlin spawn，实现 `:domain` 的 `ScriptEngine`）+ main.cpp（§5/§7.8；addon `.so` 与 APK 均走 CI 构建 —— **本机禁编**，见「构建」段禁令）
 - `:engine:sandbox` — QuickJS 宿主进程（**已裁 §18 第 1 项；壳 2026-09-30 已从 settings 注释摘除、不计入模块数**，空壳目录 2026-10-01 已从盘上删除、settings 里那行注释也同批删掉，见 `design-decisions.md` 同批追加行；复活 = 重建模块目录 + include 行加回 + ModuleGraphTest 允许集登记）
 - `:platform:capabilities` — **无障碍三面**：a11y 树/手势、screen 截图帧源、dialogs 对话框编排（`capabilities/{a11y,screen,dialogs,device}/` 子包；2026-09-30 步骤 6 系统面迁出，§9.1–9.4）
+- `:platform:editor` — **编辑器面**：`:domain` 的 `SyntaxHighlighter` 契约的实现 `TreeSitterHighlighter`（语法树走 `:bridge:treesitter`）+ `EditorHighlighters` 装配门面（`:app` 经 §6 包级例外二转接，`PlatformWiring` 同一条装配路）
 - `:platform:process` — **进程/`/proc` 面**（批 105 新增）：杀树的 ppid 图 + `kill` 二进制 + pid 两级反射阶梯（`ProcOps`/`TreeOps`/`ProcTreeOps`）。**叶子模块，零模块依赖**（连 `:domain` 都不需要）—— `/proc` 不是领域概念，塞进 `:domain` 会失守「领域层零平台面」边界
 - `:platform:system` — **系统面 handler + SPI 实现 + 能力专用契约**：`SystemNamespaces` 十一件（shell/device/app/floatingWindow/datastore/zip/settings/notification/clipboard/sensors/images）+ 电源面 `PowerManagerNamespaceHandler`/`WakeLockLedger`（§8.7）+ `SystemSpis.of` 实现入口 + 五契约（步骤 6a 自 :domain 迁入；`DialogHost` 留 :domain，§9.6/§12.2）
 - `:ui` — Compose UI 呈现层：启动 Activity（launcher）、首屏/任务中心/控制台/能力中心界面；状态经 `:domain` 的 `HostSummary` 读口现取，禁依赖 `:app`（§6）

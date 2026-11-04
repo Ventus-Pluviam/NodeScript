@@ -1,7 +1,7 @@
 ---
 name: skill-designer
-description: 设计并创建 Claude Code skill（技能），默认写入当前项目的 .claude/skills/<name>/。触发于用户要求「设计/创建/写一个 skill、技能或斜杠命令」，或要求参考 GitHub 上他人公开的 skill 来写、要求改动后 git 提交、要求给项目补描述、要求改动时不整库读代码。流程：GitHub 参考调研 → 套模板设计 → 外科手术式写改 → 自检 → 更新项目描述 → git 提交；也用于维护本 skill 自身。
-version: 1.1.0
+description: 设计并创建 Claude Code skill（技能），默认写入当前项目的 .claude/skills/<name>/。触发于用户要求「设计/创建/写一个 skill、技能或斜杠命令」，或要求参考 GitHub 上他人公开的 skill 来写；也用于维护本 skill 自身。流程：GitHub 参考调研 → 套模板设计 → 外科手术式写改 → 自检 → 更新项目描述 → git 提交。
+version: 1.2.0
 ---
 
 # skill-designer —— Skill 设计与生成器
@@ -12,9 +12,10 @@ version: 1.1.0
 ## 何时使用（触发）
 用户提到以下任一项就启用本 skill：
 - "设计 / 创建 / 写一个 **skill**、技能、斜杠命令（/xxx）"；
-- "**参考/学习 GitHub 上别人的 skill** 来写"；
-- "改动文件的时候要 **git 提交**"、"给**项目添加描述**"；
-- "**不要读所有代码** / 改动时别整库读代码"。
+- "**参考/学习 GitHub 上别人的 skill** 来写"。
+
+（git 提交、项目描述、外科手术式读改是本 skill 的**工作流协议**，不是触发场景 ——
+2026-11-04 起不再列为触发词：那三条太泛，用户说「提交一下」都会误触发。）
 
 ## 工作流（严格按序，每步有产物）
 
@@ -69,7 +70,7 @@ version: 1.1.0
 - 不是 git 仓库：向用户提议 `git init`，获准后才执行；可顺手补最小 `.gitignore`（build/、node_modules/、.idea/ 等）。
 - 提交信息：`<type>(<scope>): <一句摘要>`，type 用 feat / fix / docs / chore；正文可写参考来源。结尾必须带归属行：
   ```
-  Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude Code <noreply@anthropic.com>
   ```
 - 一次逻辑改动 = 一次提交；不把"调研笔记"与"skill 文件"混进同一提交。
 - 默认只本地 commit；push 需用户明确要求。

@@ -41,12 +41,21 @@ class ModuleGraphTest {
             }
             .toSet()
 
-    /** 计数扫描面。settings 两处是**冻结文件**，只读扫描：数字不对时由协调者改。 */
+    /**
+     * 计数扫描面。settings 两处是**冻结文件**，只读扫描：数字不对时由协调者改。
+     *
+     * CONTRIBUTING.md 与 CODEOWNERS 2026-11-04 进扫描面：两份都漂过一次（「13 个任务」
+     * 「15 个模块」，派生值实为 15/18）—— 它们此前不在面内，「写了数字就必须等于
+     * 派生值」的纪律对它们形同虚设。进面后两份都改成了**不写数字、指向派生源**，
+     * 扫描只防「以后谁又把数字写回来」。
+     */
     private val scannedFiles = listOf(
         "CLAUDE.md",
         "docs/design/06-modules.md",
         "settings.gradle.kts",
         "build-logic/settings.gradle.kts",
+        "CONTRIBUTING.md",
+        ".github/CODEOWNERS",
     )
 
     /** 引文/历史片段：扫描前抠掉，免得把「别人的建议」当成本仓现状。 */
