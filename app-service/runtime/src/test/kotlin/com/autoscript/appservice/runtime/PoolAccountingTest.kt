@@ -343,6 +343,25 @@ class PoolLeaseAccountingTest {
         Unit
     }
 
+    /** 4c：killAll 中单槽收尸失败**不中断全清**（其余槽照样杀、全部槽照样还）。 */
+    @Test
+    fun `killAll 单槽 kill 抛错不中断全清且容量不缩水`() = runBlocking {
+        val (p, engines) = pool(2)
+        grab(p, "p1")
+        grab(p, "p2")
+        engines[0].killThrowable = IllegalStateException("模拟收尸失败")
+
+        p.killAll(KillCause.WATCHDOG_CPU)
+
+        assertEquals(1, engines[0].killCalls, "收尸失败的那槽也要先尝试过 kill")
+        assertEquals(1, engines[1].killCalls, "头一槽收尸失败不得中断全清：第二槽也要杀")
+        assertEquals(PoolStats(2, free = 2, busy = 0), p.stats(), "kill 抛错跳过归还 = 容量永久 -1")
+        // 两槽状态机都收干净了：可再次夺用
+        assertInstanceOf(PoolAcquireOutcome.Granted::class.java, p.acquire(req("p3", 300)))
+        assertInstanceOf(PoolAcquireOutcome.Granted::class.java, p.acquire(req("p4", 300)))
+        Unit
+    }
+
     /** 5：并发 release 同一份 lease 恰好一次（原实现的 `stop` 与 `killAll` 双重归还面）。 */
     @Test
     fun `并发归还是恰好一次`() = runBlocking {

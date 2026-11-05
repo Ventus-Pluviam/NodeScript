@@ -24,6 +24,9 @@ class FakeEngine(
 
     /** stop() 改抛这个（非 null 优先）：收尾抛错那条归还路径的判据用（kill 兜底/容量不缩水）。 */
     var stopThrowable: Throwable? = null
+
+    /** kill() 改抛这个（非 null 优先于一切）：强杀路径「收尸失败也必须归还」的判据用。 */
+    var killThrowable: Throwable? = null
     var failOnExecute = false
     var killCalls = 0
     var stopCalls = 0
@@ -44,6 +47,9 @@ class FakeEngine(
 
     /** [ScriptEngine.lastRunSummary] 的返回值（backlog B11）：默认 null = 无事实；测试驱动。 */
     var summaryToReturn: RunSummary? = null
+
+    /** [ScriptEngine.lastRunSummary] 改抛这个（非 null 优先）：诊断读口抛错不得带走 release 的判据用。 */
+    var summaryThrowable: Throwable? = null
 
     /**
      * `pause()/resume()` 的返回值（缺省 false = 冻不住，与 `ScriptEngine` 的生产缺省同形）。
@@ -75,6 +81,7 @@ class FakeEngine(
 
     override suspend fun kill(): KillCause {
         killCalls++
+        killThrowable?.let { throw it }
         statusToReturn = EngineStatus.CRASHED
         return KillCause.REQUESTED
     }
@@ -118,5 +125,8 @@ class FakeEngine(
         return closeStdinResult
     }
 
-    override suspend fun lastRunSummary(): RunSummary? = summaryToReturn
+    override suspend fun lastRunSummary(): RunSummary? {
+        summaryThrowable?.let { throw it }
+        return summaryToReturn
+    }
 }

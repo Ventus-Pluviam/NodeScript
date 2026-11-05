@@ -188,7 +188,12 @@ class FixedEnginePool(
         return lease
     }
 
-    /** 收掉一条**没人认领**的执行体（见 [acquire] 的急停分支）；已经死了/收不动都不阻断归还路径。 */
+    /**
+     * 收掉一条执行体而**不让「收尸失败」外溢**（[acquire] 的急停分支与 [killAll] 的
+     * 全清共用）：`ScriptEngine.kill()` 没承诺不抛，而两条调用路径要的都是
+     * 「已经死了/收不动都不阻断归还路径」—— 取消照常穿透，其余异常咽下（
+     * 收不动多半意味着进程已随 killAll 死掉，收尸失败不改变「这条作废/全清继续」的结论）。
+     */
     private suspend fun killQuietly(slot: PoolSlot) {
         try {
             slot.engine.kill()
@@ -210,10 +215,20 @@ class FixedEnginePool(
         // 快照 keys：循环体里会 remove 元素，直接遍历 ConcurrentHashMap 弱一致但难推理。
         leases.keys.toList().forEach { slot ->
             val lease = leases[slot] ?: return@forEach
-            slot.engine.kill()
-            // 强释走 lease：状态机复位 + 回队一次；持有者随后的 release 是 no-op。
-            // **不等 quiesce** —— 强释要的就是「立刻不再用」，等收尾反而让急停卡住。
-            lease.forceReturn(reason)
+            try {
+                // 经 killQuietly：`ScriptEngine.kill()` 没承诺不抛（真实现是
+                // destroyForcibly + waitFor，后者可抛 InterruptedException）——
+                // 单槽收尸失败不得**中断全清**（剩下的槽还要杀、要还），
+                // 与 [acquire] 急停分支同一条「收尸失败不改变结论」纪律。
+                killQuietly(slot)
+            } finally {
+                // 强释走 lease：状态机复位 + 回队一次；持有者随后的 release 是 no-op。
+                // **不等 quiesce** —— 强释要的就是「立刻不再用」，等收尾反而让急停卡住。
+                // **归还放在 finally**：kill 抛错（含被取消）跳过归还的代价是槽永久
+                // 扣在循环外 —— 容量 -1 且现场只剩「引擎再不接活」，与 [PoolLease]
+                // 自己的 try/finally 同一条「池不缩水优先」纪律。
+                lease.forceReturn(reason)
+            }
         }
     }
 

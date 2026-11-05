@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
 class RuntimeControllerTest {
@@ -188,6 +189,72 @@ class RuntimeControllerTest {
         )
 
         Unit  // 显式收尾：void 返回值才被 JUnit5 视为测试
+    }
+
+    /**
+     * `ScriptEngine.kill()` 没承诺不抛（真实现 destroyForcibly + waitFor，后者可抛
+     * InterruptedException）：收尸失败时**槽位仍必须归还**（finally 纪律，与池侧
+     * killAll 同款）—— 跳过的代价是容量永久 -1，且异常沿看门狗 tick 终结整条轮转。
+     */
+    @Test
+    fun `killRun 引擎 kill 抛错仍归还槽位`() = runBlocking {
+        val (c, engines) = controller()
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        engines[0].killThrowable = IllegalStateException("模拟收尸失败")
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { c.killRun(started.runId, KillCause.WATCHDOG_CPU) }
+        }
+        assertTrue(c.activeRunIds().isEmpty(), "在途表摘除先于 kill：抛错不留僵尸账")
+        assertEquals(PoolStats(1, free = 1, busy = 0), c.stats(), "kill 抛错跳过归还 = 容量永久 -1")
+        assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p2", "b.js", waitTimeoutMillis = 300)),
+            "槽没还上则后续 start 只能排队到超时",
+        )
+        Unit
+    }
+
+    /**
+     * 诊断摘要（[com.autoscript.domain.engine.ScriptEngine.lastRunSummary]）是诊断面：
+     * 读口抛错降级为 null，**release 不陪葬** —— 池不缩水优先于诊断完整。
+     * 两条结算路各走一遍：自然退出（settleDone）与 CRASHED（settleKilled）。
+     */
+    @Test
+    fun `结算时摘要读口抛错仍归还槽位`() = runBlocking {
+        val (c, engines) = controller()
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        engines[0].statusToReturn = EngineStatus.STOPPED            // 自然退出 → settleDone
+        engines[0].summaryThrowable = IllegalStateException("模拟摘要读口失败")
+
+        assertEquals(RuntimeController.Completed.StoppedClean, c.awaitCompletion(started.runId, 1_000))
+        assertEquals(PoolStats(1, free = 1, busy = 0), c.stats(), "摘要抛错带走 release = 容量永久 -1")
+        Unit
+    }
+
+    @Test
+    fun `强杀结算时摘要读口抛错仍归还槽位且摘要如实为 null`() = runBlocking {
+        val (c, engines) = controller()
+        val started = assertInstanceOf(
+            RuntimeController.StartOutcome.Started::class.java,
+            c.start(PoolAcquireRequest("p1", "a.js")),
+        )
+        engines[0].statusToReturn = EngineStatus.CRASHED            // 崩溃 → settleKilled
+        engines[0].summaryThrowable = IllegalStateException("模拟摘要读口失败")
+
+        val done = assertInstanceOf(
+            RuntimeController.Completed.Killed::class.java,
+            c.awaitCompletion(started.runId, 1_000),
+        )
+        assertNull(done.summary, "读口抛错 → 摘要降级 null，不伪造进程事实")
+        assertEquals(PoolStats(1, free = 1, busy = 0), c.stats(), "摘要抛错带走 release = 容量永久 -1")
+        Unit
     }
 
     @Test
