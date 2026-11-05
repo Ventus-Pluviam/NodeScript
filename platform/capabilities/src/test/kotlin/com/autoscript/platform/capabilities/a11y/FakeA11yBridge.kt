@@ -24,6 +24,8 @@ internal class FakeA11yBridge : A11yBridge {
         var longClickResult = true
         var setTextResult = true
         var scrollResult = true
+        /** true = snapshot() 抛 ISE（模拟 API<33 对已回收节点的活读）。 */
+        var snapshotFails = false
         val kids = mutableListOf<Blue>()
         var parentBlue: Blue? = null
 
@@ -38,7 +40,10 @@ internal class FakeA11yBridge : A11yBridge {
 
         var recycled = false
 
-        override fun snapshot(): A11yNodeSnap = blue.snap
+        override fun snapshot(): A11yNodeSnap {
+            if (blue.snapshotFails) error("节点已回收（测试注入）") // error() 抛的就是 ISE（detekt UseCheckOrError）
+            return blue.snap
+        }
         // 服务死 → refresh=false（真机 AccessibilityNodeInfo.refresh 同语义）→ 调用方按 STALE 回收。
         override fun refresh(): Boolean = blue.alive && !recycled && connected
         override fun children(): List<A11yNode> = blue.kids.map { FakeNode(it) }
