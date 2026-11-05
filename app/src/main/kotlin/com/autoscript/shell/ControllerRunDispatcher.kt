@@ -23,7 +23,8 @@ import com.autoscript.domain.scripts.EngineRunLink
  * 故该接线只能落在 :app。
  *
  * 映射语义（诚实上报，不伪造成功）：
- * - 屏幕门禁拒绝 → [RunOutcome.Failed]（本次未投递；原因由 ScreenGate 实现方日志/UI 呈现）；
+ * - 屏幕门禁拒绝 → [RunOutcome.Failed]（本次未投递；**门禁给的 `reason` 随
+ *   `crashSummary` 落档案** —— 此前直接丢掉，任务中心只剩一句「失败」而没有任何原因）；
  * - 池排队超时 → [RunOutcome.Cancelled]（"排队取消"口径：未获槽，未执行）；
  * - 引擎启动失败 → [RunOutcome.Crashed]（message 保留引擎侧原文）；
  * - 完成等待 StoppedClean → Succeeded；StopTimeout → Failed（软停未净，已 kill 兜底）；
@@ -79,7 +80,10 @@ class ControllerRunDispatcher(
 
     private suspend fun run(pending: PendingRun): DispatchReport {
         when (val gate = screenGate.pass(pending.screen)) {
-            is ScreenGateDecision.Deny -> return DispatchReport(RunOutcome.Failed(), null, null)
+            is ScreenGateDecision.Deny ->
+                // 门禁的 reason 必须随 outcome 走（crashSummary 落档案/任务中心）——
+                // 丢掉它，任务中心只剩「失败」两个字，而「为什么没跑」本来就在这里。
+                return DispatchReport(RunOutcome.Failed(crashSummary = gate.reason), null, null)
             ScreenGateDecision.Proceed -> Unit
         }
         val started = when (
