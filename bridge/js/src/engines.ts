@@ -355,7 +355,8 @@ export function installHeartbeatPeriod(millis: number): void {
  *   `ERR_NOT_FOUND`，幂等语义由宿主保证，本层不吞错）；
  * - `onExit` → 节流轮询 `engines.status(runId)`：`STOPPED` 报 `null`（干净结束），
  *   `CRASHED` 报 `{cause:'CRASHED'}`，结算离表（`ERR_NOT_FOUND`）则按"谁停的"诚实回答 ——
- *   经本会话 `cancel()` 停的报 `null`，外部结算（看门狗/他人 stop/正常跑完离表）的报
+ *   经本会话 `cancel()` **确认落地**（stop 回 true）的报 `null`，外部结算（看门狗/
+ *   他人 stop/正常跑完离表，含本会话 cancel 没停成的）的报
  *   `{cause:'UNKNOWN'}`：结算即离表（见 `probeStatus`），离表后宿主已无终态可读，
  *   报 `null` 会把 CRASHED 伪装成干净结束。轮询失败（TTL/断链）吞掉等下一轮，
  *   定时器 unref 不保活事件循环（与 `startHeartbeat` 同一条纪律）；
@@ -377,8 +378,12 @@ export class EngineSessionImpl implements EngineSession {
   }
 
   async cancel(opts: { timeout?: number; signal?: AbortSignal } = {}): Promise<boolean> {
-    this.cancelCalled = true
-    return engines.stop(this.runId, opts)
+    // 「本会话停的」只在 stop **确认落地**（宿主回 true）后才成立：stop 抛错（TTL/
+    // 断链）或回 false（run 已被别路结算）都是没停成。旗标抢跑会把之后的外部结算
+    // 误报成「干净结束（我们停的）」—— onExit 的 UNKNOWN/null 之分恰恰是谁停的那笔账。
+    const stopped = await engines.stop(this.runId, opts)
+    if (stopped) this.cancelCalled = true
+    return stopped
   }
 
   onExit(

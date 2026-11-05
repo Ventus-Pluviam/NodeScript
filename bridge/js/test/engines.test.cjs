@@ -18,6 +18,8 @@ let sharedSeq = null
 /** mock 通道缓冲：emit 写入、drain 按 sinceSeq 游标拉取（复刻 Kotlin ChannelState 语义）。 */
 let emitted = null
 let closedChannels = null
+/** 模拟 stop RPC 不落地（TTL/断链）的 runId 集：cancel 的旗标不许抢跑那条用例用。 */
+const stopFailsFor = new Set()
 function installMockEngines() {
   if (sharedRuns) return sharedRuns
   const runs = new Map()
@@ -52,6 +54,10 @@ function installMockEngines() {
         return undefined
       }
       case 'stop': {
+        if (stopFailsFor.has(p.runId)) {
+          auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_TIMEOUT', detail: '模拟 stop RPC 未落地' })
+          return undefined
+        }
         if (!runs.has(p.runId)) {
           auto.handleResponse({ t: 'err', id: reqId, code: 'ERR_NOT_FOUND', detail: `未知 runId: ${p.runId}` })
         } else {
@@ -367,6 +373,22 @@ test('会话 onExit：本会话 cancel 后结算报 null，外部结算报 UNKNO
     }, { pollMillis: 20 })
     void auto.engines.stop(s2.runId).then(() => {})
   }), 1000, '外部结算 onExit')
+})
+
+test('会话 onExit：cancel 的 stop 没落地（抛错）→ 之后结算报 UNKNOWN 而非 null', async () => {
+  installMockEngines()
+  const s = await auto.engines.exec({ projectId: 'p1', scriptPath: 'a.js', timeoutMillis: 60_000 })
+  stopFailsFor.add(s.runId)
+  await assert.rejects(() => s.cancel(), (e) => e.code === 'ERR_TIMEOUT', 'stop RPC 未落地：cancel 如实抛')
+  stopFailsFor.delete(s.runId)
+  // 人还活着（stop 没落地）：随后由别路结算 —— 那不是本会话停的，不许报 null（干净）。
+  await withTimeout(new Promise((resolve) => {
+    s.onExit((info) => {
+      assert.strictEqual(info && info.cause, 'UNKNOWN', 'cancel 没停成的结算 = 外部结算：UNKNOWN')
+      resolve(undefined)
+    }, { pollMillis: 20 })
+    void auto.engines.stop(s.runId).then(() => {})   // 别路 stop（不经本会话 cancel）
+  }), 1000, 'cancel 未落地后 onExit')
 })
 
 test('会话 onExit：取消订阅后不再回调', async () => {
