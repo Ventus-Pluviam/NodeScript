@@ -230,7 +230,7 @@ jobs:
         run: bash engine/node-process/scripts/build-native.sh
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       # release 变体为什么存在（2026-10-28 第十六批，用户拍板）：真机复测（本 workflow 出包）
       # 一直在 debug 形态上做 —— `android:debuggable=true` 让 ART 只做校验级编译（解释 + JIT），
