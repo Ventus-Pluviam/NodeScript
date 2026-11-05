@@ -492,7 +492,9 @@ class MainActivity : ComponentActivity() {
                 // 顶栏「结束脚本」：与暂停/继续同一条协程域。
                 onStop = { scope.launch { logWindow.stop() } },
             )
-            com.autoscript.ui.overlay.LogWindowPoll(open = logWindow.state != null) {
+            // 「该不该拉」由 LogWindowPoll 自己从控制器现推（读点收在那一层：
+            // 在这里读 `logWindow.state` 会让整棵 pager 子树随每次按键重组）。
+            com.autoscript.ui.overlay.LogWindowPoll(controller = logWindow) {
                 reloadConsole()
                 logWindow.updateLines(consoleState.lines)
                 // 结算不解绑（执行完保留输出）：绑定随在途表

@@ -35,23 +35,50 @@ import kotlinx.coroutines.delay
  *   把同一份 `LogWindowContent` 喂给离屏 `ComposeView`（`SystemLogWindowHost.show`）；
  *   state 变即重喂（内容层无状态，全由参数进）。show 失败 → `fallbackToInApp()`。
  *
- * **轮询**（[LogWindowPoll]）：窗开期间 400ms 拉一次 `onTick`（= reloadConsole + bind）
- * —— 与控制台命令面的 `pollConsoleWhileRunning` 同一条 `pollWhile` 纪律
- * （有界 600 tick ≈ 4 分钟；关窗即停）。行过滤（归属 + 水位）走
- * `LogWindowState.visible`，不过第二遍。
+ * **轮询**（[LogWindowPoll]）：窗开**且**绑定的那次还在跑（或还没绑上）时 400ms 拉一次
+ * `onTick`（= reloadConsole + bind），结算即停、重跑即重启（见那条的 KDoc）。
+ * 行过滤（归属 + 水位）走 `LogWindowState.visible`，不过第二遍。
  */
 
-/** 窗开期间的拉取循环（窗关即停；与命令面轮询同纪律：有界 + 只在看的时候问）。 */
+/**
+ * 窗开期间的拉取循环：**有东西可能变**就拉，没有就停。
+ *
+ * 停止条件是**绑定的那次执行已结算**（窗里的行不会再变），以及窗被关。
+ * 原来只有一条 tick 上限（照抄命令面那条 600 tick ≈ 4 分钟），而那条界在这里是有代价的：
+ * 脚本没有缺省超时（`timeoutMillis` 可空、池侧不兜），跑过 4 分钟的长脚本会让**窗里的
+ * 输出在 4 分钟处停住** —— 脚本还在打印、窗里一行不动，读起来正是"它卡死了"。
+ *
+ * 上限只留给**从没绑上过**的那一档（[UNBOUND_MAX_TICKS]）：那一档的每轮 tick 要读一次
+ * `index.jsonl` 找补位号，而"起跑失败、窗口留在未开始"是可能长期停留的形态（见
+ * [LogWindowState.bind] 的 KDoc）—— 没有上限就是每 400ms 一次磁盘读，直到用户手动关窗。
+ * 命令面那条「宿主永远说在跑」的界在那一档仍成立，所以照抄过来。
+ *
+ * **"该不该拉"在这里现推，不叫调用方推好传进来**：`controller.state` 每敲一个字都在变
+ * （草稿、回显），在调用方的组合层读它等于让整棵 pager 子树随每次按键重组 ——
+ * 正是本文件反复警告的那一种。读点收进本函数后，变化的只有这个不画任何东西的壳。
+ *
+ * 键取「窗开着」与「绑定在跑没跑」（[LogWindowState.running]）：结算时置 false → 循环
+ * 取消；用户按「重跑」把窗切回未绑定态 → 置回 true → 循环重启。只按"窗开没开"作键的话，
+ * 结算之后就没有下一轮来发现重跑。
+ */
 @Composable
 fun LogWindowPoll(
-    open: Boolean,
+    controller: LogWindowController,
     onTick: suspend () -> Unit,
 ) {
-    LaunchedEffect(open) {
-        if (!open) return@LaunchedEffect
-        repeat(LOG_WINDOW_MAX_TICKS) {
+    val state = controller.state
+    // 未绑定也算「可能要拉」：起跑中 / 极快脚本的补绑窗口（见 LogWindowState.bind）。
+    val polling = state != null && (state.running || state.boundRunId == null)
+    LaunchedEffect(polling) {
+        if (!polling) return@LaunchedEffect
+        var ticks = 0
+        while (true) {
             delay(LOG_WINDOW_POLL_MILLIS)
             onTick()
+            ticks++
+            // 协程里现读，不算组合读：绑定一变（补绑成功/重跑）立刻按新事实判。
+            val now = controller.state ?: return@LaunchedEffect
+            if (now.boundRunId == null && ticks >= UNBOUND_MAX_TICKS) return@LaunchedEffect
         }
     }
 }
@@ -254,5 +281,11 @@ fun SystemWindowSync(
 /** 轮询间隔（与命令面 `LIVE_POLL_INTERVAL_MILLIS` 同值：手感与成本的折中）。 */
 private const val LOG_WINDOW_POLL_MILLIS = 400L
 
-/** 轮询上限（与 `LIVE_POLL_MAX_TICKS` 同值 ≈ 4 分钟；宿主句柄泄漏时界面不无限问）。 */
-private const val LOG_WINDOW_MAX_TICKS = 600
+/**
+ * **从没绑上过**那一档的轮询上限（≈ 4 分钟，与 `LIVE_POLL_MAX_TICKS` 同值）。
+ *
+ * 只对未绑定的窗生效：那一档每轮要读一次 `index.jsonl` 找补位号，而"起跑失败、窗口
+ * 留在未开始"可能长期停留。**绑上之后这条上限不再适用** —— 跑多久就拉多久
+ * （脚本本身没有缺省超时，见 [LogWindowPoll]）。
+ */
+private const val UNBOUND_MAX_TICKS = 600
