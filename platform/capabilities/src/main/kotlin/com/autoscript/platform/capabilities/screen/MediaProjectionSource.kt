@@ -182,7 +182,13 @@ class MediaProjectionSource(
                 MediaProjectionHandle(id, generation)
             }
         } finally {
-            synchronized(lock) { if (opening == owner) opening = null }
+            synchronized(lock) {
+                if (opening == owner) opening = null
+                // 撤销簿里自己这条随本次开启结束即清：它的全部用途就是「这一次开启的
+                // 提交前判据」，而归属三元组（runId/connectionId）单调不复用 —— 不清掉
+                // 就是每条被撤销过的连接都留一条尸，长跑宿主上只进不退。
+                revokedOwners.remove(owner)
+            }
         }
     }
 
@@ -285,7 +291,12 @@ class MediaProjectionSource(
      */
     override fun releaseConnection(owner: MediaProjectionSessionOwner): Boolean {
         val mine = synchronized(lock) {
-            revokedOwners += owner
+            // 只在「开启在进行」时记账（提交前那道判据只在那个窗口里被读）。
+            // 开启空窗期的撤销由下面的摘表/补 outcome + 设备层归属收口直接覆盖；
+            // 「撤销在先、开启在后」的尾帧竞态由 handler 侧
+            // `ConnectionResourceRegistry`（撤销后 register 立刻兑现）兜底 ——
+            // 簿里那条留着永远不会有人来读，只进不退就是一条慢漏。
+            if (opening == owner) revokedOwners += owner
             val ids = live.filterValues { it.owner == owner }.keys.toList()
             ids.map { live.remove(it)!! }
         }
