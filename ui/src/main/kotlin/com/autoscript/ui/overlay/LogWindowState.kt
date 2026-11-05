@@ -97,6 +97,17 @@ data class LogWindowState(
     val titleText: String get() = "/" + ScriptPaths.fullRelPath(projectId, relPath)
 
     /**
+     * 同一条归属的**文件清单形状**（`readScriptFile`/`runScriptFile` 那一侧收的口径：
+     * 首段 = 项目名，即 [ScriptPaths.projectInternalOrNull] 的逆运算）。
+     *
+     * 与 [titleText] 共用 [ScriptPaths.fullRelPath]，差别只有那个显示用的 `/` 前缀：
+     * 前缀是给人看的，带进落盘/执行口就会被 `RelPath.isSafe` 判成绝对路径而拒收
+     * （根层 `projectId` 是空串哨兵，裸拼 `"$projectId/$relPath"` 恰好产出前导斜杠 ——
+     * 重跑钮于是对根层脚本永远报「非法相对路径」）。
+     */
+    val listRelPath: String get() = ScriptPaths.fullRelPath(projectId, relPath)
+
+    /**
      * 这次执行的扩展名（文件类型图标的判据；取最后一段最后一个点之后，小写）。
      *
      * **`substringAfterLast('/')` 不带第二参数**（缺省 = 整串）：传 `""` 会让没有斜杠的

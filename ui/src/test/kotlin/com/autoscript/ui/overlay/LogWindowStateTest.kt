@@ -51,6 +51,22 @@ class LogWindowStateTest {
         assertEquals(7L, s.bind(listOf(run(7L, projectId = "", scriptPath = "hello.js"))).boundRunId)
     }
 
+    /**
+     * `listRelPath` = 文件清单形状（首段 = 项目名），与 [LogWindowState.titleText]
+     * 同一条判据、只差那个显示用的 `/`。**根层是这一条的全部理由**：`projectId` 是空串
+     * 哨兵，裸拼 `"$projectId/$relPath"` 产出 `/hello.js` —— 前导斜杠被 `RelPath.isSafe`
+     * 判成绝对路径，重跑当场抛「非法相对路径」。
+     */
+    @Test
+    fun `清单形状带项目段 根层不带前导斜杠`() {
+        assertEquals("demo/data/test.js", LogWindowState("demo", "data/test.js").listRelPath)
+        assertEquals("hello.js", LogWindowState("", "hello.js").listRelPath)
+        // 与标题共用一份判据：去掉显示前缀就是同一个串
+        val root = LogWindowState("", "hello.js")
+        assertEquals("/" + root.listRelPath, root.titleText)
+        Unit
+    }
+
     @Test
     fun `bind 按归属取最大 runId 并同步 paused 与 running`() {
         val s = LogWindowState(projectId = "demo", relPath = "data/test.js")
