@@ -1265,6 +1265,36 @@ class InstallCoordinatorTest {
         assertEquals(0, r.keepCount)
     }
 
+    /**
+     * 回收与在途安装的互斥（修）：安装的包**先进缓存、后落 lock** —— 回收与它赛跑，
+     * keep 集里就没有这份刚写进缓存的包，会被当成没人要的删掉（静默丢离线能力）。
+     * 现口径：回收全程持 `globalSession`，排在在途操作后面。
+     */
+    @Test
+    fun `回收缓存排在在途安装后面 不与它抢缓存`() = runBlocking {
+        val orphan = seedCacheContent("orphan")
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val c = coordinator(executor = FakeExecutor {
+            entered.complete(Unit)
+            gate.await()
+        })
+        val installJob = async { c.install("p1", listOf(PackageSpec("axios"))) }
+        withTimeout(5_000) { entered.await() }          // 安装已持全局会话锁
+
+        val reclaimJob = async { c.reclaimCache() }
+        // 给回收充分调度机会：它过不了全局会话锁，流浪 content 必须还在、任务必须没完。
+        repeat(50) { yield() }
+        assertTrue(Files.exists(cacheContentFile(orphan)), "安装持锁期间回收不得动缓存")
+        assertTrue(!reclaimJob.isCompleted, "安装持锁期间回收必须排队")
+
+        gate.complete(Unit)
+        installJob.await()
+        reclaimJob.await()
+        assertFalse(Files.exists(cacheContentFile(orphan)), "安装结束后回收才跑：流浪 content 被删")
+        Unit
+    }
+
     @Test
     fun `lock 读不出来的项目如实留痕点名（它的依赖没被保护）`() = runBlocking {
         val orphan = seedCacheContent("orphan")
