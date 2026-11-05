@@ -260,7 +260,14 @@ class MainActivity : ComponentActivity() {
     // 「当前页签」不再是一个字段：它由 pager 的滚动位置派生（见 setContent 里的 pagerState）。
     // 存两份必然漂移 —— 手指划过去时字段说 A、pager 说 B。
 
-    /** 主题档位（跟随系统/浅/深）。 */
+    /**
+     * 主题档位（跟随系统/浅/深）。
+     *
+     * **跨重建靠 Bundle 带回来**（[onSaveInstanceState]）：它不是派生值，而是用户的
+     * 一次明确选择 —— 重建一趟就退回 [ThemeMode.SYSTEM]，等于"我点的浅色自己变回去了"。
+     * 本 Activity 没声明 `configChanges`，重建的来源不止旋转（竖屏锁死不拦
+     * 系统深浅开关、字体大小、语言、分屏、进程被回收后恢复）。
+     */
     private var themeMode: ThemeMode by mutableStateOf(ThemeMode.SYSTEM)
 
     /**
@@ -392,6 +399,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 记下主题档位（用户的明确选择，不是可重算的现值 —— 见 [themeMode] 的 KDoc）。
+     *
+     * 只带 `name` 这一个 Stability 级别的原始串：`ThemeMode` 是枚举，`toString()` 与
+     * `valueOf` 对称；读了不认识的值（降级/改档）回落到 `SYSTEM`，不比 Bundle 里
+     * 塞一个会随版本漂的 ordinal。
+     */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_THEME_MODE, themeMode.name)
+    }
+
     override fun onDestroy() {
         // 注销：没有存活界面就没人能问用户 —— `:app` 那边据此如实拒绝开会话（不假装问过了）。
         if (ScreenConsentHolder.host === consentHost) ScreenConsentHolder.host = null
@@ -408,6 +427,11 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalFoundationApi::class) // LocalBringIntoViewSpec 在 foundation 1.7 仍是实验 API
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 主题档位在**首帧之前**恢复：晚一步（比如放进 setContent 的 LaunchedEffect）
+        // 会先按 SYSTEM 画一帧、再跳成用户选的那档 —— 一次闪色。
+        savedInstanceState?.getString(KEY_THEME_MODE)?.let { name ->
+            themeMode = runCatching { ThemeMode.valueOf(name) }.getOrNull() ?: ThemeMode.SYSTEM
+        }
         // 边到边（§6）：**显式开**，而不是等 Android 15 因为 targetSdk 35 替我们开 ——
         // 两条渲染路径必须是同一条，否则"只在新系统上暴露的版式问题"在老机器上永远看不见
         // （本仓的开发机与云手机都还在 13/14）。两条系统栏一律透明：状态栏那一条归顶栏、
@@ -1576,6 +1600,9 @@ class MainActivity : ComponentActivity() {
 
         /** 日志 tag（投屏同意征询那几条）。 */
         const val TAG = "MainActivity"
+
+        /** [themeMode] 在 Bundle 里的键（见 [onSaveInstanceState]）。 */
+        const val KEY_THEME_MODE = "themeMode"
 
         /**
          * 「去授权」那条同步接口等主线程 post 的上限（见 [ScreenConsentHost.requestScreenConsentDetached]）。
