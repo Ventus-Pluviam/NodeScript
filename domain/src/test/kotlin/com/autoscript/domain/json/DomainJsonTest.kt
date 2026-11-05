@@ -129,6 +129,33 @@ class DomainJsonTest {
     }
 
     @Test
+    fun `数字走真文法——孤负号 双负号 多点 空指数 前导零一律拒`() {
+        // 旧宽松扫描把这些收进 N.raw；KDoc 承诺「非法输入抛 IAE」，数字这道门也得守。
+        for (bad in listOf("-", "--5", "1.2.3", "12e", "01", "1.", ".5", "+1", "1e+")) {
+            assertThrows(
+                IllegalArgumentException::class.java,
+                { DomainJson.decode(bad) },
+                "非 JSON 数字必须拒：$bad",
+            )
+        }
+        // 合法形态不受影响（回归钉住）。
+        assertEquals("1.50", n(DomainJson.decode("1.50")))
+        assertEquals("-9223372036854775808", n(DomainJson.decode("-9223372036854775808")))
+        assertEquals("-0.5e+10", n(DomainJson.decode("-0.5e+10")))
+        assertEquals("0", n(DomainJson.decode("0")))
+        assertEquals("0.5", n(DomainJson.decode("0.5")))
+    }
+
+    @Test
+    fun `嵌套深度有顶——超深拒成 IAE 而不是栈溢出打穿桥连接`() {
+        // 解析是自递归：8 MiB 帧能装四百万层 `[`，SOE 不是 Exception，路由层折叠接不住。
+        val tooDeep = "[".repeat(600) + "]".repeat(600)
+        assertThrows(IllegalArgumentException::class.java) { DomainJson.decode(tooDeep) }
+        val ok = "[".repeat(500) + "1" + "]".repeat(500)
+        assertTrue(DomainJson.decode(ok) is DomainJson.Value.Arr, "512 层以内的正常嵌套照常解析")
+    }
+
+    @Test
     fun `encodeParsed 数字原文透传不 Double 化`() {
         val tree = DomainJson.decode("""{"a":1.50,"b":-9223372036854775808}""")
         assertEquals("""{"a":1.50,"b":-9223372036854775808}""", DomainJson.encodeParsed(tree))

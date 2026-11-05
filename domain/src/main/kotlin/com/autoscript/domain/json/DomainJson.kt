@@ -8,6 +8,14 @@ package com.autoscript.domain.json
  * 只做 JSON 值级往返（string/number/bool/null/object/array），不支持注释、不做数字精度保证
  * （Long 按十进制原文透传）；非法输入抛 IllegalArgumentException，由 `RpcNamespaceHandler`
  * 折叠为 ERR_INVALID_PARAM（桥的诚实上报，不伪造成功）。
+ *
+ * 两条边界写死在这里：
+ * - **数字走 JSON 文法**（`-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?`），不是「扫到不像数字
+ *   为止」—— 宽松扫描会把 `-`/`--5`/`1.2.3` 收进 `N.raw`，而 raw 会被 [encodeParsed]
+ *   原文透传回 wire：解析侧收的烂数，编码侧又吐出去；
+ * - **嵌套封顶 512 层**：解析是自递归，超深输入（8 MiB 帧能装四百万层 `[`）会
+ *   StackOverflow 打穿桥连接（那不是 Exception，路由层的折叠接不住）—— 超深 = IAE，
+ *   与一切非法输入同一条折叠路。
  */
 object DomainJson {
 
@@ -177,13 +185,16 @@ object DomainJson {
             while (pos < text.length && text[pos].isWhitespace()) pos++
         }
 
-        fun parseValue(): Value {
+        fun parseValue(): Value = parseValue(0)
+
+        private fun parseValue(depth: Int): Value {
+            require(depth <= MAX_DEPTH) { "嵌套超过 $MAX_DEPTH 层（防栈深 DoS，见类 KDoc）" }
             skipWs()
             if (pos >= text.length) throw IllegalArgumentException("意外结束")
             return when (val c = text[pos]) {
                 '"' -> Value.S(parseString())
-                '{' -> parseObject()
-                '[' -> parseArray()
+                '{' -> parseObject(depth)
+                '[' -> parseArray(depth)
                 't' -> { expect("true"); Value.B(true) }
                 'f' -> { expect("false"); Value.B(false) }
                 'n' -> { expect("null"); Value.Null }
@@ -192,7 +203,7 @@ object DomainJson {
             }
         }
 
-        private fun parseObject(): Value.Obj {
+        private fun parseObject(depth: Int): Value.Obj {
             pos++ // {
             val out = LinkedHashMap<String, Value>()
             skipWs()
@@ -202,12 +213,12 @@ object DomainJson {
             }
             while (true) {
                 skipWs()
-                if (pos >= text.length || text[pos] != '"') throw IllegalArgumentException("对象键必须是字符串 @$pos")
+                require(pos < text.length && text[pos] == '"') { "对象键必须是字符串 @$pos" }
                 val key = parseString()
                 skipWs()
-                if (pos >= text.length || text[pos] != ':') throw IllegalArgumentException("期望 ':' @$pos")
+                require(pos < text.length && text[pos] == ':') { "期望 ':' @$pos" }
                 pos++
-                out[key] = parseValue()
+                out[key] = parseValue(depth + 1)
                 skipWs()
                 if (pos >= text.length) throw IllegalArgumentException("对象意外结束")
                 when (text[pos]) {
@@ -221,7 +232,7 @@ object DomainJson {
             }
         }
 
-        private fun parseArray(): Value.Arr {
+        private fun parseArray(depth: Int): Value.Arr {
             pos++ // [
             val out = ArrayList<Value>()
             skipWs()
@@ -230,7 +241,7 @@ object DomainJson {
                 return Value.Arr(out)
             }
             while (true) {
-                out.add(parseValue())
+                out.add(parseValue(depth + 1))
                 skipWs()
                 if (pos >= text.length) throw IllegalArgumentException("数组意外结束")
                 when (text[pos]) {
@@ -285,11 +296,36 @@ object DomainJson {
         }
 
         private fun parseNumber(): String {
+            // JSON 数字文法：-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)? —— 逐段验收，
+            // 不是「扫到不像数字为止」（旧宽松扫描收 `-`/`--5`/`1.2.3`/`12e` 这类非 JSON，
+            // 理由见类 KDoc）。
             val start = pos
             if (pos < text.length && text[pos] == '-') pos++
-            while (pos < text.length && (text[pos].isDigit() || text[pos] in ".eE+-")) pos++
-            if (pos == start) throw IllegalArgumentException("非法数字 @$start")
+            require(pos < text.length && text[pos].isDigit()) { "非法数字 @$start" }
+            if (text[pos] == '0') {
+                pos++
+                // 前导零：`01` 不是合法 JSON（文法里 0 后面只能跟 . / e / 结束）
+                require(pos >= text.length || !text[pos].isDigit()) { "前导零非法 @$start" }
+            } else {
+                while (pos < text.length && text[pos].isDigit()) pos++
+            }
+            if (pos < text.length && text[pos] == '.') {
+                pos++
+                require(pos < text.length && text[pos].isDigit()) { "小数点后无数字 @$start" }
+                while (pos < text.length && text[pos].isDigit()) pos++
+            }
+            if (pos < text.length && (text[pos] == 'e' || text[pos] == 'E')) {
+                pos++
+                if (pos < text.length && (text[pos] == '+' || text[pos] == '-')) pos++
+                require(pos < text.length && text[pos].isDigit()) { "指数无数字 @$start" }
+                while (pos < text.length && text[pos].isDigit()) pos++
+            }
             return text.substring(start, pos)
+        }
+
+        private companion object {
+            /** 嵌套上限（见类 KDoc：防栈深 DoS）。512 对真实载荷（< 几十层）绰绰有余。 */
+            const val MAX_DEPTH: Int = 512
         }
 
         private fun expect(literal: String) {
