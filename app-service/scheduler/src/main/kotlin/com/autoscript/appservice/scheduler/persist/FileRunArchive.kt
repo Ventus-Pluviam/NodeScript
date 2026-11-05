@@ -87,8 +87,9 @@ class FileRunArchive(private val dir: Path) : RunArchive, AutoCloseable {
     }
 
     override fun close() {
-        channel.force(true)
-        channel.close()
+        // 与 FileTaskStore.close 同款上锁：不与在飞的 put 交错（否则 force/close 夹在
+        // append 中途，put 那侧吃到的是 ClosedChannelException 这种读不出所以然的错）。
+        synchronized(writeLock) { channel.force(true); channel.close() }
     }
 
     /**

@@ -75,6 +75,33 @@ class FileScriptEnvStoreTest {
     }
 
     @Test
+    fun `半行落盘即截断——补写后重启不粘行（B3 半行清盘在这份上补落）`(@TempDir dir: Path) {
+        // 盘上直接造「两条好行 + 一条半行」（模拟 append 中途断电）。
+        Files.write(
+            file(dir),
+            (
+                """{"op":"put","k":"A","v":"1"}""" + "\n" +
+                    """{"op":"put","k":"B","v":"2"}""" + "\n" +
+                    """{"op":"pu"""
+                ).toByteArray(StandardCharsets.UTF_8),
+        )
+        val first = FileScriptEnvStore(dir)
+        assertEquals(
+            listOf(ScriptEnvEntry("A", "1"), ScriptEnvEntry("B", "2")),
+            first.all(),
+            "半行在内存丢弃（旧行为不变）",
+        )
+        // 关键一步：残片已随第一次打开截掉，这次 append 不会与残片粘成一行。
+        first.put("C", "3")
+        val reopened = FileScriptEnvStore(dir)
+        assertEquals(
+            listOf(ScriptEnvEntry("A", "1"), ScriptEnvEntry("B", "2"), ScriptEnvEntry("C", "3")),
+            reopened.all(),
+            "若半行只在内存丢弃而盘上留着，本次重开会在粘行上抛 IOException —— 店再也打不开",
+        )
+    }
+
+    @Test
     fun `值经 JSON 编码——等号 空格 中文 引号 换行往返逐字相等`(@TempDir dir: Path) {
         val nasty = "a=b c 中文 \"quoted\" \n第二行\t制表"
         FileScriptEnvStore(dir).put("K", nasty)
