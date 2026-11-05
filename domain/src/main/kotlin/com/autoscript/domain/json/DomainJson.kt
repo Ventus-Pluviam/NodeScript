@@ -188,9 +188,7 @@ object DomainJson {
         fun parseValue(): Value = parseValue(0)
 
         private fun parseValue(depth: Int): Value {
-            if (depth > MAX_DEPTH) {
-                throw IllegalArgumentException("嵌套超过 $MAX_DEPTH 层（防栈深 DoS，见类 KDoc）")
-            }
+            require(depth <= MAX_DEPTH) { "嵌套超过 $MAX_DEPTH 层（防栈深 DoS，见类 KDoc）" }
             skipWs()
             if (pos >= text.length) throw IllegalArgumentException("意外结束")
             return when (val c = text[pos]) {
@@ -215,10 +213,10 @@ object DomainJson {
             }
             while (true) {
                 skipWs()
-                if (pos >= text.length || text[pos] != '"') throw IllegalArgumentException("对象键必须是字符串 @$pos")
+                require(pos < text.length && text[pos] == '"') { "对象键必须是字符串 @$pos" }
                 val key = parseString()
                 skipWs()
-                if (pos >= text.length || text[pos] != ':') throw IllegalArgumentException("期望 ':' @$pos")
+                require(pos < text.length && text[pos] == ':') { "期望 ':' @$pos" }
                 pos++
                 out[key] = parseValue(depth + 1)
                 skipWs()
@@ -303,30 +301,23 @@ object DomainJson {
             // 理由见类 KDoc）。
             val start = pos
             if (pos < text.length && text[pos] == '-') pos++
-            if (pos >= text.length || !text[pos].isDigit()) {
-                throw IllegalArgumentException("非法数字 @$start")
-            }
+            require(pos < text.length && text[pos].isDigit()) { "非法数字 @$start" }
             if (text[pos] == '0') {
                 pos++
-                if (pos < text.length && text[pos].isDigit()) {
-                    throw IllegalArgumentException("前导零非法 @$start")
-                }
+                // 前导零：`01` 不是合法 JSON（文法里 0 后面只能跟 . / e / 结束）
+                require(pos >= text.length || !text[pos].isDigit()) { "前导零非法 @$start" }
             } else {
                 while (pos < text.length && text[pos].isDigit()) pos++
             }
             if (pos < text.length && text[pos] == '.') {
                 pos++
-                if (pos >= text.length || !text[pos].isDigit()) {
-                    throw IllegalArgumentException("小数点后无数字 @$start")
-                }
+                require(pos < text.length && text[pos].isDigit()) { "小数点后无数字 @$start" }
                 while (pos < text.length && text[pos].isDigit()) pos++
             }
             if (pos < text.length && (text[pos] == 'e' || text[pos] == 'E')) {
                 pos++
                 if (pos < text.length && (text[pos] == '+' || text[pos] == '-')) pos++
-                if (pos >= text.length || !text[pos].isDigit()) {
-                    throw IllegalArgumentException("指数无数字 @$start")
-                }
+                require(pos < text.length && text[pos].isDigit()) { "指数无数字 @$start" }
                 while (pos < text.length && text[pos].isDigit()) pos++
             }
             return text.substring(start, pos)
