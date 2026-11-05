@@ -70,8 +70,16 @@ class PoolLease internal constructor(
      */
     fun forceReturn(cause: com.autoscript.domain.engine.KillCause) {
         if (!claim()) return
-        slot.forceFree(cause)
-        giveBack()
+        // forceFree 的状态机复位**今天**不会抛（CRASHED 只在 onKill→onRecycle 同一同步块
+        // 内瞬时存在，复位路径到不了它）——但这条不变量写在 PoolSlot 内部，而「池不缩水」
+        // 的责任在本类。包 try/finally 与 giveBack 自己的纪律同一条（markFree 的探测再响
+        // 也照常回队）：复位失败将来真会抛的那天，代价是一次响亮异常，而不是
+        // 「槽被扣在循环外、容量永久 -1，现场只剩引擎再不接活」。
+        try {
+            slot.forceFree(cause)
+        } finally {
+            giveBack()
+        }
     }
 
     private fun claim(): Boolean = returned.compareAndSet(false, true)
