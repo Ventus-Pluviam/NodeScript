@@ -159,6 +159,34 @@ class AndroidUiTreeTest {
         assertNotNull(runBlocking { t.root(WindowScope.ACTIVE) })
     }
 
+    @Test
+    fun `DFS 中途节点炸掉 已匹配与栈上节点全回收 异常原样上抛`() {
+        val (b, _, labelBlue) = bridgeWithTree()
+        val t = tree(b)
+        // btn 命中（进 matched 前缀）；label 的 snapshot 抛 ISE（模拟 API<33 回收节点活读）
+        labelBlue.snapshotFails = true
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { t.findBySelector(UiSelectorDsl.builder().copyWith(clickable = true)) }
+        }
+        // 根（不匹配当场回收）+ btn（matched 前缀）+ label（在处理的那个）全不许晾着
+        assertTrue(b.materialized.all { it.recycled }, "中途炸 → 物化节点全回收，无一半晾在注册表外")
+        Unit
+    }
+
+    @Test
+    fun `className 包装时快照 dispose 后仍可读不裸炸`() {
+        val (b, _, _) = bridgeWithTree()
+        val t = tree(b)
+        val node = runBlocking { t.findBySelector(UiSelectorDsl.builder().copyWith(text = "启动"))[0] }
+        assertEquals("android.widget.Button", node.className)
+        runBlocking { t.dispose(node.handle) }
+        // 与内存树同口径：className 是包装时快照（视图的类对节点不变），dispose 后不裸抛 ISE；
+        // 要活值走 attribute —— 那条过注册表，如实 STALE。
+        assertEquals("android.widget.Button", node.className)
+        assertEquals(ErrorCode.ERR_STALE_HANDLE.code, codeOf { t.attribute(node.handle, "className") })
+        Unit
+    }
+
     // ── 句柄纪律 ─────────────────────────────────────────────────────
 
     @Test

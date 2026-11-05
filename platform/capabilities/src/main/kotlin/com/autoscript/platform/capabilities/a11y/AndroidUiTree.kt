@@ -139,22 +139,39 @@ class AndroidUiTree(
      * 非匹配节点当场 [A11yNode.recycle]（其子节点在回收前已取出，Android 节点相互独立）；
      * 匹配节点保持活，生命周期由后续 wrap/dispose 管。
      */
+    @Suppress("TooGenericExceptionCaught") // 炸什么都得先把已物化节点还清，异常原样上抛不吞
     private fun search(roots: List<A11yNode>, predicate: (A11yNodeSnap) -> Boolean): List<A11yNode> {
         val matched = ArrayList<A11yNode>()
         val stack = ArrayDeque<A11yNode>()
         for (i in roots.indices) stack.addLast(roots[roots.size - 1 - i]) // 保 roots 序入栈
-        while (stack.isNotEmpty()) {
-            val node = stack.removeLast()
-            val snap = node.snapshot()
-            val kids = node.children()
-            if (predicate(snap)) {
-                matched.add(node)
-            } else {
-                node.recycle()
+        try {
+            while (stack.isNotEmpty()) {
+                val node = stack.removeLast()
+                try {
+                    val snap = node.snapshot()
+                    val kids = node.children()
+                    if (predicate(snap)) {
+                        matched.add(node)
+                    } else {
+                        node.recycle()
+                    }
+                    for (i in kids.indices) stack.addLast(kids[kids.size - 1 - i])
+                } catch (t: Throwable) {
+                    // 在处理的这一个：没进 matched、也不一定已 recycle（recycle 自己抛了
+                    // 也算）—— 当场还掉再抛，不许晾。runCatching 兜二次 recycle（API<33
+                    // 对已回收节点再 recycle 抛 ISE）。
+                    runCatching { node.recycle() }
+                    throw t
+                }
             }
-            for (i in kids.indices) stack.addLast(kids[kids.size - 1 - i])
+            return matched
+        } catch (t: Throwable) {
+            // DFS 中途炸（roots() 之后窗口关了，snapshot/children 对已回收节点抛 ISE）——
+            // 已匹配前缀与栈上剩余节点都不在任何注册表，没人替它们 recycle：全还清再上抛。
+            for (n in matched) runCatching { n.recycle() }
+            for (n in stack) runCatching { n.recycle() }
+            throw t
         }
-        return matched
     }
 
     private fun matches(a: A11yNodeSnap, s: UiSelectorDsl): Boolean {
@@ -202,7 +219,10 @@ class AndroidUiTree(
         val tree = this
         return object : UiNode {
             override val handle: HandleRef = ref
-            override val className: String? get() = node.snapshot().className
+            // 包装时快照（与 InMemoryUiTree 同口径）：视图的类对节点不变，活读没有必要；
+            // 活读的代价是 dispose 后裸抛 ISE（API<33 回收节点）—— 要活值走 attribute，
+            // 那条过注册表，如实 ERR_STALE_HANDLE。
+            override val className: String? = node.snapshot().className
             override suspend fun attribute(name: String): String? = tree.attribute(ref, name)
             override suspend fun children(): List<UiNode> = tree.children(ref)
         }
