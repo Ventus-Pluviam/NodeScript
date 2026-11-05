@@ -92,7 +92,8 @@ class HostLogStore(
             ch.position(from)
             val buf = java.nio.ByteBuffer.allocate((size - from).toInt())
             while (buf.hasRemaining() && ch.read(buf) >= 0) {
-                // 读满或到 EOF；`read` 返回 0 也会退出循环（不会自旋）。
+                // 出循环只有两条路：读满，或 EOF（read 回 -1）。阻塞 FileChannel 在
+                // 缓冲有余量时不会回 0（要么阻塞读到字节、要么 EOF），故 `>= 0` 不自旋。
             }
             return String(buf.array(), 0, buf.position(), StandardCharsets.UTF_8)
         }
