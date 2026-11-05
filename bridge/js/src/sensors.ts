@@ -109,7 +109,9 @@ export const sensors = {
           last: number
           events: SensorEvent[]
         }
-        if (batch.events.length > 0) sub.cursor = batch.last
+        // 游标**只进不退**：并发 drain（用户手调与轮询拍撞车）乱序落地时，
+        // 晚回的那批按旧游标取数 —— 不设这道闸，游标被拉回旧值，之后每拍都重放一段。
+        if (batch.last > sub.cursor) sub.cursor = batch.last
         return batch.events
       },
       on(event: 'change', cb: (events: SensorEvent[]) => void, onOpts: { intervalMs?: number; max?: number; onError?: (e: unknown) => void } = {}): () => void {
@@ -117,7 +119,13 @@ export const sensors = {
         const intervalMs = Math.max(onOpts.intervalMs ?? 200, 16)
         let stopped = false
         let timer: ReturnType<typeof setInterval> | undefined
+        // drain 慢于一拍时**跳过本拍**而不是再叠一条：两条在途 drain 按同一旧游标各拉
+        // 一份，乱序落地 = 同一批事件回调两遍（重放）还夹乱序 —— 漏一拍只是晚一拍，
+        // 重放是把「同一帧」说成「两帧」。
+        let inFlight = false
         const tick = (): void => {
+          if (inFlight) return
+          inFlight = true
           void sub.drain({ max: onOpts.max }).then((events) => {
             if (!stopped && events.length > 0) cb(events)
           }).catch((e: unknown) => {
@@ -127,6 +135,8 @@ export const sensors = {
               if (timer !== undefined) clearInterval(timer)
             }
             if (onOpts.onError !== undefined) onOpts.onError(e)
+          }).finally(() => {
+            inFlight = false
           })
         }
         timer = setInterval(tick, intervalMs)
