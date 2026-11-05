@@ -502,6 +502,7 @@ class ImagesNamespaceHandlerTest {
             "分量 -1" to findColorJsonRaw(hj, "[1,-1,3,4]", "0"),
             "tolerance 256" to findColorJsonRaw(hj, "[1,2,3,4]", "256"),
             "tolerance -1" to findColorJsonRaw(hj, "[1,2,3,4]", "-1"),
+            "tolerance 0.9（小数不容忍静默截断）" to findColorJsonRaw(hj, "[1,2,3,4]", "0.9"),
             "region 三元组" to findColorJsonRaw(hj, "[1,2,3,4]", "0", "[1,2,3]"),
             "缺 color" to """{"haystack":$hj,"tolerance":0}""",
             "缺 tolerance" to """{"haystack":$hj,"color":[1,2,3,4]}""",

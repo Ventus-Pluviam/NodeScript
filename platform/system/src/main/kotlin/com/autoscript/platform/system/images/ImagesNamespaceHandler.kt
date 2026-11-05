@@ -163,26 +163,29 @@ class ImagesNamespaceHandler(
         val fields = request.decodeObject()
         val ref: HandleRef
         val color: List<Int>
-        val tolerance: Int
+        val tolerance: Double
         val region: List<Int>?
         run {
             ref = request.requiredRef(fields, "haystack")
             color = request.requiredIntList(fields, "color")
-            tolerance = request.requiredDouble(fields, "tolerance").toInt()
+            // 先按 Double 收、整数性在域校验那步核 —— 不在此 .toInt() 截断：
+            // 0.9 截成 0 等于把「不容差」悄悄改成「精确色」，与 requiredIntList
+            // KDoc「不把 1.5 这种值悄悄截给 native」同一条纪律，这条原本犯同款。
+            tolerance = request.requiredDouble(fields, "tolerance")
             // region 可选：缺键/JSON null = 全帧；给了就必须四元组（不是就参数错）。
             region = request.optIntList(fields, "region")
         }
         // 域校验（与 :domain ImageAnalyzer.findColor KDoc 逐条对齐）：
-        //   color 恒四分量 [r,g,b,a]、各 [0,255]；tolerance [0,255]；region 四元组。
+        //   color 恒四分量 [r,g,b,a]、各 [0,255]；tolerance [0,255] 整数；region 四元组。
         // 全部先拒，**一次 SPI 调用都不发**（与阈值域同一条纪律）。
         if (color.size != 4 || color.any { it < 0 || it > 255 }) {
             return err(request, ErrorCode.ERR_INVALID_PARAM,
                 "images findColor 的 color 必须 r,g,b,a 四分量且各在 [0,255]，实际 $color",
             )
         }
-        if (tolerance < 0 || tolerance > 255) {
+        if (tolerance < 0 || tolerance > 255 || tolerance % 1.0 != 0.0) {
             return err(request, ErrorCode.ERR_INVALID_PARAM,
-                "images findColor 的 tolerance 必须在 [0,255]，实际 $tolerance",
+                "images findColor 的 tolerance 必须是 [0,255] 的整数，实际 $tolerance",
             )
         }
         region?.let { box ->
@@ -193,7 +196,7 @@ class ImagesNamespaceHandler(
             }
         }
         // 在场性同 match：SPI 判、原码透传（见 match 处的说明）。
-        val hit = analyzer.findColor(ref, color, tolerance, region)
+        val hit = analyzer.findColor(ref, color, tolerance.toInt(), region)
         return ok(request, colorPayload(hit))
     }
 
