@@ -946,17 +946,6 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 现问系统（挂起；只写 [capabilityState]，不触发重读）。
-     *
-     * 三种落点都不撒谎：
-     * - 读口未接线（宿主没实现 `HostSummary`）→ 留 `CapabilityCenterState.NOT_LOADED`，
-     *   **不冒充**"一个能力都没有"（那是"读成功且清单为空"，而 `Capability.entries`
-     *   恒非空 —— 空行集只可能是没读到）；
-     * - 查询抛错（ROM 奇异实现）→ `CapabilityCenterState.failed`，原异常文案带上
-     *   （现场要靠它区分"ROM 查询崩了"与"装配没接线"）；
-     * - 成功 → 全量行 + 降级任务账。
-     */
-    /**
      * 现取脚本文件清单（项目页；挂起；只写 [projectState]）。
      *
      * 与 [reloadTasks] 同构的三落点，差异一处：读口未接线**也不冒充空目录** ——
@@ -1081,12 +1070,6 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 读一个脚本文件（项目页点文件进编辑面）。
-     *
-     * **不写 [projectState]**：读取的成败归编辑器自己显示（清单没有任何变化），
-     * 宿主未接线照抛 —— 编辑器把原因显示在正文上方，而不是让列表替它报错。
-     */
-    /**
      * 跑一个脚本文件（项目页文件行尾 ▶）。
      *
      * **不写 [projectState]**：执行结果归控制台/任务日志（宿主读数），清单没有变化，
@@ -1100,6 +1083,12 @@ class MainActivity : ComponentActivity() {
         host.runScriptFile(projectId, relPath)
     }
 
+    /**
+     * 读一个脚本文件（项目页点文件进编辑面）。
+     *
+     * **不写 [projectState]**：读取的成败归编辑器自己显示（清单没有任何变化），
+     * 宿主未接线照抛 —— 编辑器把原因显示在正文上方，而不是让列表替它报错。
+     */
     private suspend fun readScriptFileOp(projectId: String, relPath: String): String {
         val host = hostSummary() ?: error("宿主摘要未接线（Application 未实现 HostSummary）")
         return host.readScriptFile(projectId, relPath)
@@ -1232,6 +1221,17 @@ class MainActivity : ComponentActivity() {
         return host.scriptLogContent(runId)
     }
 
+    /**
+     * 现问系统（挂起；只写 [capabilityState]，不触发重读）。
+     *
+     * 三种落点都不撒谎：
+     * - 读口未接线（宿主没实现 `HostSummary`）→ 留 `CapabilityCenterState.NOT_LOADED`，
+     *   **不冒充**"一个能力都没有"（那是"读成功且清单为空"，而 `Capability.entries`
+     *   恒非空 —— 空行集只可能是没读到）；
+     * - 查询抛错（ROM 奇异实现）→ `CapabilityCenterState.failed`，原异常文案带上
+     *   （现场要靠它区分"ROM 查询崩了"与"装配没接线"）；
+     * - 成功 → 全量行 + 降级任务账。
+     */
     private suspend fun reloadCapabilities() {
         val host = hostSummary()
         if (host == null) {
