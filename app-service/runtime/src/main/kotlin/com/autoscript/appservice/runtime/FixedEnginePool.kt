@@ -109,7 +109,19 @@ class FixedEnginePool(
         // 夺槽必须在 execute **之前**完成：否则 execute 的真实启动耗时就是窗口期 ——
         // 并发 acquire 会同时选中同一 FREE 槽，同一引擎进程跑两个脚本（违反 §8.2 每脚本一进程）。
         // 队列化后这一步只有一个出队动作，**不再有「取到了却没占上」的中间态**。
-        slot.markBusy(clock.nowMillis())
+        //
+        // markBusy 抛 = 槽位记账已坏（markFree 的残态探测此前必已响过一次 —— 那是根因，
+        // 这里是其余波）。槽**必须回队再抛**：出队即「被占」，不回队就是容量永久 -1
+        // 且现场没有任何日志指向它 —— 那正是本类 KDoc 说的最坏失真。回队后这条残态槽
+        // 每次被夺都会在同一处再响一次（失败留在明处、轮得到别的槽不受影响）。
+        try {
+            slot.markBusy(clock.nowMillis())
+        } catch (e: Exception) {
+            check(idle.trySend(slot).isSuccess) {
+                "槽 ${slot.index} 回队失败：空闲队列已满（结构性双重归还）"
+            }
+            throw e
+        }
         slot.occupy()
         val lease = newLease(slot)
         inUse.incrementAndGet()
