@@ -157,8 +157,9 @@ object SystemNamespaces {
     }
 
     /**
-     * `images` 命名空间（§9.2 图像面）：`decode`/`matchTemplate`/`findImage`/`release`
-     * 四方法。参数即 [ImageAnalyzer] SPI 实现（测试传假分析器，真机传
+     * `images` 命名空间（§9.2 图像面）：`decode`/`matchTemplate`/`findImage`/`findColor`/
+     * `toGrayscale`/`crop`/`resize`/`rotate`/`findFeature`/`release` 十方法。参数即
+     * [ImageAnalyzer] SPI 实现（测试传假分析器，真机传
      * `:bridge:image` 的 native 管线）。同 datastore/zip/settings/notification/clipboard/
      * sensors：**独立注入缝** `AppShell.assemble` 的 `imagesHandler`，不入
      * `systemHandlers` 束 —— 图像面无共担门禁（文件缺失/句柄失效判据在 SPI 自己身上）。
