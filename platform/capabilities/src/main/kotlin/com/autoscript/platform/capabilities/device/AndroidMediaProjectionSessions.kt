@@ -158,9 +158,8 @@ class AndroidMediaProjectionSessions(
         consent: ScreenConsentToken?,
         owner: MediaProjectionSessionOwner,
     ): LeasedMediaProjectionSession {
-        val token = consumeConsent(consent)
-        val data = token.data
-            ?: throw MediaProjectionOpenException(MediaProjectionOpenFailure.DENIED, "同意结果里没有投屏凭据")
+        // 先占位再烧一次性同意：忙拒（已有会话/开启中）不该烧掉用户的一次授权
+        // （API 34+ 一次同意只换一条会话，烧了就只能再弹一次系统授权框）。
         beginOpening(owner, recording = false)
 
         var fgLease: ForegroundLease? = null
@@ -171,6 +170,11 @@ class AndroidMediaProjectionSessions(
         var frames: Channel<Unit>? = null
         var committed: CaptureLive? = null
         try {
+            // 0) 烧一次性同意放在 try 里：烧失败（DENIED）由 finally 把开门占位还掉，
+            //    占位占着又烧失败的组合 = 之后所有开启都被"已有一次开启在跑"卡死。
+            val token = consumeConsent(consent)
+            val data = token.data
+                ?: throw MediaProjectionOpenException(MediaProjectionOpenFailure.DENIED, "同意结果里没有投屏凭据")
             // 1) 前台类型先起、等到系统确认 —— API 34+ 的硬前提（顺序不可反）。
             fgLease = foreground.start()
                 ?: throw MediaProjectionOpenException(
@@ -447,9 +451,7 @@ class AndroidMediaProjectionSessions(
         owner: MediaProjectionSessionOwner,
         spec: ScreenRecordingSpec,
     ): LeasedScreenRecording {
-        val token = consumeConsent(consent)
-        val data = token.data
-            ?: throw MediaProjectionOpenException(MediaProjectionOpenFailure.DENIED, "同意结果里没有投屏凭据")
+        // 先占位再烧一次性同意（与取帧腿同一条纪律，见 open）。
         beginOpening(owner, recording = true)
 
         var fgLease: ForegroundLease? = null
@@ -459,6 +461,11 @@ class AndroidMediaProjectionSessions(
         var callback: MediaProjection.Callback? = null
         var committed: RecordingLive? = null
         try {
+            // 0) 烧一次性同意放在 try 里：烧失败（DENIED）由 finally 把开门占位还掉，
+            //    占位占着又烧失败的组合 = 之后所有开启都被"已有一次开启在跑"卡死。
+            val token = consumeConsent(consent)
+            val data = token.data
+                ?: throw MediaProjectionOpenException(MediaProjectionOpenFailure.DENIED, "同意结果里没有投屏凭据")
             // 1) 前台类型先起、等到系统确认 —— API 34+ 的硬前提（顺序不可反）。
             fgLease = foreground.start()
                 ?: throw MediaProjectionOpenException(
