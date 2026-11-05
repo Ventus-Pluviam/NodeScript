@@ -573,7 +573,11 @@ private fun ScriptLogDetail(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = TabBarBottomClearance()),
                 ) {
-                    items(lines, key = { it.hashCode() }) { raw ->
+                    // **不给 key**（与 `NpmScreen` 日志大框同一理由）：行文本
+                    // `"<atMillis>|<level>|<text>"`，同毫秒 + 同级 + 同正文的两行
+                    // （脚本一行 console.log 打两遍时最可能）在 `hashCode()` 键下必撞 ——
+                    // LazyColumn 键重复当场抛。流水列表不需要业务键，位置即身份。
+                    items(lines) { raw ->
                         val parts = raw.split('|', limit = 3)
                         val text = if (parts.size == 3) {
                             val time = HH_MM_SS
