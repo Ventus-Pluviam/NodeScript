@@ -232,7 +232,8 @@ fun ProjectScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     // 悬浮底栏的隐藏开关（外壳供，[LocalTabBarHidden]）。编辑面占整屏时要把它整条收掉 ——
-    // 写口在这一层而不是编辑面自己那一层，见 [openEditor] / [requestEditorClose] 的注释。
+    // 写口在本屏（不是编辑面自己那一层），且只有**一处**：下面那条
+    // `LaunchedEffect(active, fullScreen)`，判据 `fullScreen` 就在它上面几行。
     val tabBarHidden = LocalTabBarHidden.current
 
     // 正在编辑的文件（null = 不在编辑）。编辑面**盖在整页之上**而不是「换掉整页」——
@@ -280,8 +281,8 @@ fun ProjectScreen(
 
     /** 开一个文件（动画期间吞掉，与面板入口同一口径）。 */
     fun openEditor(file: ScriptFileRowUi) {
-        // 动画期间吞掉（与面板入口同一口径）。**底栏 flag 一起吞**：切出动画里 `editing`
-        // 已经归 null、flag 已经复位，此时若只写 flag，底栏会在没有编辑面的时候又收起来。
+        // 动画期间吞掉（与面板入口同一口径）。底栏不用另写：它由 `fullScreen = editing != null`
+        // 派生，切出动画里 `editing` 已经归 null，此刻把 `editing` 再置回去底栏自会跟着收。
         if (editorAnimating) return
         editing = file
     }
@@ -293,9 +294,9 @@ fun ProjectScreen(
     /** 关掉编辑面（有未保存改动时先问一句，与返回键、‹ 同一个判定）。 */
     fun requestEditorClose() {
         (editorCloseGuard ?: { editing = null }).invoke()
-        // 底栏的复位不写在这里：`fullScreen`（editing 非空 || 目录层）在 `editing` 归
-        // null 的同一拍重算，`LaunchedEffect(fullScreen)` 据此放回底栏 —— 且从目录里
-        // 打开的编辑面退出时不会错误放回（那会儿人还在目录里）。
+        // 底栏的复位不写在这里：`fullScreen`（只由 `editing` 非空派生）在 `editing` 归
+        // null 的同一拍重算，`LaunchedEffect(fullScreen)` 据此放回底栏 —— 从目录里打开
+        // 的编辑面退出时也照常放回，那正是"进了目录底栏还在"那条判据要的样子。
     }
 
     // 可见集 = 一层（[ProjectState.childrenOf]）→ 排序。**搜索时层裁剪让位**：
@@ -319,10 +320,10 @@ fun ProjectScreen(
     /**
      * 进一层目录（点目录行、长按面板的「进入文件夹」都走这里）。
      *
-     * **底栏整条收掉**（点进列表时底栏消失、退出来才重新出现）：
-     * 进了层就是"在里面"，那四个页签既是别的页面、又压着列表最后几行 —— 与编辑面占整屏
-     * 是同一条理由。写口收在这两个函数里（而不是每个 `currentFolder = …` 各写一遍）：
-     * 三处入口漏一处就是"有时候收、有时候不收"。
+     * **不碰底栏**：进目录只是列表换了一层内容，页面还是那个项目页，收放的**唯一**判据是
+     * 下面那条 `fullScreen = editing != null`（只有编辑面占整屏才收）。这里写口收成两个
+     * 函数（而不是每个 `currentFolder = …` 各写一遍）管的是**另两件事** —— 换层要清掉
+     * 上一层的多选、要把列表滚回顶：三处入口漏一处就是"带着上一层的勾选进下一层"。
      */
     fun enterFolder(relPath: String) {
         currentFolder = relPath
