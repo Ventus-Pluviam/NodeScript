@@ -110,6 +110,49 @@ class NewlineFrameServerPerConnectionQuotaTest {
         Unit
     }
 
+    /**
+     * ④ 闸（本连接条数）拒接的归还：那一支取过**三道**许可（全局字节 + 本连接字节 +
+     * 全局条数），旧实现只还了后两道 —— 全局字节账随每条被拒请求单调泄漏，直到全局
+     * 字节闸把所有连接的请求全部拒掉（「跑一会儿就全被拒」的现场，没有任何日志指向它）。
+     */
+    @Test
+    fun `本连接条数闸拒掉的那条 全局字节账也原路还清（不泄漏配额）`() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val server = NewlineFrameServer(
+            blockingRouter(gate), identities,
+            maxFrameBytes = 64 * 1024,
+            maxInFlight = 8,          // 全局条数给足，让第 2 条撞的是**自己的**条数闸
+            quota = QuotaSettings(PerConnectionLimits(
+                inFlight = 1,         // 每连接 1：第 2 条必被拒
+                bytes = 4L * 1024 * 1024,
+                concurrent = 8,
+            )),
+        )
+        try {
+            val out = ByteArrayOutputStream()
+            val job = server.serveConnection(
+                ByteArrayInputStream(hello() + frame(512, 1L) + frame(512, 2L)),
+                out,
+            )
+            // 等第 2 条被拒的回执落地（此刻第 1 条还在飞、占着一份全局字节账）。
+            val rejected = withTimeoutOrNull(3_000) {
+                while (!out.toString(StandardCharsets.UTF_8).contains("本连接在途条数")) delay(10)
+                true
+            }
+            assertTrue(rejected == true, "第 2 条该被本连接条数闸拒掉")
+            gate.complete(Unit)
+            withTimeoutOrNull(3_000) { job.join() }
+            assertEquals(
+                0L, server.bytesInFlightCount(),
+                "条数闸拒掉的那条必须把全局字节账也还清 —— 漏一道就是配额随拒绝次数单调收紧",
+            )
+        } finally {
+            gate.complete(Unit)
+            server.close()
+        }
+        Unit
+    }
+
     @Test
     fun `每连接字节闸独立于全局字节闸 撞自己的上限被拒`(
     ) = runBlocking {
@@ -205,7 +248,9 @@ class NewlineFrameServerPerConnectionQuotaTest {
             quota = QuotaSettings(PerConnectionLimits(inFlight = 8, bytes = 64L * 1024, concurrent = 8)),
         )
         try {
-            server.serveConnection(ByteArrayInputStream(hello() + frame(16, 1L) + frame(16, 2L)), ByteArrayOutputStream())
+            val f1 = frame(16, 1L)
+            val f2 = frame(16, 2L)
+            server.serveConnection(ByteArrayInputStream(hello() + f1 + f2), ByteArrayOutputStream())
             withTimeoutOrNull(2_000) {
                 while (server.connectionStats().none { it.inFlight >= 2 }) delay(10)
                 true
@@ -213,7 +258,12 @@ class NewlineFrameServerPerConnectionQuotaTest {
             val stat = server.connectionStats().single()
             assertEquals(2, stat.inFlight, "此刻有 2 条在飞")
             assertEquals(8, stat.inFlightLimit, "读数带上限（否则用户看到 2 不知道是被谁限的）")
-            assertTrue(stat.bytes > 0, "字节账也要能读出来")
+            // bytes 的方向钉死为「占着多少」（与 inFlight 同向、与 ConnectionStat KDoc 一致），
+            // 不是「还剩多少」：两条帧各占 size-1（换行被读帧剥掉），`> 0` 两个方向都能过。
+            assertEquals(
+                (f1.size + f2.size - 2).toLong(), stat.bytes,
+                "bytes 是在途占用量（与 inFlight 同向），不是剩余额度",
+            )
             assertEquals(64L * 1024, stat.bytesLimit)
             assertTrue(stat.runId > 0, "带 runId —— 没有它无法把读数对回某个脚本")
         } finally {

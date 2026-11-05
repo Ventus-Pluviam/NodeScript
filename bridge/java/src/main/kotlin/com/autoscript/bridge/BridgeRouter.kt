@@ -112,9 +112,10 @@ class BridgeRouter(
                 BridgeResponse.Err(request.id, ErrorCode.ERR_INVALID_PARAM.code, "参数非法: ${e.message}")
             } catch (e: Exception) {
                 // 其余一律「宿主内部错误」（外审 M4）：**不是调用方的错**。
-                // 此前折成 ERR_INVALID_PARAM 会让脚本把代码 bug 当成参数 bug 去改参数；
-                // 回显 e.message 还会把内部路径/字段名带进 wire（外审同条的泄露面）。
-                // 详情只在 detail（宿主侧另有堆栈日志），脚本侧按「宿主有问题」处理。
+                // 此前折成 ERR_INVALID_PARAM 会让脚本把代码 bug 当成参数 bug 去改参数。
+                // detail 带 e.message 与类名是裁定 66.1 的明文（「detail 仍带真实原因与类名
+                // （诊断入口）」）：收窄的是**堆栈/路径不再上 wire**（javaStack 留宿主侧日志），
+                // 不是把 e.message 也抹掉 —— 抹掉它脚本连「宿主哪一步炸了」都无从知晓。
                 BridgeResponse.Err(
                     request.id,
                     ErrorCode.ERR_INTERNAL.code,

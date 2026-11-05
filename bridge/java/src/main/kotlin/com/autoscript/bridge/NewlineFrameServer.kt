@@ -569,8 +569,12 @@ class NewlineFrameServer(
                 return
             }
             if (!ownCount.tryAcquire()) {
+                // 此刻手里握着**三道**（全局字节 + 本连接字节 + 全局条数），三道都得原路还掉 ——
+                // 漏掉全局字节那一道，账随每条被拒请求单调泄漏，直到全局字节闸把所有连接全部
+                // 拒掉（正是上方 inFlight.acquire 取消支路 KDoc 点名的那种「跑一会儿就全被拒」）。
                 inFlight.release()
-                ownBytes.addAndGet(-size)                           // ← 还取过的两道
+                ownBytes.addAndGet(-size)
+                bytesInFlight.addAndGet(-size)
                 rejectOverQuota(frame, output, "本连接在途条数", "本连接上限 ${mine.inFlight} 条")
                 return
             }
@@ -705,7 +709,9 @@ class NewlineFrameServer(
                 runId = boundRunId,
                 inFlight = mine.inFlight - (ownCount?.availablePermits ?: mine.inFlight),
                 inFlightLimit = mine.inFlight,
-                bytes = mine.bytes - ownBytes.get().coerceAtLeast(0L),
+                // 与 inFlight 同向：报「占着多少」（ConnectionStat KDoc：现在谁占着多少），
+                // 不是「还剩多少」—— 否则读数与 bytesLimit 并排时含义相反。
+                bytes = ownBytes.get(),
                 bytesLimit = mine.bytes,
             )
         }
