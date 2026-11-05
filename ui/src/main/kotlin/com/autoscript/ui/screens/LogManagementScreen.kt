@@ -175,6 +175,19 @@ private fun SystemLogList(state: ConsoleState, lines: List<ConsoleLineState>, mo
                 )
             }
         }
+        if (state.trimmedTotal > 0L) {
+            item {
+                // 呈现层自己裁的那一笔（与上面那条宿主环的账分开记）：裁了就说明，
+                // 不静默把"界面没留"说成"没发生"。全文在落盘那份里（脚本输出段）。
+                ToneText(
+                    text = "更早的 ${state.trimmedTotal} 行已滚出本列表（只留最近 " +
+                        "${ConsoleState.CONSOLE_LINES_KEEP} 行）：全文见「脚本输出」段",
+                    tone = StatusTone.ATTENTION,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+        }
         if (state.pageFull && state.load.isLoaded) {
             item {
                 ToneText(

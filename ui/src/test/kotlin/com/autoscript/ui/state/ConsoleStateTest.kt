@@ -278,6 +278,56 @@ class ConsoleStateTest {
     }
 
     @Test
+    fun `累积行数超上限裁最老 裁掉记账 游标不回退`() {
+        // 上限是常量（与宿主环同值 2000）；造 KEEP+7 行一批，过界即裁最老的 7 行。
+        val keep = ConsoleState.CONSOLE_LINES_KEEP
+        val first = ConsoleState.of(
+            ConsoleState.NOT_LOADED,
+            snap(lines = (1L..keep + 7L).map { row(it) }, nextSeq = keep + 7L),
+            nowMillis = 1L,
+        )
+        assertEquals(keep, first.lines.size, "有界：呈现层的账不比宿主环更长")
+        assertEquals((8L..keep + 7L).toList(), first.lines.map { it.seq }, "裁最老：控制台读的是「刚才发生了什么」")
+        assertEquals(7L, first.trimmedTotal, "裁掉的行数要记账 —— 静默裁剪等于把「界面没留」说成「没发生」")
+        assertEquals(keep + 7L, first.nextSeq, "裁剪不动游标 —— 游标是宿主那边的事实，不是列表长度的函数")
+
+        // 再来一批：第二批只裁掉 3 行，账累计到 10。
+        val second = ConsoleState.of(
+            first,
+            snap(lines = (keep + 8L..keep + 10L).map { row(it) }, nextSeq = keep + 10L),
+            nowMillis = 2L,
+        )
+        assertEquals(keep, second.lines.size)
+        assertEquals(10L, second.trimmedTotal, "trimmedTotal 是累计的（与 droppedTotal 同一条记法）")
+        assertEquals(keep + 10L, second.nextSeq)
+    }
+
+    @Test
+    fun `上限内不裁也不记账`() {
+        val s = ConsoleState.of(
+            ConsoleState.NOT_LOADED,
+            snap(lines = (1L..5L).map { row(it) }, nextSeq = 5L),
+            nowMillis = 1L,
+        )
+        assertEquals(5, s.lines.size)
+        assertEquals(0L, s.trimmedTotal, "没裁就是 0 —— 零裁掉的零是事实，不是「还没算」")
+    }
+
+    @Test
+    fun `裁剪后失败仍保留既有的行与账`() {
+        val keep = ConsoleState.CONSOLE_LINES_KEEP
+        val big = ConsoleState.of(
+            ConsoleState.NOT_LOADED,
+            snap(lines = (1L..keep + 4L).map { row(it) }, nextSeq = keep + 4L),
+            nowMillis = 1L,
+        )
+        val failed = ConsoleState.failed(RuntimeException("壳没了"), big)
+        assertEquals(keep, failed.lines.size, "瞬时失败不清缓冲（含裁后缓冲）")
+        assertEquals(4L, failed.trimmedTotal, "失败不动账 —— 读失败与裁剪是两条线")
+        assertEquals(keep + 4L, failed.nextSeq)
+    }
+
+    @Test
     fun `停止三字段缺省空闲 刷新现取归零`() {
         val s = ConsoleState.NOT_LOADED
         assertNull(s.stopError)

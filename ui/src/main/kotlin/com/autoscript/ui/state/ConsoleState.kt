@@ -14,10 +14,24 @@ import java.time.ZoneId
  * - [load] = [LoadState.NotLoaded] 首帧哨兵；[LoadState.Failed] 表示最近一次读取失败，
  *   **但已读到的行与游标都保留**（一次瞬时失败不该把用户已经看到的日志抹掉，
  *   游标不清零才能续拉）；
- * - **行是累积的**（[of] 把本批接在既有行后面）：控制台是累计事实，刷新 = 增量拉取，
+ * - **行是累积的，但累积有上限**（[of] 把本批接在既有行后面，超过 [CONSOLE_LINES_KEEP]
+ *   裁最老、裁掉的行数记进 [trimmedTotal]）：控制台是累计事实，刷新 = 增量拉取，
  *   不是重画；同一游标读两遍（并发刷新）按 seq 去重，不重复入列；
  * - 三样"现值"不累积、每次现取：[pageFull]、[droppedTotal]、[activeRuns] ——
  *   它们答的是"此刻"，留旧值会把过期事实当现状。
+ *
+ * **为什么必须有上限**（修）：数据面是**环**（`ConsoleCollector.DEFAULT_CAPACITY = 2000`，
+ * 溢出丢最老并把 [droppedTotal] 带上），而这里的累积原先是**只增不减**的 —— 于是"有界环"
+ * 这道设计在 UI 侧被抵消了：宿主丢掉的行 UI 还留着，进程活多久 `lines` 就长多久。
+ * 具体代价不只是内存（每行都带时间戳与正文），还有**每轮拉取的成本随行数涨**：
+ * [of] 每次都把既有行整份 `mapTo(HashSet())` 去重、再对合并结果整份 `sortedBy`，
+ * 而悬浮窗在跑时是 400ms 一轮（`LogWindowPoll`）—— 长跑脚本刷到几万行之后，
+ * 每一轮都在为一个只增不减的表做 O(n log n)。上限取**与环同值**：UI 的账不该比数据面更长，
+ * 而"要看全文"本来就有落盘那条路（`ScriptLogStore` 只追加，日志管理 → 脚本输出）。
+ *
+ * 裁了就**必须说**（[trimmedTotal]，与 [droppedTotal] 同一条纪律）：静默裁剪等于把
+ * "界面没留"说成"没发生"。两笔账分开记：[droppedTotal] 是宿主环丢的（数据面），
+ * [trimmedTotal] 是这一层裁的（呈现面），加起来才是"你看到的不是全部"的完整缺口。
  *
  * 时间戳格式化在这一层（[ConsoleLineState.timeText]，`HH:mm:ss` —— 控制台行
  * 以秒为粒度，`MM-dd HH:mm` 分辨不出同分钟内的先后）；时刻由 [of] 的参数注入，
@@ -30,6 +44,12 @@ data class ConsoleState(
     val nextSeq: Long,
     val pageFull: Boolean,
     val droppedTotal: Long,
+    /**
+     * **呈现层自己裁掉的行数**（累积计数；超过 [CONSOLE_LINES_KEEP] 时裁最老）。
+     *
+     * 与 [droppedTotal] 是两笔账（那边是宿主环丢的）—— 见类 KDoc「为什么必须有上限」。
+     */
+    val trimmedTotal: Long = 0L,
     val activeRuns: List<ActiveRunState>,
     val nowMillis: Long,
     val zone: ZoneId,
@@ -51,6 +71,7 @@ data class ConsoleState(
             nextSeq = 0L,
             pageFull = false,
             droppedTotal = 0L,
+            trimmedTotal = 0L,
             activeRuns = emptyList(),
             nowMillis = 0L,
             zone = ZoneId.systemDefault(),
@@ -71,12 +92,16 @@ data class ConsoleState(
         ): ConsoleState {
             val seen = previous.lines.mapTo(HashSet()) { it.seq }
             val fresh = added.lines.filter { it.seq !in seen }
+            val merged = (previous.lines + fresh.map { ConsoleLineState.of(it, zone) }).sortedBy { it.seq }
+            // 上限裁剪（见类 KDoc）。`takeLast` 保最新 —— 控制台读的是"刚才发生了什么"。
+            val kept = if (merged.size > CONSOLE_LINES_KEEP) merged.takeLast(CONSOLE_LINES_KEEP) else merged
             return ConsoleState(
                 load = LoadState.Loaded,
-                lines = (previous.lines + fresh.map { ConsoleLineState.of(it, zone) }).sortedBy { it.seq },
+                lines = kept,
                 nextSeq = maxOf(previous.nextSeq, added.nextSeq),
                 pageFull = added.pageFull,
                 droppedTotal = added.droppedTotal,
+                trimmedTotal = previous.trimmedTotal + (merged.size - kept.size),
                 activeRuns = added.activeRuns.map { ActiveRunState.of(it) },
                 nowMillis = nowMillis,
                 zone = zone,
@@ -90,6 +115,16 @@ data class ConsoleState(
         fun failed(t: Throwable, previous: ConsoleState): ConsoleState = previous.copy(
             load = LoadState.of(t),
         )
+
+        /**
+         * 呈现层最多留多少行（更早的裁掉并把 [ConsoleState.trimmedTotal] 记上）。
+         *
+         * 取**与宿主环同值**（`ConsoleCollector.DEFAULT_CAPACITY`）而不是另编一个数：
+         * 环的容量就是"这一次进程里控制台总共能有多少行"的既有答案，UI 留得比它多
+         * 不会让用户多看到任何宿主还记得的东西，只是把内存与每轮拉取的成本抬上去。
+         * 不直接引用那个常量是因为 `:ui` 不依赖 `:bridge:java`（§6 依赖方向）。
+         */
+        const val CONSOLE_LINES_KEEP = 2_000
     }
 }
 
