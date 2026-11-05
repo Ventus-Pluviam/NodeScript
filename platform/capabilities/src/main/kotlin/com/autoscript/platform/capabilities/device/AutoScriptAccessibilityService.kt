@@ -51,14 +51,23 @@ import com.autoscript.platform.capabilities.screen.ScreenshotSource
  */
 class AutoScriptAccessibilityService : AccessibilityService() {
 
+    /** 本实例登记的那座桥 —— [onDestroy] 的「只清自己」判据（同一性，不是非空）。 */
+    private var myBridge: ServiceBridge? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        A11yServiceHolder.bridge = ServiceBridge(this)
+        val bridge = ServiceBridge(this)
+        myBridge = bridge
+        A11yServiceHolder.bridge = bridge
     }
 
     override fun onDestroy() {
-        // 只清自己登记的桥（P0 单实例；防御未来热重启交错）。
-        if (A11yServiceHolder.bridge != null) A11yServiceHolder.bridge = null
+        // 只清自己登记的那座桥（P0 单实例；防御未来热重启交错）：判据必须是
+        // **同一性**（===）—— 写成「非空即清」会把新实例刚接上的桥一并抹掉
+        // （老实例的 onDestroy 晚于新实例的 onServiceConnected 落地的交错形），
+        // 此后一切 a11y 调用只剩 ERR_SERVICE_DISABLED，直到下一次重连。
+        if (A11yServiceHolder.bridge === myBridge) A11yServiceHolder.bridge = null
+        myBridge = null
         super.onDestroy()
     }
 
