@@ -1373,17 +1373,21 @@ class MainActivity : ComponentActivity() {
             // 重跑 = **引擎再跑同一文件**（用户选定；不是重放旧日志）。
             // 窗里的 relPath 是**项目内**形状（`data/test.js`，与开窗/在途表同一口径），
             // 而 `runScriptFileOp` 收**文件清单**形状（首段 = 项目名，`demo/data/test.js`，
-            // 与 `readScriptFileOp` 同契约）—— 反推首段即 `projectInternalOrNull` 的逆运算
-            // （窗的 relPath 恒为削过前缀的形状，不会双份前缀）。
+            // 与 `readScriptFileOp` 同契约）—— 反推首段即 `projectInternalOrNull` 的逆运算。
+            // **项目段走 [ScriptPaths.fullRelPath] 而不是裸拼**（与 `LogWindowState.titleText`
+            // 同一条判据）：根层条目的 `projectId` 是空串哨兵，裸拼出 `/hello.js` ——
+            // 前导斜杠被 `RelPath.isSafe` 判成绝对路径，重跑当场抛「非法相对路径」，
+            // 根层脚本的重跑钮于是永远跑不起来（标题那处早就为此走过 fullRelPath）。
             logWindow.rerun(state.projectId, state.relPath)
+            val listRelPath = state.listRelPath
             try {
                 // **重跑前先确认窗里那个文件还在**：窗绑的是"上一次那条执行的文件"，
                 // 它可能已被改名/删掉。
                 // 缺文件的真相只有引擎侧那句 `ERR_FILE_NOT_FOUND`（落在意图日志/档案里），
                 // 窗里看到的是"没有任何新输出"—— 读起来正是"它跑了上一次那个脚本"。
                 // 这里先读一次（读口与引擎侧同一条 `ScriptFileOps` 判据），不在就当场说清楚。
-                hostSummary()?.readScriptFile(state.projectId, "${state.projectId}/${state.relPath}")
-                runScriptFileOp(state.projectId, "${state.projectId}/${state.relPath}")
+                hostSummary()?.readScriptFile(state.projectId, listRelPath)
+                runScriptFileOp(state.projectId, listRelPath)
             } catch (t: kotlinx.coroutines.CancellationException) {
                 throw t
             } catch (t: Exception) {
@@ -1404,6 +1408,11 @@ class MainActivity : ComponentActivity() {
      * Once 出册语义不变（刷新后卡片消失仍是调度器语义）。失败（opError 非空）→ 关窗。
      */
     private suspend fun runTaskNowOp(task: TaskRowState) {
+        // 忙就**在开窗之前**退出：`performTaskOp` 里那道 `opInFlight` 双保险是"进来就
+        // 早退"，而本函数在它之前已经开了悬浮窗 —— 早退时 `opError` 是 null（在跑的那次
+        // 把它清掉了），于是「没跑起来就关窗」那条判据看不见这次早退，窗留在「未开始」
+        // 而任务从没起跑（连点两行时第二行的窗盖住第一行正在跑的那次）。
+        if (taskState.opInFlight) return
         // 挂起目标先落账：那一行的播放钮要画成"转圈的开口弧"（其余行不受影响）。
         taskState = taskState.copy(opTargetTaskId = task.id)
         try {
