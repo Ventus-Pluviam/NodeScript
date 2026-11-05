@@ -91,5 +91,11 @@ class AndroidAlarmPort(
  * 换一套哈希算法只会让升级后"看起来像新任务"，而老闹钟还挂着（表现为重复触发）。
  */
 internal object KeyStableHash {
-    fun requestCode(taskId: String): Int = taskId.hashCode() and 0x0000FFFF
+    /**
+     * 掩码必须保住**整个正数空间**（31 位）：曾经掩成 16 位（`0x0000FFFF`），
+     * 与上方「32 位空间摊掉冲突」的口径直接矛盾 —— 16 位空间里 ~100 个任务就有
+     * 约 7% 的撞号率（生日界），撞号 = 两个任务共用一个 PendingIntent、后 arm 的
+     * 顶掉先 arm 的、被顶的任务永远不触发。31 位下千级任务的撞号率 ≈ 0.0002。
+     */
+    fun requestCode(taskId: String): Int = taskId.hashCode() and 0x7FFFFFFF
 }
