@@ -91,7 +91,8 @@ class ControllerRunDispatcherArchiveTest {
 
         val report = d.dispatchToReport(pending("nonce-gate", intentRunId = 1))
 
-        assertEquals(RunOutcome.Failed(), report.outcome)
+        // 门禁给的 reason 随 crashSummary 落档案（B11 渠道）—— 「失败」不再没有原因
+        assertEquals(RunOutcome.Failed(crashSummary = "熄屏"), report.outcome)
         assertNull(report.link, "未投递引擎 → 如实无关联")
         assertTrue(engines[0].executed.isEmpty(), "门禁拒绝不得投递引擎")
     }

@@ -76,7 +76,11 @@ class ControllerRunDispatcherTest {
     @Test
     fun `屏幕门禁拒绝回 Failed 且不占槽`() = runBlocking {
         val (d, controller, engines) = rig(gate = ScreenGate { ScreenGateDecision.Deny("熄屏") })
-        assertEquals(RunOutcome.Failed(), d.dispatch(pending()))
+        assertEquals(
+            RunOutcome.Failed(crashSummary = "熄屏"),
+            d.dispatch(pending()),
+            "门禁拒绝的 reason 必须随 outcome 落档案，不得丢成无原因的「失败」",
+        )
         assertTrue(engines[0].executed.isEmpty(), "门禁拒绝不得投递引擎")
         assertTrue(controller.activeRunIds().isEmpty())
     }
