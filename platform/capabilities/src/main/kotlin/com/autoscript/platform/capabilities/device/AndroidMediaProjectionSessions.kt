@@ -122,7 +122,12 @@ class AndroidMediaProjectionSessions(
     /**
      * 在册会话（**取帧腿与录屏腿共用这一个槽**）：`Live`/`CaptureLive`/`RecordingLive`
      * 三个类型住 `ProjectionSessionLive.kt`，基类 KDoc 写了为什么必须是同一个槽。
+     *
+     * `@Volatile`：状态/归属 getter（`state`/`owner`/`recordingState`/`recordingOwner`）
+     * 在锁**外**读它（能力中心轮询路径，不该为读一个引用进临界区），写侧全在锁内 ——
+     * 没有 @Volatile 时 ARM 上读到的可以是过期值（停了的会话继续显示 ACTIVE）。
      */
+    @Volatile
     private var current: Live? = null
     private var nextLeaseId = 1L
 
