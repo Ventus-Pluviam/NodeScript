@@ -41,6 +41,7 @@ function installMockSensors() {
     return seq
   }
   installMockSensors.kill = (refId) => live.delete(refId)
+  installMockSensors.drainDelayMillis = 0
   auto.install((ns, method, payloadJson, reqId) => {
     if (ns !== 'sensors') return undefined
     const p = payloadJson ? JSON.parse(payloadJson) : null
@@ -96,10 +97,18 @@ function installMockSensors() {
         const sinceSeq = typeof p?.sinceSeq === 'number' ? p.sinceSeq : 0
         const max = typeof p?.max === 'number' ? p.max : 128
         if (!(max > 0)) return err('ERR_INVALID_PARAM', `drain 的 max 必须 > 0，实际 ${max}`)
-        const sub = live.get(ref.refId)
-        const picked = sub.events.filter((e) => e.seq > sinceSeq).slice(0, max)
-        if (picked.length === 0) return ok(JSON.stringify({ first: sinceSeq, last: sinceSeq, events: [] }))
-        return ok(JSON.stringify({ first: picked[0].seq, last: picked[picked.length - 1].seq, events: picked }))
+        const respond = () => {
+          const sub = live.get(ref.refId)
+          const picked = sub.events.filter((e) => e.seq > sinceSeq).slice(0, max)
+          if (picked.length === 0) return ok(JSON.stringify({ first: sinceSeq, last: sinceSeq, events: [] }))
+          return ok(JSON.stringify({ first: picked[0].seq, last: picked[picked.length - 1].seq, events: picked }))
+        }
+        // drain 延迟缝：模拟桥背压（drain 慢于轮询拍）—— on(change) 不重叠用例用。
+        if (installMockSensors.drainDelayMillis > 0) {
+          setTimeout(respond, installMockSensors.drainDelayMillis)
+          return undefined
+        }
+        return respond()
       }
       default:
         return err('ERR_NOT_IMPLEMENTED', `未知 sensors 方法: ${method}`)
@@ -144,6 +153,23 @@ test('drain 游标：增量前移游标，空增量游标不动', async () => {
   assert.deepEqual(empty, [])
   assert.equal(sub.cursor, 2, '空增量 → 游标不动')
   await sub.unsubscribe()
+})
+
+test('on(change)：drain 慢于轮询拍不重叠 —— 同一事件不重放、游标不倒退', async () => {
+  installMockSensors()
+  installMockSensors.reset()
+  const s = await auto.sensors.register('light')
+  const refId = 1   // reset 后本用例是第一个注册
+  installMockSensors.push(refId, [100.0])
+  installMockSensors.drainDelayMillis = 40   // drain 比轮询拍（16ms）慢：无守卫则两条在途
+  const seqs = []
+  const stop = s.on('change', (events) => { for (const e of events) seqs.push(e.seq) }, { intervalMs: 16 })
+  await new Promise((r) => setTimeout(r, 180))
+  stop()
+  installMockSensors.drainDelayMillis = 0
+  // 旧实现：tick1 未回 tick2 又发一条 drain（同游标各拉一份）→ 同一事件回调两遍。
+  assert.deepEqual(seqs, [1], `同一事件不得重放（漏一拍只是晚一拍）：实际 ${JSON.stringify(seqs)}`)
+  assert.strictEqual(s.cursor, 1, `游标只进不退，落在批尾：实际 ${s.cursor}`)
 })
 
 test('三码不折叠 + ignoresUnsupported 只折叠 NOT_SUPPORTED', async () => {
