@@ -74,6 +74,11 @@ class AlarmSchedulerProvider(
     /**
      * 降级中的任务（taskId → 最近一次降级的排期时刻）。有界：一个在册任务一条，
      * 任务取消/重新拿到精确闹钟时移除（[Exact] 分支即清）。
+     *
+     * **读写同锁**：`registerTrigger` 是挂起函数、调用方可落在任意调度线程，
+     * 写不在锁内而读在锁内 = 没有 happens-before，并发写 HashMap 族结构本身
+     * 就是未定义行为（链断裂/死循环）。三个写点（Exact 清、Window 记、cancel 清）
+     * 与两个读点（[degradedTasks]/[isDegraded]）共用 `synchronized(degraded)`。
      */
     private val degraded = LinkedHashMap<String, Long>()
 
@@ -81,15 +86,15 @@ class AlarmSchedulerProvider(
         // 提前量只向前推、不向后扯：排期已到就立刻 arm 到当前时刻（语义 2）。
         val fireAt = maxOf(targetFireAtMillis - wakeAheadMillis, clock())
         if (port.canScheduleExact) {
-            degraded.remove(taskId)
+            synchronized(degraded) { degraded.remove(taskId) }
             port.arm(taskId, fireAt, AlarmMode.Exact)
         } else {
-            degraded[taskId] = targetFireAtMillis
+            synchronized(degraded) { degraded[taskId] = targetFireAtMillis }
             port.arm(taskId, fireAt, AlarmMode.Window(degradeWindowMillis))
         }
         return TriggerHandle {
             port.cancel(taskId)
-            degraded.remove(taskId)
+            synchronized(degraded) { degraded.remove(taskId) }
         }
     }
 
