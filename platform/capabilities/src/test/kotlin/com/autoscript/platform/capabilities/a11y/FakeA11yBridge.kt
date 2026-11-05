@@ -41,7 +41,7 @@ internal class FakeA11yBridge : A11yBridge {
         var recycled = false
 
         override fun snapshot(): A11yNodeSnap {
-            if (blue.snapshotFails) throw IllegalStateException("节点已回收（测试注入）")
+            if (blue.snapshotFails) error("节点已回收（测试注入）") // error() 抛的就是 ISE（detekt UseCheckOrError）
             return blue.snap
         }
         // 服务死 → refresh=false（真机 AccessibilityNodeInfo.refresh 同语义）→ 调用方按 STALE 回收。
