@@ -46,6 +46,22 @@ class SqliteTaskStoreContractTest : TaskStorePersistenceContract() {
 
     // ── SQL 层专属（契约套件不管的机制）──
 
+    /**
+     * 撤销**从未登记**的 id：占位墓碑的载荷必须是解码合法的（`allWithRevoked`
+     * 把墓碑也过 `toTask()`，而 `TaskStoreWiring.migrate` 的空库判据每次启动都跑
+     * 这行读）—— 墓碑若解码即炸，一次普通的 ghost-cancel 就把启动路径打成永久砖。
+     */
+    @org.junit.jupiter.api.Test
+    fun `撤销从未登记 id 的占位墓碑能被全量读回`() {
+        val s = store()
+        s.remove("never-existed")
+        val rows = s.allWithRevoked()
+        org.junit.jupiter.api.Assertions.assertEquals(1, rows.size, "墓碑要读得出来（连墓碑一起迁的纪律）")
+        org.junit.jupiter.api.Assertions.assertEquals("never-existed", rows.single().first.id)
+        org.junit.jupiter.api.Assertions.assertNotNull(rows.single().second, "墓碑要带撤销时刻")
+        org.junit.jupiter.api.Assertions.assertTrue(s.loadAll().isEmpty(), "墓碑不进收敛读口")
+    }
+
     /** 墓碑是**行**不是删行（否则「删除一个不存在的任务」不可审计）。 */
     @org.junit.jupiter.api.Test
     fun `撤销落行不删行：墓碑可在库里查到`() {
