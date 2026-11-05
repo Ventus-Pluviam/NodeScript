@@ -28,8 +28,9 @@ import kotlinx.coroutines.CancellationException
  * `ci` 会在宿主侧**先验 lock 签名**（`InstallCoordinator.ci` 第一行）—— 界面不预判、
  * 也不为它另编话术：验签失败是一条 `ERR_PERMISSION_DENIED` 原文，与别的失败走同一条路。
  *
- * 回执按动作分别说清**接下来会发生什么**：这些动作都入队走安装会话（几十秒量级），
- * 回一句「已完成」会让用户以为已经好了 —— 那是这个页面最容易撒的谎。
+ * 回执说**完成式**（与 `noticeForPanel` 同一条账，批 17-41）：`runNpmMaintenance`
+ * 是协程内联执行，挂到会话跑完才返回 —— 构造回执那一刻动作已经结束、清单也已
+ * 现取过，说「已入队」才是撒谎（用户会把「已完成」读成「还在跑」，干等或连点）。
  *
  * **本函数是"按枚举转手"的那条通用路**：界面上只有「清理未声明依赖」
  * （`PRUNE`）走它 —— 「依赖去重」改走 [runDedupeAndPromoteOp]（它要做两件事），
@@ -74,8 +75,9 @@ internal suspend fun runNpmMaintenanceOp(
  * - 作用域本来就是**全局**时不提升（也没有可提升的"别处"），回执里明说这一句：
  *   否则用户会以为"提升"悄悄失败了。
  *
- * 回执**不替用户宣布结果**（与三颗维护按钮同）：`dedupe` 要几十秒，
- * 回一句「已提升」而不说"已入队"会让人以为现在就能去全局那栏看到。
+ * 回执说**完成式**：两段都是协程内联执行（挂到跑完才返回），构造回执时
+ * 磁盘上的事已经发生了 —— 「已提升」是真话，「已入队」反而是「入队即返回」
+ * 假设时代的遗留（批 17-41 同一条病）。
  */
 internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState): NpmState {
     val projectId = state.selectedProjectId
@@ -86,7 +88,7 @@ internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState):
     val busy = state.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
     return try {
         host.runNpmMaintenance(projectId, NpmMaintenanceAction.DEDUPE)
-        var notice = "已入队 npm dedupe：合并当前作用域的重复依赖"
+        var notice = "npm dedupe 已完成：当前作用域的重复依赖已合并"
         var promoteError: String? = null
         if (NpmTargetScope.isGlobal(projectId)) {
             notice += "；当前作用域即全局，无依赖可提升"
@@ -138,11 +140,11 @@ internal suspend fun reclaimNpmCacheOp(host: HostSummary?, state: NpmState): Npm
     }
 }
 
-/** 三颗按钮各自的"接下来会发生什么"（**不替用户宣布结果** —— 结果在清单里）。 */
+/** 三颗按钮各自的完成式回执（调用点已是动作跑完之后；清单在回执前已现取）。 */
 private fun noticeFor(action: NpmMaintenanceAction): String = when (action) {
-    NpmMaintenanceAction.PRUNE -> "已入队 npm prune：移除 lock 中未声明的包，完成后清单更新"
-    NpmMaintenanceAction.DEDUPE -> "已入队 npm dedupe：合并重复依赖，完成后清单更新"
-    NpmMaintenanceAction.CI -> "已入队 npm ci：按 lock 重建 node_modules（先校验 lock 签名）"
+    NpmMaintenanceAction.PRUNE -> "npm prune 已完成：lock 未声明的包已移除，清单已更新"
+    NpmMaintenanceAction.DEDUPE -> "npm dedupe 已完成：重复依赖已合并，清单已更新"
+    NpmMaintenanceAction.CI -> "npm ci 已完成：已按 lock 重建 node_modules（lock 签名已校验）"
 }
 
 /**

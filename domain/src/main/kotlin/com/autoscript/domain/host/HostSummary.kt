@@ -432,7 +432,8 @@ interface HostSummary {
      * 契约（判据的唯一一份在 `:domain` 的 `NpmConsoleKeys`，本口不另判一遍）：
      * - 命令行不合法**抛** [IllegalArgumentException]，原文点名用户敲的那个串；
      * - 项目号不合法同样抛（与落盘侧的 `require` 同源）；
-     * - 重操作**入队即返回**（与 `install` 同语义，含磁盘预检/配额/项目锁/全局会话），
+     * - 重操作**协程内联执行**（与 `install` 同语义：挂到会话跑完才返回，含磁盘预检/
+     *   配额/项目锁/全局会话；要 fire-and-forget 由调用方自行 launch），
      *   输出走 [consoleOutput] 拉；
      * - `npm run` / `npx` 走 T1 门禁：未获批 → `ERR_PERMISSION_DENIED`（且请求已入队），
      *   获批但 spawn 桥未接 → `ERR_NOT_IMPLEMENTED`。两条都**如实**，不假装跑过。
@@ -521,7 +522,7 @@ interface HostSummary {
      * 往返 —— 那条路上任何一次白名单调整都会**静默**改掉按钮的行为。
      *
      * 返回 [com.autoscript.domain.npm.InstallHandle]（与 [runNpmCommand] 同）：
-     * 重操作是入队即返回，产物要走 `snapshot()`/`consoleOutput` 看。
+     * 重操作协程内联执行、挂到会话跑完才返回，产物同时走 `snapshot()`/`consoleOutput` 看。
      *
      * 失败**抛**原文（`ci` 的验签拒绝、磁盘/配额预检都是这样上来的）：界面不按错误码
      * 另编一句话 —— `lock.sig` 缺失那句里已经写清了为什么拒，界面再译一遍就是第二份判据。
