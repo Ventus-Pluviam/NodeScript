@@ -174,6 +174,29 @@ class NpmSnapshotTest {
 
     // —— helpers：改 zip 的临时垫脚（内存 zip，不用系统 unzip）———
 
+    @Test
+    fun `重打包（条目换序）后验签仍过：签的是内容清单不是打包细节`() = runBlocking {
+        seedProject()
+        snapshot().export("p1", out)
+        // 重打包：同一批条目按**乱序**写进一个新 zip（换工具/重打包的真实形态）。
+        // 中央目录顺序是打包细节，「内容一致」不该因条目换序翻案 —— 旧实现按迭代顺序
+        // 拼清单，这一换序就验签失败，与类注释「重打包后仍可验」的承诺相悖。
+        val repacked = dir.resolve("repacked.zip")
+        java.util.zip.ZipFile(out.toFile()).use { zf ->
+            val entries = zf.entries().toList().filter { !it.isDirectory }.shuffled(java.util.Random(42))
+            java.util.zip.ZipOutputStream(Files.newOutputStream(repacked)).use { z ->
+                for (e in entries) {
+                    z.putNextEntry(java.util.zip.ZipEntry(e.name))
+                    z.write(zf.getInputStream(e).readBytes())
+                    z.closeEntry()
+                }
+            }
+        }
+        val m = snapshot().verify("p1", repacked)
+        assertTrue(m.entries >= 8, "乱序重打包后条目数不变（实为 ${m.entries}）")
+        assertTrue(m.lockSig!!.startsWith("v1 "), "乱序重打包后 lock.sig 仍须读得出")
+    }
+
     private fun tamperAppend(f: Path, name: String, content: String) {
         val tmp = dir.resolve("tamper-appended.zip")
         java.util.zip.ZipOutputStream(Files.newOutputStream(tmp)).use { z ->

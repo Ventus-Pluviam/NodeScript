@@ -128,9 +128,11 @@ class NpmSnapshot(
         if (!Files.isRegularFile(zipFile)) {
             throw AutojsException(ErrorCode.ERR_FILE_NOT_FOUND, "快照文件不存在：$zipFile")
         }
-        val body = StringBuilder()
+        // 清单按**条目名排序**重建（导出侧 collect 就是 sortedBy 落盘的）：zip 中央目录
+        // 的顺序是打包细节 —— 重打包/换工具可以重排条目，而「内容一致」不该因顺序翻案。
+        // 按迭代顺序直接拼会让「同一棵树重打包后仍可验」这句承诺变成只对自己产的 zip 成立。
+        val pairs = ArrayList<Pair<String, String>>()
         var contentBytes = 0L
-        var count = 0
         var sigText: String? = null
         var lockSig: String? = null
         ZipFile(File(zipFile.toUri())).use { zf ->
@@ -150,11 +152,15 @@ class NpmSnapshot(
                 // lock.sig **既**是清单条目（内容变了要验出来）**又**是签名体的一路输入
                 // （本机对这份 lock 的认可）：两件事都要，不能二选一。
                 if (name == "lock.sig") lockSig = String(bytes, StandardCharsets.UTF_8).trim()
-                body.append(name).append(' ').append(DirSizer.sha256(bytes)).append('\n')
+                pairs += name to DirSizer.sha256(bytes)
                 contentBytes += bytes.size
-                count++
             }
         }
+        val body = StringBuilder()
+        for ((name, sha) in pairs.sortedBy { it.first }) {
+            body.append(name).append(' ').append(sha).append('\n')
+        }
+        val count = pairs.size
         if (sigText == null) {
             throw AutojsException(
                 ErrorCode.ERR_PERMISSION_DENIED,

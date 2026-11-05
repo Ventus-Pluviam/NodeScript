@@ -244,6 +244,32 @@ class NpmOfflineBundleImporterTest {
     }
 
     @Test
+    fun `烂形态条目（坏 hex 奇数长 陌生算法）点名拒收 其余照常导入`() {
+        val good = "good-payload".toByteArray()
+        val hex = digest(good)
+        val zip = dir.resolve("bundle-badsegs.zip")
+        ZipOutputStream(Files.newOutputStream(zip)).use { z ->
+            fun put(name: String, data: ByteArray) {
+                z.putNextEntry(ZipEntry(name)); z.write(data); z.closeEntry()
+            }
+            // 三条烂形态**在前**：旧实现里它们分别抛 NumberFormatException /
+            // StringIndexOutOfBoundsException / NoSuchAlgorithmException —— 都不是
+            // 逐条目拒收，而是把整次导入连锅端（后面的好条目也进不来）。
+            put("_cacache/content-v2/sha512/zz/zz/zzzz", "junk".toByteArray())   // 非 hex
+            put("_cacache/content-v2/sha512/ab/cd/e", "junk".toByteArray())       // 奇数长 hex
+            put("_cacache/content-v2/sha9/aa/bb/ccdd", "junk".toByteArray())      // 陌生算法
+            put(
+                "_cacache/content-v2/sha512/${hex.substring(0, 2)}/${hex.substring(2, 4)}/${hex.substring(4)}",
+                good,
+            )
+        }
+        val r = NpmOfflineBundleImporter.import(zip, cacheDir)
+        assertEquals(1, r.imported, "好条目必须照常合入（逐条目隔离，不许连锅端）：$r")
+        assertEquals(3, r.rejected.size, "三条烂形态条目须逐一点名拒收：${r.rejected}")
+        Unit
+    }
+
+    @Test
     fun `readCapped：cap 内原字节返回，超一个字节即 null`() {
         val data = ByteArray(1000) { it.toByte() }
         val ok = NpmOfflineBundleImporter.readCapped(data.inputStream(), cap = 1000)
