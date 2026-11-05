@@ -243,16 +243,22 @@ fun ProjectScreen(
     // 动画进行中（TG `animationInProgress`）：动画期间点列表里的另一行，在 TG 里是
     // 什么都不发生。不吞的话 `editing` 两次变，切出的收尾会被取消。
     var editorAnimating by remember { mutableStateOf(false) }
-    // 正在跑的脚本（键 = `ProjectState.keyOf` 那一份）。挂起期间那一行的 ▶ 换成转圈，
-    // 其余行照旧可点 —— 引擎池容量是 1，但"这一颗在跑"与"别的文件能不能跑"是两件事
+    // 正在跑的脚本**集合**（键 = `ProjectState.keyOf` 那一份）。挂起期间那些行的 ▶ 换成
+    // 转圈，其余行照旧可点 —— 引擎池容量是 1，但"这一颗在跑"与"别的文件能不能跑"是两件事
     // （排队那条路由宿主的分级表管，界面不替它拦）。
-    var runningKey by remember { mutableStateOf<String?>(null) }
+    //
+    // **是集合而不是单槽**：宿主的 `runScriptFile` 是挂起到本次执行结算的，池容量 1 时
+    // 点第二个文件就是排队（USER_CLICK 10s 上限），两个挂起会重叠。单槽会被后点的那次
+    // 覆盖 —— 先点那颗的转圈当场停转，而它其实还在跑（读起来正是"我那次已经结束了"）。
+    var runningKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     /** 跑一个文件（点行尾 ▶）。挂起到本次执行结算，成败归宿主（回执 = 悬浮窗）。 */
     fun runFile(file: ScriptFileRowUi) {
         val key = ProjectState.keyOf(file)
-        if (runningKey != null) return
-        runningKey = key
+        // 双保险：那一行的 ▶ 在跑动中是禁用的（`enabled = !running`），这里只兜并发入口。
+        // **只挡同一个文件** —— 别的文件照点照排队（判据见 runningKeys 的注释）。
+        if (key in runningKeys) return
+        runningKeys = runningKeys + key
         scope.launch {
             try {
                 // 成功回执 = 悬浮窗（外壳在 onRunFile 里先开窗再跑）——
@@ -273,7 +279,7 @@ fun ProjectScreen(
                 // 没捂住的话，这类异常会把组合作用域打死 —— 点执行就闪退）。
                 toast?.show("执行失败：${t.message ?: t.javaClass.simpleName}")
             } finally {
-                runningKey = null
+                runningKeys = runningKeys - key
             }
         }
     }
@@ -494,7 +500,7 @@ fun ProjectScreen(
                                     // ▶ 只在**可执行**（JS 家族）且不在选择模式时出现 ——
                                     // 判据的唯一一份在 `:domain` 的 `ScriptRunnability`。
                                     showRun = !selectionMode && ScriptRunnability.isRunnable(file.relPath),
-                                    running = runningKey == key,
+                                    running = key in runningKeys,
                                     onRun = { runFile(file) },
                                     onClick = {
                                         when {
