@@ -117,9 +117,15 @@ internal object TaskStoreSql {
     private const val DATA_COLUMNS =
         "name, project_id, script_path, kind, a, b, screen, args_json, timeout_millis, tz, enabled"
 
-    /** 撤销一条**从未登记**的 id 时用的占位载荷（非空列全给合法值，墓碑语义不依赖它们）。 */
+    /**
+     * 撤销一条**从未登记**的 id 时用的占位载荷（墓碑语义不依赖这些列，但**必须是
+     * 解码合法值**，不是只满足 NOT NULL）：`allWithRevoked` 把墓碑也读出来过
+     * `toTask()`（迁移的空库判据每次启动都跑它），`kind`/`screen` 给空串会在
+     * `decodeSchedule`/`ScreenGuarantee.valueOf` 里当场炸 —— 一条「取消了一个
+     * 从未登记的任务」的墓碑，会让装配层的迁移门禁读每次都抛，启动路径永久砖。
+     */
     private val EMPTY_ROW = listOf(
-        q(""), q(""), q(""), q(""), q(""), q(""), q(""), q("[]"), "NULL", q("UTC"), "0",
+        q(""), q(""), q(""), q("once"), q("0"), q(""), q("ANY"), q("[]"), "NULL", q("UTC"), "0",
     ).joinToString(", ")
 
     private fun dataValues(t: ScheduledTask): String {
