@@ -73,7 +73,13 @@ Java_com_autoscript_platform_system_images_JniOps_decodeNative(
             jlong triple[3] = {static_cast<jlong>(native_ref), static_cast<jlong>(w),
                                static_cast<jlong>(h)};
             result = env->NewLongArray(3);
-            if (result != nullptr) env->SetLongArrayRegion(result, 0, 3, triple);
+            if (result != nullptr) {
+                env->SetLongArrayRegion(result, 0, 3, triple);
+            } else {
+                // OOM：数组回包没造成，native_ref 就到不了 Java 侧 —— 不就地放掉，
+                // 这一帧永远躺在帧表里（Kotlin 只知道"null + status 0"，无人再记得它）。
+                imgnative_release(native_ref);
+            }
         } else {
             status = rc;
         }
@@ -121,7 +127,12 @@ Java_com_autoscript_platform_system_images_JniOps_ingestNative(
                     jlong triple[3] = {static_cast<jlong>(native_ref), static_cast<jlong>(w),
                                        static_cast<jlong>(h)};
                     result = env->NewLongArray(3);
-                    if (result != nullptr) env->SetLongArrayRegion(result, 0, 3, triple);
+                    if (result != nullptr) {
+                        env->SetLongArrayRegion(result, 0, 3, triple);
+                    } else {
+                        // 同 decode：OOM 回包失败时 native_ref 无人再记得，就地放掉。
+                        imgnative_release(native_ref);
+                    }
                 } else {
                     status = rc;
                 }
