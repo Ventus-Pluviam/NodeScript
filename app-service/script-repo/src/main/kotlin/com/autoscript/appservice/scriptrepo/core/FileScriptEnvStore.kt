@@ -24,7 +24,9 @@ import java.nio.file.StandardOpenOption
  *   而这份表会直接影响下一次脚本执行（丢了 = 脚本拿到半个环境）；
  * - **replay 全量重建**：启动读一遍，最后状态即终态；
  * - **容忍最后半行**：崩溃截断只丢那半行，不连坐完好行（按字节扫 `\n`，不按行 split ——
- *   值里可能有换行，split 会把一行撕成两行）；
+ *   值里可能有换行，split 会把一行撕成两行）；且与 `tasks.jsonl`/`run-archive.jsonl`
+ *   同款**落盘截断**（见 [replay] 末尾）—— 只在内存丢而盘上留着的话，下一次 append
+ *   会与残片粘成一行，之后每次重启 replay 都抛「行损坏」，整店再也打不开；
  * - **压实**（[compactIfOversize]）：append-only 只增不减，压实把已被覆盖的历史收掉。
  *   本表**可以**无损压实，因为读口要的是现状不是历史；`.ns/` 下那些「事实账」
  *   （`install.journal` / `approve-ledger.jsonl` / 系统日志 `host-log.jsonl`）
@@ -121,19 +123,44 @@ class FileScriptEnvStore(
      */
     private fun replay() {
         if (!Files.exists(file)) return
+        var pos = 0L
+        var lastFullLineEnd = 0L                     // 最后一个完整行的行尾偏移（含换行）
         BufferedInputStream(Files.newInputStream(file)).use { ins ->
             val line = ByteArrayOutputStream()   // 只留当前行
             while (true) {
                 val b = ins.read()
-                if (b < 0) return                          // 行缓冲里还有内容 = 最后半行 → 丢弃
+                if (b < 0) break                           // 行缓冲里还有内容 = 最后半行 → 丢内存、截盘
+                pos++
                 if (b == '\n'.code) {
                     val s = line.toString(StandardCharsets.UTF_8.name())
                     line.reset()
                     if (s.isNotBlank()) apply(s)
+                    lastFullLineEnd = pos
                 } else {
                     line.write(b)
                 }
             }
+        }
+        // 末尾有残片才动盘（干净文件不多一次写）。批 96 给 tasks/run-archive 两份补了
+        // truncateTail，本份当时漏了（B3「半行清盘」在这份上没落地）—— 不截的话，
+        // 下一次 append 与残片粘成一行，重启 replay 在粘行上抛 IOException，
+        // 整店再也打不开（压实救不了：它排在构造成功之后）。
+        if (pos > lastFullLineEnd) truncateTail(lastFullLineEnd)
+    }
+
+    /**
+     * 截掉文件尾的崩溃残片（与 `FileTaskStore.truncateTail`/`FileRunArchive.truncateTail`
+     * 同一手法 —— 批 96 那两份落地、本份漏了）。
+     *
+     * 截不动（只读 fs / 权限回卷）不拦构造：读取侧照常、写入侧随后会红 ——
+     * 与那两份同一条「半截故障不该让构造直接炸」。
+     */
+    private fun truncateTail(offset: Long) {
+        if (offset <= 0) { Files.deleteIfExists(file); return }   // 全残：从空文件重来
+        try {
+            FileChannel.open(file, StandardOpenOption.WRITE).use { ch -> ch.truncate(offset) }
+        } catch (_: IOException) {
+            // 截不动是半截故障：残片会在下一次 append 时粘坏（可观察），但读取侧不该陪葬。
         }
     }
 

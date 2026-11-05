@@ -55,13 +55,20 @@ class FileScriptLimitsStore(private val dir: Path) : ScriptLimitsStore {
             throw IOException("脚本限额配置不是合法 JSON：${file.fileName}：${e.message}", e)
         }
         val d = ScriptRuntimeLimits.DEFAULTS
-        return ScriptRuntimeLimits(
+        val loaded = ScriptRuntimeLimits(
             maxHeapMb = num(fields, "maxHeapMb", d.maxHeapMb),
             uvThreadPoolSize = num(fields, "uvThreadPoolSize", d.uvThreadPoolSize),
             bridgeInFlightPerConnection = num(fields, "bridgeInFlightPerConnection", d.bridgeInFlightPerConnection),
             bridgeBytesPerConnectionMb = num(fields, "bridgeBytesPerConnectionMb", d.bridgeBytesPerConnectionMb),
             bridgeReadThreadsPerConnection = num(fields, "bridgeReadThreadsPerConnection", d.bridgeReadThreadsPerConnection),
         )
+        // 读侧也过 reject（类 KDoc 承诺「是负数则响亮失败」）：save 的闸门拦不住手改文件，
+        // 放行 -5/0 的后果是它走到 --max-old-space-size / updatePerConnectionLimits 才以
+        // 更难懂的方式炸 —— 越晚炸，越没人联想到是这份配置。
+        ScriptRuntimeLimits.reject(loaded)?.let {
+            throw IOException("脚本限额配置数值越界：$it（${file.fileName}）")
+        }
+        return loaded
     }
 
     override fun save(limits: ScriptRuntimeLimits) {

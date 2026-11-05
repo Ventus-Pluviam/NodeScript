@@ -89,6 +89,19 @@ class FileScriptLimitsStoreTest {
     }
 
     @Test
+    fun `手改越界值（负数零）响亮失败而不是放行到深处`(@TempDir dir: Path) {
+        // save 侧的 reject 闸门拦不住手改文件；类 KDoc 承诺「是负数则响亮失败」——
+        // 读侧必须兑现，否则 -5 会走到 --max-old-space-size 才以更难懂的形态炸。
+        Files.write(file(dir), """{"maxHeapMb":-5}""".toByteArray(StandardCharsets.UTF_8))
+        val e1 = assertThrows(java.io.IOException::class.java) { FileScriptLimitsStore(dir).load() }
+        assertTrue("堆上限" in (e1.message ?: ""), "拒收原文要点名字段：${e1.message}")
+
+        Files.write(file(dir), """{"bridgeInFlightPerConnection":0}""".toByteArray(StandardCharsets.UTF_8))
+        val e2 = assertThrows(java.io.IOException::class.java) { FileScriptLimitsStore(dir).load() }
+        assertTrue("在途请求数" in (e2.message ?: ""), "0 = 禁用不是「不限」：${e2.message}")
+    }
+
+    @Test
     fun `整个文件不是合法 JSON 响亮失败`(@TempDir dir: Path) {
         Files.write(file(dir), "not json".toByteArray(StandardCharsets.UTF_8))
         assertThrows(java.io.IOException::class.java) { FileScriptLimitsStore(dir).load() }
