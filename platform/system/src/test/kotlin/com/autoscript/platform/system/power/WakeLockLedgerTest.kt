@@ -15,7 +15,10 @@ import org.junit.jupiter.api.Test
  * 2. 引用计数：多持有方共用一个系统锁，最后一个走才真放开
  *    （否则脚本侧 release 会把框架侧的锁也放掉 → 熄屏任务随机被拒）；
  * 3. 到期自动释放（§8.7 明文承诺的安全属性：卡死的持有方不该让 CPU 永不休眠）；
- * 4. [WakeLockLedger.isHeld] 两侧都真才算持着 —— 分歧按没持着算（宁可如实拒绝）。
+ * 4. [WakeLockLedger.isHeld] 两侧都真才算持着 —— 分歧按没持着算（宁可如实拒绝）；
+ * 5. 第 4 条那个分歧态由**下一次 hold 补取**自愈 —— 判据取自系统事实（`ops.held`）
+ *    而不是"账本是否为空"，且补取不重复取（`setReferenceCounted(false)` 下多取一次
+ *    就是一条永远放不掉的锁）。
  */
 class WakeLockLedgerTest {
 
@@ -142,6 +145,65 @@ class WakeLockLedgerTest {
 
         ops.held = false          // 系统侧把锁放掉了（外部/ROM 行为），账本还记着
         assertFalse(ledger.isHeld(), "分歧必须按没持着算：门禁宁可拒绝，也不能让任务在会休眠的 CPU 上跑")
+    }
+
+    @Test
+    fun `分歧态的下一次 hold 补取锁 —— 不得回一次没有锁的假成功`() {
+        // 钉的是 [WakeLockLedger.hold] 的判据**取自系统事实**（`ops.held`）而不是
+        // "账本是否为空"。此前写的是 `tokens.isEmpty() && !ops.acquire()`：账本非空
+        // 就完全不碰系统锁，于是在上面那条分歧态里 hold 回 true 而**实际没有锁** ——
+        // 一次假成功，而且账本没有别的自愈路（sweep 只放到期 token、renew 只补服务
+        // 不补锁），分歧会一直挂到最后一个持有方 release 为止。
+        //
+        // 后果是可观测的：`power_manager.acquire` 拿到 token（handler 只在 hold 回
+        // false 时才抛 ERR_SERVICE_DISABLED），而 SCREEN_ON 门禁读的 `lockHeld()`
+        // 仍是 false —— 脚本以为自己有休眠保护，任务在一个会休眠的 CPU 上跑。
+        val ops = FakeOps()
+        val ledger = WakeLockLedger(ops)
+        assertTrue(ledger.hold("framework"))
+        assertEquals(1, ops.acquires)
+
+        ops.held = false                      // 系统侧放掉了（分歧态）
+        assertTrue(ledger.hold("script:1"), "补取成功时如实回 true")
+        assertEquals(2, ops.acquires, "分歧态的 hold 必须**补取**系统锁（账本非空不是理由）")
+        assertTrue(ops.held, "锁必须真回来了")
+        assertTrue(ledger.isHeld(), "补取后门禁读到的必须是真值")
+        assertEquals(setOf("framework", "script:1"), ledger.heldTokens())
+    }
+
+    @Test
+    fun `分歧态补取失败 —— 如实 false 且不记新账（假成功在这里也必须是失败）`() {
+        val ops = FakeOps()
+        val ledger = WakeLockLedger(ops)
+        assertTrue(ledger.hold("framework"))
+
+        ops.held = false
+        ops.acquireOk = false                 // 补取也拿不到（权限被收回等）
+        assertFalse(ledger.hold("script:1"), "补取失败必须如实 false，不得记一条没有锁的账")
+        assertEquals(setOf("framework"), ledger.heldTokens(), "拿不到的 token 不进账本")
+        assertFalse(ledger.isHeld())
+    }
+
+    @Test
+    fun `系统已持着时 hold 不重复取锁 —— 补取不得补成一条放不掉的锁`() {
+        // 上一条的**反面**：把判据改成"每次都 acquire"（`!ops.acquire()`）就能过上一条，
+        // 但会在系统已持着时多取一次 —— 而 `AndroidWakeLockOps` 是
+        // `setReferenceCounted(false)`（引用计数归账本，系统那把锁只做"取一次/放一次"），
+        // 多出来的那次 acquire 对应的 release 永远不会来，现场是"锁永远持着、耗电"。
+        val ops = FakeOps()
+        val ledger = WakeLockLedger(ops)
+        assertTrue(ledger.hold("framework"))
+        assertTrue(ledger.hold("script:1"))
+        assertTrue(ledger.hold("script:2", timeoutMillis = 60_000))
+        assertEquals(1, ops.acquires, "系统已持着 → 一次都不多取")
+        assertEquals(3, ledger.heldTokens().size)
+
+        // 最后一个走了才放开，且只放一次（与上一条的"不多取"合成配对纪律）。
+        assertTrue(ledger.release("script:1"))
+        assertTrue(ledger.release("script:2"))
+        assertEquals(0, ops.releases, "还有人持着，系统锁不动")
+        assertTrue(ledger.release("framework"))
+        assertEquals(1, ops.releases, "最后一个 token 走了放开**一次**（不多放也不留锁）")
     }
 
     @Test

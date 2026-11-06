@@ -33,15 +33,18 @@ interface WakeLockOps {
  * `power_manager` 请求。两者共用一个系统锁，必须引用计数才不会互相踩：
  * 脚本释放时把框架的锁也放掉，表现就是"熄屏任务随机被拒"，现场极难查。
  *
- * 三条诚实纪律：
- * - **拿不到就不记账**：`ops.acquire()` 回 false 时 [hold] 回 false 且不写入 token ——
- *   账本里存在 token ⇔ 系统锁真的取到了（除非下面第三条的分歧）；
+ * 四条诚实纪律：
+ * - **拿不到就不记账**：系统锁没取到（[WakeLockOps.acquire] 回 false）时 [hold] 回 false
+ *   且不写入 token —— `hold` 回 true ⇒ 那一刻系统锁真持着。**判据是 [WakeLockOps.held]
+ *   这个系统事实，不是"账本是否为空"**（后者在锁被外部/系统放掉时会给出假成功，见 [hold]）；
  * - **超时自动释放**（§8.7「配套超时自动释放」）：带 `timeoutMillis` 的 token 到期后由
  *   [sweep] 释放。这是**安全属性**，不是优化 —— 一个卡死的持有方不该让 CPU 永远不休眠。
  *   驱动方是 `ForegroundKeeper.startTicker`（`:app`，周期性 renew + sweep）；
  * - **[isHeld] 两侧都真才算持着**：账本有 token **且** `ops.held` 为真。两者分歧
  *   （例如锁被外部/系统放掉）时按**没持着**算 —— 门禁宁可如实拒绝一次亮屏任务，
- *   也不能让任务在一个其实会休眠的 CPU 上跑（那条路径的表现是"任务成功、实际什么都没发生"）。
+ *   也不能让任务在一个其实会休眠的 CPU 上跑（那条路径的表现是"任务成功、实际什么都没发生"）；
+ * - **分歧态由下一次 [hold] 补取自愈**（第一条纪律的直接后果）：[isHeld] 只负责"如实报
+ *   没持着"，把锁补回来是 [hold] 的事 —— 否则那个分歧会一直挂到最后一个持有方 release。
  *
  * 线程契约：全部方法 `@Synchronized`（门禁查询、服务生命周期回调、ticker 三方并发）。
  */
@@ -67,7 +70,19 @@ class WakeLockLedger(
         require(timeoutMillis == null || timeoutMillis > 0) {
             "timeoutMillis 必须 > 0（0/负数等于要求立刻过期，疑似漏配）: $timeoutMillis"
         }
-        if (tokens.isEmpty() && !ops.acquire()) return false
+        // 取/补取系统锁，**判据是 [WakeLockOps.held] 这个系统事实**（[isHeld] 认的就是它
+        // —— 账本自己记的"应该持着"在本类里从来不算数）。
+        //
+        // 这里曾经写的是 `tokens.isEmpty() && !ops.acquire()`：账本非空就**不碰**系统锁。
+        // 那条在"锁被外部/系统放掉、账本还记着"（`isHeld` 明写的那个分歧态）下错得很难看
+        // —— hold 回 true 而**实际没有锁**，是一次假成功；而且账本没有别的自愈路：
+        // [sweep] 只放到期 token、`ForegroundKeeper.renew` 只补服务不补锁，于是这个分歧
+        // 一直挂到最后一个持有方 release 为止（那期间脚本 acquire 拿到的 token 全是空的）。
+        //
+        // 现在：系统已持着 → 不重复取（`setReferenceCounted(false)` 下 `release` 只放
+        // 一次，多出来的那次 acquire 就是一条永远放不掉的锁，表现为"锁永远持着、耗电"）；
+        // 系统没持着（空账本的首次取锁与分歧态是同一条路）→ 取，取不到如实 false 且不记账。
+        if (!ops.held && !ops.acquire()) return false
         tokens[token] = timeoutMillis?.let { clock.nowMillis() + it }
         return true
     }
