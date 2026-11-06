@@ -45,8 +45,11 @@ import com.autoscript.platform.system.zip.ZipArchiver
  * `SystemDialogOps` 设备面），而平台模块之间没有依赖边 —— 构造归装配层
  * `PlatformWiring.of`（同 `overlayAvailable` 参数一并传入）。本类十件不变（sensors 本批补到十件；`dialogs` 仍不在此造）。
  *
- * 构造点在装配层（持有 `Context` 的 Android 侧）；本类不做权限判断（§9.5：
- * 门禁在 `PermissionFacade`，先判后取）。
+ * 构造点在装配层（持有 `Context` 的 Android 侧）；本类不做权限判断。
+ *
+ * **订正**：原写「§9.5：门禁在 `PermissionFacade`，先判后取」——「先判后取」这条在生产
+ * 代码里不存在（`ensure` 零调用点；见 `SystemNamespaces` 类 KDoc 的同一条订正）。
+ * 脚本侧的判据是**桥面掩码**（§11），系统侧的拒绝由各实现折分类错误。
  */
 object SystemSpis {
 

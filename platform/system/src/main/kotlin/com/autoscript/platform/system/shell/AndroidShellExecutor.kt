@@ -14,8 +14,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * `shell` 命名空间的 Android 实现（docs §9.6；SPI 见 [ShellExecutor]，
- * 语义层 handler 住 `:platform:capabilities` 的 `ShellNamespaceHandler`）。
+ * `shell` 命名空间的 Android 实现（docs §9.6；SPI 见 [ShellExecutor]）。
+ *
+ * **订正**：语义层 handler（[ShellNamespaceHandler]）此前写的是住 `:platform:capabilities`
+ * —— 那是 2026-09-30 审查步骤 6 之前的口径。现在五个系统命名空间的 handler 随实现同住
+ * `:platform:system`（就在本文件的同包 `shell/` 里），工厂束是 `SystemNamespaces.shell`。
  *
  * 三条契约在这里兑现，每条都有对应单测：
  *
@@ -53,9 +56,28 @@ import java.util.concurrent.TimeUnit
  * 参数用 argv 数组而非拼串（`su -c "$command"` 那种）：命令里的引号/空格/`$` 一旦
  * 参与拼接就要靠转义猜，argv 形态让内核直接收参数，不经过第二层 shell 解析。
  *
- * **本类不做能力门禁**：ROOT 模式能不能用由装配层的 `PermissionFacade` 先判
- * （§9.5），本类只负责"已经决定要执行之后"的执行与收尸。`su` 不存在时
- * [launcher] 抛 [IOException]，这里如实折成 [ErrorCode.ERR_SERVICE_DISABLED]。
+ * **本类不做能力门禁**，只负责"已经决定要执行之后"的执行与收尸。
+ *
+ * **订正**：这里原写「ROOT 模式能不能用由装配层的 `PermissionFacade` 先判（§9.5）」——
+ * 那句话**不成立**：`PermissionFacade.ensure`/`requireGrantedOrThrow` 在生产代码里
+ * **零调用点**，装配层（`PlatformWiring.inject`）也不查三态。ROOT 档这条路上真在判的
+ * 只有两条：
+ *
+ * 1. **桥面掩码**（§11）：`BridgeCapabilityCatalog` 给 `shell` 命名空间要
+ *    `DEVICE_CONTROL`，`BridgeRouter.dispatch` 未覆盖即 `ERR_PERMISSION_DENIED`、
+ *    不进 handler。**它不分档到 ROOT**：`mode` 是 payload 字段，目录里没有
+ *    `shell.*` 的方法级/参数级条目，所以任何持 `DEVICE_CONTROL` 的执行都能请求 ROOT 档
+ *    —— 这条**如实登记**，不是遗漏的判据（掩码不是沙箱，§11.3 第 1 条：同 UID 同权，
+ *    脚本绕开桥直接 spawn `su` 也一样能跑）。
+ * 2. **设备自己怎么说**：`su` 不存在时 [launcher] 抛 [IOException]，这里如实折成
+ *    [ErrorCode.ERR_SERVICE_DISABLED]；`su` 在但被 root 管理器拒 → 非零退出码原样进
+ *    [ShellResult]（那是**结果**，不是异常）。
+ *
+ * 三态门禁当前只服务**能力中心 UI**（`PermissionFacade.state` 经 `CapabilityCenterRead`
+ * 逐项直读）。这与 §9.3「`root` 通道恒登记，真无 root 时命令自己失败」是同一条口径：
+ * 探测 `su` 要 spawn 一个可能挂着等用户点弹窗的阻塞进程（`AndroidSystemStateReader`
+ * 的 `rootAvailable` 就为此设了超时），把它放进**每条命令**的前置判据不划算，
+ * 而失败形态本来就如实（上面第 2 条）。
  */
 class AndroidShellExecutor(
     private val launcher: ProcessLauncher = ProcessLauncher { Runtime.getRuntime().exec(it) },

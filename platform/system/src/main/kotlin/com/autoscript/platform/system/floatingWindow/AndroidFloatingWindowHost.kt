@@ -19,8 +19,14 @@ import java.util.concurrent.atomic.AtomicLong
  * - **窗口类型选择**：按 [overlayTypeAvailable] 缝在 `TYPE_ACCESSIBILITY_OVERLAY` 与
  *   `TYPE_APPLICATION_OVERLAY` 之间选。
  *
- * **能力门禁不在这里**（§9.5）：本类只处理"系统在加窗时拒绝"这一现场事实，折成
- * [ErrorCode.ERR_PERMISSION_DENIED]；"该不该允许脚本开悬浮窗"由装配层的 `PermissionFacade` 先判。
+ * **能力门禁不在这里**：本类只处理"系统在加窗时拒绝"这一现场事实，折成
+ * [ErrorCode.ERR_PERMISSION_DENIED]。
+ *
+ * **订正**：原写「"该不该允许脚本开悬浮窗"由装配层的 `PermissionFacade` 先判（§9.5）」——
+ * `PermissionFacade.ensure` 在生产代码里零调用点，装配层不查三态。真在判的是**桥面掩码**
+ * （§11）：`BridgeCapabilityCatalog` 给 `floatingWindow` 要 `OVERLAY`，未覆盖的请求在
+ * `BridgeRouter.dispatch` 就被拒，到不了本类。三态当前只答能力中心 UI
+ * （见 `SystemNamespaces` 类 KDoc 的同一条订正）。
  *
  * [ops] 是唯一的 Android 接触面（[FloatingWindowOps]）：真机走 [WindowManagerOps]（真
  * `WindowManager.addView`，窗口令牌是 `View`）；单测注入内存替身，于是发号/幂等/错误分类

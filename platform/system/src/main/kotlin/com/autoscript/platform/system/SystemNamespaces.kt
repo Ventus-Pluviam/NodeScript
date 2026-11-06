@@ -50,9 +50,19 @@ import com.autoscript.platform.system.zip.ZipNamespaceHandler
  *
  * **能力门禁不在这里**：`:app-service:permission-center` 的 `PermissionFacade` 住
  * `:app-service:*`，而本模块的 archUnit 黑名单含 `com.autoscript.appservice..`（§6）。
- * 所以门禁由装配层在调用工厂前完成（`ensure(Capability.OVERLAY)` 等），
- * 本模块只负责**能力已保证之后的语义**：参数校验、句柄记账、分类错误。
+ * 本模块只负责**语义**：参数校验、句柄记账、分类错误。
  * 未接线的命名空间由 Router 如实回 ERR_NOT_IMPLEMENTED（§7.5），不伪造可用。
+ *
+ * **订正**：这里原写「所以门禁由装配层在调用工厂前完成（`ensure(Capability.OVERLAY)` 等），
+ * 本模块只负责能力已保证之后的语义」—— 前半句**不成立**：`PermissionFacade.ensure` /
+ * `requireGrantedOrThrow` 在生产代码里**零调用点**，装配层 `PlatformWiring.inject`
+ * 是纯转接（一处 `ensure` 都没有）。三态当前只服务**能力中心 UI**（`state` 经
+ * `CapabilityCenterRead` 逐项直读）。脚本这条路上真在判的是**桥面掩码**（§11）：
+ * `BridgeCapabilityCatalog` 逐命名空间要位，`BridgeRouter.dispatch` 未覆盖即
+ * `ERR_PERMISSION_DENIED`、不进 handler；设备侧的拒绝由各实现如实折分类错误
+ * （`AndroidFloatingWindowHost` 加窗被拒 → `ERR_PERMISSION_DENIED`、`su` 不在 →
+ * `ERR_SERVICE_DISABLED`）。把「装配层会先判」写成既有事实，会让读的人以为不必再判 ——
+ * 而它确实没人判。
  *
  * 超时（铁律 3）：桥侧 TTL 由 `BridgeRequest.ttlMillis` 驱动，handler 必须在
  * TTL 内返回。`shell.exec` 的实现方超时（shell 子包的 `DEFAULT_SHELL_TIMEOUT_MILLIS`）
