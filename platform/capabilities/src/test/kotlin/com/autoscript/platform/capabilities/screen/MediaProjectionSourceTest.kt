@@ -10,7 +10,10 @@ import com.autoscript.domain.automation.ScreenConsentToken
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import com.autoscript.domain.engine.EngineId
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -241,6 +244,74 @@ class MediaProjectionSourceTest {
         val result = pending.await()
         assertTrue(result.exceptionOrNull() is CancellationException)
         assertNull(sessions.current, "撤销过的开启不许提交")
+        Unit
+    }
+
+    @Test
+    fun `提交前撤销 —— 收口在锁外，撤销路径不被挡住`() = runBlocking {
+        // 钉的是**锁的边界**（类 KDoc：临界区只做 map 读写，绝不跨设备调用持锁）：
+        // 提交前判据发现"这条已被撤销"之后，设备层的 `close` 必须在**锁外**做 ——
+        // 真机上它是一次 binder 往返（VirtualDisplay release / projection stop），
+        // 持锁做它会把 `releaseConnection`（非挂起，可能在连接/撤销线程上被调）
+        // 与 `nextFrame`/`stop` 一起挡住。`stop` 那条路早已写在锁外并有注释说明，
+        // 本条把**同一纪律**在 start 的撤销分支上也钉住（此前它在锁内）。
+        //
+        // 复现手法：替身置 `abortOpenOnRevoke = false`，让设备层 `open` 照常返回
+        // （真机上"open 已返回、语义层还没登记"是一段赛跑窗口），于是语义层必然走到
+        // 提交前判据那一支；再让 `close` 挂住（`onClose` 钩子），此刻从**另一个线程**
+        // 调一次需要同一把锁的 `releaseConnection(ownerB)` —— 收口若在锁内，它就得
+        // 等到 close 返回（本测里 = 永远），于是超时；在锁外则立刻返回。
+        val sessions = FakeSessions().apply {
+            gateOpen = true
+            abortOpenOnRevoke = false       // 逼语义层走提交前判据（真机上是赛跑窗口）
+        }
+        val src = source(sessions)
+        // **必须跑在别的线程上**：下面主线程要用 Java 闩**阻塞地**等两件事（close 进门、
+        // 另一条撤销拿到锁），而 `runBlocking` 的事件循环就在主线程 —— 那条开启协程若也
+        // 在这儿，主线程一阻塞它就再也推不动（测出来的是闩超时，不是被测的那把锁）。
+        val pending = async(Dispatchers.Default) { runCatching { src.openAs(ownerA) } }
+        withTimeoutOrNull(2_000) {
+            while (sessions.pendingOpen == null) delay(1)
+        }
+        // 撤销落在 open 的挂起点里：撤销簿记账（提交前判据的输入）。
+        src.releaseConnection(ownerA)
+
+        // close 挂住：进门就报信，然后等放行 —— 这段窗口里锁**不该**被占着。
+        val closeEntered = CountDownLatch(1)
+        val closeRelease = CountDownLatch(1)
+        sessions.onClose = {
+            closeEntered.countDown()
+            closeRelease.await(5, TimeUnit.SECONDS)
+        }
+        sessions.finishOpen()
+        assertTrue(closeEntered.await(2, TimeUnit.SECONDS), "语义层应走到收口（提交前判据命中）")
+
+        // 另一条连接的撤销（与 ownerA 无关）：要的是"能拿到锁"，不是它的返回值。
+        val otherDone = CountDownLatch(1)
+        val waiter = Thread {
+            runCatching { src.releaseConnection(ownerB) }
+            otherDone.countDown()
+        }
+        waiter.isDaemon = true
+        try {
+            waiter.start()
+            assertTrue(
+                otherDone.await(2, TimeUnit.SECONDS),
+                "收口在锁外：设备层 close 挂住期间，别的撤销仍能拿到语义层的锁",
+            )
+        } finally {
+            closeRelease.countDown()      // 放行，别让挂住的 close 把后面的断言也拖死
+            waiter.join(2_000)
+        }
+
+        val result = pending.await()
+        assertTrue(result.exceptionOrNull() is CancellationException, "取消必须原样传播：${result.exceptionOrNull()}")
+        assertNull(sessions.current, "被撤销的那次不许留在设备层")
+        assertEquals(MediaProjectionSessionState.IDLE, src.projectionState())
+        // 面表里没登记过它：紧接着的一次开启不该被"已有一条活会话"挡下。
+        sessions.gateOpen = false       // 这次不必再挂（前面那次已放行过闸门）
+        assertNotNull(src.openAs(ownerB), "撤销的那次没进在场面表 —— 下一次开启照常放行")
+        assertEquals(2, sessions.openCalls.size, "两次开启各到设备层一次")
         Unit
     }
 

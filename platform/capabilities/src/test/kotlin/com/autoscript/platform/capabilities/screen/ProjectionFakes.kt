@@ -39,6 +39,23 @@ internal class FakeSessions : MediaProjectionSessions {
     var closeCurrentCalls = 0
     var revokeOwnerCalls = 0
 
+    /**
+     * `close` 的钩子（默认 null = 不挂）：测「语义层的收口是不是在**锁外**」用 ——
+     * 钩子里挂住，再看另一个线程能不能拿到语义层那把锁（拿不到就是死等到超时）。
+     * 真设备层的 `close` 是一次 binder 往返（VirtualDisplay release / projection stop），
+     * 所以「持锁做它」在真机上就是**持锁跨设备调用**，本钩子把那个耗时窗口显式化。
+     */
+    var onClose: (() -> Unit)? = null
+
+    /**
+     * 撤销之后 `open` 是否**如实放弃**（真设备层的行为：回 `CancellationException`，资源已还清）。
+     *
+     * 置 false = 让 `open` 照常返回会话，用于把语义层逼到「**提交前判据**」那一支 ——
+     * 真机上那是一支赛跑窗口（`open` 已返回、语义层还没登记，撤销恰好落在这中间），
+     * 替身里靠这个开关复现它，否则那条分支在测试里不可达。
+     */
+    var abortOpenOnRevoke = true
+
     /** 在册会话（真设备层是 `current`）；`open` 会替换它。 */
     var current: FakeSession? = null
         private set
@@ -86,7 +103,7 @@ internal class FakeSessions : MediaProjectionSessions {
         }
         pendingOpen = null
         // 开启期间被撤销：真设备层回 CancellationException（资源已还清）。
-        if (revoked.contains(owner)) {
+        if (abortOpenOnRevoke && revoked.contains(owner)) {
             session.markClosed()
             throw kotlinx.coroutines.CancellationException("投屏会话开启过程中被收口（连接撤销）")
         }
@@ -109,6 +126,7 @@ internal class FakeSessions : MediaProjectionSessions {
     private val revoked = HashSet<MediaProjectionSessionOwner>()
 
     override fun close(lease: SessionResourceLease): Boolean {
+        onClose?.invoke()
         val c = current ?: return false
         if (c.lease.leaseId != lease.leaseId || c.owner != lease.owner) return false
         c.markClosed()
