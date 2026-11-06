@@ -91,7 +91,23 @@ function tsInvokePayloadKeys(src, ns, method) {
   return [...new Set([...body.matchAll(/^[ \t]*([A-Za-z_][\w]*)[ \t]*:/gm)].map((m) => m[1]))].sort()
 }
 
-/** Kotlin 分支读的入参键：函数区内 `optLong(<o>, "key")` 等。 */
+/**
+ * Kotlin 分支读的入参键：函数区内 `optLong(<o>, "key")` / `optInt(...)` / `requiredInt(...)`
+ * 等**整个读者族**调用。
+ *
+ * 为什么不是只认 `optLong`：读者族按域分（Long 域 `optLong`/`requiredLong`、Int 域
+ * `optInt`/`requiredInt`），而**同一个分支里两种都会出现** —— `a11y.events` 的 `sinceSeq`
+ * 是 Long 域（游标），`batch` 是 Int 域（批量大小）。只认一种就会把另一种读成
+ * 「宿主不认这个键」，报一条**假的漂移**（2026-11-07 现场：Int 域那批改走 `optInt` 之后，
+ * `batch`/`max` 当场变成 "TS 发、宿主不认"）。故按前缀匹配整个族 —— 域归域，键归键。
+ *
+ * **判据仍是双向相等**（[bothWays]）：放宽的只是"认哪些调用形式"，不是"键集可以不等"。
+ *
+ * 为什么带后缀白名单而不是裸 `\w*`：两参 `require(x != null, "缺 x")` 的形态与读者调用
+ * **一模一样**（名字 + 逗号 + 字符串字面量），而它是**守卫**不是读者 —— 裸前缀
+ * （`req` + `\w*`）会把守卫的话术当成键捞出来。白名单里只有类型后缀，`require` 剩下的
+ * `uire` 不在其中。当前两个被扫函数里没有这种两参守卫，白名单是防它哪天被写进来。
+ */
 function ktParamKeys(src, fnSig, extra) {
   const start = src.indexOf(fnSig)
   assert.ok(start >= 0, `找不到 ${fnSig}`)
@@ -106,7 +122,9 @@ function ktParamKeys(src, fnSig, extra) {
     }
   }
   const body = src.slice(open, end)
-  const keys = [...body.matchAll(/optLong\([^,]+,\s*"([A-Za-z_][\w]*)"\)/g)].map((m) => m[1])
+  // 读者族：前缀 + 类型后缀（排除 `require` 这类守卫），见函数 KDoc。
+  const reader = /\b(?:opt|req|required)(?:Int|Long|Str|Bool|Obj|Double|Ref)\w*\([^,]+,\s*"([A-Za-z_][\w]*)"\)/g
+  const keys = [...body.matchAll(reader)].map((m) => m[1])
   return [...new Set([...keys, ...extra.filter((e) => body.includes(e.mark)).map((e) => e.key)])].sort()
 }
 
