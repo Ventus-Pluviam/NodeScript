@@ -486,6 +486,11 @@ class Scheduler(
      * 诚实边界：引擎 OS 进程可能还活着（宿主死不等于引擎死），但那已是 native 宿主的
      * 孤儿进程问题，本层无 pid 无句柄，CRASHED 表达的是"失联"，不是"已杀死"。
      * 已终态的记录不动（`put` 的终态不可改写纪律会响亮失败，所以先过滤）。
+     *
+     * **迁移清理定位**（2026-11-06 裁定，标而不删）：本函数只服务 fdad7c8c 之前
+     * 「落地先写 RUNNING、结算另写」形状的**遗留档案**；现行写入形状（[recordLink]
+     * 落地即终态）下 `recordsOfIntent` 里不存在非终态行，循环体**永不写档**。
+     * 随旧数据绝迹后退役（连恢复处的调用点一起删）—— 在此之前勿当活逻辑扩展它。
      */
     private suspend fun settleOrphanArchive(oldIntentRunId: Long) {
         val a = archive ?: return
@@ -516,6 +521,11 @@ class Scheduler(
      *
      * 关联（link）原样保留：link 是历史事实（那次执行确实由那个 intent 投递），
      * 不因结算而消失 —— 任务中心仍可按 IntentRun 追到这条"失联"记录。
+     *
+     * **迁移清理定位**（2026-11-06 裁定，标而不删）：与 [settleOrphanArchive] 同批 ——
+     * 只服务 fdad7c8c 之前形状的**遗留档案**；现行写入形状（[recordLink] 落地即终态）
+     * 下 `unfinished()` 恒空，循环**永不进体**。随旧数据绝迹后退役（连同恢复处的
+     * 调用点），在此之前勿当活逻辑扩展它。
      */
     private suspend fun settleVoidArchive(reopeningIntentIds: Set<Long>) {
         val a = archive ?: return

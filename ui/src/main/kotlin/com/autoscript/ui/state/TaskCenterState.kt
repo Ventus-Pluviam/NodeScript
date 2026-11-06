@@ -292,6 +292,9 @@ object ScheduleText {
 object RunStateText {
 
     fun describe(state: RunState): String = when (state) {
+        // 这两句只念给「迁移清理窗口期」的遗留档案听：fdad7c8c 起 recordLink 落地即终态，
+        // 新档案不再出现这两态；旧档由 Scheduler 的两个 sweep（均已标注退役）逐步清成
+        // CRASHED。随旧数据绝迹，这两个分支连同措辞一起退役（2026-11-06 裁定，标而不删）。
         RunState.PENDING -> "档案停在待投递（上一进程遗物，未结算）"
         RunState.RUNNING -> "档案停在运行中（上一进程遗物，未结算 —— 不是此刻正在跑）"
         RunState.SUCCEEDED -> "成功"
