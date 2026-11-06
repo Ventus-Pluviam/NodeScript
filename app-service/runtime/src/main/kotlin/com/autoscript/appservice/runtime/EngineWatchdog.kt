@@ -2,6 +2,7 @@ package com.autoscript.appservice.runtime
 
 import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.domain.engine.KillCause
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -178,7 +179,19 @@ class EngineWatchdog(
     private suspend fun loop() {
         // isActive 挂在 CoroutineContext 的 Job 上（kotlinx.coroutines.isActive 扩展属性）
         while (currentCoroutineContext().isActive) {
-            if (tick().sampled == 0) delay(idlePollMillis)   // 池空：退避，别按采样周期空转
+            // **一轮出错不得终结整条轮转**：tick 里要碰引擎实现（killRun →
+            // `ScriptEngine.kill` 没承诺不抛），这里不拦，一次坏样本的代价是
+            // 整条 §8.4 监督**静默消失**（挂在 SupervisorJob 下：兄弟无恙、
+            // 也没有人知道看门狗已经死了）。出错的一轮按「没采到」退避处理，
+            // 下一轮照常；取消照常穿透。
+            val sampled = try {
+                tick().sampled
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                0
+            }
+            if (sampled == 0) delay(idlePollMillis)   // 池空：退避，别按采样周期空转
             delay(policy.heartbeatIntervalMillis)
         }
     }

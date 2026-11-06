@@ -2,9 +2,11 @@ package com.autoscript.appservice.runtime
 
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineStatus
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -425,6 +427,37 @@ class EngineWatchdogTest {
         watchdog.stop()
         assertFalse(watchdog.isRunning())
         scope.cancel()
+    }
+
+    /**
+     * 一轮 tick 抛出（tick 里要碰引擎实现，而 `ScriptEngine.kill` 等没承诺不抛）→
+     * 按「没采到」退避、**轮转不死**：这里不拦，一次坏样本的代价是整条 §8.4 监督
+     * 静默消失（挂在 SupervisorJob 下，没有人知道看门狗已经死了）。
+     */
+    @Test
+    fun `一轮抛出不得终结轮转`() = runBlocking {
+        val attempts = AtomicInteger(0)
+        val monitor = ProcessMonitor(
+            100,
+            statReader = { attempts.incrementAndGet(); error("模拟 /proc 读取失败") },
+            statusReader = { status() },
+        )
+        val policy = WatchdogPolicy(heartbeatIntervalMillis = 5)
+        val engine = FakeEngine(EngineId(0)).also { it.pid = 4242 }
+        val controller = RuntimeController(FixedEnginePool({ engine }, capacity = 1), policy)
+        val watchdog = EngineWatchdog(controller = controller, policy = policy, idlePollMillis = 5)
+            .withMonitor(monitor)
+            .withHeartbeat { 100L }
+        controller.start(PoolAcquireRequest("p", "a.js"))
+
+        val scope = CoroutineScope(Job())
+        watchdog.start(scope)
+        delay(200)
+        watchdog.stop()
+        scope.cancel()
+
+        assertTrue(attempts.get() >= 2, "tick 抛出后轮转必须继续按节奏尝试（实际 ${attempts.get()} 次）")
+        Unit
     }
 
     /**

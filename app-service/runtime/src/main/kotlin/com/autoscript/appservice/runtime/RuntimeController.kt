@@ -347,10 +347,15 @@ class RuntimeController(
      *
      * **终结路径必须收归槽位**：本方法既是 kill 入口也是这次 run 的结束点
      * （[awaitCompletion] 的 CRASHED/ settleKilled 同口径），所以 kill 之后必须
-     * 把槽位与许可证一并还给池 —— 否则 `free` 与可领许可证永久错位，池容量缩水
+     * 把槽位还给池 —— 否则容量永久 -1
      * （后续 start 一律排队到超时，表现为「引擎再不接活」）。
-     * 收归走 [EnginePool.recycle]（池侧原子完成「槽位复位 + 还证」，幂等不超发），
-     * 与 [killAll] 的强释路径区分：killAll 是广播式全清，不逐个 recycle。
+     * 收归走 [PoolHandle.lease] 的 [PoolLease.forceReturn]（空闲队列是唯一真源，
+     * lease 的 claim 独占归还权），与 [stop] 是**同一条归还路径** —— 故
+     * 「killRun 与迟到的 stop 同时到达」只会归还一次；[killAll] 的广播强释
+     * 逐个走的也是这同一个动作。
+     * （订正：本段此前写「收归走 [EnginePool.recycle]、killAll 不逐个 recycle」——
+     * recycle 已退为「只拿到槽位、拿不到 lease」的诊断路径与单测口，生产归还
+     * 统一走 lease，见 [EnginePool.recycle] 自己的 KDoc。）
      * 不用 [EnginePool.release]：那会先走四步 quiesce（stop）再 kill 兜底 ——
      * 对一个已经决定强杀的执行体是多余的一次「礼貌请求」，且 stop 的语义是
      * 优雅排空，与 kill 权威语义相反。
@@ -369,18 +374,26 @@ class RuntimeController(
         heartbeats.forget(runId)
         revokeRunResources(runId)
         return withContext(NonCancellable) {
-            val killed = handle.slot.engine.kill()
             // 强杀即终结：槽位必须归还（§8.2 记账）；cause 透传给状态机归类
             // （§8.3：REQUESTED→STOPPED，watchdog/OOM→CRASHED）。
             // 归还经 [PoolHandle.lease]（：空闲队列是唯一真源，lease 的 claim
             // 独占归还权）—— 与 [stop] 走的是**同一条归还路径**，故
             // 「killRun 与迟到的 stop 同时到达」只会归还一次。
-            handle.lease.forceReturn(cause)
+            // **归还放在 finally**：`ScriptEngine.kill()` 没承诺不抛（真实现是
+            // destroyForcibly + waitFor，后者可抛 InterruptedException）—— 抛错
+            // 跳过归还的代价是槽永久扣在循环外（容量 -1，现场只剩「引擎再不接活」），
+            // 而本路径的调用方是看门狗循环，异常逃出去还会顺带终结整条 §8.4 轮转。
+            // 与 [PoolLease] 自己的 try/finally 同一条「池不缩水优先」纪律。
+            val killed = try {
+                handle.slot.engine.kill()
+            } finally {
+                handle.lease.forceReturn(cause)
+            }
             killed
         }
     }
 
-    /** 全部强杀（killAll 与 start/stop 串行，防许可证超发）。 */
+    /** 全部强杀（与 start/stop 串行：在途表与 stopEpoch 只有这一份事实，归还幂等由 lease 自己扛）。 */
     suspend fun killAll(reason: KillCause) = guard.withLock {
         stopEpoch += 1
         val gone = active.keys.toList()
@@ -675,6 +688,22 @@ class RuntimeController(
     }
 
     /**
+     * 诊断摘要的防御性读取（[settleDone]/[settleKilled] 共用）。
+     *
+     * 摘要是**诊断面**（契约缺省 null），它抛错的代价绝不能是 release 被跳过 ——
+     * 槽扣住 = 池容量永久 -1，与 [killRun] 把归还放进 finally 同一条
+     * 「池不缩水优先于响亮失败」纪律。实现抛错 → 摘要降级为 null，结算照常；
+     * 取消照常穿透。
+     */
+    private suspend fun summaryOf(handle: PoolHandle): RunSummary? = try {
+        handle.slot.engine.lastRunSummary()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
      * 完成结算：release 槽位 + 归档在途表（与 stop/killAll 串行，经 guard）。
      *
      * 摘要取在**句柄收走之前**：槽位还在本 run 手里时才能问引擎进程（[ScriptEngine.lastRunSummary]），
@@ -691,7 +720,7 @@ class RuntimeController(
         heartbeats.forget(runId)
         revokeRunResources(runId)
         return withContext(NonCancellable) {
-            val summary = handle.slot.engine.lastRunSummary()
+            val summary = summaryOf(handle)
             when (pool.release(handle)) {
                 StopResult.Clean -> Completed.StoppedClean
                 is StopResult.TimedOut -> Completed.StopTimeout(summary)
@@ -713,7 +742,7 @@ class RuntimeController(
         heartbeats.forget(runId)
         revokeRunResources(runId)
         return withContext(NonCancellable) {
-            val summary = handle.slot.engine.lastRunSummary()
+            val summary = summaryOf(handle)
             pool.release(handle)
             Completed.Killed(summary)
         }

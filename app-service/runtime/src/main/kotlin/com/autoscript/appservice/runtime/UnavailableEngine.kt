@@ -24,9 +24,10 @@ import com.autoscript.domain.engine.StopResult
  * [com.autoscript.appservice.scheduler.core.RunOutcome.Crashed]：真原因进意图日志
  * （COMMIT 行）与运行档案（RUNNING/CRASHED 记录），任务中心按 runId 读得到"为何没跑"。
  *
- * **记账不失真（§8.2 推论 B）**：execute 抛错 → 池 `recycle(slot)` → 槽位复位 + 许可证归还
- * （调用方若取消则走同一收归路径），槽位可再次夺用。`UnavailableEngineTest` 对这条路径
- * 单独走一遍「在途表摘除 + 槽位复位 + 许可证归还」三件事。
+ * **记账不失真（§8.2 推论 B）**：execute 抛错 → 池侧 `lease.forceReturn(ENGINE_REQUEST)`
+ * 把状态机 BOOTING → CRASHED → IDLE 复位并回队（调用方若取消走同一归还路径），
+ * 槽位可再次夺用。`UnavailableEngineTest` 对这条路径
+ * 单独走一遍「在途表摘除 + 槽位复位 + 容量归还」三件事。
  *
  * [pid] 恒 null：§8.4 明令宿主不给 pid 时如实回 null（**绝不给 0/自身 pid**），看门狗因此
  * 记 `noPid`。这与「引擎在跑但 /proc 读不到」是两条不同的清单，不混为一谈。
@@ -62,7 +63,7 @@ class UnavailableEngine(override val id: EngineId) : ScriptEngine {
     /**
      * 无进程可杀：回 [KillCause.REQUESTED] 表示"调用方主动要求，且已无残留"。
      *
-     * 池侧的终态归类用的是**调用方**传的 cause（[EnginePool.recycle] 的 cause 参数），
+     * 池侧的终态归类用的是**调用方**传的 cause（[PoolLease.forceReturn]/[EnginePool.recycle] 的 cause 参数），
      * 本返回值只供诊断，不会被当成仲裁依据。
      */
     override suspend fun kill(): KillCause = KillCause.REQUESTED
