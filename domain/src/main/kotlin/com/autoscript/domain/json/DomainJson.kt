@@ -78,6 +78,46 @@ object DomainJson {
     }
 
     /**
+     * 必填整数（`Int` 域）：**越界即拒，不截断**。
+     *
+     * 为什么要有它而不是 `optLong(...)?.toInt()`：后者是**静默的低 32 位截断** ——
+     * `4294967297` 变 `1`、`4294967296` 变 `0`。一条 `batch=4294967297` 的请求会被
+     * 当成 `batch=1` 执行，调用方拿到的回执与它给的参数毫无关系，而且这条错**永远不会
+     * 报出来**（截断后的值多半还是合法的正数）。本仓已有同一口径的两处手写先例
+     * （`SettingsNamespaceHandler.putInt`、`NotificationNamespaceHandler.idOf` 都判
+     * `raw < Int.MIN_VALUE || raw > Int.MAX_VALUE` 并回 `ERR_INVALID_PARAM`），这里是
+     * 把那条口径收成一处可复用的实现；[com.autoscript.domain.bridge.BridgeRequest]
+     * 侧的 `requiredInt`/`optInt` 是同一实现的 request 挂点（不另抄一份）。
+     *
+     * 非整数（`1.5`）与 [optLong] 同一条折叠路：抛 IAE → `ERR_INVALID_PARAM`。
+     */
+    fun reqInt(o: Map<String, Value>, key: String): Int = when (val v = o[key]) {
+        null -> throw IllegalArgumentException("缺数字字段 $key")
+        is Value.Null -> throw IllegalArgumentException("字段 $key 必须是数字")
+        is Value.N -> toIntInRange(key, v.raw)
+        else -> throw IllegalArgumentException("字段 $key 必须是数字")
+    }
+
+    /** 可选整数（`Int` 域），口径同 [reqInt]；缺键/显式 `null` → null。 */
+    fun optInt(o: Map<String, Value>, key: String): Int? = when (val v = o[key]) {
+        null, is Value.Null -> null
+        is Value.N -> toIntInRange(key, v.raw)
+        else -> throw IllegalArgumentException("字段 $key 必须是数字")
+    }
+
+    /**
+     * 数字原文 → `Int`：整数性靠 `String.toLongOrNull()`（`1.5` 为 null → 抛），域靠范围判。
+     *
+     * 话术刻意与 `putInt`/`idOf` 同款（`超出 Int 范围`）：同一个错误在仓里有两套说法，
+     * 会让"这是参数错还是实现错"变成靠猜。
+     */
+    private fun toIntInRange(key: String, raw: String): Int {
+        val n = raw.toLongOrNull() ?: throw IllegalArgumentException("字段 $key 必须是整数: $raw")
+        require(n >= Int.MIN_VALUE && n <= Int.MAX_VALUE) { "字段 $key 超出 Int 范围: $raw" }
+        return n.toInt()
+    }
+
+    /**
      * 可选字符串数组（缺省/显式 `null` → 空表）。
      *
      * 为什么不是「丢了就当没有」：宿主不认的字段会被静默丢弃，而调用方已经显式声明过它

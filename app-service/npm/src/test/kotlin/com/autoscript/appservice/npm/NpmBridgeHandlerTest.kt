@@ -123,6 +123,32 @@ class NpmBridgeHandlerTest {
     }
 
     @Test
+    fun `list 的 depth 与 events 的 batch 超 Int 域即拒（不静默截断）`() = runBlocking {
+        // 老路 `optLong(...).toInt()`：4294967297 截成 1（一个合法的 depth），于是一条
+        // `depth=4294967297` 的 list 只回一层依赖树 —— 回执形状正常，调用方无从发现
+        // 自己给的数被换了。events 的 batch 同理。
+        val h = handler()
+        for (raw in listOf(4294967297L, 4294967296L, 2147483648L, -4294967295L)) {
+            val r = h.handle(req("list", "{\"projectId\":\"p1\",\"depth\":$raw}"))
+            assertTrue(r is com.autoscript.domain.bridge.BridgeResponse.Err, "depth=$raw 必须是错")
+            assertEquals(
+                ErrorCode.ERR_INVALID_PARAM.code,
+                (r as com.autoscript.domain.bridge.BridgeResponse.Err).errorCode,
+                "depth=$raw 超 Int 域即拒（不是截断后的另一个数）",
+            )
+            val e = h.handle(req("events", "{\"projectId\":\"p1\",\"batch\":$raw}"))
+            assertEquals(
+                ErrorCode.ERR_INVALID_PARAM.code,
+                (e as com.autoscript.domain.bridge.BridgeResponse.Err).errorCode,
+                "batch=$raw 超 Int 域即拒",
+            )
+        }
+        // 域内照常：缺省 depth=0 的空项目回空数组（不因新增判据而回退）
+        assertEquals("[]", (h.handle(req("list", json("projectId" to "p1")))
+            as com.autoscript.domain.bridge.BridgeResponse.Ok).payload)
+    }
+
+    @Test
     fun `list 空项目返回空数组（零 Node 直读）`() = runBlocking {
         val r = handler().handle(req("list", json("projectId" to "empty-proj")))
         assertEquals("[]", (r as com.autoscript.domain.bridge.BridgeResponse.Ok).payload)

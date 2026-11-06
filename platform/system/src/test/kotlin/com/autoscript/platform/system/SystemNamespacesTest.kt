@@ -70,8 +70,13 @@ class SystemNamespacesTest {
         private val failOnClose: AutojsException? = null,
     ) : FloatingWindowHost {
         val closed = mutableListOf<HandleRef>()
+
+        /** 真送到平台层的规格（判据：被拒的越界值一次都不该到这里）。 */
+        val created = mutableListOf<FloatingWindowSpec>()
+
         override suspend fun create(spec: FloatingWindowSpec): HandleRef {
             failOnCreate?.let { throw it }
+            created += spec
             return HandleRef(next, 1)
         }
         override suspend fun close(ref: HandleRef) {
@@ -284,6 +289,29 @@ class SystemNamespacesTest {
             h.handle(BridgeRequest(4, "floatingWindow", "resize", "{}", 5_000)),
         )
         assertEquals(ErrorCode.ERR_NOT_IMPLEMENTED.code, unknown.errorCode)
+        Unit
+    }
+
+    @Test
+    fun `floatingWindow 尺寸超 Int 域即拒——不得截断成 1 像素的窗`() = runBlocking {
+        // 老路 `optLong(...).toInt()`：4294967297 截成 1 —— **一个合法的宽**（> 0），
+        // 于是一条 `width=4294967297` 的 create 静默造出一个 1 像素宽的窗，而
+        // `FloatingWindowSpec` 的 `require(width > 0)` 对此毫无意见。2147483648 截成
+        // Int.MIN_VALUE，那条被 require 挡下 —— 挡的是「非正」这条错，不是「越界」这条。
+        val fake = FakeFloating()
+        val h = SystemNamespaces.floatingWindow(fake)
+        for (raw in listOf(4294967297L, 4294967296L, 2147483648L, -2147483649L)) {
+            for (key in listOf("width", "height")) {
+                val payload = "{\"title\":\"面板\",\"$key\":$raw}"
+                val r = assertInstanceOf(
+                    BridgeResponse.Err::class.java,
+                    h.handle(BridgeRequest(1, "floatingWindow", "create", payload, 5_000)),
+                    "$key=$raw 必须是分类错误（不是截断后的另一个尺寸）",
+                )
+                assertEquals(ErrorCode.ERR_INVALID_PARAM.code, r.errorCode, "$key=$raw")
+            }
+        }
+        assertTrue(fake.created.isEmpty(), "被拒的 create 不碰平台层（实际 ${fake.created}）")
         Unit
     }
 

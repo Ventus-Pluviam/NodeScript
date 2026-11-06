@@ -56,9 +56,13 @@ class SensorsNamespaceHandlerTest {
             unregisterAllCalls++
         }
 
+        /** SPI 真收到的 max（判据：被拒的越界值一次都不该到这里）。 */
+        val drainMaxes = mutableListOf<Int>()
+
         override suspend fun drain(ref: HandleRef, sinceSeq: Long, max: Int): SensorEventBatch {
             drainFail?.let { throw it }
             require(max > 0) { "drain 的 max 必须 > 0，实际 $max" }
+            drainMaxes += max
             return SensorEventBatch(sinceSeq, sinceSeq, emptyList())
         }
     }
@@ -112,6 +116,24 @@ class SensorsNamespaceHandlerTest {
             "unregister 缺 ref",
         )
         assertEquals(true, fake.unregistered.isEmpty(), "被拒的注销不碰 SPI")
+        Unit
+    }
+
+    @Test
+    fun `drain 的 max 超 Int 域即拒——不得静默截断成另一个数`() = runBlocking {
+        // 老路是 `optLong(...).toInt()`：4294967297 截断成 1（一个完全合法的 batch），
+        // 于是一条 `max=4294967297` 的 drain 被当成 `max=1` 执行 —— 回执与参数毫无关系，
+        // 而且**没有任何错会报出来**（截断后的值照样过 `max > 0`）。这里钉「越界即拒」。
+        for (raw in listOf(4294967297L, 4294967296L, 2147483648L, -2147483649L)) {
+            val r = call("drain", """{"ref":{"refId":1,"generation":1},"max":$raw}""")
+            assertEquals(
+                ErrorCode.ERR_INVALID_PARAM.code,
+                errCode(r),
+                "max=$raw 超 Int 域必须是参数错，不是截断后的另一个数",
+            )
+        }
+        // 截断值若真被送下去，SPI 就会看见一个它没被要求过的 max —— 一次都不该发。
+        assertTrue(fake.drainMaxes.isEmpty(), "被拒的 drain 不碰 SPI（实际 ${fake.drainMaxes}）")
         Unit
     }
 

@@ -2,6 +2,7 @@ package com.autoscript.platform.system.sensors
 import com.autoscript.domain.bridge.generated.WireMethods
 
 import com.autoscript.domain.bridge.decodeObject
+import com.autoscript.domain.bridge.optInt
 import com.autoscript.domain.bridge.optLong
 import com.autoscript.domain.bridge.requiredRef
 import com.autoscript.domain.bridge.enumOrNull
@@ -101,7 +102,7 @@ class SensorsNamespaceHandler(
         val max: Int
         run {
             sinceSeq = request.optLong(fields, "sinceSeq") ?: 0L
-            max = (request.optLong(fields, "max") ?: 128L).toInt()
+            max = request.optInt(fields, "max") ?: 128
             require(max > 0) { "drain 的 max 必须 > 0，实际 $max" }
         }
         return run {

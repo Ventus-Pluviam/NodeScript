@@ -609,6 +609,12 @@ class ImagesNamespaceHandlerTest {
             """{"source":{"refId":1,"generation":1},"width":10,"height":-5}""",
             """{"source":{"refId":1,"generation":1},"width":16385,"height":10}""",
             """{"source":{"refId":1,"generation":1},"width":1.5,"height":10}""",
+            // 超 Int 域：老路 `requiredLong(...).toInt()` 把 4294967297 截成 1（合法宽高！），
+            // 2147483648 截成 Int.MIN_VALUE（一个负数当尺寸用）。两者都必须是参数错，
+            // 而不是「被截断后恰好落进配额」或「被截断后由 16384 那道挡下」。
+            """{"source":{"refId":1,"generation":1},"width":4294967297,"height":10}""",
+            """{"source":{"refId":1,"generation":1},"width":10,"height":4294967296}""",
+            """{"source":{"refId":1,"generation":1},"width":2147483648,"height":10}""",
         )) {
             assertEquals("ERR_INVALID_PARAM", errCode(call("resize", bad)), "尺寸非正/超配额/非整都是参数错: $bad")
         }

@@ -342,7 +342,7 @@ class EnginesNamespaceHandler(
         val o = decodePayload(request.payload)
         val channelId = requiredLong(o, "channelId")
         val sinceSeq = optLong(o, "sinceSeq") ?: 0L
-        val max = (optLong(o, "max") ?: 128L).toInt()
+        val max = optInt(o, "max") ?: 128
         require(max > 0) { "max 必须 > 0" }
         val owner = ownerOf()
         val picked: List<ChannelEvent>
@@ -405,6 +405,9 @@ class EnginesNamespaceHandler(
         return (v as? DomainJson.Value.N)?.raw?.toLongOrNull()
             ?: throw IllegalArgumentException("字段 $key 必须是数字")
     }
+
+    /** `Int` 域取值（`channelDrain` 的 `max`）：委托 [DomainJson.optInt]，越界即拒而不是静默截断。 */
+    private fun optInt(o: Map<String, DomainJson.Value>, key: String): Int? = DomainJson.optInt(o, key)
 
     private fun optStrList(o: Map<String, DomainJson.Value>, key: String): List<String> {
         val v = o[key] ?: return emptyList()
