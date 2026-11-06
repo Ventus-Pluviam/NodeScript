@@ -145,6 +145,73 @@ class WorkManagerNamespaceHandlerTest {
         Unit
     }
 
+    @Test
+    fun `projectId 与 scriptPath 走词法闸——非法即 INVALID_PARAM 且不落盘`() = runBlocking {
+        // 判据出处是 `:domain` 的值类（ProjectId.createOrNull / RelPath.createOrNull），
+        // 与 `EnginesNamespaceHandler.parseExec` 同源 —— 这里钉的是**桥面把它们接上了**：
+        // 这条链是持久的（建下的任务每次触发都把 scriptPath 带进 `node <路径>` 的 argv），
+        // 此前只查 isNotBlank，`..`/绝对路径/反斜杠都能进注册表并直写持久库。
+        val store = InMemoryTaskStore()
+        val (h, s) = handler(store)
+        // projectId 非法（含分隔符 = 与 scriptPath 串错位；空串 = 不是项目号）
+        for (bad in listOf("a/b", "..", "", " ", "a\\b")) {
+            val payload = """{"name":"n","projectId":"$bad","scriptPath":"a.js","schedule":{"kind":"once","delaySeconds":60}}"""
+            assertEquals(
+                "ERR_INVALID_PARAM",
+                errCode(h, "create", payload),
+                "projectId 非法应拒: ${bad.replace("\n", "\\n")}",
+            )
+        }
+        // scriptPath 非法（绝对路径 / 上跳 / 当前段 / 空段 / 反斜杠）
+        for (bad in listOf("/data/x.js", "../x.js", "a/../x.js", "./x.js", "a//x.js", "a\\x.js", "")) {
+            val payload = """{"name":"n","projectId":"p","scriptPath":"$bad","schedule":{"kind":"once","delaySeconds":60}}"""
+            assertEquals(
+                "ERR_INVALID_PARAM",
+                errCode(h, "create", payload),
+                "scriptPath 非法应拒: $bad",
+            )
+        }
+        assertTrue(s.tasks().isEmpty(), "被拒的 create 不得进内存注册表")
+        assertTrue(store.loadAll().isEmpty(), "被拒的 create 不得落盘")
+        // 合法的多段相对路径仍放行（判据不许把正常形态一起收掉）
+        val created = ok(
+            h, "create",
+            """{"id":"ok1","name":"n","projectId":"p","scriptPath":"sub/dir/a.js","schedule":{"kind":"once","delaySeconds":60}}""",
+        )
+        assertTrue(created!!.contains("ok1"), "多段相对路径放行：$created")
+        assertEquals(listOf("ok1"), store.loadAll().map { it.id })
+        Unit
+    }
+
+    @Test
+    fun `projectId 词法闸先于授权闸——判据只会拿到过了闸的项目号`() = runBlocking {
+        // 顺序纪律（本批新钉）：projectId 是**授权判据的入参**，喂它一个 `a/b`
+        // 等于让它按一个不存在的项目号裁决（放行/拒绝都无从对账）。
+        // 故 projectId 非法时判据**不得被调用**，错误码是 INVALID_PARAM 而非 PERMISSION_DENIED。
+        val store = InMemoryTaskStore()
+        val seen = mutableListOf<String>()
+        val (h, _) = handler(store) { projectId ->
+            seen += projectId
+            null
+        }
+        assertEquals(
+            "ERR_INVALID_PARAM",
+            errCode(h, "create", """{"name":"n","projectId":"a/b","scriptPath":"a.js","schedule":{"kind":"once","delaySeconds":60}}"""),
+            "projectId 非法 → INVALID_PARAM（不是授权错）",
+        )
+        assertTrue(seen.isEmpty(), "判据不该被调用（它拿到的一定是过了闸的项目号）")
+        // 反过来：scriptPath 的校验在闸门**之后**（未授权就别谈载荷），
+        // 故一条「projectId 合法 + scriptPath 非法」的载荷在判据拒绝时应回 PERMISSION_DENIED。
+        val (denying, _) = handler(store) { "拒" }
+        assertEquals(
+            "ERR_PERMISSION_DENIED",
+            errCode(denying, "create", """{"name":"n","projectId":"p","scriptPath":"../x.js","schedule":{"kind":"once","delaySeconds":60}}"""),
+            "scriptPath 校验在闸门之后：被拒时先回授权错",
+        )
+        assertTrue(store.loadAll().isEmpty())
+        Unit
+    }
+
     // ── A5：建任务的授权闸（§11 派生运行入口；判据由 :app 注入，本模块只留缝） ──
 
     private val createPayload =

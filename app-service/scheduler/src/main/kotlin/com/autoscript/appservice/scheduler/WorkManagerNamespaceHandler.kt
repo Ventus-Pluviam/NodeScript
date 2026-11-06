@@ -2,6 +2,8 @@ package com.autoscript.appservice.scheduler
 import com.autoscript.domain.bridge.generated.WireMethods
 
 import com.autoscript.domain.scripts.CronTab
+import com.autoscript.domain.scripts.ProjectId
+import com.autoscript.domain.scripts.RelPath
 import com.autoscript.domain.scripts.ScheduledTask
 import com.autoscript.appservice.scheduler.core.Scheduler
 import com.autoscript.domain.scripts.ScreenGuarantee
@@ -76,8 +78,21 @@ class WorkManagerNamespaceHandler(
     }
 
     private suspend fun create(f: Map<String, DomainJson.Value>): String {
-        val projectId = DomainJson.reqStr(f, "projectId").takeIf { it.isNotBlank() }
-            ?: throw IllegalArgumentException("projectId 不得为空串")
+        // **判据进值类**（typed ids，与 `EnginesNamespaceHandler.parseExec` 同款）：
+        // projectId/scriptPath 都是**脚本给的**，而这条链是**持久**的 —— 建下的任务此后
+        // 每次触发都把 scriptPath 一路带进 `node <路径>` 的 argv。此前只查 isNotBlank，
+        // 于是 `..`/绝对路径/反斜杠段都能落进注册表并直写持久库：闸门（下面那道授权）
+        // 只按 projectId 判"能不能建"，判不了"建的是不是个合法路径"。
+        //
+        // projectId 必须**先于闸门**校验：它是授权判据的入参，喂给它一个 `a/b`
+        // 等于让它按一个不存在的项目号裁决（放行/拒绝都无从对账）。
+        // 空白闸**先于**词法闸（与 parseExec 逐字同款）：`ScriptPaths.PROJECT_ID` 的字符集
+        // 不排除空格，`" "` 能过词法闸 —— 而它不是一个项目号（拼出来的目录名就是空格）。
+        val rawProjectId = DomainJson.reqStr(f, "projectId")
+        require(rawProjectId.isNotBlank()) { "projectId 不得为空串" }
+        val projectId = ProjectId.createOrNull(rawProjectId)
+            ?.value
+            ?: throw IllegalArgumentException("projectId 非法：$rawProjectId")
         // 授权先于一切（A5，§11）：建任务 = 派生运行的持久入口，未过闸不得登记，
         // 更不得先落盘再拒（那就留下一条无人授权的任务）。
         //
@@ -93,6 +108,7 @@ class WorkManagerNamespaceHandler(
         seam.invoke(projectId)?.let { deny ->
             throw AutojsException(ErrorCode.ERR_PERMISSION_DENIED, deny)
         }
+        val rawScriptPath = DomainJson.reqStr(f, "scriptPath")
         val schedule = parseSchedule(DomainJson.reqObj(f, "schedule"))
         val task = ScheduledTask(
             id = (f["id"] as? DomainJson.Value.S)?.v?.takeIf { it.isNotBlank() }
@@ -100,8 +116,12 @@ class WorkManagerNamespaceHandler(
             name = DomainJson.reqStr(f, "name").takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("name 不得为空串"),
             projectId = projectId,
-            scriptPath = DomainJson.reqStr(f, "scriptPath").takeIf { it.isNotBlank() }
-                ?: throw IllegalArgumentException("scriptPath 不得为空串"),
+            // 闸门**之后**才校验（顺序纪律：未授权就别谈载荷；见 `闸门先于其余解析` 用例）。
+            // 解包回 String 是 DTO 边界（ScheduledTask 字段仍是 String）：判据已在
+            // createOrNull 过了，存的只是一个过了判据的值。
+            scriptPath = RelPath.createOrNull(rawScriptPath)
+                ?.value
+                ?: throw IllegalArgumentException("scriptPath 非法：$rawScriptPath（须为项目内相对路径）"),
             schedule = schedule,
             screen = when (val v = f["screen"]) {
                 null, is DomainJson.Value.Null -> ScreenGuarantee.ANY
