@@ -120,19 +120,23 @@ fun rememberRefreshAction(onRefresh: suspend () -> Unit): RefreshAction {
  * 那份平台形变** ——
  * 1. 行上按着拖：内层 `LazyColumn` 赢了手势但一像素不滚（内容不满一屏），
  *    到边余量经链漏下来，[FeedConnection] 喂给 `effect`；
- * 2. 空白处按下：列表没有手势节点参战，拖拽位移原样经链落到壳，同一条路照喂 ——
- *    所以 `86f16c1` 那版的假 state `scrollable` 是多余的，已删（见下）；
+ * 2. 空白处按下：列表没有手势节点参战，位移得有人先「开拖」才进得了
+ *    nested-scroll 链 —— 开拖由壳自己那颗 `scrollable`（假 state，门恒开、
+ *    一像素不吃）担任；`6284a24` 曾把它删掉，空白处因此整个失去拉伸，
+ *    `8c353f4a` 请回来只当开拖者（形变仍统一喂给同一份 `effect`，见下）；
  * 3. 形变是平台那份 `EdgeEffect`（API 31+ 是 `RenderNode` stretch，与 TG 同一个平台件），
  *    绘制与尺寸都由壳自己的 `overscroll(effect)` 节点给 —— 不依赖列表容器；
  * 4. 长列表自己那份形变**不关**：行上是列表自己接、空白处是这层接，各管各的手势，
  *    不叠加 —— `e193c4d` 那次 `provides null` 把任务中心本来能用的那份关掉了，
  *    那是净负收益，这次不重犯。
  *
- * `86f16c1` 那版还挂了一个自己的 `scrollable`（假 state 骗开门，管空白处），
- * 它与 [FeedConnection] 共用同一份 `effect` —— 两份 `ScrollingLogic` 各自记
- * `scrollCycleInProgress`、各自调 `finish()`，手动归零走哪条、周期标志留在哪条
- * 全看运气，「回弹时快时慢轮换」正是这么来的。本版已把 `scrollable` 连同假 state
- * 一起删掉，只剩 [FeedConnection] 一条路。
+ * `86f16c1` 那版的 `scrollable`（假 state 骗开门）在 `6284a24` 被删掉 —— 当时的
+ * 诊断是「两份 `ScrollingLogic` 抢同一份 `effect`」导致回弹时快时慢轮换。删掉之后
+ * 空白处没人开拖、整个失去拉伸，于是 `8c353f4a` 把它请回来并定下**现在的形状**：
+ * 只当开拖者（假 state，位移一像素不吃），且 `overscrollEffect` **显式传同一份**
+ * `effect` —— 轮换的真根因是缺省参数会经 `remember` + `LocalOverscrollConfiguration`
+ * 记住**另一份** effect 实例（两份实例、松手只弹一份），不是两份逻辑抢一份
+ * （「6284a24 误诊」的更正记在下面 `.scrollable` 的行内注释里）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -151,10 +155,8 @@ fun RefreshableBox(
             // 空白处按下的开拖者：列表没有手势节点参战，
             // 没人开拖位移就进不了 nested-scroll 链。
             // 这个 scrollable 门恒开（假 state）、位移一像素不吃，
-            // 只管开拖、形变由下面的 feed 统一喂——
-            // 注意这里没传 overscrollEffect：它自己那份是 NoOp，
-            // 不占用 effect，不与 feed 抢；两份 ScrollingLogic
-            // 各管各的 effect，轮换的病根没了。
+            // 只管开拖；形变由它的 `overscrollEffect`（**与 feed 同一份** `effect`，
+            // 见下行注释 —— 空白处这一路靠它喂）与 feed（行上漏下来的余量）一起给。
             .scrollable(
                 state = proxy,
                 orientation = Orientation.Vertical,
