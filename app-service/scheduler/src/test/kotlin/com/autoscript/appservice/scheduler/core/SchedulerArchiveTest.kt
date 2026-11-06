@@ -103,6 +103,33 @@ class SchedulerArchiveTest {
     }
 
     @Test
+    fun `起止时刻不同源：起取 START 行落行时刻，止取结算钟`() = runBlocking {
+        val archive = InMemoryRunArchive()
+        val log = freshLog()
+        val t0 = now
+        // 执行耗时 50ms：dispatcher 内部把钟往前推（真实 dispatcher 里 awaitCompletion
+        // 走完才返回 —— 结算钟必然晚于落行钟）。
+        val slowDispatcher = object : RunDispatcher {
+            override suspend fun dispatch(pending: PendingRun): RunOutcome = RunOutcome.Succeeded
+            override suspend fun dispatchToReport(pending: PendingRun): DispatchReport {
+                now += 50
+                return DispatchReport(
+                    RunOutcome.Succeeded,
+                    pending.intentRunId?.let { EngineRunLink(intentRunId = it, engineRunId = 9_000 + it) },
+                )
+            }
+        }
+        val s = scheduler(log, archive, slowDispatcher)
+
+        s.schedule(ScheduledTask("t-timing", "任务", "p", "a.js", TimedSchedule.Once(0)))
+        s.onTrigger("t-timing", scheduledAtMillis = now)
+
+        val record = archive.recordsOfIntent(log.all().single().runId).single()
+        assertEquals(t0, record.startedAtMillis, "起 = START 行落行时刻（不是结算钟）")
+        assertEquals(t0 + 50, record.finishedAtMillis, "止 = 结算钟（t0+50：起 < 止，时长不再恒 0）")
+    }
+
+    @Test
     fun `未产生引擎执行的投递不写档案（无孤儿记录）`() = runBlocking {
         val archive = InMemoryRunArchive()
         val log = freshLog()

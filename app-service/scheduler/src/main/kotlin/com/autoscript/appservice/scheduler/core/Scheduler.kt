@@ -292,7 +292,7 @@ class Scheduler(
         // 由归档器把两侧成对写入（RunArchive.put + EngineRunLink）。
         val report = dispatcher.dispatchToReport(pending.copy(intentRunId = started.runId))
         log.commit(started.runId, report.outcome)
-        recordLink(pending, started.runId, report.link, report.outcome)
+        recordLink(pending, started, report.link, report.outcome)
         // 控制面句柄出口（§12.3 engines.exec）：真的产生了引擎执行（link != null）
         // 才持有句柄 —— 门禁拒绝/排队超时/启动失败没有可停的东西，不持有假句柄。
         // stop 与 link 同源（DispatchReport.stop）：link != null 蕴含
@@ -348,7 +348,7 @@ class Scheduler(
             }
             val report = dispatcher.dispatchToReport(pending)     // 恢复重投同样归档（§8.5）
             log.commit(fresh.runId, report.outcome)
-            recordLink(pending, fresh.runId, report.link, report.outcome)
+            recordLink(pending, fresh, report.link, report.outcome)
             // 恢复重投同样持有句柄（§8.5 重投即当次投递的最近一次）。
             val link = report.link
             if (link != null) {
@@ -429,6 +429,9 @@ class Scheduler(
      * - 按 [outcome] 直接写终态（[RunOutcome] → [RunState] 见 [outcomeState]），附起止时刻。
      *   dispatcher 返回时执行体已经结束（`awaitCompletion` 在 dispatcher 内部走完），
      *   先写 RUNNING 再结算只是无意义的两次 `put` —— 档案落地即终态，append-only 纪律不变。
+     * - 起止时刻**不同源**：`startedAtMillis` 取 START 行的落行时刻（意图成为在途的那一
+     *   刻 —— 此前曾拿结算钟填两端，任务日志里每条 run 开始=完成、时长恒 0），排队等槽
+     *   按档案口径计入「运行中」；`finishedAtMillis` 仍是结算钟。
      * - link 为 null（门禁拒绝/排队超时/启动失败）如实不建档案，绝不写「有档案、实际没有
      *   对应执行」的孤儿记录。
      *
@@ -442,18 +445,19 @@ class Scheduler(
      * （[settleVoidArchive]）。反过来（先写档案）会让崩溃留下「档案有终态、意图未 COMMIT」，
      * 恢复重投时会撞上档案的终态不可改写纪律 —— 那条路是响亮失败而非补账，更糟。
      */
-    private suspend fun recordLink(pending: PendingRun, intentRunId: Long, link: EngineRunLink?, outcome: RunOutcome) {
+    private suspend fun recordLink(pending: PendingRun, intent: IntentRun, link: EngineRunLink?, outcome: RunOutcome) {
         val a = archive ?: return
         if (link == null) return
-        val now = clock()
         val record = RunRecord(
             id = link.engineRunId,
             projectId = pending.projectId,
             scriptPath = pending.scriptPath,
             runNonce = pending.runNonce,
             state = outcomeState(outcome),
-            startedAtMillis = now,
-            finishedAtMillis = now,
+            // 起 = START 行落行时刻（意图行的自有时间戳，恢复重投 = reopen 新行的时刻，
+            // 两条路同源）；止 = 结算钟（本函数在 log.commit 之后跑，见上方 KDoc）。
+            startedAtMillis = intent.startedAtMillis,
+            finishedAtMillis = clock(),
             // backlog B11 诊断面：dispatcher 从引擎侧摘的进程摘要（退出码 + stderr 尾部）折进档案。
             exitCode = outcome.diagExitCode,
             crashSummary = outcome.diagCrashSummary,
