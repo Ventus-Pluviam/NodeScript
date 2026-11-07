@@ -333,6 +333,12 @@ class Scheduler(
         for (old in uncommitted) {
             val fresh = log.reopen(old.runId)                      // 单事务：封口 + 分配新 runId
             val pending = fresh.toPendingRun()
+            // 旧意向的档案若还有未终态记录：宿主死时没结算，如实 CRASHED。
+            // **必须在过期判断之前**：[settleVoidArchive] 特意跳过本次 reopen 集合
+            // （「会经 settleOrphanArchive 处理」），若过期分支 continue 掉这一步，
+            // 过期意向关联的 RUNNING 记录就两侧都不管 —— unfinished() 永久泄漏，
+            // 任务中心的「在跑」从此多一条谁也结不掉的假阳性。
+            settleOrphanArchive(old.runId)
             if (pending.isExpired(clock())) {
                 // 过期：封账不投。nonce 已随 reopen 前的那一行历史存在，Cancelled 是终态记账，
                 // 由任务中心按 runId 读到「为何没跑」——绝不在恢复路径里静默跳过。
@@ -359,8 +365,6 @@ class Scheduler(
                     stop = report.stop,
                 )
             }
-            settleOrphanArchive(old.runId)
-   // 旧意向的档案若还有未终态记录：宿主死时没结算，如实 CRASHED
             recovered += RecoveryRecord(
                 oldRunId = old.runId,
                 newRunId = fresh.runId,
