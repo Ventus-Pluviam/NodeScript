@@ -4,7 +4,7 @@ import com.autoscript.domain.bridge.RpcNamespaceHandler
 import com.autoscript.domain.bridge.BridgeResponse
 import com.autoscript.domain.bridge.BridgeRequest
 import com.autoscript.domain.bridge.decodeObject
-import com.autoscript.domain.bridge.optLong
+import com.autoscript.domain.bridge.optInt
 import com.autoscript.domain.bridge.optStr
 import com.autoscript.domain.bridge.requiredRef
 import com.autoscript.domain.bridge.generated.WireMethods
@@ -33,8 +33,8 @@ class FloatingWindowNamespaceHandler(
                 val spec = run {
                     FloatingWindowSpec(
                         title = request.optStr(fields, "title"),
-                        width = request.optLong(fields, "width")?.toInt(),
-                        height = request.optLong(fields, "height")?.toInt(),
+                        width = request.optInt(fields, "width"),
+                        height = request.optInt(fields, "height"),
                     )
                 }
                 val ref = host.create(spec)

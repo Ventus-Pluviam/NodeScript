@@ -105,6 +105,39 @@ class A11yNamespaceHandlerTest {
     }
 
     @Test
+    fun `findAll 的 max 与 events 的 batch 超 Int 域即拒——不得静默截断`() = runBlocking {
+        // 老路 `optLong(...).toInt()`：4294967297 截成 1。于是一条「我要全部匹配」的
+        // findAll 被当成 max=1 执行 —— 回一个元素的数组，看着完全正常，而调用方
+        // 永远不会知道它给的数被换了。events 的 batch 同理（截成 1 = 每次只吐一条）。
+        seedButton()
+        tree.add(InMemoryUiTree.Attrs(text = "启动", className = "TextView"))
+
+        val findAllBad = assertInstanceOf(
+            BridgeResponse.Err::class.java,
+            handler.handle(
+                a11yReq(
+                    80, "findAll",
+                    """{"conditions":${cond(""""text":"启动"""")},"max":4294967297}""",
+                ),
+            ),
+        )
+        assertEquals("ERR_INVALID_PARAM", findAllBad.errorCode, "max 超 Int 域是参数错，不是截断成 1")
+
+        val eventsBad = assertInstanceOf(
+            BridgeResponse.Err::class.java,
+            handler.handle(a11yReq(81, "events", """{"batch":4294967296}""")),
+        )
+        assertEquals("ERR_INVALID_PARAM", eventsBad.errorCode, "batch=2^32 截断成 0，必须拒")
+
+        // 负侧同样拒（-4294967295 截断成 1，会绕开 `max < 0` 那道判据）
+        val negBad = assertInstanceOf(
+            BridgeResponse.Err::class.java,
+            handler.handle(a11yReq(82, "findAll", """{"conditions":{},"max":-4294967295}""")),
+        )
+        assertEquals("ERR_INVALID_PARAM", negBad.errorCode, "负侧越界不得截断成正数绕过 `max < 0`")
+    }
+
+    @Test
     fun `click-setText-bounds-text-desc 全链路`() = runBlocking {
         val refJson = seedButton()
         val click = assertInstanceOf(

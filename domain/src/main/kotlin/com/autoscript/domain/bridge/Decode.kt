@@ -47,6 +47,30 @@ fun BridgeRequest.optLong(
     else -> throw IllegalArgumentException("字段 $key 必须是数字")
 }
 
+/**
+ * 必填整数（`Int` 域）：**越界即拒，不截断**。
+ *
+ * 为什么要有这个 helper 而不是 `requiredLong(...).toInt()`：后者在 Kotlin 里是**静默
+ * 低 32 位截断**，`4294967297` 变成 `1`、`4294967296` 变成 `0`。一条 `batch=4294967297`
+ * 的请求于是被当成 `batch=1` 执行 —— 调用方拿到的回执与它给的参数毫无关系，而且这条
+ * 错**永远不会报出来**（截断后的值多半还是合法的正数）。
+ *
+ * 判据本身在 [DomainJson.reqInt]（同一份实现，不在这里抄第二遍）：`SettingsNamespaceHandler.putInt`
+ * 与 `NotificationNamespaceHandler.idOf` 那两处手写先例的口径（`raw < Int.MIN_VALUE ||
+ * raw > Int.MAX_VALUE` → `ERR_INVALID_PARAM`）现在有了可复用的落点。非整数（`1.5`）
+ * 与 [requiredLong] 同一条折叠路（`ERR_INVALID_PARAM`）。
+ */
+fun BridgeRequest.requiredInt(
+    o: Map<String, DomainJson.Value>,
+    key: String,
+): Int = DomainJson.reqInt(o, key)
+
+/** 可选整数（`Int` 域），口径同 [requiredInt]；缺键/`null` → null。 */
+fun BridgeRequest.optInt(
+    o: Map<String, DomainJson.Value>,
+    key: String,
+): Int? = DomainJson.optInt(o, key)
+
 fun BridgeRequest.requiredStrList(
     o: Map<String, DomainJson.Value>,
     key: String,

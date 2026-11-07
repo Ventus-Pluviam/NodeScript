@@ -113,7 +113,7 @@ class NpmBridgeHandler(
                 null
             }
             "list" -> {
-                val depth = (DomainJson.optLong(f, "depth") ?: 0L).toInt()
+                val depth = DomainJson.optInt(f, "depth") ?: 0
                 // 不发 sizeBytes：list 直读 lockfile，量不到尺寸（恒 0）。发一个永远是 0
                 // 的字节数 = 声称「这个包占 0 字节」，比不给这个字段更糟——脚本会拿它算
                 // 「还要下多少」然后得到 0。尺寸的两条真来源：offlineGap（缺失清单）、
@@ -162,7 +162,7 @@ class NpmBridgeHandler(
             }
             "events" -> {
                 val sinceSeq = DomainJson.optLong(f, "sinceSeq") ?: 0L
-                val batch = (DomainJson.optLong(f, "batch") ?: 32L).toInt()
+                val batch = DomainJson.optInt(f, "batch") ?: 32
                 if (batch <= 0) throw IllegalArgumentException("batch 必须 > 0")
                 val got = facade.drainEvents(projectId.value, sinceSeq, batch)
                 DomainJson.encode(

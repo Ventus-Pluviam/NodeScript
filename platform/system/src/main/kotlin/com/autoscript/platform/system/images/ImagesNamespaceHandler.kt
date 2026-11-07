@@ -3,7 +3,7 @@ import com.autoscript.domain.bridge.generated.WireMethods
 
 import com.autoscript.domain.bridge.decodeObject
 import com.autoscript.domain.bridge.requiredStr
-import com.autoscript.domain.bridge.requiredLong
+import com.autoscript.domain.bridge.requiredInt
 import com.autoscript.domain.bridge.requiredDouble
 import com.autoscript.domain.bridge.requiredRef
 import com.autoscript.domain.bridge.requiredIntList
@@ -246,9 +246,10 @@ class ImagesNamespaceHandler(
         val height: Int
         run {
             ref = request.requiredRef(fields, "source")
-            // 目标尺寸是整数域：requiredLong 只认整数，把 1.5 直接挡成参数错（不悄悄截断）。
-            width = request.requiredLong(fields, "width").toInt()
-            height = request.requiredLong(fields, "height").toInt()
+            // 目标尺寸是 Int 域：requiredInt 把非整数（1.5）与**超 Int 域的值**都挡成参数错
+            // —— 后者此前是 `requiredLong(...).toInt()`，4294967297 静默截成 1（一个合法宽）。
+            width = request.requiredInt(fields, "width")
+            height = request.requiredInt(fields, "height")
         }
         // 目标尺寸域：正整数 + 单边配额 16384（16384²×4≈1GB，再往上是笔误把字节数
         // 当宽高 —— 配额与尺寸不合法同码，native/SPI 同样先拒，这里挡在桥面）。

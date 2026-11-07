@@ -168,7 +168,7 @@ class A11yNamespaceHandler(
     private suspend fun findAll(request: BridgeRequest): BridgeResponse {
         val o = decodePayload(request.payload)
         val selector = selectorOf(o["conditions"])
-        val max = optLong(o, "max")?.toInt() ?: Int.MAX_VALUE
+        val max = optInt(o, "max") ?: Int.MAX_VALUE
         if (max < 0) return err(request, ErrorCode.ERR_INVALID_PARAM, "max 不得为负")
         val matched = tree.findBySelector(selector)
         return ok(request, DomainJson.encode(matched.take(max).map { nodePayload(it.handle, null) }))
@@ -400,7 +400,7 @@ class A11yNamespaceHandler(
         val batch: Int
         run {
             sinceSeq = optLong(o, "sinceSeq") ?: 0L
-            batch = (optLong(o, "batch") ?: 32L).toInt()
+            batch = optInt(o, "batch") ?: 32
             require(batch > 0) { "batch 必须 > 0" }
         }
         val got = (events ?: tree.events()).next(sinceSeq, batch)
@@ -520,6 +520,9 @@ class A11yNamespaceHandler(
         return (v as? DomainJson.Value.N)?.raw?.toLongOrNull()
             ?: throw IllegalArgumentException("字段 $key 必须是数字")
     }
+
+    /** `Int` 域取值（`max`/`batch`）：委托 [DomainJson.optInt]，越界即拒而不是静默截断。 */
+    private fun optInt(o: Map<String, DomainJson.Value>, key: String): Int? = DomainJson.optInt(o, key)
 
     private fun optDirection(o: Map<String, DomainJson.Value>, key: String): ScrollDirection? {
         val v = o[key] ?: return null

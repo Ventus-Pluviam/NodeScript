@@ -510,6 +510,38 @@ class EnginesNamespaceHandlerTest {
     }
 
     @Test
+    fun `channelDrain 的 max 超 Int 域即拒——不得截断成 1 条`() = runBlocking {
+        // 老路 `optLong(...).toInt()`：4294967297 截成 1（一个合法的 max），于是一条
+        // 「把通道里的都给我」的 drain 只回一条，而回执形状完全正常 —— 调用方无从发现。
+        val (h, _) = handler()
+        val created = assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            h.handle(enginesReq(1, "channel", """{"name":"range"}""")),
+        )
+        val channelId = (DomainJson.decodeObject(created.payload!!)["channelId"] as DomainJson.Value.N).raw
+        h.handle(enginesReq(2, "channelEmit", """{"channelId":$channelId,"event":"a"}"""))
+        h.handle(enginesReq(3, "channelEmit", """{"channelId":$channelId,"event":"b"}"""))
+
+        for (raw in listOf(4294967297L, 4294967296L, 2147483648L, -4294967295L)) {
+            val resp = assertInstanceOf(
+                BridgeResponse.Err::class.java,
+                h.handle(enginesReq(4, "channelDrain", """{"channelId":$channelId,"max":$raw}""")),
+            )
+            assertEquals("ERR_INVALID_PARAM", resp.errorCode, "max=$raw 超 Int 域必须是参数错")
+        }
+        // 被拒的 drain 不推进游标：随后一条合法 drain 仍能拿到全部两条。
+        val drained = assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            h.handle(enginesReq(5, "channelDrain", """{"channelId":$channelId,"sinceSeq":0}""")),
+        )
+        assertEquals(
+            2,
+            (DomainJson.decodeObject(drained.payload!!)["events"] as DomainJson.Value.Arr).items.size,
+            "越界请求不得留下半推的游标",
+        )
+    }
+
+    @Test
     fun `channel 并发 emit 不丢`() = runBlocking {
         val (h, _) = handler()
         val created = assertInstanceOf(
