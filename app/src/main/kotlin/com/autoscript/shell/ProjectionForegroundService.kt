@@ -59,7 +59,12 @@ class ProjectionForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val generation = intent?.getLongExtra(EXTRA_GENERATION, 0L) ?: 0L
         if (intent?.action == ACTION_STOP) {
-            ProjectionForegroundHost.stop(generation, ::stopProjectionForeground)
+            // 走 [ProjectionForegroundHost.stopFromService] 而不是 [ProjectionForegroundHost.stop]：
+            // 设备层收口（AndroidProjectionForeground.stop）在投递本 Intent 前已把账按代际
+            // 清掉（"我们请求过停" ≠ "还在前台"），等服务处理到这条时 currentGeneration 已是 0 ——
+            // 若按「必须正是这一代」判，服务**永远不动手**，FGS 与常驻通知就成了孤儿
+            // （通知栏挂着「正在投屏」，实际没有任何会话 —— 正是本类 KDoc 要防的形态）。
+            ProjectionForegroundHost.stopFromService(generation, ::stopProjectionForeground)
             return START_NOT_STICKY
         }
         if (generation <= 0L) {
@@ -204,14 +209,43 @@ object ProjectionForegroundHost {
     }
 
     /**
-     * 停止指定代际的前台。
+     * 停止指定代际的前台（**调用方侧**：投递 `ACTION_STOP` 前的预清账）。
      *
      * @return true = 前台**正是**这一代（调用方应真的撤前台）；false = 不是这一代
      *   （已被别处停掉 / 已被新会话接管）—— 如实不动手，绝不把新会话的前台拆了。
+     *
+     * 服务侧（`ACTION_STOP` 落点）**不要用本方法**：那时账已被调用方预清
+     * （`currentGeneration == 0`），「必须正是这一代」在那里永远不成立 —— 服务侧走
+     * [stopFromService]。
      */
     fun stop(generation: Long, doStop: () -> Unit): Boolean {
         val mine = synchronized(lock) {
             if (currentGeneration != generation) return false
+            currentGeneration = 0L
+            true
+        }
+        if (mine) doStop()
+        return mine
+    }
+
+    /**
+     * 服务侧的停止（`ACTION_STOP` 的落点）。
+     *
+     * 与 [stop] 的差别只在一条：设备层收口（`AndroidProjectionForeground.stop`）在投递
+     * `ACTION_STOP` 之前**已经**把账按代际清掉了（注释原话：无论服务收没收到，账先按
+     * 代际清掉），等服务处理这条 Intent 时 [currentGeneration] 已是 0 —— 若仍按
+     * 「必须正是这一代」判，服务**永远不动手**，前台服务与常驻通知就成孤儿。
+     *
+     * 故本方法认两种「该停」：[currentGeneration] 正是本代（账还在 = 通知栏停止按钮
+     * 那条路，没人预清），或 [currentGeneration] 为 0（本代主人已先清账）。
+     * **唯一不动手**的情形：[currentGeneration] 是**别的非零代际** —— 那是旧代际迟到的
+     * 收口撞上已重开的新会话，动手就把新会话的前台拆了（[stop] 的那条保护原样保留）。
+     *
+     * @return true = 已清账并执行了 [doStop]；false = 另一代正在前台，如实不动手。
+     */
+    fun stopFromService(generation: Long, doStop: () -> Unit): Boolean {
+        val mine = synchronized(lock) {
+            if (currentGeneration != 0L && currentGeneration != generation) return false
             currentGeneration = 0L
             true
         }
