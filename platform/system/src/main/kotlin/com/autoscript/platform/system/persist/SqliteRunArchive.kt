@@ -53,6 +53,13 @@ class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchiv
      *
      * 裁定的依据是**库里那一行**而不是调用方给的形状 —— 与 jsonl 侧逐条等价
      * （`FileRunArchive.adjudicate` 的四条件在 SQL 层各对应一句）。
+     *
+     * **记录与关联同一事务**（合批进同一次 [SqliteIntentStore.Runner.run]）：
+     * `FileRunArchive` 那侧 record 与 intentRunId 躺在**同一行** jsonl 里（一次 append
+     * 落全，没有中间态）；本侧此前拆成两个事务，崩溃落在两者之间会留下
+     * 「有终态记录、无 link」的档案 —— 该记录从此查不进 `recordsOfIntent`，
+     * 任务中心按意向追溯断链。合批后与 jsonl 侧回到同一条崩溃口径：
+     * 要么两者都在，要么都不在。
      */
     override suspend fun put(record: RunRecord, link: EngineRunLink?): RunRecord {
         // require/check 而不是显式 throw：类型完全相同（IAE / ISE），而契约套件断言的正是
@@ -67,9 +74,18 @@ class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchiv
         // 自增只发生在**迁移导入**那条路（带原 id），日常登记一律按给定 id 写。
         val existing = findRecord(record.id)
         val flat = record.toFlat()
+        // **记录与关联同一批 op = 同一事务**（`runner.run` 一批一事务）：`FileRunArchive`
+        // 那侧 record 与 intentRunId 是**同一行** jsonl（一次 append 落全），本侧若拆成
+        // 「写记录一个事务、写关联另一个事务」，崩溃落在两者之间就留下「有终态记录、
+        // 无 link」的断链档案 —— `recordsOfIntent` 永远查不到它，任务中心按意向追溯断链。
+        // 合批后崩溃窗口只剩事务边界之外：要么两者都在，要么都不在（与 jsonl 侧同一条口径）。
         val outcome = if (existing == null) {
-            // 首次建档：按给定 id 插入（`INSERT OR IGNORE` 让「并发两次建同 id」幂等）。
-            runner.run(listOf(RunArchiveSql.insert(flat))).first().singleOrNull()
+            // 首次建档：按给定 id 插入（`INSERT OR IGNORE` 让「并发两次建同 id」幂等），
+            // 关联随行（`INSERT` 冲突即「试图改写/库被外部改过」，响亮失败）。
+            runner.run(buildList {
+                add(RunArchiveSql.insert(flat))
+                if (link != null) add(RunArchiveSql.link(record.id, link.intentRunId))
+            }).first().singleOrNull()
                 ?: error("登记后读不回结果（库异常）")
         } else {
             check(!existing.state.isTerminal) {
@@ -81,14 +97,17 @@ class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchiv
                 "双 id 关联已成立，不允许改写: $existingLink → $link"
             }
             // 前进：条件更新（终态那一档由 SQL 挡）。读回的是**现态**。
-            runner.run(listOf(RunArchiveSql.advanceState(flat))).first().singleOrNull()
+            // 关联随行：同一批 = 同一事务；已有同一条 link（existingLink == link，幂等重放）
+            // 时不再插 —— `INSERT` 只对「该补还没补」的那一种情况发。
+            runner.run(buildList {
+                add(RunArchiveSql.advanceState(flat))
+                if (link != null && existingLink == null) {
+                    add(RunArchiveSql.link(record.id, link.intentRunId))
+                }
+            }).first().singleOrNull()
                 ?: error("前进后读不回结果（库异常）")
         }
         val engineRunId = outcome["engine_run_id"] as? Long ?: record.id
-        if (link != null && findLink(engineRunId) == null) {
-            // 关联随行写入（同一批 op = 同一事务；`INSERT` 冲突即「试图改写」）。
-            runner.run(listOf(RunArchiveSql.link(engineRunId, link.intentRunId)))
-        }
         return record.copy(id = engineRunId)
     }
 
