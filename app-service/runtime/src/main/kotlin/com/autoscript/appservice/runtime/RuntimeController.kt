@@ -244,8 +244,13 @@ class RuntimeController(
      * B 排队」时 A 的 [stop]/[killAll]/[forceStopAll] 与看门狗取锚全被 B 的排队挡住 ——
      * 实测容量 1 下 `stop(A)` 耗时 2927ms（= B 的排队超时），现场表现为「脚本停不下来、
      * 急停按不动」。现在只在**记账那一刻**取锁（夺槽本身由池的 stateLock 保证原子），
-     * 并在这里补一次「急停代次」对表：等证期间发生过 [killAll]/[forceStopAll] 就作废本条
-     * （池侧 [EnginePool.killAll] 已把当时非 FREE 的槽强释，这条的执行体不属于任何人）。
+     * 并在这里补一次「急停代次」对表：等证期间发生过 [killAll]/[forceStopAll] 就作废本条。
+     * **作废必须兜底收尸**（[abortQuietly]）：「池侧 [EnginePool.killAll] 已把这条强杀强释」
+     * 只是**多数情况**，不是不变量 —— killAll 只强杀它 `leases` 快照里逮到的那些，而
+     * 本条的 lease 可能注册得比快照**晚**（killAll 恰好落在「本方法读完代次、`pool.acquire`
+     * 还没进场」那条缝里：池的两处代次对表全部放行 —— 急停在它进场前已完成 —— 于是
+     * 池照常 Granted 一条没有任何人杀的执行体）。不兜底 = 槽永久 BUSY（容量 -1，
+     * 现场只剩「引擎再不接活」）+ 一个没人管的账外野进程。
      */
     suspend fun start(request: PoolAcquireRequest): StartOutcome {
         // 授权决策**一次算死**（A5 整改第 4 条）：调用方没给快照时在这里补一份，随后
@@ -256,24 +261,64 @@ class RuntimeController(
             ?: request.copy(authorization = authorization.decide(request.projectId).snapshot())
         val epochAtEntry = guard.withLock { stopEpoch }
         return when (val outcome = pool.acquire(effective)) {
-            is PoolAcquireOutcome.Granted -> guard.withLock {
-                if (stopEpoch != epochAtEntry) {
-                    // 等证/启动期间急停过：这条执行体已在池侧被强杀，不得进在途表
-                    // （进了就等于把一条已死的 run 记成在途，stop/killRun 都当它活着）。
+            is PoolAcquireOutcome.Granted -> {
+                val aborted = guard.withLock {
+                    if (stopEpoch != epochAtEntry) {
+                        // 等证/启动期间急停过：不得进在途表（进了就等于把一条已作废的
+                        // run 记成在途，stop/killRun 都当它活着）。收尸在锁外做 ——
+                        // kill 可能 waitFor，持锁杀会把 stop/看门狗全挡在门外（B1 同款）。
+                        true
+                    } else {
+                        val receipt = outcome.handle.receipt
+                        active[receipt.runId] = outcome.handle
+                        val started = clock()
+                        startedAt[receipt.runId] = started
+                        // 落盘口：index 先行 —— 日志行随后经
+                        // ConsoleCollector.lineSink 落 `<runId>.log`，详情页靠它找文件。
+                        onRunStarted(receipt.runId, outcome.handle.request.projectId, outcome.handle.request.scriptPath, started)
+                        false
+                    }
+                }
+                if (aborted) {
+                    abortQuietly(outcome.handle)
                     StartOutcome.StartFailed(ABORTED_BY_STOP)
                 } else {
                     val receipt = outcome.handle.receipt
-                    active[receipt.runId] = outcome.handle
-                    val started = clock()
-                    startedAt[receipt.runId] = started
-                    // 落盘口：index 先行 —— 日志行随后经
-                    // ConsoleCollector.lineSink 落 `<runId>.log`，详情页靠它找文件。
-                    onRunStarted(receipt.runId, outcome.handle.request.projectId, outcome.handle.request.scriptPath, started)
                     StartOutcome.Started(receipt.runId, receipt.handle)
                 }
             }
             PoolAcquireOutcome.TimedOut -> StartOutcome.QueueTimeout
             is PoolAcquireOutcome.Failed -> StartOutcome.StartFailed(outcome.message)
+        }
+    }
+
+    /**
+     * [start] 急停作废分支的兜底收尸：杀掉执行体 + 把槽还给池，**恰好一次**。
+     *
+     * 两个分支各对应一种真实时序：
+     * - **lease 未归还**（killAll 的 leases 快照没逮到本条）：这条执行体此刻**没有任何人**
+     *   会杀 —— 这里杀，并把槽还回去（[PoolLease.forceReturn] 的 CAS 独占归还权，
+     *   与 [killRun] 同一条「归还放 finally」纪律：kill 抛错也不许把槽扣在循环外）；
+     * - **lease 已归还**（快照其实逮到了：池侧已强杀强释）：什么都不做 —— 槽可能已被
+     *   下一次 execute 复用，再补一刀杀的就是**别人的**进程（过期句柄拆新占用者那一类）。
+     *
+     * kill 失败咽下（与池侧 `killQuietly` 同一条：收尸失败不改变「本条作废」的结论），
+     * 取消照常穿透。
+     */
+    private suspend fun abortQuietly(handle: PoolHandle) {
+        if (handle.leaseReturned) return
+        withContext(NonCancellable) {
+            try {
+                try {
+                    handle.slot.engine.kill()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // 收尸失败不改变「本条作废」的结论（进程多半已随急停死掉）。
+                }
+            } finally {
+                handle.lease.forceReturn(KillCause.ENGINE_REQUEST)
+            }
         }
     }
 

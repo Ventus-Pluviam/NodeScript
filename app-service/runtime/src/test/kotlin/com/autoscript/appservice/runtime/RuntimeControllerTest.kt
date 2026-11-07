@@ -785,4 +785,108 @@ class RuntimeControllerCancellationTest {
         assertFalse(c.closeStdin(started.runId), "结算后离开在途表 → false，不再问引擎")
         assertEquals(2, engines.single().closeStdinCalls, "结算后那次没有落到引擎上")
     }
+
+    /**
+     * 急停落在「start 读完代次、`pool.acquire` 还没进场」那条缝里：池的两处代次对表
+     * 全部放行（急停在它进场前已完成、leases 快照也逮不到它），于是池照常 Granted 一条
+     * **没有任何人杀**的执行体。控制器侧的代次对表逮到这条缝之后必须**兜底收尸**：
+     * 不杀 = 账外野进程；不还 = 槽永久 BUSY（容量 -1，「引擎再不接活」）。
+     */
+    @Test
+    fun `急停落在代次对表与 acquire 进场之间 Granted 的孤儿执行体被兜底杀还`() = runBlocking {
+        val engine = FakeEngine(EngineId(0))
+        val acquireEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseAcquire = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var gaveBack = 0
+        val slot = PoolSlot(0, engine, com.autoscript.domain.core.SystemClock)
+        slot.markBusy(1L)
+        slot.markRunning()
+        val lease = PoolLease(slot) { gaveBack++ }
+        val receipt = com.autoscript.domain.engine.EngineRunReceipt(
+            runId = 77L,
+            handle = com.autoscript.domain.bridge.HandleRef(refId = 77L, generation = 1),
+            pid = 4242,
+        )
+        // 假池：acquire 卡在两条对表之间 —— killAll 落在缝里时它的 leases 快照逮不到
+        // 这条（killAll 是什么都不做的空实现：快照为空），acquire 返回时急停早已完成。
+        val pool = object : EnginePool {
+            override val capacity: Int = 1
+            override suspend fun acquire(request: PoolAcquireRequest): PoolAcquireOutcome {
+                acquireEntered.complete(Unit)
+                releaseAcquire.await()
+                return PoolAcquireOutcome.Granted(PoolHandle(request, lease, receipt))
+            }
+            override suspend fun release(handle: PoolHandle): StopResult = handle.lease.release()
+            override suspend fun killAll(reason: KillCause) = Unit
+            override fun recycle(slot: PoolSlot, cause: KillCause?) = Unit
+            override fun stats(): PoolStats = PoolStats(capacity = 1, free = 0, busy = 1)
+        }
+        val c = RuntimeController(pool, WatchdogPolicy())
+
+        val started = async { c.start(PoolAcquireRequest("p", "a.js")) }
+        acquireEntered.await()                       // start 已读完代次、卡在 acquire 里
+        c.killAll(KillCause.REQUESTED)               // 急停恰好落在这条缝里（快照无此 lease）
+        releaseAcquire.complete(Unit)                // acquire 此刻才返回 Granted
+
+        val outcome = started.await()
+        assertInstanceOf(RuntimeController.StartOutcome.StartFailed::class.java, outcome)
+        assertEquals(
+            RuntimeController.ABORTED_BY_STOP,
+            (outcome as RuntimeController.StartOutcome.StartFailed).message,
+        )
+        assertEquals(1, engine.killCalls, "快照漏掉的执行体由控制器兜底杀掉")
+        assertTrue(lease.isReturned, "槽位必须归还（容量不缩水）")
+        assertEquals(1, gaveBack, "归还恰好一次")
+        assertTrue(c.activeRunIds().isEmpty(), "作废的执行体不进在途表")
+    }
+
+    /**
+     * 上一条的另一面：作废分支发现 lease **已被池侧收掉**（强杀 + 强释都做过）时，
+     * 控制器**什么都不做** —— 槽可能已被下一次 execute 复用，再补一刀杀的就是别人的
+     * 进程（过期句柄拆新占用者那一类）。真池不会让 Granted 撞上已归还（它会先
+     * Failed 掉自己），这条钉的是兜底判据本身的「已还即不碰」。
+     */
+    @Test
+    fun `作废分支撞上池侧已收 不再补第二刀也不还第二次`() = runBlocking {
+        val engine = FakeEngine(EngineId(0))
+        val acquireEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseAcquire = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var gaveBack = 0
+        val slot = PoolSlot(0, engine, com.autoscript.domain.core.SystemClock)
+        slot.markBusy(1L)
+        slot.markRunning()
+        val lease = PoolLease(slot) { gaveBack++ }
+        val receipt = com.autoscript.domain.engine.EngineRunReceipt(
+            runId = 78L,
+            handle = com.autoscript.domain.bridge.HandleRef(refId = 78L, generation = 1),
+            pid = 4243,
+        )
+        val pool = object : EnginePool {
+            override val capacity: Int = 1
+            override suspend fun acquire(request: PoolAcquireRequest): PoolAcquireOutcome {
+                acquireEntered.complete(Unit)
+                releaseAcquire.await()
+                // 池侧 killAll 的 leases 快照逮到了这条：强杀 + 强释都已做（借假池之手演出来）。
+                engine.kill()
+                lease.forceReturn(KillCause.REQUESTED)
+                return PoolAcquireOutcome.Granted(PoolHandle(request, lease, receipt))
+            }
+            override suspend fun release(handle: PoolHandle): StopResult = handle.lease.release()
+            override suspend fun killAll(reason: KillCause) = Unit
+            override fun recycle(slot: PoolSlot, cause: KillCause?) = Unit
+            override fun stats(): PoolStats = PoolStats(capacity = 1, free = 0, busy = 1)
+        }
+        val c = RuntimeController(pool, WatchdogPolicy())
+
+        val started = async { c.start(PoolAcquireRequest("p", "a.js")) }
+        acquireEntered.await()
+        c.killAll(KillCause.REQUESTED)
+        releaseAcquire.complete(Unit)
+
+        val outcome = started.await()
+        assertInstanceOf(RuntimeController.StartOutcome.StartFailed::class.java, outcome)
+        assertEquals(1, engine.killCalls, "池已杀：控制器不补第二刀（复用该槽的执行不能被误杀）")
+        assertEquals(1, gaveBack, "池已还：归还不重复")
+        assertTrue(c.activeRunIds().isEmpty())
+    }
 }
