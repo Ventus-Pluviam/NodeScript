@@ -355,6 +355,21 @@ class ProjectStateTest {
         )
     }
 
+    /** 文件行**不是**容器候选（它没有尾随 `/`）：同名前缀的文件照样各自进删除清单。 */
+    @Test
+    fun `批量删除的前缀候选只认目录 —— 文件 lib 不吃掉 liba.js`() {
+        val files = listOf(
+            ScriptFileRowUi.of(rowAt("lib"), zone),
+            ScriptFileRowUi.of(rowAt("liba.js"), zone),
+        )
+        val keys = files.map { ProjectState.keyOf(it) }.toSet()
+        assertEquals(
+            setOf("demo/lib", "demo/liba.js"),
+            deleteTargets(keys, files).map { it.relPath }.toSet(),
+            "文件 `lib` 没有尾随斜杠，不许被当成 `liba.js` 的容器 —— 后者被选中了就必须删",
+        )
+    }
+
     @Test
     fun `多选 逐行开关与选择全部取消全选`() {
         val files = listOf(

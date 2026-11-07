@@ -29,7 +29,10 @@ enum class FileSort(val label: String) {
  *
  * 前缀判据用的是**目录行的 relPath 带尾随 `/`**（[com.autoscript.domain.host.ScriptFileRow.relPath]
  * 的契约）：`"demo/lib/"` 是 `"demo/lib/a.js"` 的前缀，而 `"demo/lib"` 不是 —— 少了这个斜杠，
- * `lib` 会误吃掉 `liba.js`。
+ * `lib` 会误吃掉 `liba.js`。**也正因如此，前缀的候选必须只是目录行**（[ScriptFileRowUi.isDirectory]）：
+ * 文件行没有尾随斜杠，让一个文件当「容器」候选，"`lib` 吃掉 `liba.js`" 立刻原样复活 ——
+ * 被选中的 `liba.js` 会从删除清单里静默消失（选了 N 项、只删了 N-1 项，且无任何提示）。
+ * 文件本就不可能包含别的条目，判它纯粹是误伤。
  *
  * **为什么住文件顶层而不是 [ProjectState.Companion]**：它是**操作语义**（选中 → 要删哪些），
  * 不是同伴对象里那套"选中集 ↔ 可见集"的读取语义；而那个 companion 已经贴到 detekt
@@ -39,7 +42,9 @@ internal fun deleteTargets(selected: Set<String>, files: List<ScriptFileRowUi>):
     val picked = files.filter { ProjectState.keyOf(it) in selected }
     return picked
         .filter { row ->
-            picked.none { other -> other.relPath != row.relPath && row.relPath.startsWith(other.relPath) }
+            picked.none { other ->
+                other.isDirectory && other.relPath != row.relPath && row.relPath.startsWith(other.relPath)
+            }
         }
         .sortedByDescending { row -> row.relPath.count { it == '/' } }
 }
