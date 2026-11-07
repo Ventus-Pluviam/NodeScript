@@ -5,17 +5,20 @@ import com.autoscript.domain.automation.ImageFrame
 import com.autoscript.domain.automation.ColorHit
 import com.autoscript.domain.automation.FeatureHit
 import com.autoscript.domain.automation.ImageMatch
+import com.autoscript.domain.bridge.AuthenticatedRunContext
+import com.autoscript.domain.bridge.ConnectionResourceRegistry
 import com.autoscript.domain.bridge.HandleRef
 import com.autoscript.domain.core.AutojsException
 import com.autoscript.domain.core.ErrorCode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /**
  * `images` 的宿主侧真实现（docs §9.2；SPI 见 `:domain` 的 [ImageAnalyzer]，
  * 语义层 handler 在 `:platform:capabilities` 的 `ImagesNamespaceHandler`）。
  * 像素计算全在 native（`libopencv.so`，OpenCV 4.14 静态链接，
- * `:bridge:image` 的 `imgnative.cpp`）；本类只做四件**本机 JVM 可测**的事：
+ * `:bridge:image` 的 `imgnative.cpp`）；本类只做五件**本机 JVM 可测**的事：
  *
  * 1. **句柄发号**：[HandleRef.refId] 单调递增、generation 恒 1（一个文件一个帧，
  *    与 `ScreenshotSource`/`AndroidSensorSource` 同形）；native 帧号 →
@@ -31,6 +34,10 @@ import kotlinx.coroutines.withContext
  * 4. **native 缺席时的诚实缺位**：so 不在 → [Unavailable]（装配层不喂分析器，
  *    桥对 `images.*` 如实 `ERR_NOT_IMPLEMENTED`），**绝不塞内存替身** ——
  *    看不见像素的"内存分析器"只能靠自报坐标假装命中（§9.2 / :domain KDoc）。
+ * 5. **连接级收口**：帧账带"发它的那条连接"，连接没了就把**它名下**的在场帧
+ *    全部还给 native（[releaseConnection]）—— 脚本不调 `recycle()` 不再是
+ *    "像素活到进程结束"（native 帧表没有批量释放口，§7.4 承诺的
+ *    `FinalizationRegistry` 兜底在 JS 侧并不存在，见该方法 KDoc）。
  *
  * 分层照 README ops 表：Android 接触面只有 [Ops] 缝（真机 [JniOps] 做
  * `System.loadLibrary` + native 方法），本类零 android.* import —— 单测注入
@@ -43,10 +50,32 @@ class NativeImageAnalyzer(
     private val ops: Ops,
 ) : ImageAnalyzer {
 
-    /** refId → native 帧号（唯一持有帧所有权的地方；只在 [guard] 内读写）。 */
+    /** refId → 帧账（native 帧号 + 发它的那条连接；唯一持有帧所有权的地方，只在 [guard] 内读写）。 */
     private val guard = Any()
-    private val frames = HashMap<Long, Long>()
+    private val frames = HashMap<Long, Frame>()
     private var nextRefId = 1L
+
+    /**
+     * 连接号 → 它名下**在场**的 refId（连接级收口的索引，见 [releaseConnection]）。
+     *
+     * 只含"有认证身份"的连接。两张表都在 [releaseConnection] 里**整条摘掉**，而连接结束时
+     * 它必被调一次（`NewlineFrameServer` 的 abort 与 dispose 都 `revokeAll`，另有
+     * `abortConnection(id)` / `revokeRunResources(runId)` 两条外部路）—— 所以条目的上界是
+     * **活连接数**，不是"开过帧的连接数"。刻意不在"账空了"的时候提前摘：那会让
+     * 「放掉最后一帧」与「同一时刻发一帧」两条线程交错出一个把新帧也收掉的窗口
+     * （登记在，撤销时按账收，账空就是 no-op —— 少一个窗口比少一条空集值当）。
+     */
+    private val byConnection = HashMap<Long, MutableSet<Long>>()
+
+    /** 连接号 → 它在 [ConnectionResourceRegistry] 上的收口句柄（[releaseConnection] 里摘）。 */
+    private val reclaimHandles = HashMap<Long, ConnectionResourceRegistry.Handle>()
+
+    /**
+     * 一帧的账。[connectionId] = [NO_CONNECTION] 表示"没有认证身份"（宿主直调/JVM 测试）——
+     * 那种帧**不进** [byConnection]：没有连接可撤销，登记到一个没人撤销的注册表等于假装
+     * 有兜底，照旧只能由显式 [release] 收。
+     */
+    private class Frame(val nativeRef: Long, val connectionId: Long)
 
     override suspend fun decode(path: String): ImageFrame {
         require(path.isNotBlank()) { "images decode 的 path 不得为空白" }
@@ -62,13 +91,7 @@ class NativeImageAnalyzer(
                     AutojsException(ErrorCode.ERR_IO, "images decode 的 native 调用失败: $path")
                 }
             }
-            val (nativeRef, width, height) = decoded
-            val refId = synchronized(guard) {
-                val id = nextRefId++
-                frames[id] = nativeRef
-                id
-            }
-            ImageFrame(HandleRef(refId, GENERATION), width, height)
+            adoptFrame(decoded)
         }
     }
 
@@ -86,13 +109,7 @@ class NativeImageAnalyzer(
                     AutojsException(ErrorCode.ERR_IO, "images ingest 的 native 调用失败")
                 }
             }
-            val (nativeRef, w, h) = ingested
-            val refId = synchronized(guard) {
-                val id = nextRefId++
-                frames[id] = nativeRef
-                id
-            }
-            ImageFrame(HandleRef(refId, GENERATION), w, h)
+            adoptFrame(ingested)
         }
     }
 
@@ -103,7 +120,8 @@ class NativeImageAnalyzer(
                 "images 帧句柄代次不匹配：期望 $GENERATION，实际 ${handle.generation}",
             )
         }
-        val nativeRef = synchronized(guard) { frames.remove(handle.refId) }
+        val nativeRef = synchronized(guard) { forgetLocked(handle.refId) }
+            ?.nativeRef
             ?: throw AutojsException(ErrorCode.ERR_STALE_HANDLE, "未知 images 帧 refId=${handle.refId}")
         val rc = ops.release(nativeRef)
         if (rc != 0) {
@@ -142,8 +160,8 @@ class NativeImageAnalyzer(
             require(it.size == 4) { "region 必须 x,y,w,h 四元组，实际 ${it.size}" }
         }
         val native = synchronized(guard) {
-            val h = frames[haystack.refId]
-            val n = frames[needle.refId]
+            val h = frames[haystack.refId]?.nativeRef
+            val n = frames[needle.refId]?.nativeRef
             if (h == null || n == null) {
                 throw AutojsException(
                     ErrorCode.ERR_STALE_HANDLE,
@@ -180,7 +198,7 @@ class NativeImageAnalyzer(
         }
         return withContext(Dispatchers.IO) {
             val nativeRef = synchronized(guard) {
-                frames[haystack.refId]
+                frames[haystack.refId]?.nativeRef
                     ?: throw AutojsException(
                         ErrorCode.ERR_STALE_HANDLE,
                         "images findColor 的帧句柄已释放（haystack=${haystack.refId}）",
@@ -241,8 +259,8 @@ class NativeImageAnalyzer(
     override suspend fun findFeature(scene: HandleRef, template: HandleRef): FeatureHit? =
         withContext(Dispatchers.IO) {
             val native = synchronized(guard) {
-                val s = frames[scene.refId]
-                val t = frames[template.refId]
+                val s = frames[scene.refId]?.nativeRef
+                val t = frames[template.refId]?.nativeRef
                 if (s == null || t == null) {
                     throw AutojsException(
                         ErrorCode.ERR_STALE_HANDLE,
@@ -263,7 +281,7 @@ class NativeImageAnalyzer(
     /** 帧在场性兜底（与 match/findColor 同口径：帧表唯一事实源，判据在 [frames]）。 */
     private fun requireLive(frame: HandleRef, what: String): Long =
         synchronized(guard) {
-            frames[frame.refId]
+            frames[frame.refId]?.nativeRef
                 ?: throw AutojsException(
                     ErrorCode.ERR_STALE_HANDLE,
                     "images $what 的帧句柄已释放（frame=${frame.refId}）",
@@ -274,20 +292,148 @@ class NativeImageAnalyzer(
      * native 产出帧 → 本类 [frames] 表（发号与 [decode]/[ingest] 同一号段）+ 回包。
      * 失败 = null + status 非 0（同 decode 的判读：null + status 0 = JNI 自身失败，如实 IO）。
      */
-    private fun frameFromNative(decoded: Triple<Long, Int, Int>?, status: IntArray, what: String): ImageFrame {
+    private suspend fun frameFromNative(
+        decoded: Triple<Long, Int, Int>?,
+        status: IntArray,
+        what: String,
+    ): ImageFrame {
         if (decoded == null) {
             throw if (status[0] != 0) statusToException(status[0], what) else {
                 AutojsException(ErrorCode.ERR_IO, "images $what 的 native 调用失败")
             }
         }
+        return adoptFrame(decoded)
+    }
+
+    // ── 帧账的三个动作：落表发号（[adoptFrame]）、摘表（[forgetLocked]）、
+    // 按连接收口（[releaseConnection]）——在场性/发号/像素所有权的唯一事实源
+    // 仍是这一张表（§7.4 发号侧归一），这里只是给每帧多记一个"谁发的"。──
+
+    /**
+     * native 产出帧 → 本类帧表：发号 + 归属记账 + 连接级收口登记。
+     *
+     * 三个发帧口（[decode]/[ingest]/[frameFromNative]）**共用这一条**，不留"哪条路
+     * 忘了登记"的缝 —— 尤其是 `ingest`：`screen.capture()`/投屏 `nextFrame` 的帧
+     * 都从这里进表（§18-8(b) 两缝一张表），而那正是单帧最大（1080×2400 RGBA
+     * ≈ 10.4 MB）、最容易被循环刷出来的一条。
+     */
+    private suspend fun adoptFrame(decoded: Triple<Long, Int, Int>): ImageFrame {
         val (nativeRef, width, height) = decoded
+        // 归属从**协程上下文**取（不是参数）：帧表跨连接共用，而"这帧是谁的"只有认证身份
+        // 说得出 —— 与 `ScreenNamespaceHandler` 的会话归属同一条读法（不可自报）。
+        val caller = coroutineContext[AuthenticatedRunContext]
+        val connId = caller?.connectionId ?: NO_CONNECTION
+        var needRegister = false
         val refId = synchronized(guard) {
             val id = nextRefId++
-            frames[id] = nativeRef
+            frames[id] = Frame(nativeRef, connId)
+            if (caller != null) {
+                byConnection.getOrPut(connId) { LinkedHashSet() } += id
+                // **一条连接一条登记**（不是"一帧一条"）：扫屏循环一帧一条会在**共享**的
+                // 注册表里堆出上万条（那张表还住着投屏会话的收口）。判据是"这条连接有没有
+                // 在册的句柄"，而不是"这帧是不是它的第一帧"—— 后者在「放掉最后一帧」与
+                // 「同时发一帧」交错时会重复登记。
+                needRegister = connId !in reclaimHandles
+            }
             id
         }
+        // 登记在锁外（注册表与 native 都不该在帧表锁里被调；见 [registerReclaim] 的竞态说明）。
+        if (caller != null && needRegister) registerReclaim(connId, caller.resources)
         return ImageFrame(HandleRef(refId, GENERATION), width, height)
     }
+
+    /**
+     * 从帧表与连接归属账里摘掉一帧（调用方须持 [guard]；native 释放在锁外做）。
+     *
+     * **不动 [reclaimHandles]**：登记随连接的生命周期走，撤销时按账收（账空即 no-op）——
+     * 提前摘会打开一个"放掉最后一帧与同时发一帧交错，新帧被当成孤儿收掉"的窗口。
+     */
+    private fun forgetLocked(refId: Long): Frame? {
+        val frame = frames.remove(refId) ?: return null
+        byConnection[frame.connectionId]?.remove(refId)
+        return frame
+    }
+
+    /**
+     * 把"这条连接没了要收什么"登记进它自己的资源收口口。
+     *
+     * **顺序与竞态**（照 `MediaProjectionSource` 那条已验证的路）：帧**先落表**再登记，
+     * 于是"撤销在先、发帧在后"时 [ConnectionResourceRegistry.register] 会**立刻兑现**
+     * 回调 —— 迟到的那一帧当场被收掉，不留孤儿。登记返回后按"账还在不在"分两种收尾，
+     * 两条线程交错都收敛到同一结果：
+     * - 账还在（没被撤销）→ 存下句柄，连接结束时兑现；
+     * - 账已空（回调已 inline 跑完，或被撤销线程抢先）→ 句柄就地还掉，不往表里塞一条
+     *   永远不会有人来兑现的尸。
+     *
+     * **并发发帧的重复登记就地还掉**（`putIfAbsent` 的输家）：两条线程同时给同一条连接
+     * 发第一帧时，两边都可能看到"还没登记"。留着输家那条不会错（撤销时它只是 no-op），
+     * 但会往**共享**的注册表里堆条目 —— 收口口是进程级资源，不该为同一件事挂两份凭据。
+     */
+    private fun registerReclaim(connId: Long, registry: ConnectionResourceRegistry) {
+        val handle = registry.register { releaseConnection(connId) }
+        synchronized(guard) {
+            if (connId !in byConnection || reclaimHandles.putIfAbsent(connId, handle) != null) {
+                handle.release()
+            }
+        }
+    }
+
+    /**
+     * 连接级收口（§7.5 × §9.2）：把**这条连接**名下的在场帧全部还给 native。
+     *
+     * **为什么需要它**（三条事实叠起来就是漏）：
+     * 1. native 帧表（`imgnative.cpp` 的 `g_frames`）**只有单帧 `imgnative_release`**，
+     *    没有批量释放口 —— 宿主不逐个报 refId，native 无从知道该收哪些；
+     * 2. §7.4 承诺的 GC 兜底（`FinalizationRegistry` → `release(id, gen)`）在
+     *    `bridge/js` 里**并不存在**：`recycle()` 是脚本自愿调的，不调就没人调；
+     * 3. 本类是 `PlatformWiring.of` 装配期建的**进程级单例**，帧表跨 run 复用 ——
+     *    脚本退出、连接断开都不清它。
+     *
+     * 于是"一个不 recycle 的扫屏循环"（1080×2400 RGBA ≈ 10.4 MB/帧，截图节流 333 ms
+     * → 约 31 MB/s）会把 native 堆一路吃穿，且**脚本结束后也不还**。收口点因此放在
+     * 连接层：连接 abort / 排空结束 / `abortConnection(id)` / `revokeRunResources(runId)`
+     * 四条路都经 [ConnectionResourceRegistry] 走到这里，与投屏会话同一条路。
+     *
+     * **只收自己的**（与 `MediaProjectionSource.releaseConnection` 同一条纪律）：别的
+     * 连接的帧原样在场 —— 分析器是所有脚本共用的单例，按连接分区才不会"一个脚本退出
+     * 带走别人的帧"。
+     *
+     * **非挂起**：撤销回调可能在任意线程被调，而 native 释放本来就是同步的。
+     *
+     * 一帧的 native 释放失败**不中断其余帧**（同 kill 路径"不中断全清"的口径）：全部
+     * 尝试完之后把第一个失败如实抛出，由 [ConnectionResourceRegistry] 的 `onError`
+     * 上报 —— 收口路径上的异常不许打断别的资源，但也不许静默。
+     *
+     * @return 实际还给 native 的帧数（诊断用）。
+     */
+    fun releaseConnection(connectionId: Long): Int {
+        val doomed: List<Long>
+        val stale: ConnectionResourceRegistry.Handle?
+        synchronized(guard) {
+            val ids = byConnection.remove(connectionId)?.toList() ?: emptyList()
+            stale = reclaimHandles.remove(connectionId)
+            doomed = ids.mapNotNull { refId -> frames.remove(refId)?.nativeRef }
+        }
+        // 还掉登记（锁外）：撤销那条路上它已被注册表的 `runEntry` 取走，这里是 no-op；
+        // 宿主/看门狗直调那条路上它还在册 —— 不摘就是一条随连接数只增不减的尸。
+        stale?.release()
+        // native 释放在锁外（与 [release] 同一条纪律：临界区只做 map 读写）。
+        var released = 0
+        var firstFailure: AutojsException? = null
+        for (nativeRef in doomed) {
+            val rc = ops.release(nativeRef)
+            if (rc == 0) {
+                released++
+            } else if (firstFailure == null) {
+                firstFailure = statusToException(rc, "连接 $connectionId 收口 native=$nativeRef")
+            }
+        }
+        firstFailure?.let { throw it }
+        return released
+    }
+
+    /** 在册帧数（测试与诊断用；连接收口后该连接的帧应全部离场）。 */
+    fun liveFrameCount(): Int = synchronized(guard) { frames.size }
 
     /** native 状态码 → 分类错误（`imgnative.cpp` 文件头的对表，原码透传）。 */
     private fun statusToException(status: Int, what: String): AutojsException {
@@ -388,6 +534,13 @@ class NativeImageAnalyzer(
     companion object {
         /** 句柄代次：帧不复用，故恒 1（§7.4 generation 语义）。 */
         const val GENERATION: Long = 1
+
+        /**
+         * "没有认证身份"的连接号占位（宿主直调/JVM 测试）：与
+         * `BridgeRouter` 的 `connectionId = caller?.connectionId ?: 0L` 同一个 0。
+         * 这种帧不进 [byConnection]（见 [Frame]）。
+         */
+        const val NO_CONNECTION: Long = 0L
 
         // native 状态码（与 imgnative.cpp 文件头逐条对表；改必须同批）：0 = OK
         // 不进 [statusToException]；1/2 点名命名，其余非零码一律归 IO（上游加码
