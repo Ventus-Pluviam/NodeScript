@@ -254,6 +254,12 @@ class InstallCoordinator(
         /** 抢终态发送权：true = 本调用方是第一个（它发事件）；false = 已有人发过。 */
         fun claimTerminal(): Boolean = terminalOnce.compareAndSet(false, true)
 
+        /** 这笔事务已落终账（fail 或 commit 任一）—— 终账恰好一条（与 [claimTerminal] 同一条纪律）。 */
+        private val journalSettled: Boolean get() = journalCommitted || journalFailed
+
+        /** 这笔事务还开着（journal.fail 的前置判据：有事务、begin 过、还没落过任何终账）。 */
+        fun journalOpen(): Boolean = journaled && journalStarted && !journalSettled
+
         // 执行体经 ScriptOp.cancelSignal 读的就是这一位：「停止」按下去 → 这里置位
         // → 执行体在 waitFor 切片间隙看到 → 杀进程树。
         override fun isCancelled(): Boolean = cancelled
@@ -436,7 +442,7 @@ class InstallCoordinator(
         handles[handle.id]?.let {
             it.cancelled = true
             if (!it.done) {
-                if (it.journaled && it.journalStarted && !it.journalCommitted && !it.journalFailed) {
+                if (it.journalOpen()) {
                     journal.fail(
                         it.nonce, handle.projectId,
                         staging.stagePath(handle.projectId, it.nonce).fileName.toString(), "用户取消",
@@ -1421,7 +1427,7 @@ class InstallCoordinator(
             // 事务 commit/fail 并存，残骸清扫与审计都读不懂；cancel() 已就地把这笔账
             // fail 掉时（取消撞在在途执行上），再写一条是同 nonce 的重复终账。
             // begin 过 → 暂存目录才是残骸。
-            if (tracked.journalStarted && !tracked.journalCommitted && !tracked.journalFailed) {
+            if (tracked.journalOpen()) {
                 journal.fail(nonce, projectId, stageDir.fileName.toString(), e.message)
                 tracked.journalFailed = true
             }
