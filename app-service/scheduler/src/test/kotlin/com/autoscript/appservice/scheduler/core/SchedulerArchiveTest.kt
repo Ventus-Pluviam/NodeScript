@@ -328,4 +328,44 @@ class SchedulerArchiveTest {
         assertEquals(RunState.RUNNING, archive.record(9_888L)!!.state, "无关联记录不被空档结算动")
         assertEquals(RunState.CRASHED, archive.record(9_999L)!!.state, "属本次 reopen 的记录照样结算")
     }
+
+    @Test
+    fun `过期意向的档案孤儿同样结算：过期只免重投不免补账`() = runBlocking {
+        val archive = InMemoryRunArchive()
+        val log = freshLog()
+        val s = scheduler(log, archive, LinkingDispatcher(engineLink))
+
+        // 崩溃遗留：RUN_START 的期限只有 1s，宿主 10 分钟后才走到恢复 → 意向过期、
+        // 封账 Cancelled 不重投；其关联档案里还停着一条 RUNNING（遗留写入形状）。
+        // settleVoidArchive 特意跳过本次 reopen 集合（「会经 settleOrphanArchive 处理」），
+        // 若过期分支 continue 掉 settleOrphanArchive —— 这条记录两侧都不管，
+        // unfinished() 永久泄漏，任务中心的「在跑」多一条谁也结不掉的假阳性。
+        val old = log.appendStart(
+            projectId = "p",
+            scriptPath = "a.js",
+            runNonce = "nonce-expired-orphan",
+            trigger = TriggerSource.TIMED,
+            scheduledAtMillis = now,
+            deadlineMillis = now + 1_000,
+        )
+        archive.put(
+            RunRecord(
+                id = 9_556L,
+                projectId = "p",
+                scriptPath = "a.js",
+                runNonce = "nonce-before-crash",
+                state = RunState.RUNNING,
+                startedAtMillis = now,
+            ),
+            EngineRunLink(intentRunId = old.runId, engineRunId = 9_556L),
+        )
+        now += 600_000                                       // 墙钟推进：重启后的恢复时刻
+
+        val recovered = s.recoverUncommitted()
+
+        assertEquals(1, recovered.size)
+        assertTrue(recovered[0].expired, "意向本身仍按过期封账（不因补账而重投）")
+        assertEquals(RunState.CRASHED, archive.record(9_556L)!!.state, "过期不投 ≠ 失联执行不用结算")
+        assertTrue(archive.unfinished().isEmpty(), "unfinished 不再泄漏")
+    }
 }
