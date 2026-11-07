@@ -233,6 +233,13 @@ class InstallCoordinator(
         val journaled: Boolean = true,
         @Volatile var journalStarted: Boolean = false,
         @Volatile var journalCommitted: Boolean = false,
+        /**
+         * 本事务**已 fail 过**（[cancel] 与 [runHeavy] 的失败收尾都可能写 fail ——
+         * 取消撞在在途执行上是常态）。journal 无状态机（逐行 append），「同 nonce
+         * 两条 FAIL」虽是冗余而非无源之记，但审计面读到的就是「这笔账被结了两次」——
+         * 与 [claimTerminal] 守的「一个句柄一个终态」是同一条纪律在 journal 侧的那一半。
+         */
+        @Volatile var journalFailed: Boolean = false,
         @Volatile var cancelled: Boolean = false,
         @Volatile var done: Boolean = false,
     ) : OpCancelSignal {
@@ -246,6 +253,12 @@ class InstallCoordinator(
 
         /** 抢终态发送权：true = 本调用方是第一个（它发事件）；false = 已有人发过。 */
         fun claimTerminal(): Boolean = terminalOnce.compareAndSet(false, true)
+
+        /** 这笔事务已落终账（fail 或 commit 任一）—— 终账恰好一条（与 [claimTerminal] 同一条纪律）。 */
+        private val journalSettled: Boolean get() = journalCommitted || journalFailed
+
+        /** 这笔事务还开着（journal.fail 的前置判据：有事务、begin 过、还没落过任何终账）。 */
+        fun journalOpen(): Boolean = journaled && journalStarted && !journalSettled
 
         // 执行体经 ScriptOp.cancelSignal 读的就是这一位：「停止」按下去 → 这里置位
         // → 执行体在 waitFor 切片间隙看到 → 杀进程树。
@@ -429,11 +442,12 @@ class InstallCoordinator(
         handles[handle.id]?.let {
             it.cancelled = true
             if (!it.done) {
-                if (it.journaled && it.journalStarted && !it.journalCommitted) {
+                if (it.journalOpen()) {
                     journal.fail(
                         it.nonce, handle.projectId,
                         staging.stagePath(handle.projectId, it.nonce).fileName.toString(), "用户取消",
                     )
+                    it.journalFailed = true
                     staging.sweep(handle.projectId, setOf(it.nonce))
                 }
                 it.finish()
@@ -1343,6 +1357,14 @@ class InstallCoordinator(
                 ErrorCode.ERR_TIMEOUT,
                 "安装会话超时（${timeoutMillis}ms）：npm ${args.joinToString(" ")}（执行体未在 TTL 内收尾）",
             )
+            // 「执行体已收尾，结果不采纳」（与 runScriptOps 同一条，那里一直有、这里漏了）：
+            // cancel() 在执行体挂起期间已 fail 事务、扫掉暂存目录并发出终态事件 ——
+            // 这里若不查就往下走，staging.commit 会撞上已被 sweep 的目录（IAE「暂存目录
+            // 不存在」），而那条 IAE 会一路抛回用户界面 —— 点「停止」的人看到一句读不懂的
+            // 路径报错，且 journal 被撞出同 nonce 的第二条 FAIL（见 TrackedOp.journalFailed）。
+            if (tracked.cancelled) {
+                throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "安装已取消（执行体已收尾，结果不采纳）")
+            }
             // §10.2 调用链末段：post-check（lock/产物就位校验）→ 落位 → 归档
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.POST_CHECK))
             warnScriptsSkipped(projectId, handle.id, stageDir)
@@ -1399,12 +1421,15 @@ class InstallCoordinator(
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
             throw e
         } catch (e: Exception) {
-            // journal.fail 的前提是这个 nonce **begin 过且没 commit 过**：begin 没跑成
-            // 就写 fail 是「从未 begin 却已 fail」（§10.4 状态机不容无源之记）；
+            // journal.fail 的前提是这个 nonce **begin 过、没 commit 过、也没 fail 过**：
+            // begin 没跑成就写 fail 是「从未 begin 却已 fail」（§10.4 状态机不容无源之记）；
             // commit 之后才落到这里（如 lock 签名失败的尾段）再补 fail，账本里同一条
-            // 事务 commit/fail 并存，残骸清扫与审计都读不懂。begin 过 → 暂存目录才是残骸。
-            if (tracked.journalStarted && !tracked.journalCommitted) {
+            // 事务 commit/fail 并存，残骸清扫与审计都读不懂；cancel() 已就地把这笔账
+            // fail 掉时（取消撞在在途执行上），再写一条是同 nonce 的重复终账。
+            // begin 过 → 暂存目录才是残骸。
+            if (tracked.journalOpen()) {
                 journal.fail(nonce, projectId, stageDir.fileName.toString(), e.message)
+                tracked.journalFailed = true
             }
             staging.sweep(projectId, setOf(nonce))
             tracked.finish()
