@@ -136,4 +136,48 @@ class SqliteRunArchiveContractTest : RunArchivePersistenceContract() {
         assertTrue(tables.contains(RunArchiveSql.TABLE), "档案表缺失：$tables")
         assertTrue(tables.contains(RunArchiveSql.LINK_TABLE), "关联表缺失：$tables")
     }
+
+    /** 批结构记录器：`runner.run` 一批 = 一个事务，断言「几次事务、每批几条 op」用。 */
+    private class BatchRecorder(private val base: CliSqlRunner) : SqliteIntentStore.Runner by base {
+        val batches = mutableListOf<List<SqlOp>>()
+        override fun run(ops: List<SqlOp>): List<List<Map<String, Any?>>> {
+            batches += ops
+            return base.run(ops)
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `记录与关联同一事务 崩溃窗口不落在两笔之间`() = kotlinx.coroutines.runBlocking {
+        // FileRunArchive 那侧 record 与 intentRunId 是同一行 jsonl（一次 append 落全）；
+        // 本侧此前拆成「写记录一个事务、写关联另一个事务」，崩溃落在两者之间就留下
+        // 「有终态记录、无 link」的断链档案（recordsOfIntent 永远查不到它）。
+        val rec = BatchRecorder(CliSqlRunner(dir.resolve("run-archive.db")))
+        val s = SqliteRunArchive(rec)
+
+        s.put(rec(1, RunState.SUCCEEDED), com.autoscript.domain.scripts.EngineRunLink(7, 1))
+        assertEquals(listOf(2), rec.batches.map { it.size }, "首次建档带关联：insert+link 一批一事务")
+
+        rec.batches.clear()
+        s.put(rec(2, RunState.RUNNING), null)
+        s.put(rec(2, RunState.SUCCEEDED), com.autoscript.domain.scripts.EngineRunLink(8, 2))
+        assertEquals(
+            listOf(1, 2),
+            rec.batches.map { it.size },
+            "前进 + 补关联同一批（崩溃不留『已终态、无 link』的孤儿）",
+        )
+        assertEquals(
+            listOf(2L),
+            s.recordsOfIntent(8).map { it.id },
+            "关联照常可查（行为与合批前等价）",
+        )
+
+        rec.batches.clear()
+        s.put(rec(3, RunState.RUNNING), com.autoscript.domain.scripts.EngineRunLink(9, 3))
+        s.put(rec(3, RunState.SUCCEEDED), com.autoscript.domain.scripts.EngineRunLink(9, 3))
+        assertEquals(
+            listOf(2, 1),
+            rec.batches.map { it.size },
+            "幂等重放同一条 link 不重复插（已有同 link 时批里只剩 advance）",
+        )
+    }
 }
