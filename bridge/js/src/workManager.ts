@@ -74,15 +74,20 @@ export function fromInput(input: TimedScheduleInput): TimedSchedule {
 export function nextFireAfter(schedule: TimedSchedule, nowMillis: number): number | null {
   if (schedule.kind === 'once') return nowMillis + schedule.delaySeconds * 1000
   if (schedule.kind === 'daily') {
+    // 与宿主 `TimedSchedule.Daily` 同一条：候选**逐日按本地日期字段重建**
+    //（`new Date(y, m, d+1, …)` 由 Date 归一化进位），不是固定 +24h ——
+    // 跨 DST 那天只有 23/25 小时，固定 +24h 会把预览带偏一小时
+    //（春拨快：次日 09:00 说成 10:00；秋拨回：说成 08:00），与宿主分歧。
     const base = new Date(nowMillis)
-    let candidate = new Date(
-      base.getFullYear(), base.getMonth(), base.getDate(),
-      schedule.hourOfDay, schedule.minuteOfHour, 0, 0,
-    ).getTime()
-    while (candidate <= nowMillis) {
-      candidate += 86_400_000 // 固定 +24h：每日整点语义；DST 由 Date 构造自动对齐
+    const day0 = new Date(base.getFullYear(), base.getMonth(), base.getDate())
+    for (let i = 0; i < 732; i++) {
+      const candidate = new Date(
+        day0.getFullYear(), day0.getMonth(), day0.getDate() + i,
+        schedule.hourOfDay, schedule.minuteOfHour, 0, 0,
+      ).getTime()
+      if (candidate > nowMillis) return candidate
     }
-    return candidate
+    return null // 两年无命中对 daily 不可达；留着与 cron 分支同形状
   }
   return nextCronFireAfter(schedule.expr, nowMillis)
 }
