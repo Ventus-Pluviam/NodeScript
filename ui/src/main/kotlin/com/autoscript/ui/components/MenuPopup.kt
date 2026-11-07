@@ -204,11 +204,16 @@ internal val LocalMenuAnim = compositionLocalOf<MenuAnim> {
  * 仓库根的 `NOTICE` —— 上游 Telegram Android 是 GPL-2.0-only，本文件属其衍生部分）：
  * 把总进度 [t] 按 [position]/[count] 错相成一波一波的浮现，[waveLength] 控制同屏
  * 波峰数 —— 项越多每波的启动间隔越短，总时长不随项数失控。
+ *
+ * **`position / count` 必须是浮点除法**：上游签名收的就是两个 `float`，比值是
+ * 0..1 的错相系数。移植若写成 `Int / Int`（Kotlin 的整数除法），position 恒 < count
+ * 时比值恒为 0 —— 每一项的 `waveOffset` 全是 0，整列同起同落，瀑布效果静默消失
+ * （这正是本函数收成 `internal` 并配单测的原因：这种错法不崩不红，肉眼只在慢放时才看得出）。
  */
-private fun cascade(t: Float, position: Int, count: Int, waveLength: Float): Float {
+internal fun cascade(t: Float, position: Int, count: Int, waveLength: Float): Float {
     if (count <= 0) return t
     val waveDuration = 1f / count * min(waveLength, count.toFloat())
-    val waveOffset = position / count * (1f - waveDuration)
+    val waveOffset = position.toFloat() / count * (1f - waveDuration)
     return ((t - waveOffset) / waveDuration).coerceIn(0f, 1f)
 }
 
