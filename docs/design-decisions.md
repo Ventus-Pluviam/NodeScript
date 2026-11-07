@@ -12,6 +12,38 @@
 
 ---
 
+## 106. 帧/对象的兜底回收挂在**连接终结**上，不挂 GC —— §7.4「`FinalizationRegistry`/finalize 兜底」口径作废（2026-11-07，审计发现）
+
+**起因**：全仓 bug 审计（PR #148）排查图像帧回收时三条事实叠加成漏洞 —— ① §7.4 写着
+「显式 `dispose()` + `FinalizationRegistry` 兜底；GC 时向内核发 `release(id, gen)`」与
+「引用计数对象用弱引用 + finalize 兜底」、§9.2 写「`recycle()` 显式 + finalize 兜底」，
+但全仓（`.ts`/`.js`/`.cjs`/`.mjs`/`.cpp`/`.cc`/`.h`/`.kt`）grep **零 `FinalizationRegistry`、
+零 `WeakRef`、零 `napi_add_finalizer`** —— GC 兜底这张网**从来没建过**（唯一的 env 清理钩子是
+`bridge_addon.cc:371` 的 `napi_add_env_cleanup_hook(env, TsfCleanup, …)`，那是**进程退出时**
+拆桥 TSF 的，不回收任何帧）；② native 帧表（`imgnative.cpp` 的 `g_frames`）**没有批量释放口**，
+只有单条 `imgnative_release`；③ `NativeImageAnalyzer` 是装配期建的**进程级单例**，帧账活过
+run/连接终结。量级：1080×2400 RGBA ≈ 10.4 MB/帧、333ms 节流 ≈ 31 MB/s，脚本不 `recycle()` 就
+只进不出、活到宿主进程结束。
+
+**拍板**：兜底回收挂在**连接生命周期**上，不挂 GC —— 与投屏会话（批 75，本文件第 48 项）
+同一条 `ConnectionResourceRegistry` 路：帧账记「发它的那条连接」
+（`AuthenticatedRunContext.connectionId`），该连接首帧时登记**一条**回收闭包
+（一连接一条，不是一帧一条），连接终结（abort/dispose/自然退出）即回调
+`NativeImageAnalyzer.releaseConnection(connectionId)`，把**这条连接名下**在场帧全部还
+native。按 `connectionId` 分区互不误收；无认证身份的调用（宿主直调/JVM 测试）落
+`NO_CONNECTION` 分区、不登记 —— 没有连接可撤销，登记了就是假装有兜底。
+
+**为什么不补 `FinalizationRegistry`**：GC 时机不可控、不可测，而兜底语义要的是
+「脚本死了帧一定还」—— 连接终结恰好是这个事实的**可靠信号**（socket 断/进程死宿主立即可知），
+且注册表与撤销链路已存在（投屏在用），边际成本最低。将来若真补 GC 网，是在连接级收口
+**之上再加一层提前量**（减峰值占用），不替代它。
+
+**落地与守卫**：PR #148（`NativeImageAnalyzer` 连接账 + `releaseConnection`，
+`NativeImageAnalyzerConnectionReclaimTest` 17 例）；§7.4 两条与 §9.2 一条原口径**原地划掉**
+注明本项（只追加纪律）；「已推翻」表同批加一行。
+
+---
+
 ## 105. 派生属性**算一次**、状态类标 `@Immutable`、列表 item 的 `contentType` 分开报、列表行里的胶囊不带动画（2026-10-18，用户口径）
 
 **用户口径原文**：「**滑动起来还是很卡啊，首页的文件列表就不卡。好好优化啊**」。
@@ -3785,6 +3817,8 @@ store 后传入，`AppShell`/`AppShellKit`/`AssembledShell` **零改动** ——
 | backlog **D7**「大文件余量：`AppShellApplication` 与 `Scheduler` 还有没有值得付的刀口」（2026-10-02 登记） | `docs/backlog.md` D7；`app-service/scheduler/.../core/Scheduler.kt`；`app/src/main/kotlin/com/autoscript/AppShellApplication.kt` | **结项**（2026-10-07，口径全文见本文件**第 39 项**）：`Scheduler` 类体是单一内聚状态机，**无值得付的接缝**（拆大方法要把八九个构造参数摊成 `internal`，是拿封装换行数）；只外迁三个顶层声明（`ScheduledTask`/`RecoveryRecord`/`DefaultDeadlines`）。`AppShellApplication` 的读侧零重复不变式（不搬），写侧取一个刀口 —— 四类 APK 资产的读法抽成 `shell/AssetsRead.kt`（**该文件不可单测**，已如实登记） | 2026-10-07 |
 | 第 54 项第 2 条「命令范围 = 只有 npm，**不加 shell**」（用户 2026-10-09 早先裁定「不用加 sh 啊」） | `docs/design-decisions.md` 第 54 项第 2 条；`docs/design/10-npm.md` §10.9 第 3 条 | **改口径（2026-10-09，批 88）**：用户同日后续裁定「也需要让控制台能执行 shell」+「`su` 进 root、`shizuku` 进 adb、`exit` 退出」—— shell **进控制台**，但不是「裸命令一律当 shell」：**必须显式进模式**（`su`/`shizuku`），默认模式下裸首词仍是 npm bin。原裁定那半句「任意命令走脚本侧的 `auto.shell` 桥面」**仍成立**（那是脚本面，与控制台是两条面）；作废的只有「控制台不加 shell」这一句。口径见本文件**第 58 项** | 2026-10-09 |
 | 审计日志（registry 变更/lock 重签/脚本执行）**落 App 且可导出**；`versionHash` 随执行进审计条目，回答「我当时跑的是哪一份脚本」（脚本一改哈希就变），但**不再作放行判据** | `docs/design/10-npm.md` §10.5-2 第 2 条（原 §18 已拍板项） | **整条下线**（2026-10-17 用户令「**去除审计这个东西，把这个日志输出到系统日志中**」）：审计页（`AuditScreen`/`AuditState`/`AuditOps` + 依赖管理页顶栏那颗按钮）与它背后那份只追加的落盘账 `files/.ns/install-history.jsonl` 一并去掉；操作事实改走 `OpLogSink` 缝 → `:app` 的 `HostLog`（logcat + 日志管理页「系统日志」段）。**「可导出」那半句本就未落**（SAF 通道没接、界面不画按钮），随之作废；快照导出内容里的 `ledger/install-history.jsonl` 同步摘除（反向断言钉在 `NpmSnapshotTest`）。`versionHash` 那半句**仍成立**（它随 `ScriptOp` 走，只是终点从审计条目换成系统日志）。口径见本文件**第 90 项** | 2026-10-17 |
+| §7.4「显式 `dispose()` + `FinalizationRegistry` 兜底；GC 时向内核发 `release(id, gen)`」「引用计数对象用弱引用 + finalize 兜底」与 §9.2「`recycle()` 显式 + finalize 兜底」 | §7.4 句柄机制段 / 引用计数对象行；§9.2 截图对象生命周期行 | **作废（2026-11-07，本文件第 106 项）**：全仓（`.ts`/`.js`/`.cjs`/`.mjs`/`.cpp`/`.cc`/`.h`/`.kt`）grep 零 `FinalizationRegistry`、零 `WeakRef`、零 `napi_add_finalizer` —— GC 兜底从未实现；唯一的 env 清理钩子是进程退出时拆桥 TSF 的 `napi_add_env_cleanup_hook`（`bridge_addon.cc:371`），不回收帧。兜底改挂**连接终结**（`ConnectionResourceRegistry` → `NativeImageAnalyzer.releaseConnection`，PR #148 落地）。§7.4 两条与 §9.2 一条原文已就地划掉并注明，不删 | 2026-11-07 |
+
 ### 附：§12.2 被反转口径原文照抄（2026-09-30 步骤 6 摘录前的原文）
 
 > - **语义层**（handler）住 `:platform:capabilities` 的 `SystemNamespaces.kt`，纯 JVM 可测（假 SPI 注入即可跑）：参数校验（spec 守卫、必填字段、`timeout > 0`）、枚举字面量解析（`ShellMode`/`DialogMode`，拼错即报错不静默套默认）、默认值（shell 超时 30s）、错误分类**透传**（`AutojsException.error` 原码回桥）、响应形状编码（与 `extras.ts` 逐字对齐）；

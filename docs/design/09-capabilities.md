@@ -34,7 +34,7 @@ FrameSource (SPI)
   └─ MediaProjectionRecorder        会话式 · **同一条会话账**（同意 + FGS 同上），输出汇不同：Surface → MediaRecorder → 视频文件
        （落地；落点 files/scripts/<projectId>/.recordings/，路径**开的时候就回**）
 ```
-- 截图对象生命周期：JS `Image` 句柄 → native 帧句柄；`recycle()` 显式 + finalize 兜底；`dispose` tombstone 协议同 §7.4。
+- 截图对象生命周期：JS `Image` 句柄 → native 帧句柄；`recycle()` 显式 + ~~finalize 兜底~~（**作废 2026-11-07**：全仓无 `FinalizationRegistry`/finalize 实现，见 §7.4 同批注记）；兜底 = 连接终结时 `NativeImageAnalyzer.releaseConnection` 的连接级收口（§7.4）；`dispose` tombstone 协议同 §7.4。
 - `FLAG_SECURE` → 分类错误（§7.6），不返回黑图（让脚本可判断）。
 - **实现注记已外迁**：Kotlin/native 落地链、八个算子的逐条记账与真机实测数字，逐字见 [`design-status.md` §9.2 实现注记](../design-status.md#实现注记自各分卷外迁逐字保留)。
   留此的口径要点：`images` 十方法 SPI 走 §12.2 第七条独立缝（native 侧 OpenCV 4.14.0 静态链接）；**两缝帧表已合一**（§18 第 8 项 (b)：`screen.capture` 与 `images.decode` 的帧同号段互认，

@@ -45,10 +45,20 @@ RuntimeBridge (单例)                        ← requestId 生成/关联、TTL�
 - **payload 编码**：Kotlin DTO ↔ JSON（结构化小对象）；大二进制（Bitmap/像素）**不走 JSON**：直接 `ByteBuffer.allocateDirect` → `napi_create_external_arraybuffer` + `napi_adjust_external_memory`（0 拷贝，一次性 buf 生命周期绑定）。
 - **句柄（Handle）机制**：跨进程资源（UiObject/Image/MediaPlayer/Dialog）在 JS 侧是 `{gen, id}` 代理对象：
   - 内核持有 `HandleRegistry`：`id → NativeResource{ref, generation, tombstone}`。
-  - 显式 `dispose()` + `FinalizationRegistry` 兜底；GC 时向内核发 `release(id, gen)`。
+  - 显式 `dispose()`（~~`FinalizationRegistry` 兜底；GC 时向内核发 `release(id, gen)`~~ —— **作废 2026-11-07**：JS 侧从未实现 `FinalizationRegistry` 兜底，全仓零引用；兜底改由**连接级收口**承担，见本条末「连接级收口」）。
   - 任何操作若 `gen` 不匹配 → `ERR_STALE_HANDLE`（防「旧引用操纵新资源」竞态）。
   - 资源 `dispose` 后 tombstone 立即清除内核引用；销毁由内核单线程执行，杜绝并发 Dispose。
-- **引用计数对象**（Image/MediaPlayer）用弱引用 + finalize 兜底；`Image.recycle()` 比 GC 优先。
+- **引用计数对象**（Image/MediaPlayer）：`Image.recycle()` 显式释放（~~用弱引用 + finalize 兜底；`Image.recycle()` 比 GC 优先~~ —— **作废 2026-11-07**，同上：无 GC 兜底，见下条）。
+- **帧的兜底回收 = 连接级收口（2026-11-07 落地，非 GC）**：图像帧账记「发它的那条连接」，
+  该连接终结（abort / dispose / 自然退出）时由 `ConnectionResourceRegistry`（`:domain`，
+  每连接一个）回调 `NativeImageAnalyzer.releaseConnection(connectionId)`，把**这条连接名下**
+  全部在场帧还给 native —— 脚本不调 `recycle()` 不再等于像素活到宿主进程结束（native 帧表
+  没有批量释放口，故按连接归账）。**一连接只登记一条回收闭包**（`ConnectionResourceRegistry.register`），
+  按 `connectionId` 分区互不误收；无认证身份的调用（宿主直调/JVM 测试）落 `NO_CONNECTION` 分区、
+  不登记回收（没有连接可撤销）。**GC 兜底依旧不是事实**：`FinalizationRegistry` 在全仓
+  （`.ts`/`.js`/`.cjs`/`.mjs`/`.cpp`/`.cc`/`.h`/`.kt`）零引用；native 侧唯一的清理钩子是
+  `bridge_addon.cc` 的 `napi_add_env_cleanup_hook(env, TsfCleanup, …)`，那是**进程退出时**拆桥
+  TSF 的，不回收任何帧。
 - **帧的所有权：发号侧归一（§18 第 8 项 (b)）**：图像帧的在场性/发号/像素
   **只由 `:domain` `ImageAnalyzer` 一家持有**（`decode` 与 `ingest` 同一个 `nextRefId`）。
   `screen` 与 `images` 是**两个释放入口、一张表**：`frame.recycle()` 按来源各打各的
