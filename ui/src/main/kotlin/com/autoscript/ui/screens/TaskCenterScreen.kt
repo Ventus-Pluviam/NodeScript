@@ -75,6 +75,7 @@ import com.autoscript.ui.components.ActionBottomSheetItem
 import com.autoscript.ui.components.CollapseHeader
 import com.autoscript.ui.components.ContextMenu
 import com.autoscript.ui.components.DismissFocusOnWindowBlur
+import com.autoscript.ui.components.FileTypeAvatar
 import com.autoscript.ui.components.RegisterFocusDismiss
 import com.autoscript.ui.components.dismissFocusOnTapOutside
 import com.autoscript.ui.components.rememberFocusDismissState
@@ -654,7 +655,11 @@ private fun TaskRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Spacer(Modifier.width(14.dp))
-            TaskAvatar(task.scriptPath, task.name)
+            FileTypeAvatar(
+                ext = task.scriptPath.substringAfterLast('.', "").lowercase(),
+                name = task.name,
+                size = 44.dp,
+            )
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 ToneText(
@@ -750,46 +755,6 @@ private fun PlayButton(
             }
         } else {
             Glyph(kind = GlyphKind.PLAY, tint = ThemeColors.accent, size = 20.dp)
-        }
-    }
-}
-
-/**
- * 任务头像：脚本类型徽标（项目页 [FileTypeAvatar] 的 44dp 版 —— TG 联系人行头像
- * 44dp 圆的那一格）。扩展名哈希取色取字，常见类型画白线字形。
- * 不直接复用项目页那颗：它 private 且钉死 52dp，这里按 TG 行的 44dp 重画同款。
- */
-@Composable
-private fun TaskAvatar(scriptPath: String, name: String) {
-    val palette = ThemeColors
-    val ext = scriptPath.substringAfterLast('.', "").lowercase()
-    val colors = palette.fileAvatarColors
-    val slot = if (ext.isNotEmpty()) {
-        ext.first().code % colors.size
-    } else {
-        (name.firstOrNull()?.code ?: 0).mod(colors.size)
-    }
-    val knownGlyph = when (ext) {
-        "js", "mjs", "cjs", "ts", "json" -> GlyphKind.FILE_JS
-        "md", "txt", "log", "doc" -> GlyphKind.FILE_DOC
-        "html", "htm", "css" -> GlyphKind.FILE_HTML
-        "sh", "bash", "zsh" -> GlyphKind.FILE_SH
-        else -> null
-    }
-    Box(
-        Modifier
-            .size(44.dp)
-            .background(colors[slot], CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (knownGlyph != null) {
-            Glyph(kind = knownGlyph, tint = Color.White, size = 22.dp, weight = 1.15f)
-        } else {
-            Text(
-                text = ext.take(4).ifEmpty { "?" },
-                color = Color.White,
-                style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
-            )
         }
     }
 }
