@@ -169,18 +169,31 @@ class MediaProjectionSource(
             } catch (e: MediaProjectionOpenException) {
                 throw e.toAutojsException()
             }
-            return synchronized(lock) {
+            // 判据与登记**必须在同一个临界区里**：`releaseConnection` 也拿这把锁做它的
+            // 记账（撤销簿 + 摘面表），两段分开就会开出「撤销刚扫过面表、这条还没登记」
+            // 的窗口 —— 那正是本段要防的野句柄（登记了但设备层已按归属收掉）。
+            val committed = synchronized(lock) {
                 // 征询/建会话期间连接被撤销（`releaseConnection`）→ 设备层已按归属把这条
                 // 会话收掉；这里绝不能把它登记进在场面表（登记了就是一个永远读不到帧的野句柄）。
                 if (revokedOwners.contains(owner)) {
-                    sessions.close(opened.lease)
-                    throw CancellationException("投屏会话开启过程中被收口（连接撤销）")
+                    null
+                } else {
+                    val id = nextSessionId++
+                    val generation = ++epoch
+                    live[id] = Live(generation, owner, opened)
+                    MediaProjectionHandle(id, generation)
                 }
-                val id = nextSessionId++
-                val generation = ++epoch
-                live[id] = Live(generation, owner, opened)
-                MediaProjectionHandle(id, generation)
             }
+            if (committed == null) {
+                // 收口在**锁外**：设备层要还资源（VirtualDisplay release / projection.stop
+                // 是一次 binder 往返），占着本类的锁做它会把 `releaseConnection`
+                // （非挂起、可能在连接/撤销线程上被调）与 `nextFrame`/`stop` 一起挡住。
+                // 与 [stop] 的写法同款，也是类 KDoc「临界区只做 map 读写」那句话的兑现。
+                // `sessions.close` 按 leaseId+owner 比对，幂等；`opened` 是局部值，锁外仍有效。
+                sessions.close(opened.lease)
+                throw CancellationException("投屏会话开启过程中被收口（连接撤销）")
+            }
+            return committed
         } finally {
             synchronized(lock) {
                 if (opening == owner) opening = null
