@@ -868,6 +868,34 @@ class InstallCoordinatorTest {
     }
 
     @Test
+    fun `在途重操作被取消 结果不采纳 事务只 fail 一次`() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val c = coordinator(executor = FakeExecutor { gate.await() })
+        val mine = detached { c.install("p1", listOf(PackageSpec("axios"))) }
+        val handle = awaitHandle(c)
+        c.cancel(InstallHandle(handle, "p1", 0))
+        gate.complete(Unit)
+        // 修复前：execute 返回后 runHeavy 不查 cancelled，继续走到 staging.commit ——
+        // 撞上已被 cancel 扫掉的暂存目录（IAE「暂存目录不存在」一路抛回用户界面），
+        // 失败收尾再补一条同 nonce 的 FAIL（重复终账）。T1 那条链（runScriptOps）一直
+        // 有「执行体已收尾，结果不采纳」的检查，重操作这条漏了。
+        val ex = assertThrows(AutojsException::class.java) { runBlocking { mine.await() } }
+        assertEquals(ErrorCode.ERR_ENGINE_STOPPED, ex.error, "执行体已收尾但结果不采纳（cancel 先到）")
+        assertEquals(
+            listOf(InstallJournal.State.BEGIN, InstallJournal.State.FAIL),
+            journal.all().map { it.state },
+            "同 nonce 只许 BEGIN + 一条 FAIL（cancel 与失败收尾不许各写一条），实际 ${journal.all()}",
+        )
+        assertFalse(
+            Files.isDirectory(layout.nodeModules(ProjectId("p1"))),
+            "已取消的安装不得把暂存落位成 node_modules",
+        )
+        val finals = c.drainEvents("p1", 0, 32).events.map { it.event }.filterIsInstance<InstallEvent.Finished>()
+        assertEquals(1, finals.size, "一个句柄只发一条终态事件")
+        assertEquals("已取消", finals.single().detail)
+    }
+
+    @Test
     fun `T1 取消：不写 journal 事务（无源之记会污染残骸清扫的判据）`() = runBlocking {
         writeManifest("p1", """{"name":"p1","version":"1.0.0","scripts":{"build":"tsc"}}""")
         val gate = CompletableDeferred<Unit>()
