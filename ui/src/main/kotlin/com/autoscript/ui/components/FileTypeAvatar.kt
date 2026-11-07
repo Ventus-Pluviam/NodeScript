@@ -22,8 +22,8 @@ import com.autoscript.ui.theme.ThemeColors
  * 底色 = 扩展名哈希取色表槽位（同一扩展名恒同色），字 = 扩展名（最多 4 字符），
  * JS/HTML/SH/MD 等常见类型换专属字形（白线画在色底上）。
  *
- * 自 `ProjectScreen` 上提为共享组件（原先 private 钉死 52dp，
- * 任务中心抄了第二份 44dp 的 `TaskAvatar` —— 两份必然漂）。调用方只给尺寸，
+ * 自 `ProjectScreen` 上提为共享组件（原先 private 钉死 52dp；任务中心曾抄第二份
+ * 44dp 的 `TaskAvatar` —— 取色公式漂过「+1」那一笔，已归并回这里）。调用方只给尺寸，
  * 图标/字号按比例派生（52dp 档 = 项目页文件行，44dp 档 = TG 联系人行/日志列表行）。
  */
 @Composable
@@ -35,19 +35,8 @@ fun FileTypeAvatar(
 ) {
     val palette = ThemeColors
     val colors = palette.fileAvatarColors
-    val slot = if (ext.isNotEmpty()) {
-        ext.first().code % colors.size
-    } else {
-        name.firstOrNull()?.code?.plus(1)?.mod(colors.size) ?: 0
-    }
-    val bg = colors[slot]
-    val knownGlyph = when (ext) {
-        "js", "mjs", "cjs", "ts", "json" -> GlyphKind.FILE_JS
-        "md", "txt", "log", "doc" -> GlyphKind.FILE_DOC
-        "html", "htm", "css" -> GlyphKind.FILE_HTML
-        "sh", "bash", "zsh" -> GlyphKind.FILE_SH
-        else -> null
-    }
+    val bg = colors[avatarColorSlot(ext, name, colors.size)]
+    val knownGlyph = avatarGlyph(ext)
     val ratio = size / 52.dp
     Box(
         modifier
@@ -67,4 +56,30 @@ fun FileTypeAvatar(
             )
         }
     }
+}
+
+/**
+ * 取色槽位：扩展名首字符对槽数取模（同一扩展名恒同色）；**没有扩展名时退回名字首字符
+ * 并 +1**（与有扩展名那条错开 —— 「同名同槽」会让无扩展名的脚本与扩展名首字母碰巧相同
+ * 的条目同色，读起来像同一个文件）。名字也没有时归 0 号槽。
+ *
+ * 提到顶层是为了 JVM 可测：这条公式曾经两处各抄一份、任务中心那份少了「+1」
+ * （`TaskAvatar` 旧拷贝，已删），钉成测试后第二个调用点再加进来也漂不走。
+ */
+internal fun avatarColorSlot(ext: String, name: String, slotCount: Int): Int {
+    if (slotCount <= 0) return 0
+    return if (ext.isNotEmpty()) {
+        ext.first().code % slotCount
+    } else {
+        name.firstOrNull()?.code?.plus(1)?.mod(slotCount) ?: 0
+    }
+}
+
+/** 常见扩展名 → 专属字形（白线画在色底上）；不在表里的画扩展名缩写字。 */
+internal fun avatarGlyph(ext: String): GlyphKind? = when (ext) {
+    "js", "mjs", "cjs", "ts", "json" -> GlyphKind.FILE_JS
+    "md", "txt", "log", "doc" -> GlyphKind.FILE_DOC
+    "html", "htm", "css" -> GlyphKind.FILE_HTML
+    "sh", "bash", "zsh" -> GlyphKind.FILE_SH
+    else -> null
 }
