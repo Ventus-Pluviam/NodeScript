@@ -20,7 +20,8 @@ import java.util.concurrent.atomic.AtomicLong
  *    `seq > sinceSeq` 取增量，空增量回 `first == last == sinceSeq` + 空表；
  * 4. **注销纪律**：已知已关幂等成功（脚本 `finally` 补刀是常态），未知/跨代
  *    抛 `ERR_STALE_HANDLE`；已关订阅的 `drain` 同样 `ERR_STALE_HANDLE`
- *    （"关掉的订阅"与"没见过的订阅"必须能分辨，§7.4）；
+ *    （"关掉的订阅"与"没见过的订阅"必须能分辨，§7.4）—— 分辨靠**号段水位**
+ *    [lastIssued]，不是"发过的号"那张集合（见其 KDoc：那是一条无界增长）；
  * 5. **系统事实折叠在本层**：名不在表/设备缺席 → `ERR_NOT_SUPPORTED`；
  *    `registerListener` 回 false → `ERR_SERVICE_DISABLED`（传感器在但系统不给收）。
  *
@@ -32,13 +33,31 @@ class AndroidSensorSource(
 ) : SensorSource {
 
     private val guard = Any()
-    private val ids = AtomicLong(1)
+    private val ids = AtomicLong(FIRST_REF_ID)
 
-    /** refId → 订阅态（活着的；unregister 后移除，tomb 入 [closedEver]）。 */
+    /** refId → 订阅态（活着的；`unregister`/`unregisterAll` 后移除）。 */
     private val live = LinkedHashMap<Long, Subscription>()
 
-    /** 已发过号的 refId（含已关闭）：分辨"关过的订阅"与"没见过的订阅"。 */
-    private val closedEver = HashSet<Long>()
+    /**
+     * **已发出去的最后一个号**（水位；只在 [guard] 内读写，发号也在同一把锁内）。
+     *
+     * 它是"关过的订阅"与"没见过的订阅"的**全部**判据（[issuedLocked]）：号单调递增且
+     * **绝不复用**（§7.4），于是 `号 ≤ 水位 && 不在 live` ⟺ 发过且已关，`号 > 水位`
+     * ⟺ 从来没见过。
+     *
+     * **为什么不是"发过的号"那张集合**（原 `closedEver: HashSet<Long>`）：本类是
+     * `SystemSpis.of` 装配期建的**进程级单例**，一张只进不退的号集合就是一条无界增长
+     * —— 一个 register/unregister 循环跑一百万次，集合里就有一百万个装箱 Long（约几十 MB），
+     * 而它的用途只是回答一个**区间**问题。仓里同类三处都已经裁过
+     * （`ProjectionForegroundHost.ABANDONED_KEEP`、`MediaProjectionRecorder.FINISHED_KEEP`、
+     * `ScreenNamespaceHandler.RECORDINGS_KEEP` 各留 64 条），这里连"留多少条"都不用定：
+     * 水位是 O(1) 且**精确**（裁剪过的集合会把"很久以前关的"误报成"没见过"）。
+     *
+     * **水位成立的前提**：号只在**订阅真建成之后**才前进（见 [register]）—— 否则失败那次
+     * 消耗的号会落在水位以下、却从没进过 `live`，于是一个从没发出去的号被报成"已关闭"
+     * （那是 wire 上的谎：脚本会以为它曾经拿到过这个订阅）。
+     */
+    private var lastIssued: Long = FIRST_REF_ID - 1
 
     private inner class Subscription(
         val token: Any,
@@ -57,7 +76,6 @@ class AndroidSensorSource(
         if (!ops.hasSensor(norm)) {
             throw AutojsException(ErrorCode.ERR_NOT_SUPPORTED, "设备不支持传感器: $name")
         }
-        val refId = ids.getAndIncrement()
         val sub = Subscription(token = Any())
         val accepted = try {
             ops.start(norm, delay, sub.token) { values, accuracy, timestamp ->
@@ -75,7 +93,14 @@ class AndroidSensorSource(
         if (!accepted) {
             throw AutojsException(ErrorCode.ERR_SERVICE_DISABLED, "传感器系统拒收: $name")
         }
-        synchronized(guard) { live[refId] = sub }
+        // **成了才占号**（水位判据的前提，见 [lastIssued]）：发号与入表在同一把锁内，
+        // 于是水位与 live 之间不存在"号发了但表还没落"的窗口。
+        val refId = synchronized(guard) {
+            val id = ids.getAndIncrement()
+            live[id] = sub
+            lastIssued = id
+            id
+        }
         return HandleRef(refId, GENERATION)
     }
 
@@ -88,14 +113,13 @@ class AndroidSensorSource(
         }
         val sub = synchronized(guard) {
             val found = live.remove(ref.refId)
-            if (found == null && ref.refId !in closedEver) {
+            if (found == null && !issuedLocked(ref.refId)) {
                 throw AutojsException(ErrorCode.ERR_STALE_HANDLE, "未知传感器订阅 refId=${ref.refId}")
             }
             found
         }
-        // 已关闭（号发过但不在 live）→ 幂等返回，不再碰传感器系统。
+        // 已关闭（号在水位以下但不在 live）→ 幂等返回，不再碰传感器系统。
         if (sub == null) return
-        synchronized(guard) { closedEver += ref.refId }
         try {
             ops.stop(sub.token)
         } catch (_: Exception) {
@@ -107,7 +131,7 @@ class AndroidSensorSource(
     override suspend fun unregisterAll() {
         val subs = synchronized(guard) {
             val all = live.values.toList()
-            closedEver += live.keys
+            // 不用另记 tomb：清空的号本来就都在水位以下（[issuedLocked] 即答"已关闭"）。
             live.clear()
             all
         }
@@ -132,7 +156,7 @@ class AndroidSensorSource(
             live[ref.refId]
                 ?: throw AutojsException(
                     ErrorCode.ERR_STALE_HANDLE,
-                    if (ref.refId in closedEver) "传感器订阅已关闭 refId=${ref.refId}"
+                    if (issuedLocked(ref.refId)) "传感器订阅已关闭 refId=${ref.refId}"
                     else "未知传感器订阅 refId=${ref.refId}",
                 )
         }
@@ -142,6 +166,14 @@ class AndroidSensorSource(
         if (picked.isEmpty()) return SensorEventBatch(sinceSeq, sinceSeq, emptyList())
         return SensorEventBatch(picked.first().seq, picked.last().seq, picked)
     }
+
+    /**
+     * 这个号**发出去过**吗（调用方须持 [guard]）：`[FIRST_REF_ID, lastIssued]` 区间内即发过。
+     *
+     * 下界那一半不是多余的：负数与 0 都在水位以下，却从没发过 —— 少了它就是拿"已关闭"
+     * 回答一个垃圾号（同 [lastIssued] 那条"不报假事实"的理由）。
+     */
+    private fun issuedLocked(refId: Long): Boolean = refId in FIRST_REF_ID..lastIssued
 
     /** 系统回调入口（ops 真实现经 SensorEventListener 转调；单测直调）。 */
     private fun push(sub: Subscription, values: List<Double>, accuracy: Int, timestamp: Long) {
@@ -177,6 +209,9 @@ class AndroidSensorSource(
     companion object {
         /** 句柄代次：订阅不复用，故恒 1（§7.4 的 generation 语义）。 */
         const val GENERATION: Long = 1
+
+        /** 号段起点（[lastIssued] 的下界判据；单源，别在两处各写一个 1）。 */
+        const val FIRST_REF_ID: Long = 1L
 
         /** 单订阅采样环上限（与 A11yEventRing 同纪律：超界丢最旧，seq 空洞可见）。 */
         const val RING_CAPACITY: Int = 512
