@@ -112,6 +112,49 @@ class AndroidFloatingWindowHostTest {
         assertEquals(1, ops.removed.size)
     }
 
+    // ── 号段水位：`everIssued` 换成 O(1) 判据之后，语义一条不许松 ────────────
+
+    @Test
+    fun `水位判据分开"已关"与"没见过"——close 幂等靠的是水位不是集合`() = runBlocking {
+        val ops = FakeOps()
+        val host = AndroidFloatingWindowHost(ops)
+        val a = host.create(FloatingWindowSpec.DEFAULT)
+        host.create(FloatingWindowSpec.DEFAULT)
+        host.close(a)
+
+        host.close(a)                       // 已关（号在水位以下、不在 live）→ 幂等成功
+        assertEquals(1, ops.removed.size, "幂等关闭只碰一次窗口系统")
+
+        val future = assertThrows(AutojsException::class.java) {
+            runBlocking { host.close(HandleRef(a.refId + 99, 1)) }
+        }
+        assertEquals(ErrorCode.ERR_STALE_HANDLE, future.error, "水位以上的号：没见过")
+
+        // 垃圾号（0 与负数都在水位以下，却从没发过）：不许借"已关闭"糊过去
+        for (junk in listOf(0L, -1L, Long.MIN_VALUE)) {
+            val e = assertThrows(AutojsException::class.java) {
+                runBlocking { host.close(HandleRef(junk, 1)) }
+            }
+            assertEquals(ErrorCode.ERR_STALE_HANDLE, e.error, "垃圾号 $junk")
+        }
+        assertEquals(1, ops.removed.size, "垃圾号不许误关活着的窗口")
+    }
+
+    @Test
+    fun `加窗被拒不推进水位——从没发出去的号不许被报成"已关闭"`() = runBlocking {
+        val ops = FakeOps(failAdd = SecurityException("permission denied"))
+        val host = AndroidFloatingWindowHost(ops)
+        assertThrows(AutojsException::class.java) {
+            runBlocking { host.create(FloatingWindowSpec.DEFAULT) }
+        }
+        // 若失败那次消耗了号，1 就落进水位以下 → 被答成"已关闭"（幂等成功，一声不响）
+        val e = assertThrows(AutojsException::class.java) {
+            runBlocking { host.close(HandleRef(AndroidFloatingWindowHost.FIRST_REF_ID, 1)) }
+        }
+        assertEquals(ErrorCode.ERR_STALE_HANDLE, e.error, "从没发出去的号必须是「未知」")
+        assertTrue(e.message!!.contains("未知"), "实际 ${e.message}")
+    }
+
     private class FakeOps(
         private val failAdd: Exception? = null,
         private val failRemove: Exception? = null,

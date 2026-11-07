@@ -209,6 +209,100 @@ class AndroidSensorSourceTest {
         Unit
     }
 
+    // ── 号段水位：`closedEver` 换成 O(1) 判据之后，语义一条不许松 ────────────
+
+    @Test
+    fun `水位判据把三种号分开——已关、没见过、垃圾号`() = runBlocking {
+        val source = AndroidSensorSource(FakeOps())
+        val ref = source.register("accelerometer")
+        source.unregister(ref)
+
+        // 已关：号在水位以下、不在 live → "已关闭"（不是"未知"）
+        val closed = assertThrows(AutojsException::class.java) {
+            runBlocking { source.drain(ref, sinceSeq = 0, max = 10) }
+        }
+        assertTrue(closed.message!!.contains("已关闭"), "实际 ${closed.message}")
+
+        // 没见过：号在水位以上 → "未知"
+        val future = assertThrows(AutojsException::class.java) {
+            runBlocking { source.drain(HandleRef(ref.refId + 1, 1), sinceSeq = 0, max = 10) }
+        }
+        assertTrue(future.message!!.contains("未知"), "实际 ${future.message}")
+
+        // 垃圾号（0 与负数都在水位以下，却从没发过）：必须报"未知"，不许借"已关闭"糊过去
+        for (junk in listOf(0L, -1L, Long.MIN_VALUE)) {
+            val e = assertThrows(AutojsException::class.java) {
+                runBlocking { source.drain(HandleRef(junk, 1), sinceSeq = 0, max = 10) }
+            }
+            assertEquals(ErrorCode.ERR_STALE_HANDLE, e.error)
+            assertTrue(e.message!!.contains("未知"), "垃圾号 $junk 不是「已关闭」：${e.message}")
+        }
+        Unit
+    }
+
+    @Test
+    fun `系统拒收不推进水位——从没发出去的号不许被报成"已关闭"`() = runBlocking {
+        // 前半程拒收：那次消耗的号若落进水位以下，就会让 1 号被答成"关过的订阅"。
+        val refusing = AndroidSensorSource(FakeOps(refuseStart = true))
+        assertThrows(AutojsException::class.java) { runBlocking { refusing.register("accelerometer") } }
+        val junk = assertThrows(AutojsException::class.java) {
+            runBlocking { refusing.drain(HandleRef(1, 1), sinceSeq = 0, max = 10) }
+        }
+        assertTrue(junk.message!!.contains("未知"), "从没发出去的号必须是「未知」：${junk.message}")
+
+        // 同一个实例上拒收之后真建一个：首号仍是 1（发号器只在成功后前进）
+        val ops = FakeOps(refuseStart = true)
+        val source = AndroidSensorSource(ops)
+        assertThrows(AutojsException::class.java) { runBlocking { source.register("accelerometer") } }
+        assertThrows(AutojsException::class.java) { runBlocking { source.register("light") } }
+        ops.refuseStart = false
+        val ok = source.register("accelerometer")
+        assertEquals(AndroidSensorSource.FIRST_REF_ID, ok.refId, "两次失败没占号")
+        Unit
+    }
+
+    @Test
+    fun `unregister 的水位判据同样分三种——已关幂等、没见过与跨代如实 STALE`() = runBlocking {
+        val ops = FakeOps()
+        val source = AndroidSensorSource(ops)
+        val a = source.register("accelerometer")
+        val b = source.register("light")
+        source.unregister(a)
+
+        source.unregister(a)                      // 已关 → 幂等成功，不再碰传感器系统
+        assertEquals(1, ops.stopped.size, "幂等关闭只碰一次系统")
+
+        val future = assertThrows(AutojsException::class.java) {
+            runBlocking { source.unregister(HandleRef(b.refId + 1, 1)) }
+        }
+        assertTrue(future.message!!.contains("未知"), "水位以上的号：${future.message}")
+
+        val junk = assertThrows(AutojsException::class.java) {
+            runBlocking { source.unregister(HandleRef(0, 1)) }
+        }
+        assertTrue(junk.message!!.contains("未知"), "0 从没发过：${junk.message}")
+        assertEquals(1, ops.stopped.size, "垃圾号不许误关活着的订阅")
+        Unit
+    }
+
+    @Test
+    fun `unregisterAll 之后全部号仍答"已关闭"——不用另记 tomb`() = runBlocking {
+        val source = AndroidSensorSource(FakeOps())
+        val a = source.register("accelerometer")
+        val b = source.register("light")
+        source.unregisterAll()
+
+        for (ref in listOf(a, b)) {
+            val e = assertThrows(AutojsException::class.java) {
+                runBlocking { source.drain(ref, sinceSeq = 0, max = 10) }
+            }
+            assertTrue(e.message!!.contains("已关闭"), "清空的号本来就在水位以下：${e.message}")
+            // 且 unregister 仍是幂等成功（不抛）
+            source.unregister(ref)
+        }
+        Unit
+    }
+
     @Test
     fun `unregisterAll清全场逐个停`() = runBlocking {
         val ops = FakeOps()
