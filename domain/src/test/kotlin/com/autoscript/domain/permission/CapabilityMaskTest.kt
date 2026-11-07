@@ -154,6 +154,28 @@ class CapabilityMaskTest {
     }
 
     @Test
+    fun `shell 只有命名空间一档——mode 是 payload，目录看不见它`() {
+        // 钉的是「谁在判 ROOT 档」这件事的**实际答案**（AndroidShellExecutor / SystemNamespaces
+        // 的 KDoc 原写「ROOT 模式由装配层的 PermissionFacade 先判」—— 那条路上零判据）。
+        //
+        // 目录只有 `shell` → DEVICE_CONTROL 一档：`BridgeCapabilityCatalog` 是
+        // 「namespace (+ method)」两张表，而 `mode`（default/root/adb）在 **payload** 里，
+        // 路由层根本看不见。于是任何持 DEVICE_CONTROL 的执行都能请求 ROOT 档 —— 这不是
+        // 漏写的判据，是 §11.3 第 1 条的既有事实（同 UID 同权：脚本绕开桥直接 spawn `su`
+        // 效果一样，掩码不是沙箱）。
+        val required = BridgeCapabilityCatalog.required("shell", "exec")
+        assertEquals(BridgeCapabilityCatalog.namespaceRequired("shell"), required, "exec 没有更细的档")
+        assertTrue(required.contains(BridgeCapability.DEVICE_CONTROL))
+        // 生产缺省档（无来源元数据 → UNKNOWN）**覆盖**它：ROOT 档对任何已认证执行可达。
+        assertTrue(
+            TrustTierMasks.UNKNOWN_DEFAULT.covers(required),
+            "缺省档覆盖 shell 要求（含 ROOT 档）—— 想收窄得改 §11 矩阵，不是改目录",
+        )
+        // 收窄到「不含 DEVICE_CONTROL」的掩码则一律拒（失败方向是拒，不是放行）。
+        assertFalse(CapabilityMask.of(BridgeCapability.SENSORS).covers(required))
+    }
+
+    @Test
     fun `console 面不要求设备能力`() {
         assertEquals(CapabilityMask.NONE, BridgeCapabilityCatalog.required("console", "log"))
     }

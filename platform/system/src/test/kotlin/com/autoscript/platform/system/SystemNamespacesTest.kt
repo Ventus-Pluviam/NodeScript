@@ -126,6 +126,29 @@ class SystemNamespacesTest {
     }
 
     @Test
+    fun `shell 的 ROOT 档不经三态门禁——mode 直接落到执行体`() = runBlocking {
+        // 钉的是**实际行为**（订正后的口径）：`AndroidShellExecutor` 与 `SystemNamespaces`
+        // 的 KDoc 原写「ROOT 模式能不能用由装配层的 PermissionFacade 先判（§9.5）」，而那条
+        // 路上**零判据** —— `PermissionFacade.ensure`/`requireGrantedOrThrow` 在生产代码里
+        // 没有调用点，`PlatformWiring.inject` 是纯转接。mode 是 payload 字段，桥面掩码目录
+        // 也只有 `shell` → DEVICE_CONTROL 一档（`:domain` 的 CapabilityMaskTest 钉那条），
+        // 于是 ROOT 档一路走到执行体，中间没有任何一道三态查询。
+        //
+        // 真在判的只有设备自己怎么说（`su` 不在 → ERR_SERVICE_DISABLED；`su` 在但被拒 →
+        // 非零退出码原样进 ShellResult），与 §9.3「root 通道恒登记，真无 root 时命令自己失败」
+        // 同一条口径。**要把 ROOT 档收窄成"先判后用"，改这条用例之前先改 §11 的矩阵** ——
+        // 掩码不是沙箱（同 UID 同权，脚本绕开桥直接 spawn `su` 效果一样）。
+        val fake = FakeShell()
+        val h = SystemNamespaces.shell(fake)
+        assertInstanceOf(
+            BridgeResponse.Ok::class.java,
+            h.handle(BridgeRequest(1, "shell", "exec", """{"cmd":"id","mode":"root"}""", 5_000)),
+        )
+        assertEquals(ShellMode.ROOT, fake.mode, "ROOT 档原样落到执行体（不经三态、不经任何预检）")
+        Unit
+    }
+
+    @Test
     fun `shell 截断标志原样透出：截断不改退出码也不折成错误`() = runBlocking {
         val fake = FakeShell(result = { ShellResult(0, "big", null, truncated = true) })
         val resp = SystemNamespaces.shell(fake)
