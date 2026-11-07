@@ -126,6 +126,16 @@ class InMemoryUiTreeTest {
     }
 
     @Test
+    fun `click 不可点返回 false 与设备同口径`() = runBlocking {
+        // 设备上 `performAction(ACTION_CLICK)` 对不可点节点回 false（系统真相）；
+        // 替身此前恒 true —— 脚本在测试里点什么都"成功"，上真机才知道没点上。
+        // AndroidUiTree 的 KDoc 写明内存树靠属性预检**近似**系统，click 是那套预检漏掉的一处。
+        val label = tree.add(InMemoryUiTree.Attrs(text = "纯文本", clickable = false))
+        assertEquals(false, tree.click(label), "不可点返回 false（不抛错）")
+        assertTrue(tree.click(button()), "可点照常 true")
+    }
+
+    @Test
     fun `scroll 可滚动回 true 并记事件，不可滚动回 false`() = runBlocking {
         val list = tree.add(InMemoryUiTree.Attrs(className = "RecyclerView", scrollable = true))
         assertTrue(tree.scroll(list, com.autoscript.domain.automation.ScrollDirection.DOWN))
