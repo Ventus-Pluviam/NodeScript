@@ -1,6 +1,7 @@
 package com.autoscript.platform.system.persist
 
 import com.autoscript.domain.scripts.RunState
+import com.autoscript.domain.scripts.isTerminal
 
 /**
  * 运行档案的 SQL 面（§8.5 归档入口）：
@@ -32,16 +33,23 @@ internal object RunArchiveSql {
     const val LINK_TABLE = "engine_run_link"
 
     /**
-     * 终态集合（SQL 字面量，`IN (...)` 用）。
+     * 终态集合（SQL 字面量，`IN (...)` 用）—— **从 `:domain` 的判据派生，不手抄**。
      *
-     * 与 `com.autoscript.domain.scripts.isTerminal` **同源但独立**：那份是 Kotlin 侧的
-     * 判定（读口用），这里是 SQL 侧的判定（写口用）。两侧各有一份不是疏忽而是必然 ——
-     * SQL 字符串不能引用 Kotlin 函数。**改一处必须看另一处**（本文件 KDoc 点名的纪律）。
+     * 此前这里是一份手写列表，注释写着「与 `com.autoscript.domain.scripts.isTerminal`
+     * 同源但独立，改一处必须看另一处」。那份「必须」是**没有守卫的**：`RunState` 加一个
+     * 终态、`isTerminal` 同步改了，而这张表没跟上时，SQL 侧的 `advanceState` 会把那个
+     * 状态当成**中间态**放行 —— 表现是「终态记录被改写/复活」，且只有 SQLite 实现错，
+     * `FileRunArchive`/`InMemoryRunArchive` 都对（它们用的是 domain 判据）。这种只有
+     * 一个实现错的分歧最难在契约套件里看出来。
+     *
+     * 现在谓词与枚举都来自 domain：SQL 字符串引用不了 Kotlin 函数这件事仍然成立
+     * （所以 [TERMINAL_IN] 还是文本），但**集合本身不再有第二份**，漂移面消失。
      */
-    private val TERMINAL_STATES = listOf("SUCCEEDED", "FAILED", "CRASHED", "CANCELLED")
+    internal val TERMINAL_STATES: List<String> =
+        RunState.entries.filter { it.isTerminal }.map { it.name }
 
     /** 终态集合的 SQL 字面量（`IN (...)` 用）—— **每个值都要单引号**，否则被当成列名。 */
-    private val TERMINAL_IN = TERMINAL_STATES.joinToString(", ") { "'$it'" }
+    internal val TERMINAL_IN: String = TERMINAL_STATES.joinToString(", ") { "'$it'" }
 
     /** 建表 + 关联表（逐条一句，真机逐条 execSQL；幂等 —— 既有库重开照样能跑）。 */
     val SCHEMA: List<String> = listOf(

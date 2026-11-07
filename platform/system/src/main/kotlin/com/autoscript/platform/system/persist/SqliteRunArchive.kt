@@ -4,6 +4,7 @@ import com.autoscript.domain.scripts.EngineRunLink
 import com.autoscript.domain.scripts.RunArchive
 import com.autoscript.domain.scripts.RunRecord
 import com.autoscript.domain.scripts.RunState
+import com.autoscript.domain.scripts.isTerminal
 
 /**
  * 运行档案的 SQLite 实现（§8.2 归档 + §8.5 归档入口）。
@@ -30,6 +31,14 @@ import com.autoscript.domain.scripts.RunState
  *
  * **不做日志清理/保留期**：老记录一旦能丢，`recordsOfIntent` 的历史追溯即失真 ——
  * 那是策略变更（A13 仍未拍板），不是本次存储引擎替换的一部分。
+ *
+ * **终态判据只有一份**：Kotlin 侧（本类的 `check`）直接用 `:domain` 的 `RunState.isTerminal`，
+ * SQL 侧（`WHERE state NOT IN (…)`）用 [RunArchiveSql.TERMINAL_STATES] —— 而那份也是从
+ * 同一个 domain 谓词派生的（`RunState.entries.filter { it.isTerminal }`），所以「改一处必须
+ * 看另一处」这条纪律现在只剩字符串进不了谓词、谓词进不了 SQL 文本那一半，集合本身没有
+ * 第二份（守卫在 `RunArchiveSqlTerminalStatesTest`）。本类此前**还抄了第三份**：一个私有的
+ * `RunState.isTerminalState()` 与 domain 那份逐字同义 —— 它和 `FileRunArchive`/
+ * `InMemoryRunArchive` 的分歧方向是「SQLite 侧的复活判据与另两个实现不同步」，删掉它。
  */
 class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchive {
 
@@ -63,8 +72,8 @@ class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchiv
             runner.run(listOf(RunArchiveSql.insert(flat))).first().singleOrNull()
                 ?: error("登记后读不回结果（库异常）")
         } else {
-            check(!existing.state.isTerminalState()) {
-                val verb = if (!record.state.isTerminalState()) "复活" else "不可改写"
+            check(!existing.state.isTerminal) {
+                val verb = if (!record.state.isTerminal) "复活" else "不可改写"
                 "终态记录$verb: engineRunId=${record.id} state=${existing.state}"
             }
             val existingLink = findLink(record.id)
@@ -170,8 +179,4 @@ class SqliteRunArchive(private val runner: SqliteIntentStore.Runner) : RunArchiv
         this[key] as? String ?: error("列 $key 缺失或非文本（库异常）")
 
     private fun Map<String, Any?>.optStr(key: String): String? = this[key] as? String
-
-    private fun RunState.isTerminalState(): Boolean =
-        this == RunState.SUCCEEDED || this == RunState.FAILED ||
-            this == RunState.CRASHED || this == RunState.CANCELLED
 }
