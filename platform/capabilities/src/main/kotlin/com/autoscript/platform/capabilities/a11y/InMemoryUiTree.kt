@@ -137,7 +137,11 @@ class InMemoryUiTree : UiNodeTreeReader, UiActionExecutor {
     // ── UiActionExecutor ─────────────────────────────────────────────
 
     override suspend fun click(handle: HandleRef): Boolean = guard.withLock {
-        liveLocked(handle)
+        // 与 longClick/setText/scroll 同一条预检近似（AndroidUiTree KDoc：内存树没有系统
+        // 可问，才用属性预检近似）——设备上 `performAction(ACTION_CLICK)` 对不可点节点
+        // 回 false，替身若恒 true，测试里点什么都"成功"，上真机才知道没点上（假绿）。
+        val e = liveLocked(handle)
+        if (!e.attrs.clickable) return false
         true
     }
 
