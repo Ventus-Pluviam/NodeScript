@@ -115,4 +115,48 @@ class ProjectionForegroundHostTest {
         assertTrue(ProjectionForegroundHost.running)
         ProjectionForegroundHost.stop(l.generation) {}
     }
+
+    @Test
+    fun `服务侧停止 —— 调用方已先清账（设备层收口路径）照样真的撤前台`() {
+        val l = lease()
+        ProjectionForegroundHost.confirm(l.generation)
+        // `AndroidProjectionForeground.stop` 的形状：投递 ACTION_STOP 后**同步**把账先清掉
+        // （"我们请求过停" ≠ "还在前台"）。服务随后才处理那条 Intent —— 账虽已清，
+        // 也必须停；旧口径（服务侧也走 `stop`）在这里回 false、不动手，FGS 与常驻通知
+        // 就成了孤儿（通知栏永远挂着「正在投屏」）。
+        assertTrue(ProjectionForegroundHost.stop(l.generation) {})
+        var stopped = false
+        assertTrue(
+            ProjectionForegroundHost.stopFromService(l.generation) { stopped = true },
+            "本代主人已先清账：服务侧必须照样停",
+        )
+        assertTrue(stopped)
+        assertFalse(ProjectionForegroundHost.running)
+    }
+
+    @Test
+    fun `服务侧停止 —— 通知按钮路径照停，迟到的旧代际停不到新代际的前台`() {
+        // 通知栏「停止」按钮：没人预清账，currentGeneration 正是这一代 —— 停。
+        val l = lease()
+        ProjectionForegroundHost.confirm(l.generation)
+        var stopped = false
+        assertTrue(ProjectionForegroundHost.stopFromService(l.generation) { stopped = true })
+        assertTrue(stopped)
+        assertFalse(ProjectionForegroundHost.running)
+
+        // 旧代际的设备层收口（预清账）之后新会话已进前台：旧代际迟到的 ACTION_STOP 不动手。
+        val old = lease()
+        val fresh = lease()
+        ProjectionForegroundHost.confirm(old.generation)
+        ProjectionForegroundHost.stop(old.generation) {}
+        ProjectionForegroundHost.confirm(fresh.generation)
+        var stoppedNew = false
+        assertFalse(
+            ProjectionForegroundHost.stopFromService(old.generation) { stoppedNew = true },
+            "另一代正在前台：旧代际迟到的 ACTION_STOP 不许拆它的前台",
+        )
+        assertFalse(stoppedNew)
+        assertTrue(ProjectionForegroundHost.running)
+        ProjectionForegroundHost.stop(fresh.generation) {}
+    }
 }
