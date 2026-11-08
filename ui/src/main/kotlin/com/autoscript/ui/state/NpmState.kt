@@ -267,9 +267,15 @@ data class NpmState(
                 installing = previous.installing,
                 installProgress = previous.installProgress,
                 installSeq = previous.installSeq,
-                // 逐格桥的缓冲**不保留**（缺省即空）：单次现取整批折叠到批尾，阶段条已是
-                // 最新，缓冲里比它还旧的那几条没有意义 —— 留着只会在下一个轮询 tick 里
-                // 把它往回拽（见 `pendingProgressEvents` 的 KDoc）。
+                // 逐格桥的缓冲**必须保留**（与 [installProgress]/[installSeq] 同一条「现取不抹
+                // 操作面」纪律）：逐格轮询（`pollInstallWhileRunning`）每一拍都会经
+                // `loadNpmSnapshot` 走到这里，而安装期快照**每拍都在变**（尺寸在长），
+                // `canReusePrevious` 的短路接不住 —— 在这里把缓冲抹掉，等于「一拍只放一条、
+                // 剩下的全丢」：游标已推到批尾，丢掉的几条**再也拉不回来**，阶段条卡在
+                // 头一两格直到会话结束（用户看到的就是「缓存一直在涨、进度条不动」）。
+                // 单次现取（`pollInstallEvents`）那条路要清缓冲，它自己显式清：「整批折到
+                // 批尾」的是它，不是这里。
+                pendingProgressEvents = previous.pendingProgressEvents,
                 // 日志那一段同理：它是"这次会话已经发生了什么"的**累积**，每次刷新重建一份
                 // 就等于把用户刚看到的 npm 输出抹成空的。
                 consoleLines = previous.consoleLines,
