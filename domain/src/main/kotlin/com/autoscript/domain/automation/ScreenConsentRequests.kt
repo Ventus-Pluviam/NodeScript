@@ -201,25 +201,33 @@ class ScreenConsentRequests {
  */
 class ScreenConsentInbox {
 
-    @Volatile
-    private var pending: ScreenConsentOutcome? = null
+    /**
+     * 待领凭据。**恰好一次的原子性由 [AtomicReference.getAndSet] 保证**（见 [claim]）——
+     * 「`@Volatile` + 读出来再清」是两步，并发下两个执行会各领走**同一份**同意。
+     */
+    private val pending = java.util.concurrent.atomic.AtomicReference<ScreenConsentOutcome?>()
 
     /** 放进一份同意。**非 `granted` 的结果直接丢弃**（见类 KDoc）。 */
     fun offer(outcome: ScreenConsentOutcome) {
         if (!outcome.granted) return
-        pending = outcome
+        pending.set(outcome)
     }
 
-    /** 领走（恰好一次）：第二次、以及没放过东西时都回 `null`。 */
-    fun claim(): ScreenConsentOutcome? {
-        val claimed = pending ?: return null
-        pending = null
-        return claimed
-    }
+    /**
+     * 领走（恰好一次）：第二次、以及没放过东西时都回 `null`。
+     *
+     * **原子性是这条承诺的本体**：调用点（`screen.startCapturer`）跑在桥面读线程上，
+     * 两个脚本可以同时来领。「读 → 清」两步写法下，同一份系统凭据会被两个执行
+     * 各领走一份 —— 后到者在 `getMediaProjection` 处被系统拒（API 34 起凭据一次性），
+     * 用户明明同意过却有一个脚本看到 `ERR_CAPTURE_DENIED`、下一次还得再弹一次
+     * 对话框，正是本类要堵掉的那条。`getAndSet(null)` 把「读+清」收成一次原子操作，
+     * 赢家恒只有一个。
+     */
+    fun claim(): ScreenConsentOutcome? = pending.getAndSet(null)
 
     /** 丢弃待领凭据（界面销毁/用户取消时如实清掉，不留"下次自动授权"）。 */
     fun clear() {
-        pending = null
+        pending.set(null)
     }
 
     companion object {
