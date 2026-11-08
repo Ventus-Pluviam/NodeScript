@@ -101,6 +101,16 @@ bool frame_is_normalized(const cv::Mat& m) { return m.channels() == 4 && m.depth
  * 2026-09-25 兑现：`imgnative_crop` 直接复用本函数，没有第二份判据（找色与裁剪对
  * "区域越界"的回答是同一个码、同一个边界口径 —— `rx + rw == cols` 合法）。
  * 返回 false 时 `out` 不动。
+ *
+ * **`rx + rw` 必须在 int64 里算**（2026-11-08 修，host ASAN 实测）：region 四个分量
+ * 来自 wire 的 JSON 整数，`requiredIntList` 只保证它是 `Int`（`toIntOrNull`），
+ * 不保证它小。`{1, 0, INT32_MAX, 1}` 在 int32 里 `rx + rw` 回绕成 `INT32_MIN`
+ * （有符号溢出是 UB，C++ 层面已经不该发生），于是 `> frame.cols` 判**假**、
+ * 越界区域被当成合法 —— 紧接着 `cv::inRange` 按 `INT32_MAX` 列去读，ASAN 报
+ * SEGV on unknown address。这不是"判读错"，是**脚本一行可触发的越界读**，而且
+ * 本库装在**宿主进程**里（`JniOps` 的 `System.loadLibrary`），崩的是整个 App，
+ * 不是某个引擎子进程。先扩到 int64 再比，判据本身的边界口径一个字没动
+ * （`rx + rw == cols` 贴边仍合法、越界仍是 IMG_ERR_INVALID_PARAM）。
  */
 bool resolve_region(const cv::Mat& frame, const int32_t* region, cv::Rect* out) {
     if (region == nullptr) {
@@ -108,8 +118,10 @@ bool resolve_region(const cv::Mat& frame, const int32_t* region, cv::Rect* out) 
         return true;
     }
     const int32_t rx = region[0], ry = region[1], rw = region[2], rh = region[3];
-    if (rw <= 0 || rh <= 0 || rx < 0 || ry < 0 ||
-        rx + rw > frame.cols || ry + rh > frame.rows) {
+    // 先排除非正/负起点（此后的四个量都 ≥ 0，int64 求和不可能回绕）。
+    if (rw <= 0 || rh <= 0 || rx < 0 || ry < 0) return false;
+    if (static_cast<int64_t>(rx) + rw > frame.cols ||
+        static_cast<int64_t>(ry) + rh > frame.rows) {
         return false;
     }
     *out = cv::Rect(static_cast<int>(rx), static_cast<int>(ry),

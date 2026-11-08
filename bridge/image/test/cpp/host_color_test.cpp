@@ -14,6 +14,7 @@
 // commit 固定，kleidicv OFF —— host 是 x86_64，那条加速面只在 aarch64 上）。
 #include <cassert>
 #include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -192,6 +193,22 @@ int main() {
         check(run(ref, {1, 2, 3, 255}, 0, out).rc == 4, "region 右越界 → INVALID_PARAM");
         const int32_t neg[4] = {-1, 0, 2, 3};
         check(run(ref, {1, 2, 3, 255}, 0, neg).rc == 4, "region 负起点 → INVALID_PARAM");
+
+        // rx + rw 在 int32 里回绕：{1, 0, INT32_MAX, 1} 曾被判"合法"（1 + INT32_MAX
+        // 回绕成 INT32_MIN，`> cols` 判假），随后 cv::inRange 按 INT32_MAX 列去读 ——
+        // host ASAN 实测 SEGV。修法是判据里扩到 int64（见 resolve_region 的 KDoc），
+        // 边界口径一个字未动。这条钉子就是那次 SEGV 的回归门：没有它，判据退回
+        // int32 加法照样全绿（越界读在非 ASAN 构建里可能只是读到别的堆块）。
+        const int32_t huge_w[4] = {1, 0, INT32_MAX, 1};
+        const Hit hw = run(ref, {1, 2, 3, 255}, 0, huge_w);
+        check(hw.rc == 4, "region 宽 INT32_MAX（rx+rw 会溢出 int32）→ INVALID_PARAM（实际 rc=" +
+            std::to_string(hw.rc) + "）");
+        const int32_t huge_h[4] = {0, 1, 2, INT32_MAX};
+        check(run(ref, {1, 2, 3, 255}, 0, huge_h).rc == 4,
+            "region 高 INT32_MAX（ry+rh 会溢出 int32）→ INVALID_PARAM");
+        const int32_t huge_both[4] = {2, 2, INT32_MAX, INT32_MAX};
+        check(run(ref, {1, 2, 3, 255}, 0, huge_both).rc == 4,
+            "region 宽高都 INT32_MAX → INVALID_PARAM");
     }
 
     // ── 7) 分量域与容差域在本层兜底（handler 已拒，这里是第二道） ────────
