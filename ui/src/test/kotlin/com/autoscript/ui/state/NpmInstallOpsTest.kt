@@ -402,6 +402,63 @@ class NpmInstallOpsTest {
         assertTrue(final.installProgress!!.done)
     }
 
+    /**
+     * **安装期快照每拍都在变**（缓存体积/尺寸在长）→ `NpmState.of` 的「快照没变就复用」
+     * 短路接不住 → 每拍都走重建。重建若把逐格桥缓冲抹掉，就是「一拍只放一条、剩下的
+     * 全丢」：游标已推到批尾，丢掉的再也拉不回来，阶段条卡在头一两格直到会话结束。
+     *
+     * 用户看到的就是「缓存一直在涨、进度条不动」（2026-11-08 真机）。
+     * 旧代码里 `轮询整段` 那条用例是绿的，因为它的替身把快照钉死成常量、短路生效 ——
+     * 这条用例专门把「快照每拍变化」写进替身，才照得出重建路径上的缓冲丢失。
+     */
+    @Test
+    fun `轮询整段：快照每拍都在变时，六格照样逐格走完（缓冲不许被现取抹掉）`() = runBlocking {
+        val base = project("demo")
+        val host = object : PanelHost(
+            events = listOf(
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.QUEUED),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.RESOLVE),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.DOWNLOAD),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.REIFY),
+                InstallEvent.Progress("demo", "h1", InstallEvent.Phase.POST_CHECK),
+                InstallEvent.Finished("demo", "h1", success = true, detail = "npm install 完成"),
+            ),
+        ) {
+            /** 安装期真形态：缓存与尺寸每拍都在长 → 快照每拍都不相等。 */
+            var size = 1024L
+            override suspend fun npmSnapshot(): NpmPanelSnapshot {
+                size += 1
+                return NpmPanelSnapshot(
+                    listOf(base.copy(storage = NodeModulesStats(projectId = "demo", pkgCount = 1, totalBytes = size))),
+                )
+            }
+        }
+        var s = loaded(project("demo")).copy(
+            installing = true,
+            installProgress = InstallProgressState(InstallEvent.Phase.QUEUED),
+        )
+        val seen = mutableListOf<String>()
+        val final = pollInstallWhileRunning(host, s, "demo", intervalMillis = 1L, maxTicks = 10) {
+            seen += it.installProgress!!.let { p -> "${p.label}:${p.done}" }
+        }
+        assertEquals(
+            listOf(
+                "排队中:false",
+                "解析依赖:false",
+                "下载:false",
+                "写入 node_modules:false",
+                "收尾校验:false",
+                "收尾校验:true",
+            ),
+            seen,
+            "快照每拍都变也必须逐格走完：缓冲被重建抹掉时这里会卡在第二格（真机：进度条不动）",
+        )
+        assertEquals(1, host.polls, "六条一次拉齐，逐格只消费缓冲，不再回头问宿主")
+        assertFalse(final.installing)
+        assertTrue(final.installProgress!!.done)
+        Unit
+    }
+
     @Test
     fun `进度：一批事件折成当前阶段，终态把条收起来`() {
         val folded = foldProgress(
