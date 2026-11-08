@@ -298,4 +298,85 @@ class FixedEnginePoolInterleavingTest {
         assertTrue(engine.enteredStop.isCompleted, "第一条 stop 确实走过")
         Unit
     }
+
+    /** 真挂起 execute 的替身：execute 进闩 → 等放行；同时记录同一引擎上的并发 execute 峰值。 */
+    private class LatchedBootEngine(override val id: EngineId) : ScriptEngine {
+        val enteredExecute = CompletableDeferred<Unit>()
+        val proceedExecute = CompletableDeferred<Unit>()
+        var executeCalls = 0
+            private set
+        var maxInFlight = 0
+            private set
+        private var inFlight = 0
+        var killCalls = 0
+            private set
+        private var nextRunId = 100L
+
+        override suspend fun execute(run: EngineRunRequest): EngineRunReceipt {
+            executeCalls++
+            inFlight++
+            if (inFlight > maxInFlight) maxInFlight = inFlight
+            try {
+                enteredExecute.complete(Unit)
+                proceedExecute.await()
+                val runId = nextRunId++
+                return EngineRunReceipt(runId = runId, handle = HandleRef(runId, 1), pid = null)
+            } finally {
+                inFlight--
+            }
+        }
+
+        override suspend fun stop(): StopResult = StopResult.Clean
+
+        override suspend fun kill(): KillCause {
+            killCalls++
+            return KillCause.REQUESTED
+        }
+
+        override suspend fun status(): EngineStatus = EngineStatus.RUNNING
+        override val pid: Int? = null
+    }
+
+    /**
+     * 交错 ④：`killAll` 撞上**在途 execute**（BOOTING）—— 槽不得提前回队。
+     *
+     * 修前病灶：killAll 的强释不问槽状态，`forceReturn` 把 execute 还停在 spawn 中途的
+     * 槽塞回空闲队列；下一个 acquire 立刻夺走它，对**同一台引擎**发起第二次 execute ——
+     * `NodeProcessEngine` 的「同引擎一次一脚本」哨兵是「检查 → spawn → 赋值 `execution`」
+     * 三步无锁交错，两个并发 execute 互相盖掉 `execution`：先到那条的事后收尸
+     * （acquire 急停分支的 killQuietly）杀的是**别人的**进程，而它自己的 spawn 产物
+     * 成为没有任何人引用的账外野进程（桥令牌已签发、看门狗没登记、release 收不到它）。
+     * 现口径：killAll 对 BOOTING 槽只杀不还，归还由在途 acquirer 自己的三条出路
+     * （execute 返回/异常/取消）兜底，槽不会漏还。
+     */
+    @Test
+    fun `killAll 撞上在途 execute 槽不提前回队 同引擎绝不并发两次 execute`() = runBlocking {
+        val engine = LatchedBootEngine(EngineId(0))
+        val pool = FixedEnginePool({ engine }, capacity = 1)
+
+        // A 的 acquire 停在 execute 里（闩控 = 点名 spawn 中途这个窗口，不靠 delay 撞概率）。
+        val a = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            pool.acquire(PoolAcquireRequest("p1", "a.js"))
+        }
+        engine.enteredExecute.await()           // 点名：现在 execute 停在半途（槽 = BOOTING）
+
+        pool.killAll(KillCause.ENGINE_REQUEST)  // 修前：强释把槽提前回队；修后：只杀不还
+
+        // B 紧跟着夺槽：修前立刻拿到那个提前回队的槽并发起**第二次**并发 execute；
+        // 修后必须排在空队列上，等 A 的急停分支收场后才轮得到。
+        val b = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            pool.acquire(PoolAcquireRequest("p2", "b.js"))
+        }
+        assertEquals(1, engine.executeCalls, "execute 还在飞就把槽回队 = 同一引擎两次并发 execute")
+        assertTrue(!b.isCompleted, "槽未归还前 B 必须排队，拿不到半个槽")
+
+        // 放行 A 的 execute：急停分支收尸 + 还槽 → B 随后正常获准。
+        engine.proceedExecute.complete(Unit)
+        val aborted = assertInstanceOf(PoolAcquireOutcome.Failed::class.java, a.await())
+        assertEquals(FixedEnginePool.ABORTED_BY_STOP, aborted.message)
+        assertInstanceOf(PoolAcquireOutcome.Granted::class.java, b.await())
+        assertEquals(1, engine.maxInFlight, "任何时刻同一引擎上至多一个在途 execute")
+        assertEquals(PoolStats(1, free = 0, busy = 1), pool.stats())
+        Unit
+    }
 }
