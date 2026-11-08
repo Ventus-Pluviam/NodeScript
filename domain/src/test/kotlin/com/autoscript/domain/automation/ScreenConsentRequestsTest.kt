@@ -189,4 +189,40 @@ class ScreenConsentInboxTest {
         inbox.clear()
         assertNull(inbox.claim())
     }
+
+    /**
+     * 「恰好一次」必须是**原子**承诺：`claim` 的调用点（`screen.startCapturer`）跑在
+     * 桥面读线程上，两个脚本可以**同时**来领。旧实现是「读出来再清」两步
+     * （`val claimed = pending; pending = null`），两个线程各读各清、**同一份同意**
+     * 被两个执行各领走一份 —— 拿到的还是同一份系统凭据，后到者在
+     * `getMediaProjection` 处被系统拒（API 34 起凭据一次性）：用户明明同意过，
+     * 却有一个脚本看到 `ERR_CAPTURE_DENIED`、下一次还得再弹一次对话框 ——
+     * 正是本类要堵掉的那条。
+     *
+     * 复现形态：屏障放行对两指令窗口对齐不够（实测 8 线程栅栏约 1.5e-4/轮），
+     * 这里用**自旋闸门**（全员热等同一个标志，放行即同拍进 `claim`）——
+     * 同形状旧实现实测约 68%/轮现形，64 轮下漏检率 < 1e-32，不再是撞概率。
+     */
+    @Test
+    fun `并发领走只能有一个赢家 —— 恰好一次是原子承诺`() {
+        repeat(64) { round ->
+            val fresh = ScreenConsentInbox()
+            fresh.offer(granted)
+            val won = java.util.concurrent.ConcurrentLinkedQueue<Boolean>()
+            val ready = java.util.concurrent.CountDownLatch(8)
+            val go = java.util.concurrent.atomic.AtomicBoolean(false)
+            val threads = (1..8).map {
+                kotlin.concurrent.thread {
+                    ready.countDown()
+                    while (!go.get()) { /* 自旋热等：把 8 条线程压到同一拍进 claim */ }
+                    won.add(fresh.claim() != null)
+                }
+            }
+            ready.await()
+            go.set(true)
+            threads.forEach { it.join() }
+            val winners = won.count { it }
+            assertEquals(1, winners, "第 $round 轮：一次同意只能换一条会话，$winners 个执行领到了同一份凭据")
+        }
+    }
 }
