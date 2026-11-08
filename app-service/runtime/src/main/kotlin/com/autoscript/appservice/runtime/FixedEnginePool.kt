@@ -4,6 +4,7 @@ import com.autoscript.domain.core.Clock
 import com.autoscript.domain.core.SystemClock
 import com.autoscript.domain.engine.EngineId
 import com.autoscript.domain.engine.EngineRunRequest
+import com.autoscript.domain.engine.EngineStatus
 import com.autoscript.domain.engine.KillCause
 import com.autoscript.domain.engine.ScriptEngine
 import com.autoscript.domain.engine.StopResult
@@ -222,12 +223,26 @@ class FixedEnginePool(
                 // 与 [acquire] 急停分支同一条「收尸失败不改变结论」纪律。
                 killQuietly(slot)
             } finally {
-                // 强释走 lease：状态机复位 + 回队一次；持有者随后的 release 是 no-op。
-                // **不等 quiesce** —— 强释要的就是「立刻不再用」，等收尾反而让急停卡住。
-                // **归还放在 finally**：kill 抛错（含被取消）跳过归还的代价是槽永久
-                // 扣在循环外 —— 容量 -1 且现场只剩「引擎再不接活」，与 [PoolLease]
-                // 自己的 try/finally 同一条「池不缩水优先」纪律。
-                lease.forceReturn(reason)
+                // **BOOTING = 这条 acquire 的 `engine.execute` 还在飞（spawn 途中）——
+                // 只杀不还**。此刻强释会把槽提前回队，下一个 acquire 立刻夺走并对
+                // **同一台引擎**发起第二次 execute：`NodeProcessEngine` 的
+                // 「同引擎一次一脚本」哨兵是「检查 → spawn → 赋值 `execution`」三步
+                // 无锁交错，两个并发 execute 会让后到的赋值盖掉先到的 —— 于是
+                // 先到那条的事后收尸（[acquire] 急停分支的 killQuietly）杀的是
+                // **别人的进程**，而自己的 spawn 产物变成没有任何人引用的账外野进程
+                // （桥令牌已签发、看门狗没登记、release 收不到它）。QUESCING 无此病：
+                // release 在 quiesce **开始前**就占了 lease 的 CAS，这里的 forceReturn
+                // 对它是 no-op（交错①钉的正是那条）。BOOTING 槽的归还由在途 acquirer
+                // 自己完成 —— execute 返回/抛异常/被取消三条出路都会 forceReturn，
+                // 槽不会因这里跳过而漏还。
+                if (slot.status() != EngineStatus.BOOTING) {
+                    // 强释走 lease：状态机复位 + 回队一次；持有者随后的 release 是 no-op。
+                    // **不等 quiesce** —— 强释要的就是「立刻不再用」，等收尾反而让急停卡住。
+                    // **归还放在 finally**：kill 抛错（含被取消）跳过归还的代价是槽永久
+                    // 扣在循环外 —— 容量 -1 且现场只剩「引擎再不接活」，与 [PoolLease]
+                    // 自己的 try/finally 同一条「池不缩水优先」纪律。
+                    lease.forceReturn(reason)
+                }
             }
         }
     }
