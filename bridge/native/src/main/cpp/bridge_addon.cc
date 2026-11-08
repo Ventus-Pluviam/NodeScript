@@ -191,6 +191,19 @@ void* SocketReadLoop(void* /*arg*/) {
 
 // invoke(ns, method, payloadJson|null, reqId, ttl) → undefined（已投递，等 TSF 响应）。
 // fd 未注入 → 抛 ERR_ENGINE_STOPPED（对齐 SocketBootstrap.checkConnected，不悬挂）。
+//
+// **入参类型必须先判，不判就是拿脏值成帧**（2026-11-08 修，host 实测）：
+// `napi_get_value_string_utf8` 对**非字符串**入参返回 `napi_string_expected` 并
+// **原样不动**目标缓冲 —— 于是 `char ns[64]` 保留着**上一次调用**留下的内容，
+// 这一次的帧就带着上一个调用的 ns/method 发出去（实测：先 invoke('A'*60,…)、
+// 再 invoke(1234,…)，第二帧线上是 `"ns":"AAAA…"`）。同类静默还有三处：
+//   · ns/method 超 63 字节 → 静默截断（宿主按截断后的名字答 ERR_NOT_IMPLEMENTED，
+//     脚本看到的却是"方法不存在"而不是"名字太长"）；
+//   · reqId 不是数字（如 BigInt/字符串）→ `napi_get_value_int64` 不动出参，
+//     id 恒 0 成帧 → JS 侧 inflight 里没有 0（reqId 从 1 起、心跳走负数命名空间），
+//     回包查不到即丢，**调用悬挂到 TTL 超时**，而宿主其实已经执行了它；
+//   · payload 不是字符串（对象/数字）→ 静默当成 null 发出，方法按"无参"执行。
+// 四条都改成 `ERR_INVALID_PARAM` 响亮拒绝：调用方 bug 不该变成"另一条请求"。
 napi_value Invoke(napi_env env, napi_callback_info info) {
   size_t argc = 5;
   napi_value argv[5];
@@ -201,12 +214,32 @@ napi_value Invoke(napi_env env, napi_callback_info info) {
   }
   char ns[64], method[64];
   char payload[64 * 1024];
-  size_t n = 0;
+  // 类型先判：N-API 的类型不符不会写目标缓冲（见上），先判后读是唯一能保证
+  // 「读到的字节就是本次入参」的顺序。
+  napi_valuetype t_ns = napi_undefined, t_method = napi_undefined;
+  napi_typeof(env, argv[0], &t_ns);
+  napi_typeof(env, argv[1], &t_method);
+  if (t_ns != napi_string || t_method != napi_string) {
+    napi_throw_error(env, "ERR_INVALID_PARAM", "ns/method 必须是字符串");
+    return nullptr;
+  }
+  // 超长先问真实长度再拒，不静默截断（transmit 截断后的名字是一条**别的**请求）。
+  size_t need_ns = 0, need_method = 0, n = 0;
+  napi_get_value_string_utf8(env, argv[0], nullptr, 0, &need_ns);
+  napi_get_value_string_utf8(env, argv[1], nullptr, 0, &need_method);
+  if (need_ns >= sizeof(ns) || need_method >= sizeof(method)) {
+    napi_throw_error(env, "ERR_INVALID_PARAM", "ns/method 超过 63 字节上限");
+    return nullptr;
+  }
   napi_get_value_string_utf8(env, argv[0], ns, sizeof(ns), &n);
   napi_get_value_string_utf8(env, argv[1], method, sizeof(method), &n);
   napi_valuetype t = napi_undefined;
   napi_typeof(env, argv[2], &t);
   bool has_payload = (t == napi_string);
+  if (!has_payload && t != napi_null && t != napi_undefined) {
+    napi_throw_error(env, "ERR_INVALID_PARAM", "payload 必须是 JSON 字符串或 null");
+    return nullptr;
+  }
   if (has_payload) {
     // 先问真实长度再拷：静默截断的 JSON 必然畸形 → 宿主整帧丢弃（同一类"坏帧"事故）。
     size_t need = 0;
@@ -216,6 +249,13 @@ napi_value Invoke(napi_env env, napi_callback_info info) {
       return nullptr;
     }
     napi_get_value_string_utf8(env, argv[2], payload, sizeof(payload), &n);
+  }
+  napi_valuetype t_id = napi_undefined, t_ttl = napi_undefined;
+  napi_typeof(env, argv[3], &t_id);
+  napi_typeof(env, argv[4], &t_ttl);
+  if (t_id != napi_number || t_ttl != napi_number) {
+    napi_throw_error(env, "ERR_INVALID_PARAM", "reqId/ttl 必须是数字");
+    return nullptr;
   }
   int64_t req_id = 0, ttl = 0;
   napi_get_value_int64(env, argv[3], &req_id);
