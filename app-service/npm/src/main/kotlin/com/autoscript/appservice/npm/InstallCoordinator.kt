@@ -155,13 +155,6 @@ class InstallCoordinator(
         return NpmrcFile.readKey(rc, NpmGlobalConfig.REGISTRY_KEY)
     }
 
-    /** lifecycle 脚本字段（§10.5-3 的扫描面）：出现任一即视为「装了但脚本没跑」。 */
-    private val LIFECYCLE_KEYS = listOf(
-        "preinstall", "install", "postinstall",
-        "preuninstall", "uninstall", "postuninstall",
-        "prepare", "preprepare", "preparePack",
-    )
-
     // —— 运行态（全局互斥 + per-project 锁 + 事件流 + 句柄账） ——
 
     private val globalSession = Mutex()
@@ -1451,43 +1444,6 @@ class InstallCoordinator(
     }
 
     /**
-     * §10.5-3「禁止静默」：T0 主路径全程 `--ignore-scripts`（HostNodeExecutor 参数面），
-     * 所以带 lifecycle 脚本的包必然有脚本**没跑**。落位前扫一遍暂存树，命中即发
-     * [InstallEvent.Warning]SCRIPTS_SKIPPED + 包名清单——不阻塞安装（T0 契约就是这样），
-     * 但绝不假装无事发生；UI 依赖该事件显式告知「脚本未运行」。
-     *
-     * 扫描面：各顶层依赖 package.json 的 install-scripts 字段（pre/post install，
-     * preuninstall/uninstall，prepare/preparePack）。只读顶层（深度 1 的 node_modules/＊）
-     * —— 传递依赖同属这些包自己的声明，按顶层包汇总即可覆盖。
-     *
-     * **与 `child_process` 门禁（[NpmSpawnGate]）是两件事，别合并**：本警告管
-     * 「本该跑却没跑的 lifecycle 脚本」（信息面，不阻塞安装）；门禁管「**任何** spawn 入口
-     * 一律拒绝」（不变量面，硬失败）。前者对 `--ignore-scripts` 的后果负责，后者对
-     * 「npm 或某个包在背地里起进程而没人知道」负责 —— 两者覆盖的失败模式不重叠。
-     */
-    private suspend fun warnScriptsSkipped(projectId: String, handleId: String, stageDir: java.nio.file.Path) {
-        val marked = ArrayList<String>()
-        if (Files.isDirectory(stageDir)) {
-            Files.list(stageDir).use { s ->
-                s.filter { Files.isDirectory(it) && it.fileName.toString().let { n -> !n.startsWith(".") && n != "node_modules" } }
-                    .forEach { pkgDir ->
-                        if (hasLifecycleScript(pkgDir.resolve("package.json"))) marked += pkgDir.fileName.toString()
-                    }
-            }
-        }
-        if (marked.isEmpty()) return
-        emit(
-            InstallEvent.Warning(
-                projectId = projectId,
-                handleId = handleId,
-                kind = InstallEvent.Kind.SCRIPTS_SKIPPED,
-                pkgs = marked.sorted(),
-                message = "以下包的安装脚本未运行（零 spawn 契约 --ignore-scripts）：${marked.sorted().joinToString(", ")}",
-            ),
-        )
-    }
-
-    /**
      * cacheDir（npm 的 `--cache` 值，cacache 根）解析。
      *
      * 布局：npm cache 目录下**直接**就是 `_cacache/`（`cacache(cache)` = `<cache>/_cacache`，
@@ -1508,11 +1464,34 @@ class InstallCoordinator(
     private fun resolveCacheDir(): Path =
         npmCacheDir ?: layout.projectsRoot.resolveSibling(".npm-cache")
 
-    /** 该包的 package.json 是否声明 install-scripts 字段（不解析脚本内容）。 */
-    private fun hasLifecycleScript(pkgJson: java.nio.file.Path): Boolean {
-        if (!Files.isRegularFile(pkgJson)) return false
-        val text = String(Files.readAllBytes(pkgJson), java.nio.charset.StandardCharsets.UTF_8)
-        return LIFECYCLE_KEYS.any { "\"$it\"" in text }
+
+    /**
+     * §10.5-3「禁止静默」：T0 主路径全程 `--ignore-scripts`（HostNodeExecutor 参数面），
+     * 所以带 lifecycle 脚本的包必然有脚本**没跑**。落位前扫一遍暂存树，命中即发
+     * [InstallEvent.Warning]SCRIPTS_SKIPPED + 包名清单——不阻塞安装（T0 契约就是这样），
+     * 但绝不假装无事发生；UI 依赖该事件显式告知「脚本未运行」。
+     *
+     * **扫描面的判据（认哪些键、带 scope 的怎么扫、node-gyp 那条自动注入）全在
+     * [skippedLifecyclePkgs]**（`SkippedLifecycleScan.kt`，逐条对到素材 npm 12.2.0 的
+     * arborist 源码）—— 本方法只负责「扫到了就如实说」。
+     *
+     * **与 `child_process` 门禁（[NpmSpawnGate]）是两件事，别合并**：本警告管
+     * 「本该跑却没跑的 lifecycle 脚本」（信息面，不阻塞安装）；门禁管「**任何** spawn 入口
+     * 一律拒绝」（不变量面，硬失败）。前者对 `--ignore-scripts` 的后果负责，后者对
+     * 「npm 或某个包在背地里起进程而没人知道」负责 —— 两者覆盖的失败模式不重叠。
+     */
+    private suspend fun warnScriptsSkipped(projectId: String, handleId: String, stageDir: java.nio.file.Path) {
+        val marked = skippedLifecyclePkgs(stageDir)
+        if (marked.isEmpty()) return
+        emit(
+            InstallEvent.Warning(
+                projectId = projectId,
+                handleId = handleId,
+                kind = InstallEvent.Kind.SCRIPTS_SKIPPED,
+                pkgs = marked,
+                message = "以下包的安装脚本未运行（零 spawn 契约 --ignore-scripts）：${marked.joinToString(", ")}",
+            ),
+        )
     }
 
     /**
