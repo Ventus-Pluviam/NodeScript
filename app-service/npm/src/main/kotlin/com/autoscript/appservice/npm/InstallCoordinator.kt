@@ -1414,6 +1414,14 @@ class InstallCoordinator(
             }
             opLog.log(opName(args), projectId, true, outcome.summary)
             if (tracked.claimTerminal()) {
+                // **DONE 在这里发，不在执行体**（：与 `HostNodeExecutor` 同一条纪律）：
+                // 执行体返回只说明「npm 进程跑完」，此刻 post-check / 落位 / lock 签名
+                // 的结局都还不知道 —— 那时报「完成」会在失败路径（如签名失败）上得到
+                // 「先说完成、再说失败」两句互相矛盾的结论，也会让事件环里的次序倒挂成
+                // DONE 压在 POST_CHECK 前面（UI 阶段条按 [InstallEvent.Phase] 的声明序
+                // 点亮，六格先亮满再退一格）。
+                // 进 `claimTerminal` 之内：取消抢到终态时不报「完成」（一个句柄一个结论）。
+                emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.DONE))
                 emit(InstallEvent.Finished(projectId, handle.id, success = true, detail = outcome.summary))
             }
         } catch (e: CancellationException) {
