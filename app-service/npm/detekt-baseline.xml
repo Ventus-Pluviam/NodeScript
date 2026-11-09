@@ -56,7 +56,6 @@
     <ID>UseCheckOrError:NpmCacheSeedDeployer.kt$NpmCacheSeedDeployer$throw IllegalStateException("缓存种子 manifest.json 未指向任何存在的 tarball")</ID>
     <ID>UseRequire:NpmBridgeHandler.kt$NpmBridgeHandler$throw IllegalArgumentException("batch 必须 &gt; 0")</ID>
     <ID>UseRequire:NpmOfflineBundleImporter.kt$NpmOfflineBundleImporter$throw IllegalArgumentException("离线 bundle 不存在：$zipFile")</ID>
-    <ID>VariableNaming:InstallCoordinator.kt$InstallCoordinator$/** lifecycle 脚本字段（§10.5-3 的扫描面）：出现任一即视为「装了但脚本没跑」。 */ private val LIFECYCLE_KEYS = listOf( "preinstall", "install", "postinstall", "preuninstall", "uninstall", "postuninstall", "prepare", "preprepare", "preparePack", )</ID>
     <ID>VariableNaming:InstallCoordinatorTest.kt$InstallCoordinatorTest$/** 交叉校验断言里用的占位 integrity（真形状由 NpmRegistryVerifierTest 管）。 */ private val I = "sha512-" + "a".repeat(24)</ID>
     <ID>VariableNaming:NpmRegistryVerifierTest.kt$NpmRegistryVerifierTest$private val I1 = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"</ID>
     <ID>VariableNaming:NpmRegistryVerifierTest.kt$NpmRegistryVerifierTest$private val I2 = "sha512-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"</ID>

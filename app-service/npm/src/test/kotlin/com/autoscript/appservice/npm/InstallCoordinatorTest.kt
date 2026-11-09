@@ -493,6 +493,58 @@ class InstallCoordinatorTest {
             "test 脚本不算 install-scripts，不该误报")
     }
 
+    /**
+     * **真机那条虚警**（2026-11-09）：装 axios 报「以下包的安装脚本未运行…：axios」，
+     * 而 axios 1.x 只有一个 `prepare: husky` —— `prepare` 对 registry 装来的包
+     * **本来就不会跑**（素材 npm 的 `rebuild.js` 里它被圈在 `if (type === 'links')`）。
+     * 报它等于让用户去查一个不存在的构建步骤。判据细节在 [SkippedLifecycleScanTest]，
+     * 这条钉的是它**经协调器发到用户面前的那条警告**上成立。
+     */
+    @Test
+    fun `只有 prepare 的包（axios 形态）不发 SCRIPTS_SKIPPED —— 真机那条虚警`() = runBlocking {
+        val exec = FakeExecutor { op ->
+            val pkg = op.stageDir.resolve("axios")
+            Files.createDirectories(pkg)
+            Files.write(
+                pkg.resolve("package.json"),
+                ("""{"name":"axios","version":"1.21.0","scripts":{"prepare":"husky","test":"vitest run"}}""").toByteArray(),
+            )
+        }
+        val c = coordinator(executor = exec)
+        c.install("p1", listOf(PackageSpec("axios", "1.21.0")))
+
+        val ws = c.drainEvents("p1", 0, 64).events.map { it.event }
+            .filterIsInstance<InstallEvent.Warning>()
+            .filter { it.kind == InstallEvent.Kind.SCRIPTS_SKIPPED }
+        assertTrue(ws.isEmpty(), "prepare 对 registry 依赖不会跑，报它就是虚警：$ws")
+        Unit
+    }
+
+    /**
+     * **漏报面**：原扫描只到深度 1，`@scope/` 那层被当成包（它自己没有 package.json）
+     * → 带 scope 的包一个都没扫过。漏的正是 `@parcel/watcher` 这类必带 postinstall 的
+     * 原生包 —— 「禁止静默」在它们身上静默了。
+     */
+    @Test
+    fun `带 scope 的原生包照样点名（原来整类漏报）`() = runBlocking {
+        val exec = FakeExecutor { op ->
+            val pkg = op.stageDir.resolve("@parcel").resolve("watcher")
+            Files.createDirectories(pkg)
+            Files.write(
+                pkg.resolve("package.json"),
+                ("""{"name":"@parcel/watcher","version":"2.4.0","scripts":{"postinstall":"node-gyp rebuild"}}""").toByteArray(),
+            )
+        }
+        val c = coordinator(executor = exec)
+        c.install("p1", listOf(PackageSpec("@parcel/watcher", "2.4.0")))
+
+        val ws = c.drainEvents("p1", 0, 64).events.map { it.event }
+            .filterIsInstance<InstallEvent.Warning>()
+            .filter { it.kind == InstallEvent.Kind.SCRIPTS_SKIPPED }
+        assertEquals(listOf("@parcel/watcher"), ws.single().pkgs, "带 scope 的包必须被点名：$ws")
+        Unit
+    }
+
     @Test
     fun `成功安装留痕：op 名取 npm 子命令`() = runBlocking {
         val exec = FakeExecutor { op ->
