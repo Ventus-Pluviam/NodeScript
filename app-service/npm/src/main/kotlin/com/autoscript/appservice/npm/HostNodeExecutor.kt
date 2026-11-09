@@ -129,7 +129,14 @@ class HostNodeExecutor(
             val workDir = op.stageDir.resolveSibling("npmwork-" + op.nonce)
             try {
                 val seededManifest = prepareWorkDir(op, workDir)
-                // REIFY/DONE：npm 进程内 reify 是黑盒，主机形态只能粗粒度标注阶段
+                // REIFY：npm 进程内 reify 是黑盒，主机形态只能粗粒度标注阶段。
+                // **不在这里报 DONE**（发射权在协调器，见 `runHeavy` 的那条 emit）：
+                // 执行体返回只说明「npm 进程跑完」，会话还没完 —— 协调器随后还有
+                // post-check → commit → lock 签名。抢先报 DONE 有两个具体后果
+                // （2026-11-09 真机日志）：① 阶段次序倒挂 —— 事件环里 DONE 压在
+                // POST_CHECK 前面，而 UI 阶段条按 ORDER（…REIFY→POST_CHECK→DONE）
+                // 点亮，六格先亮满再退一格；② commit/签名失败时控制台先说「完成」
+                // 再说「失败」，同一句话柄两句互相矛盾的结论。
                 sink.emit(
                     com.autoscript.domain.npm.InstallEvent.Progress(
                         op.projectId, op.nonce,
@@ -138,12 +145,6 @@ class HostNodeExecutor(
                 )
                 val captured = runNpm(op, workDir, output)
                 harvest(op, workDir)
-                sink.emit(
-                    com.autoscript.domain.npm.InstallEvent.Progress(
-                        op.projectId, op.nonce,
-                        com.autoscript.domain.npm.InstallEvent.Phase.DONE,
-                    ),
-                )
                 HeavyOpOutcome(
                     // 自动补出来的清单要在**终态摘要**里说一句（走 `InstallEvent.Finished.detail`
                     // 与控制台 RESULT 行，与"完成/失败"同一处）：不静默 —— 用户的项目里

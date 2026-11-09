@@ -2117,6 +2117,64 @@ class InstallCoordinatorTest {
         )
     }
 
+    /**
+     * 阶段次序的**协调器半边**（回归钉，2026-11-09 真机日志；执行体半边在
+     * [HostNodeExecutorPhaseTest]）：事件环里的 `Progress` 次序必须是
+     * `QUEUED → RESOLVE → POST_CHECK → DONE` —— 与 [InstallEvent.Phase] 的声明序一致。
+     *
+     * 修前的真机日志是 `… → 写入 node_modules → changed 27 packages → 完成 → 收尾校验`：
+     * `DONE` 由执行体发（harvest 之后、返回之前），`POST_CHECK` 由协调器在执行体
+     * **返回之后**发 —— 倒挂一格。UI 阶段条按声明序点亮，六格先亮满再退回五格；
+     * 脚本侧 `onProgress` 的 phase 流同样倒序。
+     *
+     * **DONE 还必须压在成功终态的紧前面**：post-check/落位/签名任何一步失败都不该
+     * 先说「完成」——「完成」只属于真走完的那次。
+     */
+    @Test
+    fun `阶段次序不倒挂：DONE 在 POST_CHECK 之后、且只属于成功收尾`() = runBlocking {
+        // 执行体照 HostNodeExecutor 的真实形状报 DOWNLOAD/REIFY（但不报 DONE —— 那是被修的点）。
+        val exec = object : HeavyOpExecutor {
+            override suspend fun execute(op: HeavyOp, sink: ProgressSink, output: OutputSink): HeavyOpOutcome {
+                sink.emit(InstallEvent.Progress(op.projectId, op.nonce, InstallEvent.Phase.DOWNLOAD))
+                sink.emit(InstallEvent.Progress(op.projectId, op.nonce, InstallEvent.Phase.REIFY))
+                return HeavyOpOutcome("ok", "npm output")
+            }
+        }
+        val c = coordinator(executor = exec)
+        c.install("p1", listOf(PackageSpec("axios")))
+
+        val phases = c.drainEvents("p1", 0, 64).events.map { it.event }
+            .filterIsInstance<InstallEvent.Progress>().map { it.phase }
+        assertEquals(
+            listOf(
+                InstallEvent.Phase.QUEUED,
+                InstallEvent.Phase.RESOLVE,
+                InstallEvent.Phase.DOWNLOAD,
+                InstallEvent.Phase.REIFY,
+                InstallEvent.Phase.POST_CHECK,
+                InstallEvent.Phase.DONE,
+            ),
+            phases,
+            "DONE 压在 POST_CHECK 前面 = 阶段条亮满又退格（真机症状）：实为 $phases",
+        )
+        Unit
+    }
+
+    @Test
+    fun `签名失败的路径上不许出现 DONE —— 没走完的会话不配说完成`() = runBlocking {
+        val signer = LockSigner(dir.resolve(".ns"), LockSigner.KeyProvider { error("应用密钥不可用") })
+        val c = coordinator(executor = harvesting("axios" to "1.0.0"), lockSigner = signer)
+        runCatching { c.install("p1", listOf(PackageSpec("axios"))) }
+
+        val phases = c.drainEvents("p1", 0, 64).events.map { it.event }
+            .filterIsInstance<InstallEvent.Progress>().map { it.phase }
+        assertFalse(
+            InstallEvent.Phase.DONE in phases,
+            "签名失败 = 会话没走完；先说「完成」再说「失败」是两句互相矛盾的结论：$phases",
+        )
+        Unit
+    }
+
     // —— helpers ——
 
     private fun writeLock(projectId: String, content: String) {
