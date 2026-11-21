@@ -43,12 +43,12 @@ class HostNodeExecutorSeedTest {
     }
 
     @Test
-    fun `项目缺 package json 时造一份最小骨架，并如实报「新建了」`() {
+    fun `项目缺 package json 时造一份最小骨架，并返回新建标记`() {
         val op = op()
         val workDir = dir.resolve("work")
         val seeded = executor().prepareWorkDir(op, workDir)
 
-        assertTrue(seeded, "项目根原本没有 package.json ⇒ 必须报「新建了」（终态摘要要据此说一句）")
+        assertTrue(seeded, "项目根原本没有 package.json ⇒ 准备结果标记本次新建，不作为用户提示")
         val written = workDir.resolve(ProjectManifest.FILE_NAME)
         assertTrue(Files.isRegularFile(written), "workDir 里必须有一份 —— npm 的 --prefix 只认那里")
         val fields = DomainJson.decodeObject(Files.readAllBytes(written).toString(StandardCharsets.UTF_8))
@@ -103,7 +103,7 @@ class HostNodeExecutorSeedTest {
     }
 
     @Test
-    fun `项目已有 package json 时原样拷过去，报「没新建」`() {
+    fun `项目已有 package json 时原样拷过去，返回非新建标记`() {
         val op = op()
         val original = """{"name":"mine","version":"2.0.0","main":"app.js"}"""
         Files.write(op.projectRoot.resolve(ProjectManifest.FILE_NAME), original.toByteArray())
@@ -111,7 +111,7 @@ class HostNodeExecutorSeedTest {
         val workDir = dir.resolve("work")
         val seeded = executor().prepareWorkDir(op, workDir)
 
-        assertFalse(seeded, "本来就有 ⇒ 不许报成新建（那句话是给用户看的，不能编）")
+        assertFalse(seeded, "已有清单只拷贝，准备结果不能标成新建")
         assertEquals(
             original,
             Files.readAllBytes(workDir.resolve(ProjectManifest.FILE_NAME)).toString(StandardCharsets.UTF_8),
