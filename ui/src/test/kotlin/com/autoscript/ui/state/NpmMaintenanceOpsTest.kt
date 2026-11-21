@@ -1,6 +1,5 @@
 package com.autoscript.ui.state
 
-import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.npm.InstallHandle
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmMaintenanceAction
@@ -8,10 +7,12 @@ import com.autoscript.domain.npm.NpmPanelSnapshot
 import com.autoscript.domain.npm.NpmProjectSnapshot
 import com.autoscript.domain.npm.NodeModulesStats
 import com.autoscript.domain.npm.NpmTargetScope
+import com.autoscript.domain.npm.PkgNode
 import com.autoscript.domain.npm.NpmConsoleLine
 import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.SequencedConsoleLine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -24,7 +25,7 @@ import org.junit.jupiter.api.Test
  *
  * 断的是「界面会怎么说、会不会冒充」，不是 npm 的行为：
  * - 失败原文**原样透传**（`ci` 的验签拒绝那句里已经写清了为什么拒，界面再译一遍就是第二份判据）；
- * - 回执**不许替用户宣布结果**（三颗按钮是入队，不是完成）；
+ * - 回执在挂起调用返回后才说完成，不再暗中串接一次全局安装；
  * - 回收回执要带上删/留两侧数字 —— 用户按下去就是为了看那个数字变没变。
  */
 class NpmMaintenanceOpsTest {
@@ -66,14 +67,16 @@ class NpmMaintenanceOpsTest {
         private val fail: Throwable? = null,
         private val report: NpmCacheReclaimReport = NpmCacheReclaimReport(3, 3L * 1024 * 1024, 7, 9L * 1024 * 1024, 7, false),
         private val snapshot: () -> NpmPanelSnapshot = { NpmPanelSnapshot(listOf()) },
-        /** 「提升到全局」单独一个失败位：去重成了、提升没成是**真会发生的**那一档。 */
-        private val promoteFail: Throwable? = null,
     ) : FakeHost() {
         val calls = mutableListOf<Pair<String, NpmMaintenanceAction>>()
         var reclaims = 0
+        var snapshotReads = 0
         val promoted = mutableListOf<String>()
 
-        override suspend fun npmSnapshot(): NpmPanelSnapshot = snapshot()
+        override suspend fun npmSnapshot(): NpmPanelSnapshot {
+            snapshotReads++
+            return snapshot()
+        }
 
         override suspend fun runNpmMaintenance(projectId: String, action: NpmMaintenanceAction): InstallHandle {
             calls += projectId to action
@@ -89,8 +92,7 @@ class NpmMaintenanceOpsTest {
 
         override suspend fun promoteNpmToGlobal(projectId: String): InstallHandle {
             promoted += projectId
-            promoteFail?.let { throw it }
-            return InstallHandle(id = "h2", projectId = NpmTargetScope.GLOBAL, enqueuedAtMillis = 1L)
+            error("维护当前作用域不应触发全局安装")
         }
     }
 
@@ -115,8 +117,7 @@ class NpmMaintenanceOpsTest {
                 runNpmMaintenanceOp(MaintenanceHost(), loaded(project()), action).opNotice
             }
         }
-        // 枚举仍是三个取值（界面只露两颗：`dedupe` 改走去重+提升那条路、
-        // `ci` 整颗下线）—— 这条断的是**通用路本身**：谁被接回来，回执照样分得开。
+        // 枚举仍是三个取值（界面只露 prune/dedupe，ci 没有入口），回执各自可辨。
         assertEquals(3, notices.toSet().size, "每个动作的回执必须各自可辨：$notices")
         assertTrue(notices[2]!!.contains("lock 签名已校验"), "ci 先校验 lock 签名这件事，回执得说：${notices[2]}")
     }
@@ -135,11 +136,11 @@ class NpmMaintenanceOpsTest {
     }
 
     @Test
-    fun `没选项目 → 如实说没有项目，不假装跑过`() = runBlocking {
+    fun `没选作用域 → 如实说没有作用域，不假装跑过`() = runBlocking {
         val host = MaintenanceHost()
         val next = runNpmMaintenanceOp(host, NpmState.of(NpmPanelSnapshot(emptyList())), NpmMaintenanceAction.DEDUPE)
-        assertTrue(host.calls.isEmpty(), "没有项目就不该调宿主")
-        assertTrue(next.opError!!.contains("没有选中的项目"), "实为 ${next.opError}")
+        assertTrue(host.calls.isEmpty(), "没有选中作用域就不该调宿主")
+        assertTrue(next.opError!!.contains("没有选中的作用域"), "实为 ${next.opError}")
     }
 
     @Test
@@ -157,74 +158,82 @@ class NpmMaintenanceOpsTest {
         assertEquals("1 MB", next.sizeLabel, "回读的才是现状")
     }
 
-    // ═══ 去重 + 提升到全局 ═══
+    // ═══ 去重只维护当前作用域 ═══
 
     @Test
-    fun `去重并提升：先 dedupe 当前作用域，再把它是谁提升上去`() = runBlocking {
-        val host = MaintenanceHost()
-        val next = runDedupeAndPromoteOp(host, loaded(project("demo")))
+    fun `项目去重不把相同或不同版本的依赖复制或替换到全局`() = runBlocking {
+        val local = project("demo").copy(installed = listOf(PkgNode("axios", "1.7.0"), PkgNode("@scope/tool", "2.0.0")))
+        val refreshed = local.copy(storage = local.storage!!.copy(totalBytes = 1024 * 1024))
+        for (globalVersion in listOf(null, "1.7.0", "1.8.0", "2.0.0")) {
+            val global = project(NpmTargetScope.GLOBAL).copy(
+                installed = globalVersion?.let { listOf(PkgNode("axios", it), PkgNode("@scope/tool", it)) }.orEmpty(),
+            )
+            val before = NpmPanelSnapshot(listOf(global, local, project("other")))
+            val after = NpmPanelSnapshot(listOf(global, refreshed, project("other")))
+            val host = MaintenanceHost(snapshot = { after })
+            val picked = NpmState.withProject(NpmState.of(before), "demo")
+            val next = runNpmMaintenanceOp(host, picked, NpmMaintenanceAction.DEDUPE)
 
-        assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls, "第一段是当前作用域上的去重")
-        assertEquals(listOf("demo"), host.promoted, "第二段提升的是**这个**作用域声明的依赖")
-        assertNull(next.maintenance, "跑完必须把忙碌标记清掉，否则那颗按钮永远转圈")
+            assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls)
+            assertTrue(host.promoted.isEmpty(), "全局版本 $globalVersion：去重不能顺带安装或替换全局依赖")
+            assertEquals(1, host.snapshotReads, "完成后只现取一次真实快照")
+            assertEquals(after, next.snapshot, "全局与其他项目保持宿主原样，不能伪造已经移走项目依赖")
+            assertEquals("demo", next.selectedProjectId)
+            assertEquals(listOf("1.7.0", "2.0.0"), next.installed.map { it.version })
+            assertEquals("1 MB", next.sizeLabel, "当前作用域的去重结果必须回读")
+            assertNull(next.maintenance)
+            assertNull(next.opError)
+            assertTrue(next.opNotice!!.contains("当前作用域"))
+            assertFalse(next.opNotice!!.contains("提升"))
+        }
+        Unit
+    }
+
+    @Test
+    fun `全局去重只维护全局树，不改项目也不触发提升`() = runBlocking {
+        val snapshot = NpmPanelSnapshot(listOf(project(NpmTargetScope.GLOBAL), project("demo")))
+        val host = MaintenanceHost(snapshot = { snapshot })
+        val next = runNpmMaintenanceOp(host, NpmState.of(snapshot), NpmMaintenanceAction.DEDUPE)
+
+        assertEquals(listOf(NpmTargetScope.GLOBAL to NpmMaintenanceAction.DEDUPE), host.calls)
+        assertTrue(host.promoted.isEmpty())
+        assertEquals(1, host.snapshotReads)
+        assertEquals(snapshot, next.snapshot)
+        assertEquals(NpmTargetScope.GLOBAL, next.selectedProjectId)
+        assertNull(next.maintenance)
         assertNull(next.opError)
-        val n = next.opNotice!!
-        assertTrue(n.contains("dedupe"), "第一段干了什么要说：$n")
-        assertTrue(n.contains("已提升"), "第二段干了什么更要说 —— 那是这颗按钮的意思：$n")
-        assertTrue(n.contains("dedupe 已完成"), "第一段也是完成式（调用返回时已跑完）：$n")
-        assertFalse(n.contains("已入队"), "「入队即返回」假设已过时，不许说它还在跑：$n")
+        assertTrue(next.opNotice!!.contains("dedupe 已完成"))
+        assertFalse(next.opNotice!!.contains("提升"), "去重不再包含需要解释跳过的提升步骤")
     }
 
     @Test
-    fun `作用域已经是全局 → 不提升，且回执明说这一步跳过了`() = runBlocking {
-        val host = MaintenanceHost()
-        val picked = NpmState.withProject(loaded(project("demo"), project(NpmTargetScope.GLOBAL)), NpmTargetScope.GLOBAL)
-        val next = runDedupeAndPromoteOp(host, picked)
-
-        assertEquals(listOf(NpmMaintenanceAction.DEDUPE), host.calls.map { it.second }, "去重照样跑")
-        assertTrue(host.promoted.isEmpty(), "把自己提升到自己身上是句空话，不该发出去")
-        // **必须明说跳过了**：不然用户会以为"提升"那半截悄悄失败了（这正是这条按钮的语义）。
-        assertTrue(next.opNotice!!.contains("全局"), "实为 ${next.opNotice}")
-        assertTrue(next.opNotice!!.contains("可提升"), "实为 ${next.opNotice}")
-    }
-
-    @Test
-    fun `去重失败 → 整颗报失败，且不做后段`() = runBlocking {
+    fun `去重失败保留原清单和失败原文，不再执行全局安装`() = runBlocking {
         val raw = "npm 退出码 1: ERESOLVE could not resolve"
         val host = MaintenanceHost(fail = IllegalStateException(raw))
-        val next = runDedupeAndPromoteOp(host, loaded(project("demo")))
+        val previous = loaded(project("demo").copy(installed = listOf(PkgNode("axios", "1.7.0"))))
+        val next = runNpmMaintenanceOp(host, previous, NpmMaintenanceAction.DEDUPE)
 
+        assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls)
         assertEquals(raw, next.opError, "失败原文必须原样到达界面")
-        assertTrue(host.promoted.isEmpty(), "依赖树还乱着就往外提升 = 把一个半成品抄成全局的基准")
-        assertNull(next.opNotice, "失败不许留成功回执")
-        assertNull(next.maintenance)
-    }
-
-    /**
-     * **部分失败两个都给** —— 这是这一颗按钮最容易撒的谎：去重真的跑了（几十秒），
-     * 只报一句「提升失败」会让用户以为整颗按钮什么也没干，于是再点一次，去重被重跑一遍。
-     */
-    @Test
-    fun `去重成了、提升失败 → 两个都给，去重不许被报成失败`() = runBlocking {
-        val host = MaintenanceHost(promoteFail = IllegalStateException("没有可提升的依赖声明：package.json 里 dependencies/devDependencies 都是空的"))
-        val next = runDedupeAndPromoteOp(host, loaded(project("demo")))
-
-        assertEquals(listOf("demo"), host.promoted, "后段确实发出去过")
-        assertTrue(next.opNotice!!.contains("dedupe"), "前段的成果要如实说：${next.opNotice}")
-        assertFalse(next.opNotice!!.contains("失败"), "回执那行不是放失败的地方：${next.opNotice}")
-        assertTrue(next.opError!!.contains("提升到全局失败"), "后段的病因要带出来：${next.opError}")
-        assertTrue(next.opError!!.contains("dependencies"), "原文透传，不另编话术：${next.opError}")
+        assertTrue(host.promoted.isEmpty())
+        assertEquals(0, host.snapshotReads, "失败不伪造刷新后的成功清单")
+        assertEquals(previous.snapshot, next.snapshot)
+        assertNull(next.opNotice)
         assertNull(next.maintenance)
     }
 
     @Test
-    fun `去重并提升：没选作用域与宿主未接线，两句话不一样`() = runBlocking {
-        val noPick = runDedupeAndPromoteOp(MaintenanceHost(), NpmState.of(NpmPanelSnapshot(emptyList())))
-        assertTrue(noPick.opError!!.contains("还没有选中的作用域"), "实为 ${noPick.opError}")
+    fun `取消去重原样传播，不吞成失败也不续跑全局安装`() = runBlocking {
+        val host = MaintenanceHost(fail = CancellationException("页面已离开"))
+        val failure = runCatching {
+            runNpmMaintenanceOp(host, loaded(project("demo")), NpmMaintenanceAction.DEDUPE)
+        }.exceptionOrNull()
 
-        val noHost = runDedupeAndPromoteOp(null, loaded(project("demo")))
-        assertTrue(noHost.opError!!.contains("未接线"), "实为 ${noHost.opError}")
-        assertNull(noHost.opNotice)
+        assertTrue(failure is CancellationException)
+        assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls)
+        assertTrue(host.promoted.isEmpty())
+        assertEquals(0, host.snapshotReads)
+        Unit
     }
 
     // ═══ 缓存回收 ═══

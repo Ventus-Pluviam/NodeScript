@@ -142,7 +142,6 @@ fun NpmScreen(
     onSubmitInstall: () -> Unit,
     onRemoveInstalled: (String) -> Unit,
     onBack: () -> Unit,
-    onDedupePromote: () -> Unit,
     onReinstall: (NpmRowState) -> Unit,
     onReclaimCache: () -> Unit,
     modifier: Modifier = Modifier,
@@ -192,7 +191,6 @@ fun NpmScreen(
                 OptionsBar(
                     state = state,
                     onMaintenance = onMaintenance,
-                    onDedupePromote = onDedupePromote,
                     onReclaimCache = onReclaimCache,
                 )
             }
@@ -873,8 +871,7 @@ private fun PanelRow(
  *
  * 三件事各自说清它动的是什么（不靠用户猜 `dedupe` 是什么意思）：
  * - 「清理依赖」= `prune`；
- * - 「依赖去重」= `dedupe` **+ 提升到全局**，走 `runDedupeAndPromoteOp`：两段、
- *   两个作用域，各自的成败分开说；
+ * - 「依赖去重」= 当前作用域内的 `dedupe`，不把项目依赖再装一份到全局；
  * - 「清理缓存」= 按各作用域 lock 的并集回收 npm 缓存（`reclaimNpmCacheOp`）。
  *
  * 样式照 TG `ProfileActionsView`（「我的资料」那一行的三颗）：**三张等宽白卡**横排，
@@ -883,23 +880,19 @@ private fun PanelRow(
  * 两处必须一起看：
  * - 「按 lock 重装」（`ci`）在本页没有入口，宿主那半边与 [NpmMaintenanceAction.CI]
  *   都还在、也还测着 —— 想放回来随时可以；
- * - `prune` 走 [NpmMaintenanceAction] 那条按枚举转手的通用路（`runNpmMaintenanceOp`）；
- *   另两颗各有自己的入口，理由见它们各自的 KDoc。
+ * - `prune` 与 `dedupe` 走 [NpmMaintenanceAction] 那条按枚举转手的通用路
+ *   （`runNpmMaintenanceOp`）；缓存回收不动依赖树，保留独立入口。
  *
  * 禁用判据：两个重操作（cleaning / dedupe）跟 [NpmState.canInstall] 走，缓存那一颗跟
  * [NpmState.canReclaimCache] 走 —— 两条都是"安装会话全局互斥"这一个事实的两种说法：
  * 安装、维护、回收三者互相排斥。只禁被按下的那一颗会让另两颗看起来还能按，按下去是排队，
  * 用户以为卡了。**跑起来没有「进行中」文字** —— 三颗一起变灰就是状态本身；
  * TG 这三颗也没有 loading 态（见 [OptionTile]）。
- *
- * 「依赖去重」按下时记的仍是 [NpmMaintenanceAction.DEDUPE]：提升是它的**后半段**，
- * 不是另一件并列的事（见 `runDedupeAndPromoteOp`）。
  */
 @Composable
 private fun OptionsBar(
     state: NpmState,
     onMaintenance: (NpmMaintenanceAction) -> Unit,
-    onDedupePromote: () -> Unit,
     onReclaimCache: () -> Unit,
 ) {
     Row(
@@ -927,7 +920,7 @@ private fun OptionsBar(
             label = "依赖去重",
             glyph = GlyphKind.LAYERS,
             enabled = state.canInstall,
-            onClick = onDedupePromote,
+            onClick = { onMaintenance(NpmMaintenanceAction.DEDUPE) },
             modifier = Modifier.weight(1f),
         )
         OptionTile(

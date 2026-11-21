@@ -61,7 +61,6 @@ import com.autoscript.domain.automation.ScreenConsentOutcome
 import com.autoscript.domain.automation.ScreenConsentRequests
 import com.autoscript.domain.editor.SyntaxHighlighter
 import com.autoscript.domain.host.HostSummary
-import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmRegistryKeys
 import com.autoscript.domain.scripts.ScriptPaths
 import com.autoscript.domain.host.TaskRegistration
@@ -102,7 +101,6 @@ import com.autoscript.ui.state.pollConsoleWhileRunning
 import com.autoscript.ui.state.removeInstalled
 import com.autoscript.ui.state.submitInstall
 import com.autoscript.ui.state.runNpmMaintenanceOp
-import com.autoscript.ui.state.runDedupeAndPromoteOp
 import com.autoscript.ui.state.reclaimNpmCacheOp
 import com.autoscript.ui.state.reinstallInstalled
 import com.autoscript.ui.state.withInstallInFlight
@@ -886,12 +884,6 @@ class MainActivity : ComponentActivity() {
                     scope.launch { npmState = removeInstalled(hostSummary(), npmState, name) }
                 },
                 onBack = onCloseNpm,
-                // 「依赖去重」那个选项是**两件事**（去重 + 提升到全局），所以它有自己的一条
-                // 入口而不是从 `onMaintenance` 转手 —— 见 `OptionsCard` 的 KDoc。
-                onDedupePromote = {
-                    npmState = npmState.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
-                    scope.launch { npmState = runDedupeAndPromoteOp(hostSummary(), npmState) }
-                },
                 onReinstall = { row ->
                     // 名字与版本都取自这一行（宿主读 lockfile 的结果），不是用户敲的 ——
                     // 走的是与「卸载」同一条命令通道，门禁强度因此不取决于按的是哪一颗。
