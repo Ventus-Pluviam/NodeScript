@@ -114,9 +114,7 @@ class InstallCoordinator(
     // 探针/时钟/配额不走 [NpmServices]：它们不是「外部协作者」而是本类行为参数，
     // 收进 services 会让「换一份 layout 就顺手换掉时钟」变得合法——那是两回事。
     // 保留为构造参数 + 就地私有化，测试按需注入（时钟/磁盘探针是门禁断言的输入）。
-    private val freeSpaceProbe = freeSpaceProbe
     private val now = now
-    private val config = config
     private val npmCacheDir = npmCacheDir
 
     // —— services 成员的本类私有别名 ——
@@ -138,6 +136,10 @@ class InstallCoordinator(
     private val bundleImporter: NpmOfflineBundleImporter? = services.bundleImporter
     private val registryVerifier: RegistryVerifier? = services.registryVerifier
     private val registryOf: (String) -> String? = registryOf ?: ::resolveRegistry
+    private val admission = InstallAdmission(layout, config, freeSpaceProbe, opLog)
+    private val promotionRunner = NpmPromotionRunner(layout, ::crossCheckRegistry) { projectId, args, check ->
+        withHeavyAdmission(projectId, args, checkWorkTree = check) { run -> run() }
+    }
 
     /**
      * 本次首选注册表的**两层解析**（§10.2）：项目 `.npmrc` → 全局 `files/.npmrc` → null。
@@ -1233,47 +1235,18 @@ class InstallCoordinator(
                 throw AutojsException(ErrorCode.ERR_INVALID_PARAM, "请选择要迁移依赖的项目")
             }
             try {
-                withProjectLock(projectId) { globalSession.withLock { promoteLocked(project) } }
+                withProjectLock(projectId) {
+                    globalSession.withLock {
+                        val result = promotionRunner.run(project)
+                        consoleLine(projectId, NpmConsoleLine(NpmConsoleLineKind.RESULT, result.summary, now(), ok = true))
+                        result.handle ?: InstallHandle("promote-${handleSeq.incrementAndGet()}", projectId, now())
+                    }
+                }
             } finally {
                 invalidateNodeModulesSizes(layout.nodeModules(project))
                 invalidateNodeModulesSizes(layout.globalNodeModules)
             }
         }
-
-    private suspend fun promoteLocked(project: ProjectId): InstallHandle {
-        val projectTree = PromoteTree.read(layout.projectRoot(project))
-        val globalRoot = layout.projectsRoot
-        val plan = PromotePlan(projectTree, PromoteTree.read(globalRoot, allowEmpty = true))
-        val projectId = project.value
-        val globalId = NpmTargetScope.GLOBAL
-        if (plan.additions.isNotEmpty()) {
-            val specs = plan.additions.map { "${it.name}@${it.version}" }
-            // `--save` / `--package-lock` 覆盖本地 npmrc 的 no-save 配置，确保下次 prune 仍保留。
-            val args = listOf("install", "--save", "--save-prod", "--save-exact", "--package-lock", "--prefer-offline") + specs
-            crossCheckRegistry(globalId, plan.additions, args)
-            withHeavyAdmission(
-                globalId, args,
-                checkWorkTree = { root, modules -> plan.verifyGlobal(PromoteTree.read(root, nodeModules = modules)) },
-            ) { run -> run() }
-        }
-
-        val handle = if (plan.packages.isEmpty()) {
-            InstallHandle("promote-${handleSeq.incrementAndGet()}", projectId, now())
-        } else {
-            // 全局会话已落位并签名；重读真实树。取消或校验失败均不能进入卸载。
-            plan.verifyGlobal(PromoteTree.read(globalRoot))
-            plan.verifySource(PromoteTree.read(layout.projectRoot(project)))
-            coroutineContext.ensureActive()
-            val args = listOf("uninstall", "--save", "--package-lock") + plan.packages.keys
-            withHeavyAdmission(
-                projectId, args,
-                checkWorkTree = { root, modules -> plan.verifyProject(PromoteTree.read(root, nodeModules = modules)) },
-            ) { run -> run() }
-        }
-        coroutineContext.ensureActive()
-        consoleLine(projectId, NpmConsoleLine(NpmConsoleLineKind.RESULT, plan.summary(), now(), ok = true))
-        return handle
-    }
 
     // ══════════ 重操作入口 ══════════
 
@@ -1294,13 +1267,13 @@ class InstallCoordinator(
         inSession: suspend (suspend () -> Unit) -> Unit,
     ): InstallHandle {
         coroutineContext.ensureActive()
-        val free = checkFreeSpace(projectId, args)
+        val free = admission.check(projectId, opName(args))
         val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
         val tracked = TrackedOp(handle, UUID.randomUUID().toString(), checkWorkTree = checkWorkTree)
         handles[handle.id] = tracked
         try {
             inSession {
-                warnLowSpace(tracked.handle, free)
+                admission.warning(handle, free)?.let { emit(it) }
                 runHeavy(tracked, args, timeoutMillis)
             }
         } catch (e: CancellationException) {
@@ -1310,30 +1283,6 @@ class InstallCoordinator(
             tracked.finish()
         }
         return handle
-    }
-
-    private fun checkFreeSpace(projectId: String, args: List<String>): Long {
-        val free = freeSpaceProbe(layout.projectRoot(ProjectId(projectId)))
-        if (free < config.minFreeBytes) {
-            val why = "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装"
-            opLog.log(opName(args), projectId, false, why)
-            throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
-        }
-        return free
-    }
-
-    private suspend fun warnLowSpace(handle: InstallHandle, free: Long) {
-        if (free < (config.minFreeBytes * FREE_WARN_HEADROOM).toLong()) {
-            emit(
-                InstallEvent.Warning(
-                    projectId = handle.projectId,
-                    handleId = handle.id,
-                    kind = InstallEvent.Kind.DISK_QUOTA,
-                    message = "磁盘可用 ${free / 1024 / 1024}MB 已逼近预检下限 " +
-                        "${config.minFreeBytes / 1024 / 1024}MB：再装大包会被拒",
-                ),
-            )
-        }
     }
 
     private suspend fun runHeavy(tracked: TrackedOp, args: List<String>, timeoutMillis: Long) {
@@ -1554,7 +1503,7 @@ class InstallCoordinator(
         installEventRing.push(e.projectId, e)
         // 控制台投影在**唯一一处**：runHeavy 与 runScriptOps 的全部
         // 阶段/警告/终态都经这里，两条执行路径不必各写一遍，也就不会有一条忘了投影。
-        consoleLine(e.projectId, projectConsoleLine(e))
+        consoleLine(e.projectId, projectNpmConsoleLine(e, now()))
         events.emit(e)
     }
 
@@ -1562,43 +1511,6 @@ class InstallCoordinator(
     private fun consoleLine(projectId: String, line: NpmConsoleLine) {
         consoleRing.push(projectId, line)
     }
-
-    /**
-     * [InstallEvent] → 控制台行的投影（判读只在这一处，呈现层按 [NpmConsoleLineKind] 着色）。
-     *
-     * 事件环与控制台环是**两个视图**，谁也不替代谁：脚本侧的 `onProgress`/`onWarning`
-     * 形状一个字不改（那是 §10.8 的契约），控制台只是宿主自己的界面。
-     */
-    private fun projectConsoleLine(e: InstallEvent): NpmConsoleLine = when (e) {
-        is InstallEvent.Progress -> NpmConsoleLine(
-            kind = NpmConsoleLineKind.PHASE,
-            text = phaseText(e.phase) + (e.pkg?.let { "  $it" } ?: ""),
-            atMillis = now(),
-        )
-        is InstallEvent.Warning -> NpmConsoleLine(
-            kind = NpmConsoleLineKind.WARNING,
-            text = e.message,
-            atMillis = now(),
-        )
-        is InstallEvent.Finished -> NpmConsoleLine(
-            kind = NpmConsoleLineKind.RESULT,
-            text = if (e.success) (e.detail ?: "完成") else "失败：${e.detail ?: "（无详情）"}",
-            atMillis = now(),
-            // 成败是**判读**，在宿主侧定：呈现层据此着色，不去猜那句中文怎么写。
-            ok = e.success,
-        )
-    }
-
-    /** 阶段的中文说法（控制台是给人看的；`bridge/js` 那边仍走 `phaseWire` 的连字符口径）。 */
-    private fun phaseText(p: InstallEvent.Phase): String = when (p) {
-        InstallEvent.Phase.QUEUED -> "排队中"
-        InstallEvent.Phase.RESOLVE -> "解析依赖"
-        InstallEvent.Phase.DOWNLOAD -> "下载"
-        InstallEvent.Phase.REIFY -> "写入 node_modules"
-        InstallEvent.Phase.POST_CHECK -> "收尾校验"
-        InstallEvent.Phase.DONE -> "完成"
-    }
-
 
     companion object {
         /**
