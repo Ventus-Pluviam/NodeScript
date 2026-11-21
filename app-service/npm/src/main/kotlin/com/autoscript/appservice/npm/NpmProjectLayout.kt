@@ -204,12 +204,24 @@ object LockfileReader {
 
 /** 目录尺寸遍历（storage 轻操作）+ 字节哈希（部署校验）。 */
 object DirSizer {
+    private const val HEX_DIGITS = "0123456789abcdef"
+
+    // 启动全树校验要编码几千份摘要，逐字节 String.format 会创建几十万个 Formatter。
+    // 位运算直接写小写十六进制，摘要算法、字节与既有 marker 身份保持逐字相同。
+    private fun ByteArray.hexDigest(): String = buildString(size * 2) {
+        for (byte in this@hexDigest) {
+            val value = byte.toInt() and 0xff
+            append(HEX_DIGITS[value ushr 4])
+            append(HEX_DIGITS[value and 0x0f])
+        }
+    }
+
     fun sha256(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-256")
-        .digest(bytes).joinToString("") { "%02x".format(it) }
+        .digest(bytes).hexDigest()
 
     /** cacache 的默认摘要算法（内容路径按 sha512 分段；与 lockfile v3 integrity 同口径）。 */
     fun sha512(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-512")
-        .digest(bytes).joinToString("") { "%02x".format(it) }
+        .digest(bytes).hexDigest()
 
     fun sizeBytes(root: Path): Long {
         if (!Files.isDirectory(root)) return 0

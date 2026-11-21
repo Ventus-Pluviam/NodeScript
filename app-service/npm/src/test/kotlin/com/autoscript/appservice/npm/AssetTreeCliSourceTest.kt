@@ -76,6 +76,44 @@ class AssetTreeCliSourceTest {
     }
 
     @Test
+    fun `目录识别读到的子项直接复用每个路径每轮只枚举一次`() {
+        val tree = mapOf(
+            "npm" to arrayOf("bin", "node_modules", "empty/"),
+            "npm/bin" to arrayOf("npm-cli.js", "npx-cli.js"),
+            "npm/node_modules" to arrayOf("@scope"),
+            "npm/node_modules/@scope" to arrayOf("pkg"),
+            "npm/node_modules/@scope/pkg" to arrayOf("index.js"),
+            "npm/empty" to emptyArray(),
+        )
+        val calls = linkedMapOf<String, Int>()
+        val src = AssetTreeCliSource("npm", { path ->
+            calls[path] = calls.getOrDefault(path, 0) + 1
+            tree[path]
+        }) { error("list 只枚举名字，不读文件") }
+        val expected = listOf("bin/npm-cli.js", "bin/npx-cli.js", "node_modules/@scope/pkg/index.js")
+        assertEquals(expected, src.list().sorted())
+        assertEquals(
+            tree.keys + expected.map { "npm/$it" },
+            calls.keys,
+            "仍完整枚举真实资产树，不能用清单推测目录内容而漏掉额外文件",
+        )
+        assertTrue(calls.values.all { it == 1 }, "不带尾斜杠的目录不能先为识别、再为展开而重复枚举：$calls")
+        assertEquals(expected, src.list().sorted())
+        assertTrue(calls.values.all { it == 2 }, "缓存只限一轮，下次启动检疫仍要现查：$calls")
+    }
+
+    @Test
+    fun `重复枚举仍能看见新增或删除的资产不缓存旧文件集合`() {
+        var names = arrayOf("old.js")
+        val src = AssetTreeCliSource("npm", { path -> if (path == "npm") names else null }) {
+            error("list 不读文件")
+        }
+        assertEquals(listOf("old.js"), src.list())
+        names = arrayOf("new.js", "extra.js")
+        assertEquals(listOf("extra.js", "new.js"), src.list().sorted())
+    }
+
+    @Test
     fun `root 不存在返回空表而非异常`() {
         val src = AssetTreeCliSource("npm", { null }) { ByteArrayInputStream(ByteArray(0)) }
         assertTrue(src.list().isEmpty())
