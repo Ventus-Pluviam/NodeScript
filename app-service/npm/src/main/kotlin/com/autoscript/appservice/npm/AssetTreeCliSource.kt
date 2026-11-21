@@ -45,7 +45,7 @@ class AssetTreeCliSource(
         val out = ArrayList<String>()
         // 判目录时已经读到的子项直接入队；同一趟遍历里不再为了展开目录而 list 第二次。
         // 只留名字、不读文件内容，且缓存仅限本次调用，下次检疫仍现查整棵 APK 树。
-        val queue = ArrayDeque<Pair<String, Array<String>>>()
+        val queue = ArrayDeque<Pair<String, Array<out String>>>()
         queue.addLast("" to (listDir(root) ?: return out))
         while (queue.isNotEmpty()) {
             val (rel, names) = queue.removeFirst()
