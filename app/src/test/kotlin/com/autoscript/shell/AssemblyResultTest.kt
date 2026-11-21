@@ -11,6 +11,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -55,12 +56,16 @@ class AssemblyResultTest {
         val result = AssemblyResult<Any>()
         val first = async(start = CoroutineStart.UNDISPATCHED) { runCatching { result.await() }.exceptionOrNull() }
         val second = async(start = CoroutineStart.UNDISPATCHED) { runCatching { result.await() }.exceptionOrNull() }
-        val cause = IllegalStateException("意图日志数据库打不开")
+        val cause = IllegalStateException("意图日志数据库打不开", java.io.IOException("database locked"))
         result.begin().completeExceptionally(cause)
         withTimeout(5_000) {
-            assertSame(cause, first.await())
-            assertSame(cause, second.await())
-            assertSame(cause, runCatching { result.await() }.exceptionOrNull())
+            for (failure in listOf(first.await(), second.await(), runCatching { result.await() }.exceptionOrNull())) {
+                // 协程调试的 stacktrace recovery 可能复制异常外壳；追到原异常而不是断言外壳引用。
+                assertEquals(cause.message, failure?.message)
+                val chain = generateSequence(failure) { it.cause }.toList()
+                assertTrue(chain.any { it === cause }, "共享结果必须保留装配时的原异常和 cause：$chain")
+                assertTrue(chain.any { it === cause.cause }, "底层 IO 病因不能丢失")
+            }
         }
         Unit
     }
