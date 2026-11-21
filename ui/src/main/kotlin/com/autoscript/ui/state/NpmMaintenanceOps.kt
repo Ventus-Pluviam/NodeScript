@@ -3,7 +3,6 @@ package com.autoscript.ui.state
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmMaintenanceAction
-import com.autoscript.domain.npm.NpmTargetScope
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -32,10 +31,9 @@ import kotlinx.coroutines.CancellationException
  * 是协程内联执行，挂到会话跑完才返回 —— 构造回执那一刻动作已经结束、清单也已
  * 现取过，说「已入队」才是撒谎（用户会把「已完成」读成「还在跑」，干等或连点）。
  *
- * **本函数是"按枚举转手"的那条通用路**：界面上只有「清理未声明依赖」
- * （`PRUNE`）走它 —— 「依赖去重」改走 [runDedupeAndPromoteOp]（它要做两件事），
- * 「按 lock 重装」整颗下线。枚举三个取值一个没少、这条路的用例也照测：
- * 将来哪颗按钮回来，接上就行，不必重新推一遍这段编排。
+ * 「清理依赖」（`PRUNE`）与「依赖去重」（`DEDUPE`）都只维护当前选中的作用域，
+ * 不顺带往全局安装另一份依赖。不同作用域的同名包可以是不同版本，不能当成可合并的重复项。
+ * 「按 lock 重装」在界面上没有入口，但枚举与宿主路径仍保留。
  */
 internal suspend fun runNpmMaintenanceOp(
     host: HostSummary?,
@@ -43,7 +41,7 @@ internal suspend fun runNpmMaintenanceOp(
     action: NpmMaintenanceAction,
 ): NpmState {
     val projectId = state.selectedProjectId
-        ?: return state.withOpAccount("还没有选中的项目：依赖维护跑在某个项目的 node_modules 上", null)
+        ?: return state.withOpAccount("还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", null)
     if (host == null) {
         return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
     }
@@ -53,58 +51,6 @@ internal suspend fun runNpmMaintenanceOp(
         loadNpmSnapshot(host, busy).copy(
             maintenance = null,
         ).withOpAccount(null, noticeFor(action))
-    } catch (e: CancellationException) {
-        throw e
-    } catch (t: Exception) {
-        busy.copy(maintenance = null).withOpAccount(t.message ?: t.javaClass.simpleName, null)
-    }
-}
-
-/**
- * 「**去重并提升到全局**」—— 一次点击两件事，所以它有一条自己的入口，而不是给 [NpmMaintenanceAction]
- * 加第四个枚举值：那两步的产物落在**两个不同的作用域**上（先去重当前这棵，再把声明的依赖
- * 装一份到 `files/scripts/node_modules`），收成一个动作名会让"这颗按钮动的是谁"在枚举上
- * 读不出来。
- *
- * **两段各自的成败分开说**，三条刻意：
- * - 前段（去重）失败 → 整颗报失败，**不做后段**：依赖树还乱着就往外提升，等于把一个
- *   半成品抄成全局的基准。
- * - 前段成功、后段失败 → **两个都给**：`opNotice` 说去重已经入队（那是真的跑了），
- *   `opError` 说提升失败的原因为什么。只报失败会让用户以为整颗按钮什么也没干，
- *   于是又点一次 —— 而去重会被重跑一遍。
- * - 作用域本来就是**全局**时不提升（也没有可提升的"别处"），回执里明说这一句：
- *   否则用户会以为"提升"悄悄失败了。
- *
- * 回执说**完成式**：两段都是协程内联执行（挂到跑完才返回），构造回执时
- * 磁盘上的事已经发生了 —— 「已提升」是真话，「已入队」反而是「入队即返回」
- * 假设时代的遗留（批 17-41 同一条病）。
- */
-internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState): NpmState {
-    val projectId = state.selectedProjectId
-        ?: return state.withOpAccount("还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", null)
-    if (host == null) {
-        return state.withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
-    }
-    val busy = state.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
-    return try {
-        host.runNpmMaintenance(projectId, NpmMaintenanceAction.DEDUPE)
-        var notice = "npm dedupe 已完成：当前作用域的重复依赖已合并"
-        var promoteError: String? = null
-        if (NpmTargetScope.isGlobal(projectId)) {
-            notice += "；当前作用域即全局，无依赖可提升"
-        } else {
-            try {
-                host.promoteNpmToGlobal(projectId)
-                notice += "；已提升「$projectId」的声明依赖至全局"
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Exception) {
-                promoteError = "提升到全局失败：${t.message ?: t.javaClass.simpleName}"
-            }
-        }
-        loadNpmSnapshot(host, busy).copy(
-            maintenance = null,
-        ).withOpAccount(promoteError, notice)
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
@@ -143,7 +89,7 @@ internal suspend fun reclaimNpmCacheOp(host: HostSummary?, state: NpmState): Npm
 /** 三颗按钮各自的完成式回执（调用点已是动作跑完之后；清单在回执前已现取）。 */
 private fun noticeFor(action: NpmMaintenanceAction): String = when (action) {
     NpmMaintenanceAction.PRUNE -> "npm prune 已完成：lock 未声明的包已移除，清单已更新"
-    NpmMaintenanceAction.DEDUPE -> "npm dedupe 已完成：重复依赖已合并，清单已更新"
+    NpmMaintenanceAction.DEDUPE -> "npm dedupe 已完成：当前作用域的重复依赖已合并，清单已更新"
     NpmMaintenanceAction.CI -> "npm ci 已完成：已按 lock 重建 node_modules（lock 签名已校验）"
 }
 
