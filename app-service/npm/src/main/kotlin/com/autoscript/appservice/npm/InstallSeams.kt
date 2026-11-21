@@ -97,6 +97,8 @@ data class HeavyOp(
     val projectRoot: java.nio.file.Path,
     val stageDir: java.nio.file.Path,
     val timeoutMillis: Long,
+    /** 非空时在独立工作树运行；收割前传入 prefix 验证，抛出即丢弃产物、不落位。 */
+    val checkWorkTree: ((Path, Path) -> Unit)? = null,
 )
 
 /** 进度事件回传缝（执行体 → 协调器事件流）。 */

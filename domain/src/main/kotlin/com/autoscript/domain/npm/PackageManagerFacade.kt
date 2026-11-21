@@ -332,21 +332,17 @@ interface PackageManagerFacade {
 
     // —— 轻操作（:main Kotlin 直读，零 Node 进程）——
     /**
-     * 把一个项目**声明的**依赖装一份到全局作用域。
+     * 把一个项目已锁定且与全局兼容的**直接依赖迁移**到全局作用域。
      *
-     * 三条刻意：
-     * - **取的是项目 `package.json` 里声明的那几条**（`dependencies` + `devDependencies`），
-     *   **不是** lockfile 的闭包：闭包是几十上百条传递依赖，把它们逐条写成全局的**直接依赖**
-     *   会把全局那份 `package.json` 撑成一张假清单（下次谁看都以为这个机器手写了 200 条依赖）。
-     *   装进去的实际闭包由 npm 自己按声明解一遍 —— 与在项目里装是同一条解析路径。
-     * - **带的是声明的范围（`^1.2.3`）而不是锁定的版本**：全局那一份跟着项目一起走小版本，
-     *   两边不会分家 —— 钉死到某一次 lock 里的那个具体版本，项目升个小版本之后全局那份
-     *   就与它对不上了，而用户看不出为什么。
-     * - 目标固定是 [NpmTargetScope.GLOBAL]，**与调用方当前在看哪个作用域无关** ——
-     *   这条口回答的就是「提升到全局」这一件事，当前作用域由调用方决定要不要调它。
+     * 规则固定：
+     * - 只看项目根 `node_modules` 的直接依赖与 lock 锁定版本，不搬传递依赖；
+     * - 全局缺包时，先按项目锁定的精确版本安装；全局已有相同版本时直接复用；
+     * - 全局已有不同版本时保留项目依赖、不覆盖全局；确认全局物化版本兼容后才从项目移除。
+     * - 目标固定是 [NpmTargetScope.GLOBAL]；仍被其他项目依赖需要的顶层副本不能强删，迁移拒绝而保留原树。
+     * - 非 registry 来源（alias/file/git/workspace 等）和 optional/peer 声明不迁移，避免更换来源或安装语义。
      *
-     * 项目没有 `package.json`（或里面一条依赖都没声明）时**抛**：那是"没有可提升的东西"，
-     * 返回一个空句柄会让界面显示"已提升"而磁盘上什么也没发生。
+     * 项目没有 `package.json` 时抛出；没有可迁移项时不启动 npm，会在项目控制台说明保留项，
+     * 不把空操作说成已迁移。
      *
      * 返回 [InstallHandle] 与 [install] 同形（协程内联执行、挂到会话跑完才返回）。
      *
@@ -355,7 +351,7 @@ interface PackageManagerFacade {
     suspend fun promoteToGlobal(projectId: String): InstallHandle =
         throw com.autoscript.domain.core.AutojsException(
             com.autoscript.domain.core.ErrorCode.ERR_NOT_IMPLEMENTED,
-            "提升到全局未接线：本宿主没有接上 npm 安装会话入口",
+            "依赖迁移到全局未接线：本宿主没有接上 npm 安装会话入口",
         )
 
     suspend fun list(projectId: String, depth: Int = 0): List<PkgNode>

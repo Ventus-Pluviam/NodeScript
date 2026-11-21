@@ -30,7 +30,6 @@
     <ID>SwallowedException:NpmRegistryVerifier.kt$HttpRegistrySource$e: IOException</ID>
     <ID>SwallowedException:NpmRegistryVerifier.kt$HttpRegistrySource$e: IllegalArgumentException</ID>
     <ID>SwallowedException:NpmShellKit.kt$NpmShellKit$e: java.io.IOException</ID>
-    <ID>ThrowsCount:InstallCoordinator.kt$InstallCoordinator$private suspend fun enqueueHeavy( projectId: String, args: List&lt;String&gt;, timeoutMillis: Long = 120_000, ): InstallHandle</ID>
     <ID>ThrowsCount:InstallCoordinator.kt$InstallCoordinator$private suspend fun runHeavy(tracked: TrackedOp, args: List&lt;String&gt;, timeoutMillis: Long)</ID>
     <ID>ThrowsCount:InstallCoordinator.kt$InstallCoordinator$private suspend fun runScriptOps( projectId: String, action: String, what: String, args: List&lt;String&gt;, pkg: String, versionHash: String, npmArgs: List&lt;String&gt;, ): InstallHandle</ID>
     <ID>ThrowsCount:LockSigner.kt$LockSigner$fun verifyOrThrow(projectId: String, lockfile: Path)</ID>

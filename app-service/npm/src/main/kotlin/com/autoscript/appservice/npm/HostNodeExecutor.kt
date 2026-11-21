@@ -2,6 +2,7 @@ package com.autoscript.appservice.npm
 
 import com.autoscript.domain.core.AutojsException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.charset.StandardCharsets
@@ -32,6 +33,9 @@ import java.util.concurrent.TimeUnit
  *    node_modules，[harvest]），由 staging.commit 原子 rename 落位成项目根
  *    node_modules；`<workDir>/package-lock.json` 原子写回项目根
  *    （lockfile 随成功事务更新，失败不污染）；
+ * 迁移校验（[HeavyOp.checkWorkTree] 非 null）例外：复制真树，在独立 prefix 校验后才 harvest，
+ * 失败时原树仍在项目根，不走半改树回滚；普通操作继续使用增量 rename。
+ *
  * 5. 失败/取消路径把 workDir 里的树**逆搬回**项目根（见 [rollbackTree] —— 真树唯一
  *    副本绝不跟着临时目录被删，即使它可能已被 npm 半改；journal fail + 下次
  *    `ci --offline` 自愈，§10.4 那条通道原样保留），工作目录随后删尽。
@@ -129,6 +133,7 @@ class HostNodeExecutor(
             val workDir = op.stageDir.resolveSibling("npmwork-" + op.nonce)
             try {
                 prepareWorkDir(op, workDir)
+                ensureActive()
                 // REIFY：npm 进程内 reify 是黑盒，主机形态只能粗粒度标注阶段。
                 // **不在这里报 DONE**（发射权在协调器，见 `runHeavy` 的那条 emit）：
                 // 执行体返回只说明「npm 进程跑完」，会话还没完 —— 协调器随后还有
@@ -144,6 +149,11 @@ class HostNodeExecutor(
                     ),
                 )
                 val captured = runNpm(op, workDir, output)
+                op.checkWorkTree?.let { check ->
+                    ensureActive()
+                    check(workDir, workDir.resolve("node_modules"))
+                    ensureActive()
+                }
                 harvest(op, workDir)
                 HeavyOpOutcome(
                     summary = "npm ${op.args.first()} 完成",
@@ -154,7 +164,7 @@ class HostNodeExecutor(
             } finally {
                 // 失败/取消路径先把真实树移回项目根（若 harvest 还没落位）——见
                 // [rollbackTree] 的 KDoc：真树唯一副本不能跟着临时目录一起被删。
-                val treeSafe = rollbackTree(op, workDir)
+                val treeSafe = op.checkWorkTree != null || rollbackTree(op, workDir)
                 // 回滚成功（或树本就没搬来过）才删临时目录；回滚失败时整目录保留
                 // （UUID 每次会话换新，不会撞上）——宁可留残骸，不可丢真树。
                 if (treeSafe) workDir.toFile().deleteRecursively()
@@ -196,7 +206,9 @@ class HostNodeExecutor(
         // 搬走之后项目根在会话期间没有 node_modules，崩溃时由 execute 的 finally
         // 走 [rollbackTree] 移回 —— 真树唯一的副本绝不留在会被 deleteRecursively 的目录里。
         val realTree = op.projectRoot.resolve("node_modules")
-        if (Files.isDirectory(realTree)) {
+        if (op.checkWorkTree != null) {
+            copyNpmWorkTree(realTree, workDir.resolve("node_modules"))
+        } else if (Files.isDirectory(realTree)) {
             Files.move(
                 realTree, workDir.resolve("node_modules"),
                 StandardCopyOption.ATOMIC_MOVE,

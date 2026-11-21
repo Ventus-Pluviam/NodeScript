@@ -871,7 +871,7 @@ private fun PanelRow(
  *
  * 三件事各自说清它动的是什么（不靠用户猜 `dedupe` 是什么意思）：
  * - 「清理依赖」= `prune`；
- * - 「依赖去重」= 当前作用域内的 `dedupe`，不把项目依赖再装一份到全局；
+ * - 「依赖去重」= 项目按精确锁定版本迁移到全局；选中全局时只做 `npm dedupe`；
  * - 「清理缓存」= 按各作用域 lock 的并集回收 npm 缓存（`reclaimNpmCacheOp`）。
  *
  * 样式照 TG `ProfileActionsView`（「我的资料」那一行的三颗）：**三张等宽白卡**横排，
@@ -880,8 +880,8 @@ private fun PanelRow(
  * 两处必须一起看：
  * - 「按 lock 重装」（`ci`）在本页没有入口，宿主那半边与 [NpmMaintenanceAction.CI]
  *   都还在、也还测着 —— 想放回来随时可以；
- * - `prune` 与 `dedupe` 走 [NpmMaintenanceAction] 那条按枚举转手的通用路
- *   （`runNpmMaintenanceOp`）；缓存回收不动依赖树，保留独立入口。
+ * - `prune` 与 `dedupe` 都走 [NpmMaintenanceAction]；状态层对项目 `dedupe` 追加兼容迁移，
+ *   对全局 `dedupe` 只维护全局树；缓存回收保留独立入口。
  *
  * 禁用判据：两个重操作（cleaning / dedupe）跟 [NpmState.canInstall] 走，缓存那一颗跟
  * [NpmState.canReclaimCache] 走 —— 两条都是"安装会话全局互斥"这一个事实的两种说法：

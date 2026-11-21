@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test
  *
  * 断的是「界面会怎么说、会不会冒充」，不是 npm 的行为：
  * - 失败原文**原样透传**（`ci` 的验签拒绝那句里已经写清了为什么拒，界面再译一遍就是第二份判据）；
- * - 回执在挂起调用返回后才说完成，不再暗中串接一次全局安装；
+ * - 回执在挂起调用返回后才说完成；去重后的兼容迁移失败不说成功；
  * - 回收回执要带上删/留两侧数字 —— 用户按下去就是为了看那个数字变没变。
  */
 class NpmMaintenanceOpsTest {
@@ -67,6 +67,7 @@ class NpmMaintenanceOpsTest {
         private val fail: Throwable? = null,
         private val report: NpmCacheReclaimReport = NpmCacheReclaimReport(3, 3L * 1024 * 1024, 7, 9L * 1024 * 1024, 7, false),
         private val snapshot: () -> NpmPanelSnapshot = { NpmPanelSnapshot(listOf()) },
+        private val promoteFail: Throwable? = null,
     ) : FakeHost() {
         val calls = mutableListOf<Pair<String, NpmMaintenanceAction>>()
         var reclaims = 0
@@ -92,7 +93,8 @@ class NpmMaintenanceOpsTest {
 
         override suspend fun promoteNpmToGlobal(projectId: String): InstallHandle {
             promoted += projectId
-            error("维护当前作用域不应触发全局安装")
+            promoteFail?.let { throw it }
+            return InstallHandle(id = "migrate", projectId = projectId, enqueuedAtMillis = 2L)
         }
     }
 
@@ -158,42 +160,34 @@ class NpmMaintenanceOpsTest {
         assertEquals("1 MB", next.sizeLabel, "回读的才是现状")
     }
 
-    // ═══ 去重只维护当前作用域 ═══
+    // ═══ 去重后按精确版本迁移到全局 ═══
 
     @Test
-    fun `项目去重不把相同或不同版本的依赖复制或替换到全局`() = runBlocking {
-        val local = project("demo").copy(installed = listOf(PkgNode("axios", "1.7.0"), PkgNode("@scope/tool", "2.0.0")))
-        val refreshed = local.copy(storage = local.storage!!.copy(totalBytes = 1024 * 1024))
-        for (globalVersion in listOf(null, "1.7.0", "1.8.0", "2.0.0")) {
-            val global = project(NpmTargetScope.GLOBAL).copy(
-                installed = globalVersion?.let { listOf(PkgNode("axios", it), PkgNode("@scope/tool", it)) }.orEmpty(),
-            )
-            val before = NpmPanelSnapshot(listOf(global, local, project("other")))
-            val after = NpmPanelSnapshot(listOf(global, refreshed, project("other")))
-            val host = MaintenanceHost(snapshot = { after })
-            val picked = NpmState.withProject(NpmState.of(before), "demo")
-            val next = runNpmMaintenanceOp(host, picked, NpmMaintenanceAction.DEDUPE)
+    fun `项目去重后调用兼容迁移并现取真实快照`() = runBlocking {
+        val local = project("demo").copy(installed = listOf(PkgNode("axios", "1.7.0")))
+        val after = NpmPanelSnapshot(listOf(project(NpmTargetScope.GLOBAL), project("demo", 1024L * 1024)))
+        val host = MaintenanceHost(snapshot = { after })
+        val before = NpmPanelSnapshot(listOf(project(NpmTargetScope.GLOBAL), local))
+        val picked = NpmState.withProject(NpmState.of(before), "demo")
 
-            assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls)
-            assertTrue(host.promoted.isEmpty(), "全局版本 $globalVersion：去重不能顺带安装或替换全局依赖")
-            assertEquals(1, host.snapshotReads, "完成后只现取一次真实快照")
-            assertEquals(after, next.snapshot, "全局与其他项目保持宿主原样，不能伪造已经移走项目依赖")
-            assertEquals("demo", next.selectedProjectId)
-            assertEquals(listOf("1.7.0", "2.0.0"), next.installed.map { it.version })
-            assertEquals("1 MB", next.sizeLabel, "当前作用域的去重结果必须回读")
-            assertNull(next.maintenance)
-            assertNull(next.opError)
-            assertTrue(next.opNotice!!.contains("当前作用域"))
-            assertFalse(next.opNotice!!.contains("提升"))
-        }
-        Unit
+        val next = runNpmMaintenanceOp(host, picked, NpmMaintenanceAction.DEDUPE)
+
+        assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls)
+        assertEquals(listOf("demo"), host.promoted)
+        assertEquals(1, host.snapshotReads)
+        assertEquals(after, next.snapshot)
+        assertEquals("demo", next.selectedProjectId)
+        assertEquals("1 MB", next.sizeLabel)
+        assertNull(next.maintenance)
+        assertNull(next.opError)
+        assertTrue(next.opNotice!!.contains("兼容依赖迁移"))
     }
 
     @Test
     fun `全局去重只维护全局树，不改项目也不触发提升`() = runBlocking {
         val snapshot = NpmPanelSnapshot(listOf(project(NpmTargetScope.GLOBAL), project("demo")))
         val host = MaintenanceHost(snapshot = { snapshot })
-        val next = runNpmMaintenanceOp(host, NpmState.of(snapshot), NpmMaintenanceAction.DEDUPE)
+        val next = runDedupeAndPromoteOp(host, NpmState.of(snapshot))
 
         assertEquals(listOf(NpmTargetScope.GLOBAL to NpmMaintenanceAction.DEDUPE), host.calls)
         assertTrue(host.promoted.isEmpty())
@@ -207,11 +201,11 @@ class NpmMaintenanceOpsTest {
     }
 
     @Test
-    fun `去重失败保留原清单和失败原文，不再执行全局安装`() = runBlocking {
+    fun `去重失败保留原清单和失败原文，不进入迁移`() = runBlocking {
         val raw = "npm 退出码 1: ERESOLVE could not resolve"
         val host = MaintenanceHost(fail = IllegalStateException(raw))
         val previous = loaded(project("demo").copy(installed = listOf(PkgNode("axios", "1.7.0"))))
-        val next = runNpmMaintenanceOp(host, previous, NpmMaintenanceAction.DEDUPE)
+        val next = runDedupeAndPromoteOp(host, previous)
 
         assertEquals(listOf("demo" to NpmMaintenanceAction.DEDUPE), host.calls)
         assertEquals(raw, next.opError, "失败原文必须原样到达界面")
@@ -223,10 +217,10 @@ class NpmMaintenanceOpsTest {
     }
 
     @Test
-    fun `取消去重原样传播，不吞成失败也不续跑全局安装`() = runBlocking {
+    fun `取消去重原样传播，不吞成失败也不进入迁移`() = runBlocking {
         val host = MaintenanceHost(fail = CancellationException("页面已离开"))
         val failure = runCatching {
-            runNpmMaintenanceOp(host, loaded(project("demo")), NpmMaintenanceAction.DEDUPE)
+            runDedupeAndPromoteOp(host, loaded(project("demo")))
         }.exceptionOrNull()
 
         assertTrue(failure is CancellationException)
@@ -234,6 +228,35 @@ class NpmMaintenanceOpsTest {
         assertTrue(host.promoted.isEmpty())
         assertEquals(0, host.snapshotReads)
         Unit
+    }
+
+    @Test
+    fun `操作成功但刷新失败时保留加载失败态且不说迁移成功`() = runBlocking {
+        val host = MaintenanceHost(snapshot = { error("snapshot read failed") })
+        val previous = NpmState.withProject(loaded(project(NpmTargetScope.GLOBAL), project("demo")), "demo")
+
+        val next = runDedupeAndPromoteOp(host, previous)
+
+        assertEquals("snapshot read failed", next.load.failedReason())
+        assertNull(next.opNotice)
+        assertEquals(listOf("demo"), host.promoted)
+        assertEquals(1, host.snapshotReads)
+    }
+
+    @Test
+    fun `迁移失败不显示去重迁移成功回执`() = runBlocking {
+        val raw = "全局版本校验失败"
+        val after = NpmPanelSnapshot(listOf(project(NpmTargetScope.GLOBAL), project("demo", 2L * 1024 * 1024)))
+        val host = MaintenanceHost(snapshot = { after }, promoteFail = IllegalStateException(raw))
+        val previous = NpmState.withProject(loaded(project(NpmTargetScope.GLOBAL), project("demo")), "demo")
+
+        val next = runDedupeAndPromoteOp(host, previous)
+
+        assertTrue(next.opError!!.contains(raw))
+        assertNull(next.opNotice)
+        assertEquals(listOf("demo"), host.promoted)
+        assertEquals(1, host.snapshotReads)
+        assertEquals(after, next.snapshot)
     }
 
     // ═══ 缓存回收 ═══

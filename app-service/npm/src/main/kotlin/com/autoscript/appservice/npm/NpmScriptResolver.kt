@@ -71,21 +71,9 @@ internal object NpmScriptResolver {
     }
 
     /**
-     * 项目 `package.json` 里**声明**的依赖，拼成可以直接喂给 `npm install` 的包说明符
-     * （「去重并提升到全局」那条路的取数口）。
-     *
-     * 两段都收（`dependencies` + `devDependencies`）、**顺序固定**（按名字排序）：
-     * - 为什么连 `devDependencies` 一起：提升到全局是为了"别的项目也能用"，而全局那份
-     *   清单里没有"开发/生产"这个区分（npm 只对**当前项目**算 `--omit=dev`）。挑挑拣拣
-     *   反而会让"我明明提升了、另一个项目却找不到"变成一个说不清的现象。
-     * - 为什么排序：同一次提升两次跑出来的命令必须逐字相同（日志能对上、测试能断言）。
-     *
-     * **范围原样带上**（`{"axios": "^1.7.0"}` → `axios@^1.7.0`）：全局那份跟着项目一起走小版本，
-     * 两边不会分家；钉死到某一次 lock 里的具体版本则项目一升级就对不上。没写范围的
-     * （`"axios": ""`）就只给名字。
-     *
-     * manifest 不存在 → `null`（与 [projectScripts] 同款：那是"没有这个项目 / 还没装过"，
-     * 不是"声明了 0 条"）；声明段缺失或为空 → 空表。
+     * 按名称排序的直接依赖声明（dependencies + devDependencies，同名只取一次）。
+     * 这里保留声明范围，不作为跨作用域迁移的版本依据；迁移使用 [PromoteTree] 的严格锁定读口。
+     * 缺清单返回 null；声明段缺失或为空返回空表。
      */
     fun declaredSpecs(projectRoot: Path): List<String>? {
         val manifest = manifestOf(projectRoot) ?: return null
