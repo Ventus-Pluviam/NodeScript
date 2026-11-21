@@ -293,7 +293,8 @@ class AppShellApplication : Application(), HostSummary {
             projectionSessions = wiring.projectionSessions
             // §7.5 生产桥监听：**bind 必须赶在 assemble 前** —— FixedEnginePool.init 是
             // eager 构造引擎（engineFactory 闭包在 init 时就捕获 hostSocketName）。
-            // 绑定失败 = 离线降级：不注入名 → spawn 无 socket env → main.cpp stderr 提示，
+            // 绑定失败 = 离线降级：不注入名 → spawn 无 socket env（宿主对这种无桥启动
+            // 不打 stderr，见 main.cpp ①；降级的留痕就是下面这行 HostLog），
             // 绝不注入一个绑不上的名字（那会触发 exit 3 硬失败）。名按 uid 隔离（见 defaultName）。
             if (bridgeListener == null) {
                 val uid = Process.myUid()

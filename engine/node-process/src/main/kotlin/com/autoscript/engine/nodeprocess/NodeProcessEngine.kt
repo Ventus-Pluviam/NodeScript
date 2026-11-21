@@ -46,8 +46,8 @@ data class NodeEngineConfig(
     val addonPath: Path? = null,
     /**
      * `AUTOSCRIPT_HOST_SOCKET`：`:main` 桥监听名（设备 = abstract unix socket 名，由
-     * `BridgeSocketListener` 生成并注入；null = 离线模式：main.cpp 打 stderr 提示、
-     * 桥调用如实 `ERR_ENGINE_STOPPED`，不悬挂）。
+     * `BridgeSocketListener` 生成并注入；null = 无桥跑：桥调用如实 `ERR_ENGINE_STOPPED`、
+     * 不悬挂。宿主**不再为此打 stderr** —— npm 的两条 spawn 路径本就不带桥，那是常态）。
      */
     val hostSocketName: String? = null,
     /**
