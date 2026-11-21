@@ -402,14 +402,11 @@ private fun LazyListScope.dependenciesGroup(
     item(key = "npm-deps-body", contentType = SLICE_DEP_BODY) {
         Column(Modifier.cardSlice(ThemeColors.background, first = false, last = true)) {
             if (rows.isEmpty()) {
-                // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
+                // 三态各说各的：没读到不能说成「依赖列表为空」。
                 if (!state.load.isLoaded) {
                     EmptyHint("还没读到依赖清单：切到别的页再回来，或看下面日志里怎么说的")
                 } else {
-                    EmptyHint(
-                        if (state.scopeIsGlobal) "读到了，全局项目还没有依赖（先装点什么）"
-                        else "读到了，这个项目还没有依赖（先装点什么）",
-                    )
+                    EmptyHint("依赖列表为空")
                 }
             } else {
                 DepsListBox(
