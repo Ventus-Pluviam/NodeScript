@@ -297,7 +297,7 @@ class NodeProcessEngineTest {
         val e = engine(launcher)
         runBlocking { e.execute(request()) }
         val env = launcher.lastEnv!!
-        assertFalse(NodeProcessEngine.ENV_HOST_SOCKET in env, "socket 缺省 = 离线模式（main.cpp stderr 提示，不悬挂）")
+        assertFalse(NodeProcessEngine.ENV_HOST_SOCKET in env, "socket 缺省 = 无桥跑（桥调用如实报错，不悬挂）")
         assertFalse(NodeProcessEngine.ENV_RUN_NONCE in env, "nonce 缺省不注入")
         assertFalse(NodeProcessEngine.ENV_LIBNODE in env)
         assertFalse(NodeProcessEngine.ENV_BRIDGE_ADDON in env)

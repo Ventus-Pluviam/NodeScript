@@ -14,9 +14,10 @@
 //                            给 addon 未给 dist / dist 顶层不存在 = exit 5（§7.8 契约，
 //                            launch 期裁决，不推到运行期 ERR_ENGINE_STOPPED）。
 //  AUTOSCRIPT_HOST_SOCKET    :main 的 unix socket 地址（选填）—— 给则必须连上
-//                            （连不上 = exit 3，不静默降级：生产由 :main spawn 并带上，
-//                            缺失只应出现在离线调试）；不给 = 离线跑，桥调用如实抛
-//                            ERR_ENGINE_STOPPED（addon 语义），stderr 打一行提示。
+//                            （连不上 = exit 3，不静默降级）。不给 = 无桥跑，桥调用如实抛
+//                            ERR_ENGINE_STOPPED（addon 语义）—— **这是常态，不是降级**：
+//                            npm 的两条 spawn 路径本就不带桥，离线调试也走这里；
+//                            stderr 不打提示（正常启动写一行只是噪音，见主函数 ① 的 else）。
 //                            地址两形态（前导 '/' 判别）：以 '/' 开头 = 文件系统路径
 //                            （桌面/CI/回归）；否则 = Linux abstract 名（真机，
 //                            :main 侧 LocalServerSocket 绑抽象命名空间 —— minSdk 26 无
@@ -305,9 +306,14 @@ int main(int argc, char** argv) {
     std::snprintf(fd_text, sizeof(fd_text), "%d", sock_fd);
     setenv("AUTOSCRIPT_SOCK_FD", fd_text, 1);
   } else {
+    // **无桥启动是常态，不是降级，所以不打提示**：npm 的两条 spawn 路径本就不带桥
+    // （安装会话走零 spawn 契约，`npm run` 走自己的 `AUTOSCRIPT_T1_SOCKET`），离线调试
+    // 也走这里 —— 而引擎路径的 stderr 只进 StderrTail、失败时才浮进摘要（§8.3），
+    // 正常启动写一行没人看得见，只会给失败摘要添一句与病因无关的噪音。
+    // 真正的降级（生产里桥监听没绑上）在 :main 侧留痕，见 AppShellApplication 的
+    // 「桥监听绑定失败」HostLog —— 那条不用靠子进程 stderr 传。
     unsetenv("AUTOSCRIPT_SOCK_FD");
     unsetenv("AUTOSCRIPT_BRIDGE_TOKEN");
-    std::fprintf(stderr, ":nodeN 离线启动（无 AUTOSCRIPT_HOST_SOCKET，桥不可用）\n");
   }
 
   // ── ② dlopen libnode（RTLD_GLOBAL：addon 后续 require 时 napi_* 从这里解析）────
