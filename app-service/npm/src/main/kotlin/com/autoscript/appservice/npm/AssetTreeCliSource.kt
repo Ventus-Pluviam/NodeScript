@@ -43,11 +43,12 @@ class AssetTreeCliSource(
 
     override fun list(): List<String> {
         val out = ArrayList<String>()
-        val queue = ArrayDeque<String>()   // 待展开的目录（相对 root；"" = root 自身）
-        queue.addLast("")
+        // 判目录时已经读到的子项直接入队；同一趟遍历里不再为了展开目录而 list 第二次。
+        // 只留名字、不读文件内容，且缓存仅限本次调用，下次检疫仍现查整棵 APK 树。
+        val queue = ArrayDeque<Pair<String, Array<out String>>>()
+        queue.addLast("" to (listDir(root) ?: return out))
         while (queue.isNotEmpty()) {
-            val rel = queue.removeFirst()
-            val names = listDir(if (rel.isEmpty()) root else "$root/$rel") ?: continue
+            val (rel, names) = queue.removeFirst()
             for (raw in names) {
                 if (raw.isBlank()) continue
                 // 目录名可能带尾 '/'：入队前剥掉，保证 list/open 收到的路径形态一致
@@ -55,8 +56,9 @@ class AssetTreeCliSource(
                 val name = raw.trimEnd('/')
                 if (name.isEmpty()) continue
                 val childRel = if (rel.isEmpty()) name else "$rel/$name"
-                if (bySuffix || !listDir("$root/$childRel").isNullOrEmpty()) {
-                    queue.addLast(childRel)
+                val childNames = listDir("$root/$childRel")
+                if (bySuffix || !childNames.isNullOrEmpty()) {
+                    queue.addLast(childRel to childNames.orEmpty())
                 } else {
                     out.add(childRel)
                 }
