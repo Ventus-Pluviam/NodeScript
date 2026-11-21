@@ -12,7 +12,12 @@ import com.autoscript.domain.npm.NpmConsoleLine
 import com.autoscript.domain.npm.NpmConsoleLineKind
 import com.autoscript.domain.npm.NpmConsoleSnapshot
 import com.autoscript.domain.npm.SequencedConsoleLine
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -291,6 +296,64 @@ class NpmMaintenanceOpsTest {
         assertEquals(2, state.consoleLines.size, "快照与日志必须是同一趟现取（两条各拉一次会互相矛盾）")
         assertEquals("$ npm install axios", state.consoleLines.first().text)
         assertEquals(listOf("退出码 0"), state.consoleLines.drop(1).map { it.text })
+    }
+
+    @Test
+    fun `首读等待装配后原调用自动加载无需退出重进`() = runBlocking {
+        val ready = CompletableDeferred<Unit>()
+        var reads = 0
+        val host = object : FakeHost() {
+            override suspend fun npmSnapshot(): NpmPanelSnapshot {
+                reads++
+                ready.await()
+                return NpmPanelSnapshot(listOf(project("demo")))
+            }
+        }
+        val reading = async(start = CoroutineStart.UNDISPATCHED) { loadNpmSnapshot(host, NpmState.NOT_LOADED) }
+        assertFalse(reading.isCompleted, "装配中应继续等待，而不是写入失败态")
+        ready.complete(Unit)
+        val loaded = withTimeout(5_000) { reading.await() }
+        assertTrue(loaded.load.isLoaded)
+        assertEquals("demo", loaded.selectedProjectId)
+        assertEquals(1, reads, "装配完成恢复同一次读取，不靠重进页面第二次调用")
+        assertTrue(loaded.logLines.isEmpty(), "完成后加载提示消失")
+        Unit
+    }
+
+    @Test
+    fun `等待装配时离开页面只取消读取再次进入仍能拿到结果`() = runBlocking {
+        val ready = CompletableDeferred<Unit>()
+        val host = object : FakeHost() {
+            override suspend fun npmSnapshot(): NpmPanelSnapshot {
+                ready.await()
+                return NpmPanelSnapshot(listOf(project("demo")))
+            }
+        }
+        val first = async(start = CoroutineStart.UNDISPATCHED) { loadNpmSnapshot(host, NpmState.NOT_LOADED) }
+        first.cancelAndJoin()
+        assertFalse(ready.isCancelled, "页面取消不得取消进程级装配")
+        val second = async(start = CoroutineStart.UNDISPATCHED) { loadNpmSnapshot(host, NpmState.NOT_LOADED) }
+        ready.complete(Unit)
+        assertTrue(withTimeout(5_000) { second.await() }.load.isLoaded)
+        Unit
+    }
+
+    @Test
+    fun `装配真正失败时结束首读并显示具体原因`() = runBlocking {
+        val ready = CompletableDeferred<Unit>()
+        val host = object : FakeHost() {
+            override suspend fun npmSnapshot(): NpmPanelSnapshot {
+                ready.await()
+                error("不会到这里")
+            }
+        }
+        val reading = async(start = CoroutineStart.UNDISPATCHED) { loadNpmSnapshot(host, NpmState.NOT_LOADED) }
+        ready.completeExceptionally(IllegalStateException("壳自装配失败：数据库打不开"))
+        val failed = withTimeout(5_000) { reading.await() }
+        assertEquals("壳自装配失败：数据库打不开", failed.load.failedReason())
+        assertFalse(failed.load.isLoaded)
+        assertTrue(failed.logLines.single().text.startsWith("读取失败：壳自装配失败：数据库打不开"))
+        Unit
     }
 
     @Test
