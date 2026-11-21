@@ -128,7 +128,7 @@ class HostNodeExecutor(
             )
             val workDir = op.stageDir.resolveSibling("npmwork-" + op.nonce)
             try {
-                val seededManifest = prepareWorkDir(op, workDir)
+                prepareWorkDir(op, workDir)
                 // REIFY：npm 进程内 reify 是黑盒，主机形态只能粗粒度标注阶段。
                 // **不在这里报 DONE**（发射权在协调器，见 `runHeavy` 的那条 emit）：
                 // 执行体返回只说明「npm 进程跑完」，会话还没完 —— 协调器随后还有
@@ -146,15 +146,7 @@ class HostNodeExecutor(
                 val captured = runNpm(op, workDir, output)
                 harvest(op, workDir)
                 HeavyOpOutcome(
-                    // 自动补出来的清单要在**终态摘要**里说一句（走 `InstallEvent.Finished.detail`
-                    // 与控制台 RESULT 行，与"完成/失败"同一处）：不静默 —— 用户的项目里
-                    // 凭空多了个 package.json，他得知道是谁放的。**不走 [OutputSink]** 是刻意的：
-                    // 那条缝一被碰，`runHeavy` 的 `streamed` 就为真，npm 的输出尾部会被当成
-                    // "已经报过流"而不再补 —— 一句话换掉一段真输出，不值。
-                    summary = buildString {
-                        append("npm ").append(op.args.first()).append(" 完成")
-                        if (seededManifest) append("（项目原本没有 package.json，已自动建一份最小骨架）")
-                    },
+                    summary = "npm ${op.args.first()} 完成",
                     // 尾部截断（见 [HeavyOpOutcome.outputTail] 的 KDoc）：控制台要的是
                     // 「npm 最后说了什么」，不是几万行安装日志。
                     outputTail = captured.trim().takeLast(OUTPUT_TAIL_CHARS).ifBlank { null },
@@ -190,8 +182,8 @@ class HostNodeExecutor(
      * 命中真包、写回的锁键才锚定这颗树（类头 work-prefix 模型第 2 步）。会话期间
      * 项目根没有 node_modules；任何失败由 execute 的 finally 走 [rollbackTree] 移回。
      *
-     * @return 本次是不是**新建**了那份清单（项目根此前没有）—— 调用方据此在终态摘要里
-     *   如实说一句：用户的项目里会凭空多出一个文件，不能让他自己猜是哪儿来的。
+     * @return 本次是不是**新建**了那份清单（项目根此前没有）；只记录准备结果，
+     *   不向终态摘要或 npm 输出追加自动创建提示。
      */
     fun prepareWorkDir(op: HeavyOp, workDir: Path): Boolean {
         val pkgJson = op.projectRoot.resolve(ProjectManifest.FILE_NAME)

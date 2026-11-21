@@ -2,6 +2,7 @@ package com.autoscript.appservice.npm
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
+import java.util.Collections
 
 /**
  * [HostNodeExecutor] 交给控制台的那一半：[HeavyOpOutcome.outputTail]（§10.9 第 3 条）。
@@ -72,10 +74,54 @@ class HostNodeExecutorOutcomeTest {
     }
 
     @Test
-    fun `输出为空时给 null 而不是空串——由控制台如实说「没有捕获到」`() = runBlocking {
-        val root = project("p2")
-        val outcome = executor(stubNode("exit 0")).execute(op("p2", root), {}, OutputSink.None)
-        assertNull(outcome.outputTail, "空输出 = null：控制台据此显示「本次没有捕获到命令输出」")
+    fun `输出为空时给 null，自动补清单也不插入额外提示`() = runBlocking {
+        for (hasManifest in listOf(true, false)) {
+            val projectId = "p2-$hasManifest"
+            val root = project(projectId)
+            if (!hasManifest) Files.delete(root.resolve(ProjectManifest.FILE_NAME))
+            val lines = Collections.synchronizedList(mutableListOf<String>())
+            val outcome = executor(stubNode("exit 0")).execute(op(projectId, root), {}, OutputSink { lines += it })
+
+            assertEquals("npm install 完成", outcome.summary, "是否补清单不改变完成摘要")
+            assertNull(outcome.outputTail, "空输出 = null：控制台据此显示「本次没有捕获到命令输出」")
+            assertTrue(lines.isEmpty(), "不把已移除的提示挪到输出流中")
+            assertTrue(Files.isRegularFile(root.resolve(ProjectManifest.FILE_NAME)), "缺清单时仍自动创建并写回")
+        }
+        Unit
+    }
+
+    @Test
+    fun `自动补清单成功后只报命令完成，真实 npm 输出不变`() = runBlocking {
+        val root = project("p4")
+        Files.delete(root.resolve(ProjectManifest.FILE_NAME))
+        val lines = Collections.synchronizedList(mutableListOf<String>())
+        val outcome = executor(stubNode("echo 'added 1 package in 2s'"))
+            .execute(op("p4", root), {}, OutputSink { lines += it })
+
+        assertEquals("npm install 完成", outcome.summary)
+        assertEquals("added 1 package in 2s", outcome.outputTail)
+        assertEquals(listOf("added 1 package in 2s"), lines.toList(), "输出流只保留命令原文")
+        assertEquals(
+            ProjectManifest.minimal("p4"),
+            Files.readAllBytes(root.resolve(ProjectManifest.FILE_NAME)).toString(Charsets.UTF_8),
+            "移除提示不取消自动创建，成功后仍由 harvest 持久化最小清单",
+        )
+    }
+
+    @Test
+    fun `缺清单时命令失败仍保留真实病因，不把新清单写回项目`() = runBlocking {
+        val root = project("p5")
+        Files.delete(root.resolve(ProjectManifest.FILE_NAME))
+        val lines = Collections.synchronizedList(mutableListOf<String>())
+        val failure = runCatching {
+            executor(stubNode("echo 'npm ERR! ERESOLVE'; exit 1"))
+                .execute(op("p5", root), {}, OutputSink { lines += it })
+        }.exceptionOrNull()
+
+        assertTrue(failure is RuntimeException)
+        assertTrue(failure!!.message!!.contains("npm 退出码 1: npm ERR! ERESOLVE"), "失败原文不能因去提示而丢失")
+        assertEquals(listOf("npm ERR! ERESOLVE"), lines.toList())
+        assertFalse(Files.exists(root.resolve(ProjectManifest.FILE_NAME)), "失败不能把自动生成的清单写回项目")
     }
 
     @Test
