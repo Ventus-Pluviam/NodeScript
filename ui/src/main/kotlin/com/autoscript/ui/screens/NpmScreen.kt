@@ -74,6 +74,7 @@ import com.autoscript.ui.components.TabBarBottomClearance
 import com.autoscript.ui.components.ToneText
 import com.autoscript.ui.state.NpmRowState
 import com.autoscript.ui.state.InstallProgressState
+import com.autoscript.ui.state.LoadState
 import com.autoscript.ui.state.NpmState
 import com.autoscript.domain.npm.NpmMaintenanceAction
 import com.autoscript.domain.npm.NpmProjectSnapshot
@@ -404,7 +405,10 @@ private fun LazyListScope.dependenciesGroup(
             if (rows.isEmpty()) {
                 // 三态各说各的：没读到不能说成"这个项目还没有依赖"。
                 if (!state.load.isLoaded) {
-                    EmptyHint("还没读到依赖清单：切到别的页再回来，或看下面日志里怎么说的")
+                    EmptyHint(
+                        if (state.load is LoadState.Failed) "依赖列表读取失败，原因见下方日志"
+                        else "正在加载依赖列表…",
+                    )
                 } else {
                     EmptyHint(
                         if (state.scopeIsGlobal) "读到了，全局项目还没有依赖（先装点什么）"

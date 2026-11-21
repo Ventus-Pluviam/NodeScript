@@ -205,6 +205,7 @@ data class NpmState(
         fun timeText(): String =
             HH_MM_SS.format(Instant.ofEpochMilli(opAtMillis).atZone(ZoneId.systemDefault()))
         buildList {
+            if (load == LoadState.NotLoaded) add(NpmLogLine("正在加载依赖列表…", StatusTone.MUTED))
             if (consoleTruncated) add(NpmLogLine("更早的输出已裁掉，这里只留最近 $LOG_KEEP 行", StatusTone.MUTED))
             (load as? LoadState.Failed)?.let {
                 add(NpmLogLine("读取失败：${it.reason}（下面显示的是上次读到的，可能已过期）", StatusTone.PROBLEM))

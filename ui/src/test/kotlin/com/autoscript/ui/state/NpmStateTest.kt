@@ -337,6 +337,18 @@ class NpmStateTest {
     }
 
     @Test
+    fun `首次等待显示正在加载而不是读取失败或空列表`() {
+        val lines = NpmState.NOT_LOADED.logLines
+        assertEquals(listOf("正在加载依赖列表…"), lines.map { it.text })
+        assertEquals(listOf(StatusTone.MUTED), lines.map { it.tone })
+        val loaded = NpmState.of(NpmPanelSnapshot(listOf(project("demo"))))
+        assertTrue(loaded.logLines.isEmpty(), "读到空日志后加载提示消失")
+        val failed = NpmState.failed(IllegalStateException("壳自装配失败：数据库打不开"))
+        assertTrue(failed.logLines.single().text.startsWith("读取失败：壳自装配失败：数据库打不开"))
+        assertEquals(StatusTone.PROBLEM, failed.logLines.single().tone)
+    }
+
+    @Test
     fun `日志框读失败也进框且说清是旧数据`() {
         val failed = NpmState.failed(
             IllegalStateException("宿主未接线"),

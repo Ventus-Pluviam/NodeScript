@@ -52,6 +52,7 @@ import com.autoscript.shell.AppShell
 import com.autoscript.shell.AppShellKit
 import com.autoscript.shell.AssetsRead
 import com.autoscript.shell.AssembledShell
+import com.autoscript.shell.AssemblyResult
 import com.autoscript.shell.AutoScriptForegroundService
 import com.autoscript.shell.BootRecovery
 import com.autoscript.shell.BridgeSocketListener
@@ -74,6 +75,7 @@ import com.autoscript.shell.launchGuaranteed
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -122,6 +124,11 @@ class AppShellApplication : Application(), HostSummary {
     /** 自装配产物的持久句柄（关壳时要成对释放；见 [AssembledShell]）。 */
     @Volatile
     private var assembled: AssembledShell? = null
+
+    /** 读口等待同一轮后台装配；页面销毁不取消装配，真失败则把原因交给所有等待者。 */
+    private val assemblyResult = AssemblyResult<AssembledShell>()
+    // 不锁 Application 本身：环境变量/限额表的懒建也用 synchronized(this)，不能被整趟部署挡住。
+    private val assemblyLock = Any()
 
     /** 闹钟回投缝（[AlarmDispatch]）：装配前记账、装配后投递。 */
     private val alarmDispatch = AlarmDispatch()
@@ -253,8 +260,12 @@ class AppShellApplication : Application(), HostSummary {
         // 而门禁在装配期就被交给 dispatcher —— 装完再起会让"装配完成到保活生效"之间
         // 出现一个窗口，期间 SCREEN_ON 任务被如实拒绝（不是错，但没必要让用户撞上）。
         foregroundKeeper()
+        val startup = assemblyResult.begin()
         appScope.launch {
             installWithFiles(filesDir.toPath(), cacheDir.toPath())
+        }.invokeOnCompletion { cause ->
+            // 域已经取消时协程体根本不执行；只结束本轮，不能误伤后来重装配的结果。
+            if (cause != null) startup.completeExceptionally(cause)
         }
     }
 
@@ -281,8 +292,10 @@ class AppShellApplication : Application(), HostSummary {
      *
      * @return 装好的壳；null = 装配失败（已记日志，调用方可重试）。
      */
-    fun installWithFiles(filesDir: Path, cacheDir: Path): AppShell? {
-        return try {
+    fun installWithFiles(filesDir: Path, cacheDir: Path): AppShell? = synchronized(assemblyLock) {
+        val result = assemblyResult.begin()
+        val startedAt = System.nanoTime()
+        try {
             // 闹钟出口只建一次（[installAlarmPort] 先装过就用那份：取消/续排路径按同一份撤销）。
             val port = alarmPort ?: AndroidAlarmPort(applicationContext, AlarmReceiver::class.java)
                 .also { alarmPort = it }
@@ -455,8 +468,8 @@ class AppShellApplication : Application(), HostSummary {
             // 排队，start 后取用）；必须在 install 前 —— install 后闹钟路线即通，执行体可能
             // 随时 spawn 来连。
             bridge?.start(built.shell)
-            install(built.shell)
             assembled = built
+            install(built.shell)
             // 桥侧每连接闸**装填期现读一次**：闸是宿主进程里的一份 `@Volatile`
             // 当前值，不推它就一直用出厂档，而设置页会显示「已保存」—— 正是「保存了却没生效」。
             // 单脚本那半不在这儿做（引擎每次 spawn 现读那条缝，装填期推反而多一份能漂的副本）。
@@ -474,8 +487,14 @@ class AppShellApplication : Application(), HostSummary {
                 val fresh = (built.npmCli as? NpmCliDeployer.Outcome.Ready)?.deployedFresh
                 HostLog.i(TAG, "npm CLI 就位（filesDir/npm，本次${if (fresh == true) "新部署" else "幂等命中"}）")
             }
+            HostLog.i(TAG, "壳装配完成：耗时 ${(System.nanoTime() - startedAt) / 1_000_000}ms")
+            result.complete(built)
             built.shell
         } catch (t: Throwable) {
+            result.completeExceptionally(
+                if (t is CancellationException) t
+                else IllegalStateException("壳自装配失败：${t.message ?: t.javaClass.simpleName}", t),
+            )
             HostLog.e(TAG, "壳自装配失败：保持未就绪（闹钟走漏投记账，不伪造投递）", t)
             null
         }
@@ -485,7 +504,14 @@ class AppShellApplication : Application(), HostSummary {
      * 装壳（engineFactory 由 Android 侧注入；屏幕门禁取真 PowerManager）。
      * 幂等：重复 install 只替换旧壳，[AlarmDispatch] 的路线随之换新。
      */
-    fun install(shell: AppShell) {
+    fun install(shell: AppShell): Unit = synchronized(assemblyLock) {
+        if (assembled?.shell !== shell) {
+            // 注入式只有 AppShell，没有持久寄存器/npmFacade；不能一直等一份不会出现的产物。
+            assembled = null
+            assemblyResult.begin().completeExceptionally(
+                IllegalStateException("本次仅注入 AppShell，未提供装配产物：任务与 npm 读口不可用"),
+            )
+        }
         shell.connectHostLog()  // 先回放启动期日志，再开放闹钟与恢复路线；单纯 assemble 不接线。
         this.shell = shell
         alarmDispatch.install(SchedulerAlarmRoute(shell.scheduler))
@@ -677,10 +703,8 @@ class AppShellApplication : Application(), HostSummary {
     /**
      * 任务中心快照（[HostSummary] 的生产实现，§8.6/§8.5）。
      *
-     * **壳没装好就抛**（不返回空快照）：空快照长得像"一条任务都没有"，而用户看到的会是
-     * 自己的定时任务凭空消失 —— 那是比"读失败"严重得多的谎。抛出去由 `:ui` 如实显示，
-     * 文案里点名"壳未装配"（与首屏的 `ShellSummary.shellReady` 是同一条事实的两种说法：
-     * 首屏答"装配到哪一步了"，这里答"所以任务读不到"）。
+     * **装配中挂起等待，失败才抛**：首读不再把正常启动当失败，装配完成即在同一次
+     * 调用里读取快照。空快照仍只代表确实没有任务，不拿它冒充「还没读到」。
      *
      * 读的是 [AssembledShell.taskCenter]（壳自己持有的两个寄存器），
      * 不让 UI 另开一份 `FileTaskStore`/`FileRunArchive`（第二个实例 = 写侧两份视图）。
@@ -688,29 +712,27 @@ class AppShellApplication : Application(), HostSummary {
      * 怎么样了"，与任务列表是两件事，分列在快照里。
      */
     override suspend fun taskCenter(): TaskCenterSnapshot {
-        val built = assembled
-            ?: throw IllegalStateException("壳未装配（装配中或失败）：任务与执行记录暂不可读")
+        val built = assemblyResult.await()
         return built.taskCenter { recoverySnapshot() }
     }
 
-    /** 任务日志（全部项目的终态历史）；壳未就绪或档案读取失败就抛，不冒充“没有记录”。 */
+    /** 任务日志（全部项目的终态历史）；装配中等待，装配或档案读取失败就抛，不冒充“没有记录”。 */
     override suspend fun taskLog(): TaskLogSnapshot {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：任务日志暂不可读" }
+        val built = assemblyResult.await()
         return built.taskLog()
     }
 
     /**
      * 控制台快照（§7.3 seq 游标拉取）。
      *
-     * **壳没装好就抛**（与 [taskCenter] 同一条纪律）：返回一份空快照长得像"暂无日志"，
-     * 而事实是"根本没读到" —— 用户会以为脚本安静地什么都没输出。
+     * **装配中挂起等待，失败才抛**（与 [taskCenter] 同一条纪律）：返回一份空快照长得像
+     * "暂无日志"，而事实是"根本没读到" —— 用户会以为脚本安静地什么都没输出。
      *
      * 读的是 [AssembledShell.consoleView]（壳持有的收集器与在途表），
      * 不让 UI 另开收集器（第二个收集器收不到桥上的行）。
      */
     override suspend fun console(sinceSeq: Long, maxLines: Int): ConsoleSnapshot {
-        val built = assembled
-            ?: throw IllegalStateException("壳未装配（装配中或失败）：控制台暂不可读")
+        val built = assemblyResult.await()
         return built.consoleView(sinceSeq, maxLines)
     }
 
@@ -924,12 +946,12 @@ class AppShellApplication : Application(), HostSummary {
      * 第二个实例会各自持账本/句柄表/事件环，写侧两份即失真（与 `console()`/`taskCenter()`
      * 读壳自己持有的那两件同一条理）。
      *
-     * 没接上（壳未装配 / 本次装配没挂 npm）**抛**，不返回空快照 —— 空快照是「读成功且
-     * 一条都没有」的样子，会把「npm 压根没接线」画成「一个项目都没有」。装配期的
-     * 失败原文在 `AssembledShell.npmCliFailure`，呈现层该显示它。
+     * 装配中等待同一份后台结果，完成后这次读取直接继续，页面无需退出重进。
+     * 装配失败或本次没挂 npm **抛**，不返回空快照 —— 空快照只代表「读成功且一条都没有」。
+     * 自装配失败保留异常 cause；npm 能力未接线仍由 `AssembledShell.npmCliFailure` 记账。
      */
     override suspend fun npmSnapshot(): NpmPanelSnapshot {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：依赖面板暂不可读" }
+        val built = assemblyResult.await()
         val facade = checkNotNull(built.npmFacade) {
             "npm 未接线：本次装配没挂 npm handler（原因见装配日志的 npmCliFailure）——依赖面板无可读之处"
         }
@@ -945,7 +967,7 @@ class AppShellApplication : Application(), HostSummary {
      * 未接线**抛**，不返回假的出厂值 —— 那会把「宿主没接这个口」画成「你用的就是出厂源」。
      */
     override suspend fun npmRegistry(): NpmRegistrySnapshot {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：镜像源暂不可读" }
+        val built = assemblyResult.await()
         val facade = checkNotNull(built.npmFacade) { "npm 未接线：镜像源无处读取" }
         return facade.globalRegistry()
     }
@@ -1073,7 +1095,7 @@ class AppShellApplication : Application(), HostSummary {
      * 会把「宿主没接这个口」画成「命令跑了但什么都没说」。
      */
     override suspend fun consoleOutput(projectId: String, sinceSeq: Long, maxLines: Int): NpmConsoleSnapshot {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：控制台输出暂不可读" }
+        val built = assemblyResult.await()
         val facade = checkNotNull(built.npmFacade) { "npm 未接线：控制台输出无可读之处" }
         return facade.consoleOutput(projectId, sinceSeq, maxLines)
     }
@@ -1088,7 +1110,7 @@ class AppShellApplication : Application(), HostSummary {
      * 未接线**抛**（与 [consoleOutput] 同）：空表是"读成功且真的一条都没有"的样子。
      */
     override suspend fun consoleHistory(projectId: String): List<String> {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：命令历史暂不可读" }
+        val built = assemblyResult.await()
         val facade = checkNotNull(built.npmFacade) { "npm 未接线：命令历史无处读取" }
         return facade.consoleHistory(projectId)
     }
@@ -1125,7 +1147,7 @@ class AppShellApplication : Application(), HostSummary {
      * 空批次是「读了、确实没有事件」的样子，会把「宿主没接这个口」画成「安装还没开始」。
      */
     override suspend fun npmInstallEvents(projectId: String, sinceSeq: Long, maxBatch: Int): InstallEventBatch {
-        val built = checkNotNull(assembled) { "壳未装配（装配中或失败）：安装进度暂不可读" }
+        val built = assemblyResult.await()
         val facade = checkNotNull(built.npmFacade) {
             "npm 未接线：安装进度无处读取（原因见装配日志的 npmCliFailure）"
         }
