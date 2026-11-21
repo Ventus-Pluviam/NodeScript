@@ -167,6 +167,7 @@ class HostNodeNpmE2ETest {
         val c = coordinatorAt(dir, dir.resolve("npm-cache"))
         val same = "share"
         val conflict = "isolated"
+        prepareProject(layout, same)
         c.install(same, listOf(PackageSpec("lodash", "4.17.21")))
         c.promoteToGlobal(same)
         assertFalse(Files.exists(layout.nodeModules(ProjectId(same)).resolve("lodash")))
@@ -176,6 +177,7 @@ class HostNodeNpmE2ETest {
         assertEquals(global, nodeResolvedPackage(layout.projectRoot(ProjectId(same)), "lodash"))
 
         // 所有项目同版时只复用，不重新安装全局；只有冲突的项目保留自己的版本。
+        prepareProject(layout, conflict)
         c.install(conflict, listOf(PackageSpec("lodash", "4.17.20")))
         c.promoteToGlobal(conflict)
         val local = layout.nodeModules(ProjectId(conflict)).resolve("lodash/package.json").toRealPath()
@@ -188,6 +190,7 @@ class HostNodeNpmE2ETest {
     fun `真实 npm 验证拒绝后不会提交其重算的项目树`() = runBlocking {
         val layout = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
         val c = coordinatorAt(dir, dir.resolve("npm-cache"))
+        prepareProject(layout, "keep")
         c.install("keep", listOf(PackageSpec("lodash", "4.17.21")))
         val root = layout.projectRoot(ProjectId("keep"))
         val manifest = Files.readString(root.resolve("package.json"))
@@ -202,6 +205,11 @@ class HostNodeNpmE2ETest {
         assertEquals(lock, Files.readString(root.resolve("package-lock.json")))
         assertTrue(Files.exists(layout.nodeModules(ProjectId("keep")).resolve("lodash/package.json")))
         assertFalse(Files.exists(root.resolve("npmwork-rejected")))
+    }
+
+    private fun prepareProject(layout: NpmProjectLayout, projectId: String) {
+        val root = Files.createDirectories(layout.projectRoot(ProjectId(projectId)))
+        Files.writeString(root.resolve("package.json"), ProjectManifest.minimal(projectId))
     }
 
     private fun nodeResolvedPackage(projectRoot: Path, name: String): Path {

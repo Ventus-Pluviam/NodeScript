@@ -1110,7 +1110,7 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `list 同一包同版本落两个位置 → 归一成一条（重复的键会让依赖页当场崩）`() = runBlocking {
+    fun `list 只列根层直接版本且嵌套同名包不生成重复界面键`() = runBlocking {
         // lock v3 的键是**安装位置**，不是包的身份 —— peer 冲突的典型形态：根上 c@2，
         // a 与 b 各嵌一份 c@1（`node_modules/a/node_modules/c` 与 `node_modules/b/node_modules/c`
         // 是同名同版的两份）。依赖管理页用 `items(key = "<name>@<version>")` 铺这份清单，
@@ -1128,10 +1128,11 @@ class InstallCoordinatorTest {
         )
         val list = coordinator().list("p1", 0)
         assertEquals(
-            listOf("a", "b", "c", "c"),
+            listOf("a", "b", "c"),
             list.map { it.name },
-            "5 个安装位置 / 4 个不同的 包@版本：c@1.0.0 的两份落点归一成一条",
+            "清单只画根层直接依赖；a/b 里的 c@1 不能冒充根层声明的 c@2",
         )
+        assertEquals("2.0.0", list.single { it.name == "c" }.version)
         assertEquals(
             list.size,
             list.distinctBy { "${it.name}@${it.version}" }.size,
