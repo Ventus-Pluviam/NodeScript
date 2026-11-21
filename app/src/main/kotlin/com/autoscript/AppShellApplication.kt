@@ -490,11 +490,11 @@ class AppShellApplication : Application(), HostSummary {
             HostLog.i(TAG, "壳装配完成：耗时 ${(System.nanoTime() - startedAt) / 1_000_000}ms")
             result.complete(built)
             built.shell
+        } catch (e: CancellationException) {
+            result.completeExceptionally(e)
+            throw e
         } catch (t: Throwable) {
-            result.completeExceptionally(
-                if (t is CancellationException) t
-                else IllegalStateException("壳自装配失败：${t.message ?: t.javaClass.simpleName}", t),
-            )
+            result.completeExceptionally(IllegalStateException("壳自装配失败：${t.message ?: t.javaClass.simpleName}", t))
             HostLog.e(TAG, "壳自装配失败：保持未就绪（闹钟走漏投记账，不伪造投递）", t)
             null
         }
