@@ -26,7 +26,8 @@ import kotlinx.coroutines.withContext
  * 一次（那次「依赖装多了，一查看就闪退」就是这个形态）。
  *
  * **代价如实记**：盘上变了而时钟没走 → 回的是缓存里的旧值（陈旧上界 = TTL）。
- * 本进程装完**不失效**（一失效就等于每次安装照旧全量遍历，正是要修的东西）；
+ * 普通安装完成不失效（避免每次安装照旧全量遍历）；跨作用域迁移结束后定向失效两棵树，
+ * 否则刚腾出的项目空间会继续显示为旧值。
  * 脚本自己跑 npm 装的那部分更看不见 —— 期间可能放行一次把项目顶过配额的安装，
  * 表现是 npm 自己报 ENOSPC 或下次预检拦下，不会静默写坏数据（尺寸只决定「让不让开始」，
  * 不参与任何写路径决策）。
@@ -60,6 +61,12 @@ internal suspend fun packageSizesOf(nodeModules: Path, at: Long): Map<String, Lo
         pkgCache[nodeModules] = MeasuredPkgs(out, at)
         out
     }
+
+/** 仅迁移路径调用；普通轮询和增量安装仍复用 TTL。 */
+internal fun invalidateNodeModulesSizes(nodeModules: Path) {
+    totalCache.remove(nodeModules)
+    pkgCache.remove(nodeModules)
+}
 
 /** 目录总量的一次实测（[nodeModulesBytesOf] 的缓存条目）。 */
 private class MeasuredTotal(val bytes: Long, val atMillis: Long)

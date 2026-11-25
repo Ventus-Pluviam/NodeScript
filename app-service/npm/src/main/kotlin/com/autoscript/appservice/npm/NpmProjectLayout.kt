@@ -87,7 +87,15 @@ class NpmProjectLayout(val projectsRoot: Path) {
 }
 
 /** lockfile v3 已锁定包（name@version + integrity + 尺寸不可得→0，由 cache/tarball 头补）。 */
-data class LockedPkg(val name: String, val version: String, val integrity: String?, val resolvedSize: Long = 0)
+data class LockedPkg(
+    val name: String,
+    val version: String,
+    val integrity: String?,
+    val resolvedSize: Long = 0,
+    val location: String = "node_modules/$name",
+) {
+    val topLevel: Boolean get() = location == "node_modules/$name"
+}
 
 /**
  * 缓存索引接缝（cacache content-v2 的查询抽象；生产实现读 cacheDir/npm-cache/_cacache）。
@@ -144,6 +152,7 @@ object LockfileReader {
                         name = name,
                         version = extractString(body, "version") ?: "0.0.0",
                         integrity = extractString(body, "integrity"),
+                        location = key,
                     ),
                 )
             }

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import com.autoscript.testkit.HostNpm
 
 /**
@@ -159,4 +160,68 @@ class HostNodeNpmE2ETest {
         assertTrue(Files.isDirectory(nm.resolve("lodash")), "第一次安装产物必须保留")
         assertTrue(Files.isDirectory(nm.resolve("dayjs")), "第二次安装产物必须落位")
     }
+
+    @Test
+    fun `迁移后 Node 祖先查找命中全局且冲突项目仍用本地版本`() = runBlocking {
+        val layout = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
+        val c = coordinatorAt(dir, dir.resolve("npm-cache"))
+        val same = "share"
+        val conflict = "isolated"
+        prepareProject(layout, same)
+        c.install(same, listOf(PackageSpec("lodash", "4.17.21")))
+        c.promoteToGlobal(same)
+        assertFalse(Files.exists(layout.nodeModules(ProjectId(same)).resolve("lodash")))
+        assertTrue(c.list(same).isEmpty())
+        assertEquals(listOf("4.17.21"), c.list(com.autoscript.domain.npm.NpmTargetScope.GLOBAL).map { it.version })
+        val global = layout.globalNodeModules.resolve("lodash/package.json").toRealPath()
+        assertEquals(global, nodeResolvedPackage(layout.projectRoot(ProjectId(same)), "lodash"))
+
+        // 所有项目同版时只复用，不重新安装全局；只有冲突的项目保留自己的版本。
+        prepareProject(layout, conflict)
+        c.install(conflict, listOf(PackageSpec("lodash", "4.17.20")))
+        c.promoteToGlobal(conflict)
+        val local = layout.nodeModules(ProjectId(conflict)).resolve("lodash/package.json").toRealPath()
+        assertEquals(local, nodeResolvedPackage(layout.projectRoot(ProjectId(conflict)), "lodash"))
+        assertEquals(listOf("4.17.20"), c.list(conflict).map { it.version })
+        assertEquals(listOf("4.17.21"), c.list(com.autoscript.domain.npm.NpmTargetScope.GLOBAL).map { it.version })
+    }
+
+    @Test
+    fun `真实 npm 验证拒绝后不会提交其重算的项目树`() = runBlocking {
+        val layout = NpmProjectLayout(ScriptPaths.projectsRoot(dir))
+        val c = coordinatorAt(dir, dir.resolve("npm-cache"))
+        prepareProject(layout, "keep")
+        c.install("keep", listOf(PackageSpec("lodash", "4.17.21")))
+        val root = layout.projectRoot(ProjectId("keep"))
+        val manifest = Files.readString(root.resolve("package.json"))
+        val lock = Files.readString(root.resolve("package-lock.json"))
+        val stage = Files.createDirectory(root.resolve("reject-stage"))
+        val op = HeavyOp("rejected", "keep", listOf("uninstall", "lodash"), root, stage, 120_000) { _, _ ->
+            error("reject computed tree")
+        }
+        val failure = runCatching { HostNodeExecutor(npmCli!!, dir.resolve("npm-cache")).execute(op, {}, OutputSink.None) }.exceptionOrNull()
+        assertEquals("reject computed tree", failure?.message)
+        assertEquals(manifest, Files.readString(root.resolve("package.json")))
+        assertEquals(lock, Files.readString(root.resolve("package-lock.json")))
+        assertTrue(Files.exists(layout.nodeModules(ProjectId("keep")).resolve("lodash/package.json")))
+        assertFalse(Files.exists(root.resolve("npmwork-rejected")))
+    }
+
+    private fun prepareProject(layout: NpmProjectLayout, projectId: String) {
+        val root = Files.createDirectories(layout.projectRoot(ProjectId(projectId)))
+        Files.writeString(root.resolve("package.json"), ProjectManifest.minimal(projectId))
+    }
+
+    private fun nodeResolvedPackage(projectRoot: Path, name: String): Path {
+        val output = projectRoot.resolve("resolved-package.txt")
+        val process = ProcessBuilder("node", "-p", "require.resolve('$name/package.json')")
+            .directory(projectRoot.toFile()).redirectErrorStream(true).redirectOutput(output.toFile()).start()
+        val finished = process.waitFor(30, TimeUnit.SECONDS)
+        if (!finished) process.destroyForcibly()
+        assertTrue(finished, "Node resolve 超时")
+        val resolved = Files.readString(output).trim()
+        assertEquals(0, process.exitValue(), resolved)
+        return Path.of(resolved).toRealPath()
+    }
+
 }

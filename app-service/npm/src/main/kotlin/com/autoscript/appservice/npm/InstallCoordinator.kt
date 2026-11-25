@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -112,9 +114,7 @@ class InstallCoordinator(
     // 探针/时钟/配额不走 [NpmServices]：它们不是「外部协作者」而是本类行为参数，
     // 收进 services 会让「换一份 layout 就顺手换掉时钟」变得合法——那是两回事。
     // 保留为构造参数 + 就地私有化，测试按需注入（时钟/磁盘探针是门禁断言的输入）。
-    private val freeSpaceProbe = freeSpaceProbe
     private val now = now
-    private val config = config
     private val npmCacheDir = npmCacheDir
 
     // —— services 成员的本类私有别名 ——
@@ -136,6 +136,10 @@ class InstallCoordinator(
     private val bundleImporter: NpmOfflineBundleImporter? = services.bundleImporter
     private val registryVerifier: RegistryVerifier? = services.registryVerifier
     private val registryOf: (String) -> String? = registryOf ?: ::resolveRegistry
+    private val admission = InstallAdmission(layout, config, freeSpaceProbe, opLog)
+    private val promotionRunner = NpmPromotionRunner(layout, ::crossCheckRegistry) { projectId, args, check ->
+        withHeavyAdmission(projectId, args, checkWorkTree = check) { run -> run() }
+    }
 
     /**
      * 本次首选注册表的**两层解析**（§10.2）：项目 `.npmrc` → 全局 `files/.npmrc` → null。
@@ -235,6 +239,7 @@ class InstallCoordinator(
         @Volatile var journalFailed: Boolean = false,
         @Volatile var cancelled: Boolean = false,
         @Volatile var done: Boolean = false,
+        val checkWorkTree: ((Path, Path) -> Unit)? = null,
     ) : OpCancelSignal {
         /**
          * 「一个句柄只能有一个终态事件」的**原子**落账（`runScriptOps` 的 `firstTerminal`
@@ -530,7 +535,7 @@ class InstallCoordinator(
             val direct = NpmScriptResolver.declaredNames(layout.projectRoot(pid)) ?: return@withContext emptyList()
             if (direct.isEmpty()) return@withContext emptyList()
             LockfileReader.readLocked(layout.lockfile(pid))
-                .filter { it.name in direct }
+                .filter { it.topLevel && it.name in direct }
                 .distinctBy { it.name to it.version }
                 .map { PkgNode(name = it.name, version = it.version) }
         }
@@ -1222,79 +1227,60 @@ class InstallCoordinator(
         return list(projectId, depth = 0).map { it.copy(sizeBytes = sizes[it.name] ?: 0L) }
     }
 
-    // ══════════ 提升到全局（「去重并提升到全局」那条路的后半） ══════════
+    /** 全程占同一安装会话：其它 npm 写入不能插在全局验证和项目卸载之间。 */
+    override suspend fun promoteToGlobal(projectId: String): InstallHandle =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val project = ProjectId(projectId)
+            if (NpmTargetScope.isGlobal(projectId) || NpmProjectLayout.isReservedDirName(projectId)) {
+                throw AutojsException(ErrorCode.ERR_INVALID_PARAM, "请选择要迁移依赖的项目")
+            }
+            try {
+                withProjectLock(projectId) {
+                    globalSession.withLock {
+                        val result = promotionRunner.run(project)
+                        consoleLine(projectId, NpmConsoleLine(NpmConsoleLineKind.RESULT, result.summary, now(), ok = true))
+                        result.handle ?: InstallHandle("promote-${handleSeq.incrementAndGet()}", projectId, now())
+                    }
+                }
+            } finally {
+                invalidateNodeModulesSizes(layout.nodeModules(project))
+                invalidateNodeModulesSizes(layout.globalNodeModules)
+            }
+        }
 
-    /**
-     * 把一个项目**声明的**依赖装一份到全局作用域（语义与三条刻意见
-     * [PackageManagerFacade.promoteToGlobal] 的 KDoc）。
-     *
-     * **走的是与控制台逐字相同的那条重操作路**：同一次 [NpmConsoleKeys.packageSpecsIn]
-     * 取包说明符 → 同一次 [crossCheckRegistry] 多镜像交叉校验 → 同一次 [enqueueHeavy]
-     * （磁盘预检 / 项目锁 / 全局会话 / journal 事务）。门禁强度不该取决于用户是敲进来的
-     * 还是按一颗按钮 —— 与 [runConsoleCommand] 里那段注释同一条纪律。
-     *
-     * ECHO 行落在**全局**那份控制台里（`consoleLine(GLOBAL, …)`）：这次安装真跑在全局，
-     * 把回显记到项目那份去，等于在一个作用域的账本上记另一棵树发生的事。
-     */
-    override suspend fun promoteToGlobal(projectId: String): InstallHandle {
-        val plan = promotePlanOf(layout.projectRoot(ProjectId(projectId)), projectId)
-        consoleLine(NpmTargetScope.GLOBAL, echoLine("npm " + plan.args.joinToString(" "), now()))
-        crossCheckRegistry(NpmTargetScope.GLOBAL, NpmConsoleKeys.packageSpecsIn(plan.specs), listOf("install"))
-        return enqueueHeavy(NpmTargetScope.GLOBAL, plan.args)
-    }
+    // ══════════ 重操作入口 ══════════
 
-    // ══════════ 编排核心 ══════════
-
-    /**
-     * 排队 → 门禁 → 事务（journal begin → 执行 → commit/fail）→ 事件归档。
-     * 全局同时至多一个安装会话（globalSession）；per-project 串行（projectLocks）。
-     */
     private suspend fun enqueueHeavy(
         projectId: String,
         args: List<String>,
-        timeoutMillis: Long = 120_000,
-    ): InstallHandle {
-        val root = layout.projectRoot(ProjectId(projectId))   // projectId 合法性在此校验（防路径逃逸）
-        val free = freeSpaceProbe(root)
-        if (free < config.minFreeBytes) {
-            val why = "磁盘可用 ${free / 1024 / 1024}MB < 预检下限 ${config.minFreeBytes / 1024 / 1024}MB，拒绝安装"
-            // 预检拒绝也记一条：日志要能回答「用户当时看到成功了吗」，
-            // 而「被配额/磁盘挡住」正是最该被看见的那类失败 —— 它不留痕的话，用户在系统日志
-            // 里看到的是「什么都没发生」，与他屏幕上那句报错对不上。与 `crossCheckRegistry`
-            // 的预检拒绝同一条口径（那条一直在记，这两条是漏的）。
-            opLog.log(opName(args), projectId, false, why)
-            throw AutojsException(ErrorCode.ERR_DISK_FULL, why)
-        }
-        // 黄警（锚在磁盘上）：可用空间进了预检下限的 1.25 倍以内就发一条，**不拦** ——
-        // 「下一次安装就要被拒了」值得在**被拒之前**说一次。
-        // （见 `InstallConfig` 的 KDoc），故 `DISK_QUOTA` 这个事件名留用、判据换锚。
-        val freeWarned = free < (config.minFreeBytes * FREE_WARN_HEADROOM).toLong()
-        val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
-        val nonce = UUID.randomUUID().toString()
-        val tracked = TrackedOp(handle, nonce)
-        handles[handle.id] = tracked
+        timeoutMillis: Long = DEFAULT_HEAVY_TIMEOUT_MILLIS,
+    ): InstallHandle = withHeavyAdmission(projectId, args, timeoutMillis) { run ->
+        withProjectLock(projectId) { globalSession.withLock { run() } }
+    }
 
-        // 协程内联执行（挂起语义 = 排队；调用方要 fire-and-forget 可自行 launch）
+    /** 普通操作先准入再排队；迁移已持锁，直接运行。同一份磁盘门禁、句柄和收尾。 */
+    private suspend fun withHeavyAdmission(
+        projectId: String,
+        args: List<String>,
+        timeoutMillis: Long = DEFAULT_HEAVY_TIMEOUT_MILLIS,
+        checkWorkTree: ((Path, Path) -> Unit)? = null,
+        inSession: suspend (suspend () -> Unit) -> Unit,
+    ): InstallHandle {
+        coroutineContext.ensureActive()
+        val free = admission.check(projectId, opName(args))
+        val handle = InstallHandle("inst-${handleSeq.incrementAndGet()}", projectId, now())
+        val tracked = TrackedOp(handle, UUID.randomUUID().toString(), checkWorkTree = checkWorkTree)
+        handles[handle.id] = tracked
         try {
-            withProjectLock(projectId) {
-                globalSession.withLock {
-                    if (freeWarned) {
-                        emit(
-                            InstallEvent.Warning(
-                                projectId = projectId,
-                                handleId = handle.id,
-                                kind = InstallEvent.Kind.DISK_QUOTA,
-                                message = "磁盘可用 ${free / 1024 / 1024}MB 已逼近预检下限 " +
-                                    "${config.minFreeBytes / 1024 / 1024}MB：再装大包会被拒",
-                            ),
-                        )
-                    }
-                    runHeavy(tracked, args, timeoutMillis)
-                }
+            inSession {
+                admission.warning(handle, free)?.let { emit(it) }
+                runHeavy(tracked, args, timeoutMillis)
             }
         } catch (e: CancellationException) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { cancel(handle) }
             throw e
+        } finally {
+            tracked.finish()
         }
         return handle
     }
@@ -1327,7 +1313,10 @@ class InstallCoordinator(
             var streamed = false
             val outcome = withTimeoutOrNull(timeoutMillis) {
                 executor.execute(
-                    HeavyOp(nonce, projectId, args, layout.projectRoot(ProjectId(projectId)), stageDir, timeoutMillis),
+                    HeavyOp(
+                        nonce, projectId, args, layout.projectRoot(ProjectId(projectId)), stageDir, timeoutMillis,
+                        tracked.checkWorkTree,
+                    ),
                     // 执行体报的阶段**必须经 `emit`**：只 `events.tryEmit(ev)` 的话
                     // 只喂了那条 SharedFlow，而 `installEventRing`（`drainEvents` 读的
                     // 就是它）与 `consoleRing`
@@ -1361,6 +1350,9 @@ class InstallCoordinator(
             // §10.2 调用链末段：post-check（lock/产物就位校验）→ 落位 → 归档
             emit(InstallEvent.Progress(projectId, handle.id, InstallEvent.Phase.POST_CHECK))
             warnScriptsSkipped(projectId, handle.id, stageDir)
+            tracked.checkWorkTree?.invoke(layout.projectRoot(ProjectId(projectId)), stageDir)
+            coroutineContext.ensureActive()
+            if (tracked.cancelled) throw AutojsException(ErrorCode.ERR_ENGINE_STOPPED, "安装已取消（未落位）")
             // 执行体把新树写在 stageDir（harvest 提升）；落位由 staging.commit 原子 rename
             staging.commit(projectId, nonce)
             journal.commit(nonce, projectId, stageDir.fileName.toString())
@@ -1511,7 +1503,7 @@ class InstallCoordinator(
         installEventRing.push(e.projectId, e)
         // 控制台投影在**唯一一处**：runHeavy 与 runScriptOps 的全部
         // 阶段/警告/终态都经这里，两条执行路径不必各写一遍，也就不会有一条忘了投影。
-        consoleLine(e.projectId, projectConsoleLine(e))
+        consoleLine(e.projectId, projectNpmConsoleLine(e, now()))
         events.emit(e)
     }
 
@@ -1519,43 +1511,6 @@ class InstallCoordinator(
     private fun consoleLine(projectId: String, line: NpmConsoleLine) {
         consoleRing.push(projectId, line)
     }
-
-    /**
-     * [InstallEvent] → 控制台行的投影（判读只在这一处，呈现层按 [NpmConsoleLineKind] 着色）。
-     *
-     * 事件环与控制台环是**两个视图**，谁也不替代谁：脚本侧的 `onProgress`/`onWarning`
-     * 形状一个字不改（那是 §10.8 的契约），控制台只是宿主自己的界面。
-     */
-    private fun projectConsoleLine(e: InstallEvent): NpmConsoleLine = when (e) {
-        is InstallEvent.Progress -> NpmConsoleLine(
-            kind = NpmConsoleLineKind.PHASE,
-            text = phaseText(e.phase) + (e.pkg?.let { "  $it" } ?: ""),
-            atMillis = now(),
-        )
-        is InstallEvent.Warning -> NpmConsoleLine(
-            kind = NpmConsoleLineKind.WARNING,
-            text = e.message,
-            atMillis = now(),
-        )
-        is InstallEvent.Finished -> NpmConsoleLine(
-            kind = NpmConsoleLineKind.RESULT,
-            text = if (e.success) (e.detail ?: "完成") else "失败：${e.detail ?: "（无详情）"}",
-            atMillis = now(),
-            // 成败是**判读**，在宿主侧定：呈现层据此着色，不去猜那句中文怎么写。
-            ok = e.success,
-        )
-    }
-
-    /** 阶段的中文说法（控制台是给人看的；`bridge/js` 那边仍走 `phaseWire` 的连字符口径）。 */
-    private fun phaseText(p: InstallEvent.Phase): String = when (p) {
-        InstallEvent.Phase.QUEUED -> "排队中"
-        InstallEvent.Phase.RESOLVE -> "解析依赖"
-        InstallEvent.Phase.DOWNLOAD -> "下载"
-        InstallEvent.Phase.REIFY -> "写入 node_modules"
-        InstallEvent.Phase.POST_CHECK -> "收尾校验"
-        InstallEvent.Phase.DONE -> "完成"
-    }
-
 
     companion object {
         /**
@@ -1565,6 +1520,7 @@ class InstallCoordinator(
          * 真正会拒人的那道预检（见 [enqueueHeavy]）。
          */
         const val FREE_WARN_HEADROOM = 1.25
+        private const val DEFAULT_HEAVY_TIMEOUT_MILLIS = 120_000L
 
         /** 事件环容量（与 `A11yEventRing.MAX_EVENTS` 同值同纪律）。 */
         const val RING_CAPACITY = 512

@@ -18,9 +18,7 @@ class PackageManagerFacadeContractTest {
             // 重操作
             "install", "ci", "update", "uninstall", "dedupe", "prune",
             "audit", "importOfflineBundle", "importTarball", "cancel",
-            // 提升到全局（去重之后把项目声明的依赖装一份到全局 ——
-            // 「去重并提升到全局」那颗按钮的后半。与 install 同族：它就是把**声明的**依赖
-            // 装一份到全局作用域，故走同一条重操作路，不新开一条"搬包"的语义）
+            // 按兼容版本把项目直接依赖迁移到全局；方法面仍是既有契约，不另增 facade 入口。
             "promoteToGlobal",
             // 轻操作
             "list", "offlineGap", "config", "storage", "snapshot",

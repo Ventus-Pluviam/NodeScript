@@ -1110,7 +1110,7 @@ class InstallCoordinatorTest {
     }
 
     @Test
-    fun `list 同一包同版本落两个位置 → 归一成一条（重复的键会让依赖页当场崩）`() = runBlocking {
+    fun `list 只列根层直接版本且嵌套同名包不生成重复界面键`() = runBlocking {
         // lock v3 的键是**安装位置**，不是包的身份 —— peer 冲突的典型形态：根上 c@2，
         // a 与 b 各嵌一份 c@1（`node_modules/a/node_modules/c` 与 `node_modules/b/node_modules/c`
         // 是同名同版的两份）。依赖管理页用 `items(key = "<name>@<version>")` 铺这份清单，
@@ -1128,10 +1128,11 @@ class InstallCoordinatorTest {
         )
         val list = coordinator().list("p1", 0)
         assertEquals(
-            listOf("a", "b", "c", "c"),
+            listOf("a", "b", "c"),
             list.map { it.name },
-            "5 个安装位置 / 4 个不同的 包@版本：c@1.0.0 的两份落点归一成一条",
+            "清单只画根层直接依赖；a/b 里的 c@1 不能冒充根层声明的 c@2",
         )
+        assertEquals("2.0.0", list.single { it.name == "c" }.version)
         assertEquals(
             list.size,
             list.distinctBy { "${it.name}@${it.version}" }.size,
@@ -2319,8 +2320,7 @@ class InstallCoordinatorTest {
      *
      * 三条一起断，因为它们是同一个决定的三个面：
      * - **闭包太大**：lock 的 500 个包全提到全局，等于每次点这颗按钮都把整棵树抄一遍；
-     * - **范围而不是锁定版本**：`axios@^1.7.0` 让全局那份跟着项目一起走小版本，
-     *   写死 `1.7.0` 反而会与项目里那棵树分家；
+     * - **这里保留声明范围**：读口返回原声明，迁移另从严格 lock 读精确版本；
      * - **同名只算一次、按名字排序**：否则两个段里都写了的包会被拼进 argv 两遍
      *   （npm 会报重复），而顺序不定则每次提升的 argv 都不一样 —— 没法对拍。
      */
@@ -2353,53 +2353,6 @@ class InstallCoordinatorTest {
             NpmScriptResolver.declaredSpecs(root),
             "有清单、只是没声明依赖 —— 与「没有清单」是两件事（上游两句话也不同）",
         )
-    }
-
-    /**
-     * 提升走的是**与控制台逐字相同的那条重操作路**（门禁强度不取决于用户是从哪个界面
-     * 按下去的），且落点是 `files/scripts/` 那一棵 —— 项目里那些包靠 Node 向上查找自动优先，
-     * 所以不需要任何 NODE_PATH 之类的额外机制（见 `NpmTargetScope` 的 KDoc）。
-     */
-    @Test
-    fun `提升到全局：装到 files_scripts 那一棵，回显记在全局那份控制台里`() = runBlocking {
-        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{"axios":"^1.7.0"}}""")
-        val exec = FakeExecutor()
-        val c = coordinator(executor = exec)
-
-        c.promoteToGlobal("p1")
-
-        val op = exec.calls.single()
-        assertEquals(NpmTargetScope.GLOBAL, op.projectId, "目标固定是全局作用域")
-        assertEquals(listOf("install", "axios@^1.7.0", "--prefer-offline"), op.args)
-        assertEquals(layout.projectsRoot, op.projectRoot, "落点是 files/scripts/ 本身")
-
-        val lines = c.consoleOutput(NpmTargetScope.GLOBAL, 0, 16).lines
-        assertTrue(
-            lines.any { it.line.text.contains("axios@^1.7.0") },
-            "这次安装真跑在全局，账就得记在全局那份上：${lines.map { it.line.text }}",
-        )
-    }
-
-    @Test
-    fun `提升到全局：没清单、没声明各是一句话，且都不排队`() = runBlocking {
-        val exec = FakeExecutor()
-        val c = coordinator(executor = exec)
-        Files.createDirectories(layout.projectRoot(ProjectId("p1")))
-
-        val noManifest = assertThrows(AutojsException::class.java) {
-            runBlocking { c.promoteToGlobal("p1") }
-        }
-        assertEquals(ErrorCode.ERR_FILE_NOT_FOUND, noManifest.error)
-        assertTrue(noManifest.message!!.contains("package.json"), "要说清缺的是哪份东西")
-
-        writeManifest("p1", """{"name":"p1","version":"1.0.0","dependencies":{}}""")
-        val empty = assertThrows(AutojsException::class.java) {
-            runBlocking { c.promoteToGlobal("p1") }
-        }
-        assertEquals(ErrorCode.ERR_NOT_FOUND, empty.error)
-        assertTrue(empty.message!!.contains("dependencies"), "空声明与没清单不是一回事：${empty.message}")
-
-        assertTrue(exec.calls.isEmpty(), "两次都不该排队")
     }
 
     // ═══ 每行尺寸 ═══

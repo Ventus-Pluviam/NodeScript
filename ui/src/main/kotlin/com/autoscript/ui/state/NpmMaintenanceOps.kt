@@ -3,6 +3,7 @@ package com.autoscript.ui.state
 import com.autoscript.domain.host.HostSummary
 import com.autoscript.domain.npm.NpmCacheReclaimReport
 import com.autoscript.domain.npm.NpmMaintenanceAction
+import com.autoscript.domain.npm.NpmTargetScope
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -31,15 +32,15 @@ import kotlinx.coroutines.CancellationException
  * 是协程内联执行，挂到会话跑完才返回 —— 构造回执那一刻动作已经结束、清单也已
  * 现取过，说「已入队」才是撒谎（用户会把「已完成」读成「还在跑」，干等或连点）。
  *
- * 「清理依赖」（`PRUNE`）与「依赖去重」（`DEDUPE`）都只维护当前选中的作用域，
- * 不顺带往全局安装另一份依赖。不同作用域的同名包可以是不同版本，不能当成可合并的重复项。
- * 「按 lock 重装」在界面上没有入口，但枚举与宿主路径仍保留。
+ * 「清理依赖」（`PRUNE`）与「按 lock 重装」（`CI`）走通用路；「依赖去重」在当前作用域
+ * 去重后，再把与全局版本兼容的直接依赖真正迁移到全局，版本冲突的项目依赖保留。
  */
 internal suspend fun runNpmMaintenanceOp(
     host: HostSummary?,
     state: NpmState,
     action: NpmMaintenanceAction,
 ): NpmState {
+    if (action == NpmMaintenanceAction.DEDUPE) return runDedupeAndPromoteOp(host, state)
     val projectId = state.selectedProjectId
         ?: return state.withOpAccount("还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", null)
     if (host == null) {
@@ -51,6 +52,51 @@ internal suspend fun runNpmMaintenanceOp(
         loadNpmSnapshot(host, busy).copy(
             maintenance = null,
         ).withOpAccount(null, noticeFor(action))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Exception) {
+        busy.copy(maintenance = null).withOpAccount(t.message ?: t.javaClass.simpleName, null)
+    }
+}
+
+/**
+ * 依赖去重 + 兼容迁移到全局。
+ *
+ * 宿主侧按 lock 的精确版本处理：全局缺包先安装后再移除项目直依赖；全局已有不同版本
+ * 则两边都保留，绝不覆盖。前段失败不进入迁移，避免把未整理的依赖树带到全局。
+ */
+internal suspend fun runDedupeAndPromoteOp(host: HostSummary?, state: NpmState): NpmState {
+    val projectId = state.selectedProjectId
+        ?: return state.copy(maintenance = null)
+            .withOpAccount("还没有选中的作用域：依赖维护跑在某一棵 node_modules 上", null)
+    if (host == null) {
+        return state.copy(maintenance = null)
+            .withOpAccount("宿主摘要未接线（Application 未实现 HostSummary）", null)
+    }
+    val busy = state.withMaintenanceInFlight(NpmMaintenanceAction.DEDUPE)
+    return try {
+        host.runNpmMaintenance(projectId, NpmMaintenanceAction.DEDUPE)
+        var migrationError: String? = null
+        if (!NpmTargetScope.isGlobal(projectId)) {
+            try {
+                host.promoteNpmToGlobal(projectId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Exception) {
+                migrationError = t.message ?: t.javaClass.simpleName
+            }
+        }
+        val refreshed = loadNpmSnapshot(host, busy).copy(maintenance = null)
+        if (migrationError != null) {
+            return refreshed.withOpAccount("兼容依赖迁移失败：$migrationError", null)
+        }
+        if (!refreshed.load.isLoaded) return refreshed.withOpAccount(null, null)
+        val notice = if (NpmTargetScope.isGlobal(projectId)) {
+            "npm dedupe 已完成：当前作用域就是全局"
+        } else {
+            "npm dedupe 已完成；兼容依赖迁移结果见日志，版本冲突或非 registry 项保留在当前作用域"
+        }
+        refreshed.withOpAccount(null, notice)
     } catch (e: CancellationException) {
         throw e
     } catch (t: Exception) {
